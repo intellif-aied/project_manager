@@ -5,6 +5,7 @@ import { useNavigate, useParams } from "react-router-dom";
 
 import {
   fetchManagedAgents,
+  fetchManagedCredentials,
   fetchManagedMCPEntries,
   fetchManagedSkills,
   updateManagedAgent
@@ -14,7 +15,7 @@ import { AgentEditor, type AgentEditorValues } from "../components/AgentEditor";
 import {
   AI_ASSETS_HOME,
   aiAssetsPath,
-  currentMCPKeys,
+  currentMCPSelection,
   currentSkillKeys,
   errorMessage
 } from "../utils/agentAssets";
@@ -44,9 +45,15 @@ export function AgentEditPage() {
     queryFn: () => fetchManagedMCPEntries(true),
     staleTime: 60_000
   });
+  const credentialsQuery = useQuery({
+    queryKey: ["managed-credentials"],
+    queryFn: () => fetchManagedCredentials(),
+    staleTime: 30_000
+  });
 
   const skills = useMemo(() => skillsQuery.data?.skills ?? [], [skillsQuery.data]);
   const mcpEntries = useMemo(() => mcpQuery.data?.entries ?? [], [mcpQuery.data]);
+  const credentials = useMemo(() => credentialsQuery.data?.credentials ?? [], [credentialsQuery.data]);
 
   const agent = useMemo(
     () => agentsQuery.data?.agents.find((item) => item.agent_id === agentId) ?? null,
@@ -75,7 +82,8 @@ export function AgentEditPage() {
       default_model_id: agent.default_model_id,
       start_prompt_template: agent.start_prompt_template,
       skills: currentSkillKeys(agent),
-      mcp_bindings: currentMCPKeys(agent)
+      mcp_bindings: currentMCPSelection(agent),
+      slot_credentials: agent.default_bindings ?? {}
     });
   }, [agent, form]);
 
@@ -139,6 +147,7 @@ export function AgentEditPage() {
         agent={agent}
         skills={skills}
         mcpEntries={mcpEntries}
+        credentials={credentials}
         submitting={updateMutation.isPending}
         onCancel={() => navigate(AI_ASSETS_RETURN_PATH)}
         onSubmit={(payload: UpsertManagedAgentPayload) => updateMutation.mutate(payload)}

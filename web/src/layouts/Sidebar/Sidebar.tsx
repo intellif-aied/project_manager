@@ -84,7 +84,7 @@ export function SidebarContent({ collapsed = false, onNavigate }: SidebarContent
   return (
     <>
       <a className="app-sidebar__brand" href="/" aria-label="AIDashboard 首页">
-        <span className="app-sidebar__brand-mark">AI</span>
+        <img className="app-sidebar__brand-logo" src="/logo.svg" alt="" aria-hidden="true" />
         {!collapsed && (
           <span className="app-sidebar__brand-copy">
             <strong>AIDashboard</strong>

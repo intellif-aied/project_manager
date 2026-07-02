@@ -121,8 +121,8 @@
 
 .user-menu::after {
   position: absolute;
-  top: 11px;
-  left: 29px;
+  top: 24px;
+  left: 25px;
   width: 7px;
   height: 7px;
   content: "";
@@ -132,9 +132,73 @@
   box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.12);
 }
 
-.user-menu .ant-avatar {
-  color: #eaf4ff;
-  background: linear-gradient(135deg, #1677ff, #0b3b72);
+.user-menu .user-menu__avatar {
+  --user-avatar-bg: #eff6ff;
+  --user-avatar-border: rgba(37, 99, 235, 0.22);
+  --user-avatar-color: #1d4ed8;
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--user-avatar-color);
+  background: var(--user-avatar-bg);
+  border: 1px solid var(--user-avatar-border);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.86),
+    0 8px 16px rgba(15, 23, 42, 0.06);
+}
+
+.user-menu .user-menu__avatar .ant-avatar-string {
+  position: static;
+  left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  line-height: 1;
+  transform: none !important;
+}
+
+.user-menu__avatar-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 14px;
+  font-size: 10px;
+  font-weight: 820;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+.user-menu__avatar--admin {
+  --user-avatar-bg: #ecfdf5;
+  --user-avatar-border: rgba(5, 150, 105, 0.24);
+  --user-avatar-color: #047857;
+}
+
+.user-menu__avatar--director {
+  --user-avatar-bg: #eef2ff;
+  --user-avatar-border: rgba(79, 70, 229, 0.24);
+  --user-avatar-color: #4338ca;
+}
+
+.user-menu__avatar--pm {
+  --user-avatar-bg: #eff6ff;
+  --user-avatar-border: rgba(37, 99, 235, 0.24);
+  --user-avatar-color: #1d4ed8;
+}
+
+.user-menu__avatar--team_leader {
+  --user-avatar-bg: #ecfeff;
+  --user-avatar-border: rgba(8, 145, 178, 0.24);
+  --user-avatar-color: #0e7490;
+}
+
+.user-menu__avatar--employee {
+  --user-avatar-bg: #f1f5f9;
+  --user-avatar-border: rgba(71, 85, 105, 0.22);
+  --user-avatar-color: #334155;
 }
 
 .user-menu__copy {

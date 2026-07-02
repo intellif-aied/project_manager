@@ -336,6 +336,22 @@ export interface ManagedMCPBinding {
   credential_slot?: string;
 }
 
+export interface ManagedCredentialSlot {
+  name: string;
+  required?: boolean;
+}
+
+export interface ManagedCredential {
+  credential_id: string;
+  name: string;
+  kind?: string;
+  description?: string;
+  metadata?: Record<string, string>;
+  archived: boolean;
+  created_at?: number;
+  updated_at?: number;
+}
+
 export interface ManagedSkill {
   skill_id: string;
   owner?: string;
@@ -390,6 +406,8 @@ export interface ManagedAgent {
   managed_version?: number;
   archived: boolean;
   is_public: boolean;
+  credential_slots?: ManagedCredentialSlot[];
+  default_bindings?: Record<string, string>;
   skills?: ManagedSkillRef[];
   mcp_bindings?: ManagedMCPBinding[];
   business_type?: "generic" | "report";
@@ -404,6 +422,8 @@ export interface UpsertManagedAgentPayload {
   instructions?: string;
   default_model_id?: string;
   start_prompt_template?: string;
+  credential_slots?: ManagedCredentialSlot[];
+  default_bindings?: Record<string, string>;
   skills?: ManagedSkillRef[];
   mcp_bindings?: ManagedMCPBinding[];
   business_type?: "generic" | "report";
@@ -414,6 +434,7 @@ export interface ManagedAgentManualRunPayload {
   message: string;
   model_id?: string;
   params?: Record<string, string>;
+  credential_overrides?: Record<string, string>;
 }
 
 export type ReportType =
@@ -440,6 +461,7 @@ export interface ManagedReportAgentRunPayload {
   model_id?: string;
   start_prompt_values?: Record<string, string>;
   message?: string;
+  credential_overrides?: Record<string, string>;
 }
 
 export interface ManagedAgentSchedule {

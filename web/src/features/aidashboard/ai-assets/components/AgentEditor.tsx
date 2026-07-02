@@ -3,13 +3,19 @@ import type { FormInstance } from "antd";
 
 import type {
   ManagedAgent,
+  ManagedCredential,
   ManagedMCPEntry,
   ManagedSkill,
   UpsertManagedAgentPayload
 } from "../../api/types";
 import { MCPResourcePicker } from "./MCPResourcePicker";
 import { SkillResourcePicker } from "./SkillResourcePicker";
-import { parseMCPBindingKey, parseRefKey } from "../utils/agentAssets";
+import {
+  buildAgentResourcePayload,
+  isSystemBuiltinMCP,
+  parseRefKey,
+  refKey
+} from "../utils/agentAssets";
 
 import "./AgentWorkspace.css";
 
@@ -24,7 +30,8 @@ export interface AgentEditorValues {
   default_model_id?: string;
   start_prompt_template?: string;
   skills?: string[];
-  mcp_bindings?: string[];
+  mcp_bindings?: Record<string, string>;
+  slot_credentials?: Record<string, string>;
 }
 
 interface AgentEditorProps {
@@ -32,6 +39,7 @@ interface AgentEditorProps {
   agent: ManagedAgent | null;
   skills: ManagedSkill[];
   mcpEntries: ManagedMCPEntry[];
+  credentials: ManagedCredential[];
   submitting: boolean;
   onCancel: () => void;
   onSubmit: (payload: AgentEditorSubmitPayload) => void;
@@ -42,18 +50,40 @@ export function AgentEditor({
   agent,
   skills,
   mcpEntries,
+  credentials,
   submitting,
   onCancel,
   onSubmit
 }: AgentEditorProps) {
+  const slotCredentials = Form.useWatch("slot_credentials", { form, preserve: true }) ?? {};
+  const configurableMCPEntries = mcpEntries.filter((entry) => !isSystemBuiltinMCP(entry));
+
   return (
     <section className="ai-assets-workspace ai-assets-agent-editor">
       <Form
         form={form}
         layout="vertical"
-        initialValues={{ engine: "codex" }}
+        initialValues={{ engine: "codex", mcp_bindings: {}, slot_credentials: {} }}
         onFinish={(values: AgentEditorValues) => {
           const businessType = values.business_type || "generic";
+          const slotCredentialValues =
+            values.slot_credentials ?? form.getFieldValue("slot_credentials") ?? {};
+          const mcpSelection = Object.entries(values.mcp_bindings ?? {}).map(([key, slot]) => {
+            const ref = parseRefKey(key);
+            const entry = mcpEntries.find(
+              (item) => refKey(item.owner, item.slug, item.version) === key
+            );
+            return {
+              ...ref,
+              requiresCredential: entry ? entry.requires_credential : Boolean(slot),
+              credential_slot: slot || undefined,
+              credentialId: slot ? slotCredentialValues[slot] || "" : ""
+            };
+          });
+          const resources = buildAgentResourcePayload({
+            skills: values.skills?.map(parseRefKey) ?? [],
+            mcps: mcpSelection
+          });
           const payload: AgentEditorSubmitPayload = {
             name: values.name,
             description: values.description,
@@ -62,8 +92,7 @@ export function AgentEditor({
             instructions: values.instructions,
             default_model_id: values.default_model_id,
             start_prompt_template: values.start_prompt_template,
-            skills: values.skills?.map(parseRefKey),
-            mcp_bindings: values.mcp_bindings?.map(parseMCPBindingKey)
+            ...resources
           };
           onSubmit(payload);
         }}
@@ -73,7 +102,7 @@ export function AgentEditor({
             <Form.Item name="name" label="名称" rules={[{ required: true, message: "请输入名称" }]}>
               <Input placeholder="Agent 名称" />
             </Form.Item>
-            <Form.Item name="business_type" label="Agent 类型" initialValue="generic">
+            <Form.Item name="business_type" label="Agent 类型" initialValue="report">
               <Select
                 options={[
                   { label: "普通 Agent", value: "generic" },
@@ -124,11 +153,25 @@ export function AgentEditor({
         </Card>
 
         <Card title="资源绑定" className="ai-assets-editor-section">
+          <Form.Item name="slot_credentials" hidden preserve />
           <Form.Item name="skills" label="Skills">
             <SkillResourcePicker skills={skills} />
           </Form.Item>
           <Form.Item name="mcp_bindings" label="MCP Servers">
-            <MCPResourcePicker entries={mcpEntries} />
+            <MCPResourcePicker
+              entries={configurableMCPEntries}
+              credentials={credentials}
+              slotCredentials={slotCredentials}
+              onSlotCredentialChange={(slot, credentialId) => {
+                const next = { ...slotCredentials };
+                if (credentialId) {
+                  next[slot] = credentialId;
+                } else {
+                  delete next[slot];
+                }
+                form.setFieldsValue({ slot_credentials: next });
+              }}
+            />
           </Form.Item>
         </Card>
 

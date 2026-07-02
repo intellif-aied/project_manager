@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { createManagedAgent, fetchManagedMCPEntries, fetchManagedSkills } from "../../api/client";
+import { createManagedAgent, fetchManagedCredentials, fetchManagedMCPEntries, fetchManagedSkills } from "../../api/client";
 import type { UpsertManagedAgentPayload } from "../../api/types";
 import { AgentEditor, type AgentEditorValues } from "../components/AgentEditor";
 import { AI_ASSETS_HOME, aiAssetsPath, errorMessage } from "../utils/agentAssets";
@@ -27,9 +27,15 @@ export function AgentCreatePage() {
     queryFn: () => fetchManagedMCPEntries(true),
     staleTime: 60_000
   });
+  const credentialsQuery = useQuery({
+    queryKey: ["managed-credentials"],
+    queryFn: () => fetchManagedCredentials(),
+    staleTime: 30_000
+  });
 
   const skills = useMemo(() => skillsQuery.data?.skills ?? [], [skillsQuery.data]);
   const mcpEntries = useMemo(() => mcpQuery.data?.entries ?? [], [mcpQuery.data]);
+  const credentials = useMemo(() => credentialsQuery.data?.credentials ?? [], [credentialsQuery.data]);
 
   const createMutation = useMutation({
     mutationFn: (payload: UpsertManagedAgentPayload) => createManagedAgent(payload),
@@ -44,9 +50,10 @@ export function AgentCreatePage() {
   useEffect(() => {
     form.setFieldsValue({
       engine: "codex",
-      business_type: "generic",
+      business_type: "report",
       skills: [],
-      mcp_bindings: []
+      mcp_bindings: {},
+      slot_credentials: {}
     });
   }, [form]);
 
@@ -67,6 +74,7 @@ export function AgentCreatePage() {
         agent={null}
         skills={skills}
         mcpEntries={mcpEntries}
+        credentials={credentials}
         submitting={createMutation.isPending}
         onCancel={() => navigate(AI_ASSETS_RETURN_PATH)}
         onSubmit={(payload: UpsertManagedAgentPayload) => createMutation.mutate(payload)}

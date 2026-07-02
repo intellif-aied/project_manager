@@ -427,7 +427,7 @@ export function AIAssetsPage() {
     mutationFn: (payload: { agentId: string; archived: boolean }) =>
       archiveManagedAgent(payload.agentId, payload.archived),
     onSuccess: (_data, variables) => {
-      message.success(variables.archived ? "Agent 已归档" : "Agent 已恢复");
+      message.success(variables.archived ? "Agent 已删除" : "Agent 已恢复");
       void queryClient.invalidateQueries({ queryKey: ["managed-agents"] });
       void queryClient.invalidateQueries({ queryKey: ["managed-agent-runs"] });
     },
@@ -688,7 +688,7 @@ export function AIAssetsPage() {
       dataIndex: "archived",
       width: 100,
       render: (archived: boolean) =>
-        archived ? <Tag color="default">已归档</Tag> : <Tag color="blue">可用</Tag>
+        archived ? <Tag color="default">已删除</Tag> : <Tag color="blue">可用</Tag>
     },
     {
       title: "操作",
@@ -701,7 +701,7 @@ export function AIAssetsPage() {
             className="resource-action"
             icon={<PlayCircleOutlined />}
             disabled={platformBlocked || record.archived}
-            title={record.archived ? "已归档 Agent 不能发起新运行" : platformActionTitle}
+            title={record.archived ? "已删除 Agent 不能发起新运行" : platformActionTitle}
             onClick={() =>
               navigate(aiAssetsChildPath(`${AGENTS_PATH}/${record.agent_id}/run`, "agents"))
             }
@@ -718,24 +718,55 @@ export function AIAssetsPage() {
           >
             编辑
           </Button>
-          <Button
-            type="link"
-            className="resource-action"
-            disabled={platformBlocked}
-            title={platformActionTitle}
-            loading={
-              archiveAgentMutation.isPending &&
-              archiveAgentMutation.variables?.agentId === record.agent_id
-            }
-            onClick={() =>
-              archiveAgentMutation.mutate({
-                agentId: record.agent_id,
-                archived: !record.archived
-              })
-            }
-          >
-            {record.archived ? "恢复" : "归档"}
-          </Button>
+          {record.archived ? (
+            <Button
+              type="link"
+              className="resource-action"
+              disabled={platformBlocked}
+              title={platformActionTitle}
+              loading={
+                archiveAgentMutation.isPending &&
+                archiveAgentMutation.variables?.agentId === record.agent_id
+              }
+              onClick={() =>
+                archiveAgentMutation.mutate({
+                  agentId: record.agent_id,
+                  archived: false
+                })
+              }
+            >
+              恢复
+            </Button>
+          ) : (
+            <Popconfirm
+              title="删除 Agent"
+              description="删除后该 Agent 将从当前列表移除，不能继续发起新运行。确认删除吗？"
+              okText="删除"
+              cancelText="取消"
+              okButtonProps={{ danger: true }}
+              onConfirm={() =>
+                archiveAgentMutation.mutate({
+                  agentId: record.agent_id,
+                  archived: true
+                })
+              }
+            >
+              <Button
+                type="link"
+                className="resource-action resource-action--danger"
+                danger
+                icon={<DeleteOutlined />}
+                disabled={platformBlocked}
+                title={platformActionTitle}
+                loading={
+                  archiveAgentMutation.isPending &&
+                  archiveAgentMutation.variables?.agentId === record.agent_id
+                }
+              >
+                删除
+              </Button>
+            </Popconfirm>
+          )}
         </Space>
       )
     }
@@ -995,7 +1026,7 @@ export function AIAssetsPage() {
                 <strong>{agent.name}</strong>
                 <span>{agent.description || agent.agent_id}</span>
               </span>
-              {agent.archived ? <Tag color="default">已归档</Tag> : <Tag color="blue">可用</Tag>}
+              {agent.archived ? <Tag color="default">已删除</Tag> : <Tag color="blue">可用</Tag>}
             </header>
             <div className="ai-assets-mobile-card__meta">
               <MobileMeta label="Engine" value={agent.engine} />
@@ -1027,22 +1058,51 @@ export function AIAssetsPage() {
               >
                 编辑
               </Button>
-              <Button
-                size="small"
-                loading={
-                  archiveAgentMutation.isPending &&
-                  archiveAgentMutation.variables?.agentId === agent.agent_id
-                }
-                disabled={platformBlocked}
-                onClick={() =>
-                  archiveAgentMutation.mutate({
-                    agentId: agent.agent_id,
-                    archived: !agent.archived
-                  })
-                }
-              >
-                {agent.archived ? "恢复" : "归档"}
-              </Button>
+              {agent.archived ? (
+                <Button
+                  size="small"
+                  loading={
+                    archiveAgentMutation.isPending &&
+                    archiveAgentMutation.variables?.agentId === agent.agent_id
+                  }
+                  disabled={platformBlocked}
+                  onClick={() =>
+                    archiveAgentMutation.mutate({
+                      agentId: agent.agent_id,
+                      archived: false
+                    })
+                  }
+                >
+                  恢复
+                </Button>
+              ) : (
+                <Popconfirm
+                  title="删除 Agent"
+                  description="删除后该 Agent 将从当前列表移除，不能继续发起新运行。确认删除吗？"
+                  okText="删除"
+                  cancelText="取消"
+                  okButtonProps={{ danger: true }}
+                  onConfirm={() =>
+                    archiveAgentMutation.mutate({
+                      agentId: agent.agent_id,
+                      archived: true
+                    })
+                  }
+                >
+                  <Button
+                    size="small"
+                    danger
+                    icon={<DeleteOutlined />}
+                    loading={
+                      archiveAgentMutation.isPending &&
+                      archiveAgentMutation.variables?.agentId === agent.agent_id
+                    }
+                    disabled={platformBlocked}
+                  >
+                    删除
+                  </Button>
+                </Popconfirm>
+              )}
             </div>
           </article>
         ))}
@@ -1364,7 +1424,7 @@ export function AIAssetsPage() {
             key: "agents",
             label: "我的 Agents",
             children: (
-              <div className="ai-assets-agent-pane">
+              <>
                 <div className="ai-assets-table-card ai-assets-table-card--desktop">
                   <ResourceTable<ManagedAgent>
                     rowKey="agent_id"
@@ -1375,34 +1435,7 @@ export function AIAssetsPage() {
                   />
                 </div>
                 {agentMobileList}
-                <section className="ai-assets-history">
-                  <header>
-                    <strong>运行历史</strong>
-                    <Button
-                      size="small"
-                      icon={<ReloadOutlined />}
-                      onClick={() => void runsQuery.refetch()}
-                    >
-                      刷新
-                    </Button>
-                  </header>
-                  <div className="ai-assets-table-card ai-assets-table-card--desktop">
-                    <ResourceTable<AIRun>
-                      rowKey="id"
-                      columns={runColumns}
-                      dataSource={runs}
-                      loading={runsQuery.isLoading}
-                      pagination={{ pageSize: 8 }}
-                      locale={{
-                        emptyText: (
-                          <AssetEmptyState icon={<PlayCircleOutlined />} title="暂无运行记录" />
-                        )
-                      }}
-                    />
-                  </div>
-                  {runMobileList}
-                </section>
-              </div>
+              </>
             )
           },
           {
@@ -1461,6 +1494,39 @@ export function AIAssetsPage() {
                 </div>
                 {scheduleMobileList}
               </>
+            )
+          },
+          {
+            key: "runs",
+            label: "运行历史",
+            children: (
+              <section className="ai-assets-history">
+                <header>
+                  <strong>最近运行记录</strong>
+                  <Button
+                    size="small"
+                    icon={<ReloadOutlined />}
+                    onClick={() => void runsQuery.refetch()}
+                  >
+                    刷新
+                  </Button>
+                </header>
+                <div className="ai-assets-table-card ai-assets-table-card--desktop">
+                  <ResourceTable<AIRun>
+                    rowKey="id"
+                    columns={runColumns}
+                    dataSource={runs}
+                    loading={runsQuery.isLoading}
+                    pagination={{ pageSize: 8 }}
+                    locale={{
+                      emptyText: (
+                        <AssetEmptyState icon={<PlayCircleOutlined />} title="暂无运行记录" />
+                      )
+                    }}
+                  />
+                </div>
+                {runMobileList}
+              </section>
             )
           }
         ]}

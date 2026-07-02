@@ -18,7 +18,7 @@
   min-height: 92px;
   padding: 12px;
   text-align: left;
-  cursor: pointer;
+  cursor: default;
   background: #fff;
   border: 1px solid #dfe7f2;
   border-radius: 8px;
@@ -33,6 +33,11 @@
   box-shadow: 0 8px 20px rgba(30, 64, 175, 0.08);
 }
 
+.ai-assets-resource-card .ant-checkbox-wrapper,
+.ai-assets-resource-card .ant-checkbox {
+  cursor: pointer;
+}
+
 .ai-assets-resource-card.is-selected {
   background: #f5f8ff;
   border-color: #4f7cff;
@@ -41,6 +46,7 @@
 .ai-assets-resource-card__body {
   display: grid;
   gap: 4px;
+  width: 100%;
   min-width: 0;
 }
 
@@ -67,4 +73,95 @@
   font-family:
     ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
     monospace;
+}
+
+.ai-assets-resource-card__credential-select {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  margin-top: 4px;
+  cursor: default;
+}
+
+.ai-assets-resource-card__credential-control {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  max-width: 360px;
+  overflow: hidden;
+}
+
+.ai-assets-resource-card__credential-control .ai-assets-resource-card__credential-select {
+  max-width: 100%;
+}
+
+.ai-assets-resource-card__credential-select .ant-select-content,
+.ai-assets-resource-card__credential-select .ant-select-selector {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  min-height: 32px;
+  padding: 0 30px 0 10px;
+  overflow: hidden;
+  color: #334155;
+  font-size: 12px;
+  line-height: 30px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: #ffffff;
+  border-color: #d8e2f0;
+  border-style: solid;
+  border-width: 1px;
+  border-radius: 7px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.035);
+}
+
+.ai-assets-resource-card__credential-select .ant-select-content {
+  position: relative;
+}
+
+.ai-assets-resource-card__credential-select .ant-select-content-has-value {
+  min-width: 0;
+}
+
+.ai-assets-resource-card__credential-select .ant-select-input {
+  width: 0;
+  min-width: 0;
+}
+
+.ai-assets-resource-card__credential-select .ant-select-selection-item {
+  color: #334155;
+  font-size: 12px;
+  line-height: 30px;
+}
+
+.ai-assets-resource-card__credential-select .ant-select-suffix {
+  right: 10px;
+  color: #64748b;
+}
+
+.ai-assets-resource-card__credential-select:hover .ant-select-content,
+.ai-assets-resource-card__credential-select:hover .ant-select-selector {
+  border-color: #91b4ff;
+}
+
+.ai-assets-resource-credential-popup {
+  background: #ffffff;
+  border: 1px solid #d8e2f0;
+  border-radius: 8px;
+  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.14);
+}
+
+.ai-assets-resource-credential-popup .ant-select-item {
+  min-height: 30px;
+  color: #334155;
+  font-size: 12px;
+}
+
+.ai-assets-resource-credential-popup .ant-select-item-option-content {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

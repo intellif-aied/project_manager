@@ -25,6 +25,7 @@ import type {
   ManagedAgentManualRunPayload,
   ManagedReportAgentRunPayload,
   ManagedAgentSchedule,
+  ManagedCredential,
   ManagedMCPEntry,
   ManagedSkill,
   PaginatedDailyReports,
@@ -574,6 +575,12 @@ export const archiveManagedMCPEntry = (slug: string, version: string, archived: 
   unwrap(api.post<Record<string, unknown>>(`/ai-assets/mcp/${encodeURIComponent(slug)}/${encodeURIComponent(version)}/archive`, { archived }));
 export const deleteManagedMCPEntry = (slug: string, version: string) =>
   unwrap(api.delete<Record<string, unknown>>(`/ai-assets/mcp/${encodeURIComponent(slug)}/${encodeURIComponent(version)}`));
+export const fetchManagedCredentials = () =>
+  unwrap(api.get<{ credentials: ManagedCredential[] }>("/ai-assets/credentials", undefined, { skipErrorHandler: true }));
+export const createManagedCredential = (payload: { name: string; value: string; kind?: string; description?: string }) =>
+  unwrap(api.post<{ credential_id: string }>("/ai-assets/credentials", payload));
+export const deleteManagedCredential = (credentialId: string) =>
+  unwrap(api.delete<Record<string, unknown>>(`/ai-assets/credentials/${encodeURIComponent(credentialId)}`));
 export const fetchDailyReportAgentIntegration = () =>
   unwrap(api.get<DailyReportAgentIntegration>("/ai-assets/daily-report-integration"));
 export const fetchManagedAgents = () =>

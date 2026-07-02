@@ -40,7 +40,7 @@
 
 .acceptance-criteria-editor__row .ant-input {
   height: 34px;
-  padding-inline: 0;
+  padding: 6px 10px;
   color: #253047;
   background: transparent;
   border-color: transparent;

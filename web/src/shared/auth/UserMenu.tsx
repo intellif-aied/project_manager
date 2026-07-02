@@ -1,12 +1,21 @@
-import { CopyOutlined, LogoutOutlined, UserOutlined } from "@ant-design/icons";
+import { CopyOutlined, LogoutOutlined } from "@ant-design/icons";
 import { App } from "antd";
 import { Avatar, Dropdown, Skeleton, Space } from "antd";
 import type { MenuProps } from "antd";
 import { useNavigate } from "react-router-dom";
 
 import { ROLE_LABELS } from "./types";
+import type { UserRole } from "./types";
 import { useAuth } from "./authContext";
 import { getAuthSession } from "./session";
+
+const ROLE_AVATAR_MARKS: Record<UserRole, string> = {
+  admin: "A",
+  director: "D",
+  pm: "PM",
+  team_leader: "TL",
+  employee: "E"
+};
 
 async function copyText(text: string) {
   if (navigator.clipboard && window.isSecureContext) {
@@ -44,6 +53,8 @@ export function UserMenu() {
   const userSummary = user
     ? `${ROLE_LABELS[user.role]}${user.team_name ? " · " + user.team_name : ""}`
     : "平台用户";
+  const avatarRoleClass = user ? `user-menu__avatar--${user.role}` : "user-menu__avatar--guest";
+  const avatarMark = user ? ROLE_AVATAR_MARKS[user.role] : "U";
 
   const copyToken = async () => {
     const { token } = getAuthSession();
@@ -99,7 +110,9 @@ export function UserMenu() {
       }}
     >
       <Space className="user-menu" size={8}>
-        <Avatar size={28} icon={<UserOutlined />} />
+        <Avatar size={28} className={`user-menu__avatar ${avatarRoleClass}`}>
+          <span className="user-menu__avatar-mark">{avatarMark}</span>
+        </Avatar>
         <span className="user-menu__copy">
           <strong>{displayName}</strong>
           <small>{userSummary}</small>

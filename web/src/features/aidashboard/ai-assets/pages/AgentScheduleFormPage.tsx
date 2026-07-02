@@ -1,5 +1,20 @@
-import { App, Alert, Button, Card, Empty, Form, Input, Select, Space, Switch, Tag } from "antd";
+import {
+  App,
+  Alert,
+  Button,
+  Card,
+  Empty,
+  Form,
+  Input,
+  Select,
+  Space,
+  Switch,
+  Tag,
+  TimePicker
+} from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import dayjs from "dayjs";
+import type { Dayjs } from "dayjs";
 import { useEffect, useMemo } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
@@ -50,6 +65,7 @@ const REPORT_TYPE_OPTIONS: Array<{ label: string; value: ReportType }> = [
   { label: "部门日报", value: "department_daily" },
   { label: "部门周报", value: "department_weekly" }
 ];
+const TIME_OF_DAY_FORMAT = "HH:mm";
 
 interface AgentScheduleFormValues {
   name: string;
@@ -120,6 +136,22 @@ function scheduleRuleText(values: Partial<AgentScheduleFormValues>) {
     return `${labels || "每周"} ${values.time_of_day}`;
   }
   return `每天 ${values.time_of_day}`;
+}
+
+function timeStringToDayjs(value?: string): Dayjs | null {
+  const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(value || "");
+  if (!match) return null;
+  return dayjs()
+    .hour(Number(match[1]))
+    .minute(Number(match[2]))
+    .second(0)
+    .millisecond(0);
+}
+
+function normalizeTimeOfDay(value?: Dayjs | string | null) {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  return value.format(TIME_OF_DAY_FORMAT);
 }
 
 function formatDateTime(value?: string) {
@@ -284,9 +316,13 @@ export function AgentScheduleFormPage() {
       ]}
     >
       <section className="ai-assets-workspace">
-        <Form form={form} layout="vertical">
-          <Card title="基础信息" className="ai-assets-editor-section">
-            <div className="ai-assets-editor-grid">
+        <Form
+          form={form}
+          layout="vertical"
+          className="ai-assets-agent-editor ai-assets-schedule-form"
+        >
+          <Card title="任务设置" className="ai-assets-editor-section">
+            <div className="ai-assets-schedule-form__grid">
               <Form.Item
                 name="name"
                 label="任务名称"
@@ -294,17 +330,19 @@ export function AgentScheduleFormPage() {
               >
                 <Input placeholder="例如：每日个人日报" />
               </Form.Item>
-              <Form.Item name="enabled" label="启用状态" valuePropName="checked">
+              <Form.Item
+                name="enabled"
+                label="启用状态"
+                valuePropName="checked"
+                className="ai-assets-schedule-form__switch"
+              >
                 <Switch checkedChildren="启用" unCheckedChildren="停用" />
               </Form.Item>
-            </div>
-          </Card>
 
-          <Card title="选择 Agent" className="ai-assets-editor-section">
-            <div className="ai-assets-editor-grid">
               <Form.Item
                 name="agent_id"
                 label="Agent"
+                className="ai-assets-editor-grid__wide"
                 rules={[{ required: true, message: "请选择 Agent" }]}
               >
                 <Select
@@ -315,6 +353,7 @@ export function AgentScheduleFormPage() {
                   placeholder="选择要定时运行的 Agent"
                 />
               </Form.Item>
+
               <Form.Item label="Agent 类型">
                 {runKind === "report_agent" ? (
                   <Tag color="purple">Report Agent</Tag>
@@ -322,11 +361,7 @@ export function AgentScheduleFormPage() {
                   <Tag>普通 Agent</Tag>
                 )}
               </Form.Item>
-            </div>
-          </Card>
 
-          <Card title="定时器配置" className="ai-assets-editor-section">
-            <div className="ai-assets-editor-grid">
               <Form.Item name="schedule_type" label="触发频率" rules={[{ required: true }]}>
                 <Select
                   options={[
@@ -335,6 +370,7 @@ export function AgentScheduleFormPage() {
                   ]}
                 />
               </Form.Item>
+
               {scheduleType === "weekly" ? (
                 <Form.Item
                   name="weekdays"
@@ -344,21 +380,25 @@ export function AgentScheduleFormPage() {
                   <Select mode="multiple" options={WEEKDAY_OPTIONS} />
                 </Form.Item>
               ) : null}
+
               <Form.Item
                 name="time_of_day"
-                label="几点执行"
+                label="执行时间"
+                getValueProps={(value?: string) => ({ value: timeStringToDayjs(value) })}
+                normalize={normalizeTimeOfDay}
                 rules={[
-                  { required: true, message: "请输入执行时间" },
+                  { required: true, message: "请选择执行时间" },
                   { pattern: /^([01]\d|2[0-3]):[0-5]\d$/, message: "格式应为 HH:mm" }
                 ]}
               >
-                <Input placeholder="19:00" />
+                <TimePicker
+                  format={TIME_OF_DAY_FORMAT}
+                  inputReadOnly
+                  placeholder="选择时间"
+                  showNow={false}
+                />
               </Form.Item>
-            </div>
-          </Card>
 
-          <Card title="Agent 运行配置" className="ai-assets-editor-section">
-            <div className="ai-assets-editor-grid">
               {runKind === "report_agent" ? (
                 <Form.Item
                   name="report_type"
@@ -368,66 +408,82 @@ export function AgentScheduleFormPage() {
                   <Select options={REPORT_TYPE_OPTIONS} />
                 </Form.Item>
               ) : null}
-              <Form.Item name="model_id" label="模型">
-                <Input placeholder="留空使用 Agent 默认模型" />
+
+              <Form.Item name="model_id" label="模型 ID" extra="不填写时使用 Agent 默认模型">
+                <Input placeholder="例如：MiniMax-M2.5" />
               </Form.Item>
+
               <Form.Item
                 name="initial_message"
-                label={
-                  runKind === "report_agent" ? "Initial Message / 补充要求" : "Initial Message"
-                }
+                label={runKind === "report_agent" ? "补充要求" : "运行消息"}
                 className="ai-assets-editor-grid__wide"
               >
                 <Input.TextArea rows={4} placeholder="可选：补充本次运行要求" />
               </Form.Item>
-            </div>
-            <div className="ai-assets-prompt-values">
-              {promptVariables.length === 0 ? (
-                <Empty
-                  image={Empty.PRESENTED_IMAGE_SIMPLE}
-                  description="当前 Agent 没有需要填写的 Start Prompt Values"
-                />
-              ) : (
-                promptVariables.map((key) => (
-                  <Form.Item key={key} name={["start_prompt_values", key]} label={key}>
-                    <Input.TextArea rows={2} />
-                  </Form.Item>
-                ))
-              )}
+
+              {promptVariables.length > 0 ? (
+                <div className="ai-assets-schedule-form__prompt-block">
+                  <div className="ai-assets-schedule-form__subhead">运行参数</div>
+                  <div className="ai-assets-prompt-values">
+                    {promptVariables.map((key) => (
+                      <Form.Item key={key} name={["start_prompt_values", key]} label={key}>
+                        <Input.TextArea rows={2} />
+                      </Form.Item>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </div>
           </Card>
 
-          <Card title="预览" className="ai-assets-editor-section">
-            <Space direction="vertical" size={8}>
-              <span>
-                触发规则：
-                {scheduleRuleText({
-                  schedule_type: scheduleType,
-                  weekdays,
-                  time_of_day: timeOfDay
-                })}
-              </span>
-              <span>下次触发时间：{formatDateTime(previewQuery.data?.next_run_at)}</span>
-              <span>Agent 类型：{runKind === "report_agent" ? "Report Agent" : "普通 Agent"}</span>
+          <Card title="运行预览" className="ai-assets-editor-section">
+            <dl className="ai-assets-schedule-preview">
+              <div>
+                <dt>触发规则</dt>
+                <dd>
+                  {scheduleRuleText({
+                    schedule_type: scheduleType,
+                    weekdays,
+                    time_of_day: timeOfDay
+                  })}
+                </dd>
+              </div>
+              <div>
+                <dt>下次触发时间</dt>
+                <dd>{formatDateTime(previewQuery.data?.next_run_at)}</dd>
+              </div>
+              <div>
+                <dt>Agent 类型</dt>
+                <dd>{runKind === "report_agent" ? "Report Agent" : "普通 Agent"}</dd>
+              </div>
               {runKind === "report_agent" ? (
                 <>
-                  <span>
-                    报告类型：
-                    {REPORT_TYPE_OPTIONS.find((item) => item.value === reportType)?.label || "-"}
-                  </span>
-                  <span>报告对象：{previewQuery.data?.report_target_display || "-"}</span>
-                  <span>预计报告周期：{previewQuery.data?.period_display || "-"}</span>
+                  <div>
+                    <dt>报告类型</dt>
+                    <dd>
+                      {REPORT_TYPE_OPTIONS.find((item) => item.value === reportType)?.label ||
+                        "-"}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>报告对象</dt>
+                    <dd>{previewQuery.data?.report_target_display || "-"}</dd>
+                  </div>
+                  <div>
+                    <dt>预计报告周期</dt>
+                    <dd>{previewQuery.data?.period_display || "-"}</dd>
+                  </div>
                 </>
               ) : null}
-              {previewQuery.error ? (
-                <Alert
-                  type="warning"
-                  showIcon
-                  message="预览失败"
-                  description={errorMessage(previewQuery.error)}
-                />
-              ) : null}
-            </Space>
+            </dl>
+            {previewQuery.error ? (
+              <Alert
+                type="warning"
+                showIcon
+                message="预览失败"
+                description={errorMessage(previewQuery.error)}
+              />
+            ) : null}
           </Card>
 
           <div className="ai-assets-workspace__actions">

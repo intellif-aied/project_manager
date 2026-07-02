@@ -87,6 +87,78 @@
   grid-column: 1 / -1;
 }
 
+.ai-assets-schedule-form .ant-card-body {
+  padding: 18px;
+}
+
+.ai-assets-schedule-form__grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.25fr) minmax(180px, 0.75fr);
+  gap: 14px 16px;
+  align-items: start;
+}
+
+.ai-assets-schedule-form__switch .ant-form-item-control-input {
+  min-height: 32px;
+}
+
+.ai-assets-schedule-form .ant-picker {
+  width: 100%;
+}
+
+.ai-assets-schedule-form__prompt-block {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 10px;
+  padding-top: 2px;
+}
+
+.ai-assets-schedule-form__subhead {
+  color: #172033;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.ai-assets-schedule-preview {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+
+.ai-assets-schedule-preview div {
+  min-width: 0;
+  padding: 12px 14px;
+  background: #f8fafc;
+  border: 1px solid #e6ebf3;
+  border-radius: 8px;
+}
+
+.ai-assets-schedule-preview dt,
+.ai-assets-schedule-preview dd {
+  margin: 0;
+}
+
+.ai-assets-schedule-preview dt {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.ai-assets-schedule-preview dd {
+  margin-top: 4px;
+  color: #172033;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.ai-assets-schedule-preview + .ant-alert {
+  margin-top: 12px;
+}
+
 .ai-assets-agent-editor .ant-form-item {
   min-width: 0;
   margin-bottom: 0;
@@ -191,6 +263,50 @@
   min-width: 0;
 }
 
+.ai-assets-credential-alert {
+  margin-bottom: 14px;
+}
+
+.ai-assets-runtime-credentials {
+  display: grid;
+  gap: 12px;
+}
+
+.ai-assets-runtime-credential {
+  display: grid;
+  grid-template-columns: minmax(180px, 260px) minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+}
+
+.ai-assets-runtime-credential > span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.ai-assets-runtime-credential strong {
+  color: #172033;
+  font-size: 13px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.ai-assets-runtime-credential em {
+  color: #64748b;
+  font-size: 12px;
+  font-style: normal;
+  line-height: 1.4;
+  word-break: break-all;
+}
+
+.ai-assets-runtime-credential-create {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(180px, 1.4fr) auto;
+  gap: 10px;
+  margin-top: 12px;
+}
+
 .ai-assets-prompt-values {
   display: grid;
   gap: 12px;
@@ -291,6 +407,8 @@
   }
 
   .ai-assets-editor-grid,
+  .ai-assets-schedule-form__grid,
+  .ai-assets-schedule-preview,
   .ai-assets-run-layout {
     grid-template-columns: 1fr;
   }

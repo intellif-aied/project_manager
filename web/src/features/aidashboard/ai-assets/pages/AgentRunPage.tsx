@@ -1,4 +1,16 @@
-import { Alert, App, Button, Card, DatePicker, Input, Select, Space, Spin, Tag, Tooltip } from "antd";
+import {
+  Alert,
+  App,
+  Button,
+  Card,
+  DatePicker,
+  Input,
+  Select,
+  Space,
+  Spin,
+  Tag,
+  Tooltip
+} from "antd";
 import { PlayCircleOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
@@ -7,12 +19,14 @@ import { useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import {
+  createManagedCredential,
   fetchManagedAgentRun,
   fetchManagedAgents,
+  fetchManagedCredentials,
   startManagedAgentRun,
   startReportAgentRun
 } from "../../api/client";
-import type { AIRun, ManagedAgent, ReportType } from "../../api/types";
+import type { AIRun, ManagedAgent, ManagedCredential, ReportType } from "../../api/types";
 import {
   AI_ASSETS_HOME,
   aiAssetsPath,
@@ -20,6 +34,8 @@ import {
   extractPromptVariables,
   isReportAgentAsset,
   REPORT_AGENT_MARKER,
+  REPORT_SYSTEM_MCP_SLUG,
+  REPORT_SYSTEM_MCP_VERSION,
   reportAgentMarkerText,
   renderPromptPreview
 } from "../utils/agentAssets";
@@ -136,6 +152,181 @@ function modelCardTitle(required: boolean) {
   );
 }
 
+function reportRuntimeCredentialSlots(agent: ManagedAgent) {
+  const slots = new Set<string>();
+  for (const binding of agent.mcp_bindings ?? []) {
+    const isReportMCP =
+      binding.slug === REPORT_SYSTEM_MCP_SLUG &&
+      (!binding.version || binding.version === REPORT_SYSTEM_MCP_VERSION);
+    const slot = binding.credential_slot?.trim();
+    if (isReportMCP && slot) slots.add(slot);
+  }
+  return slots;
+}
+
+interface RuntimeCredentialSlot {
+  name: string;
+  label: string;
+  defaultCredentialId: string;
+}
+
+function runtimeCredentialSlots(agent: ManagedAgent): RuntimeCredentialSlot[] {
+  const reportSlots = reportRuntimeCredentialSlots(agent);
+  const defaultBindings = agent.default_bindings ?? {};
+  const mcpLabels = new Map<string, string>();
+  for (const binding of agent.mcp_bindings ?? []) {
+    const slot = binding.credential_slot?.trim();
+    if (!slot) continue;
+    const owner = binding.owner ? `${binding.owner}/` : "";
+    mcpLabels.set(slot, `${owner}${binding.slug}@${binding.version}`);
+  }
+  return (agent.credential_slots ?? []).flatMap((slot) => {
+    const name = slot.name.trim();
+    if (!slot.required || !name || reportSlots.has(name)) return [];
+    return [
+      {
+        name,
+        label: mcpLabels.get(name) ?? name,
+        defaultCredentialId: defaultBindings[name]?.trim() ?? ""
+      }
+    ];
+  });
+}
+
+function formatCredentialSlots(slots: string[]) {
+  if (slots.length <= 3) return slots.join("、");
+  return `${slots.slice(0, 3).join("、")} 等 ${slots.length} 项`;
+}
+
+function isSelectableCredential(credential: ManagedCredential) {
+  const purpose = credential.metadata?.purpose ?? "";
+  return !credential.archived && !purpose.includes("report_mcp_auth");
+}
+
+function missingRuntimeCredentialSlots(
+  slots: RuntimeCredentialSlot[],
+  overrides: Record<string, string>
+) {
+  return slots
+    .filter((slot) => !slot.defaultCredentialId && !overrides[slot.name]?.trim())
+    .map((slot) => slot.name);
+}
+
+function credentialDisabledReason(slots: string[], credentialsLoading: boolean) {
+  if (credentialsLoading) return "正在加载 MCP 凭证，请稍候。";
+  return `请先为以下 MCP 凭证项选择已保存凭证：${formatCredentialSlots(slots)}。`;
+}
+
+function compactCredentialOverrides(overrides: Record<string, string>) {
+  return Object.fromEntries(
+    Object.entries(overrides)
+      .map(([slot, credentialId]) => [slot.trim(), credentialId.trim()])
+      .filter(([slot, credentialId]) => slot && credentialId)
+  );
+}
+
+function RuntimeCredentialCard({
+  slots,
+  credentials,
+  values,
+  loading,
+  onChange
+}: {
+  slots: RuntimeCredentialSlot[];
+  credentials: ManagedCredential[];
+  values: Record<string, string>;
+  loading: boolean;
+  onChange: (slot: string, credentialId: string) => void;
+}) {
+  const queryClient = useQueryClient();
+  const { message } = App.useApp();
+  const [credentialName, setCredentialName] = useState("");
+  const [credentialValue, setCredentialValue] = useState("");
+  const createCredentialMutation = useMutation({
+    mutationFn: () =>
+      createManagedCredential({
+        name: credentialName.trim(),
+        value: credentialValue
+      }),
+    onSuccess: (result) => {
+      message.success("凭证已保存");
+      setCredentialName("");
+      setCredentialValue("");
+      const firstMissing = slots.find((slot) => !slot.defaultCredentialId && !values[slot.name]);
+      if (firstMissing) {
+        onChange(firstMissing.name, result.credential_id);
+      }
+      void queryClient.invalidateQueries({ queryKey: ["managed-credentials"] });
+    },
+    onError: (err: unknown) => message.error(errorMessage(err))
+  });
+  if (slots.length === 0) return null;
+  const selectableCredentials = credentials.filter(isSelectableCredential);
+  const canCreateCredential = credentialName.trim().length > 0 && credentialValue.trim().length > 0;
+  return (
+    <Card title="MCP 凭证" className="ai-assets-editor-section">
+      <div className="ai-assets-runtime-credentials">
+        {slots.map((slot) => {
+          const hasDefault = Boolean(slot.defaultCredentialId);
+          const value = values[slot.name] ?? "";
+          return (
+            <label key={slot.name} className="ai-assets-runtime-credential">
+              <span>
+                <strong>{slot.label}</strong>
+                <em>{slot.name}</em>
+              </span>
+              <Select
+                loading={loading}
+                value={value}
+                showSearch
+                optionFilterProp="label"
+                placeholder="选择已保存凭证"
+                options={[
+                  {
+                    label: hasDefault ? "使用 Agent 默认凭证" : "请选择已保存凭证",
+                    value: "",
+                    disabled: !hasDefault
+                  },
+                  ...selectableCredentials.map((credential) => ({
+                    label: credential.name,
+                    value: credential.credential_id
+                  }))
+                ]}
+                onChange={(credentialId) => onChange(slot.name, credentialId)}
+              />
+            </label>
+          );
+        })}
+      </div>
+      <p className="ai-assets-field-help">
+        报告能力所需凭证由平台处理；如果 Agent 还连接了其他 MCP，可在这里选择对应凭证。
+      </p>
+      <div className="ai-assets-runtime-credential-create">
+        <Input
+          value={credentialName}
+          onChange={(event) => setCredentialName(event.target.value)}
+          placeholder="凭证名称"
+        />
+        <Input.Password
+          value={credentialValue}
+          onChange={(event) => setCredentialValue(event.target.value)}
+          placeholder="凭证值"
+        />
+        <Button
+          loading={createCredentialMutation.isPending}
+          disabled={!canCreateCredential || createCredentialMutation.isPending}
+          onClick={() => createCredentialMutation.mutate()}
+        >
+          保存凭证
+        </Button>
+      </div>
+      {!loading && selectableCredentials.length === 0 ? (
+        <Alert type="warning" showIcon message="当前没有可用的已保存凭证" />
+      ) : null}
+    </Card>
+  );
+}
+
 function RunStatusCard({ run }: { run?: AIRun }) {
   return (
     <Card title="运行状态" className="ai-assets-editor-section">
@@ -202,6 +393,7 @@ function GenericAgentRunForm({ agent }: { agent: ManagedAgent }) {
   const [runMessage, setRunMessage] = useState("");
   const [runModelId, setRunModelId] = useState("");
   const [activeRunId, setActiveRunId] = useState<string>();
+  const [credentialOverrides, setCredentialOverrides] = useState<Record<string, string>>({});
 
   const activeRunQuery = useQuery<AIRun>({
     queryKey: ["managed-agent-run", activeRunId],
@@ -212,6 +404,11 @@ function GenericAgentRunForm({ agent }: { agent: ManagedAgent }) {
       return status === "pending" || status === "running" ? 2500 : false;
     }
   });
+  const credentialsQuery = useQuery({
+    queryKey: ["managed-credentials"],
+    queryFn: () => fetchManagedCredentials(),
+    staleTime: 30_000
+  });
 
   const defaultModelId = agent.default_model_id?.trim() || "";
   const modelId = runModelId.trim() || defaultModelId;
@@ -219,17 +416,39 @@ function GenericAgentRunForm({ agent }: { agent: ManagedAgent }) {
   const promptPreview = template ? renderPromptPreview(template, startPromptValues) : "";
   const hasPromptInput =
     promptVariables.length > 0 ? missingPromptVariables.length === 0 : runMessage.trim().length > 0;
+  const credentialSlots = useMemo(() => runtimeCredentialSlots(agent), [agent]);
+  const credentials = useMemo(
+    () => credentialsQuery.data?.credentials ?? [],
+    [credentialsQuery.data]
+  );
+  const cleanedCredentialOverrides = useMemo(
+    () => compactCredentialOverrides(credentialOverrides),
+    [credentialOverrides]
+  );
+  const missingCredentialSlots = useMemo(
+    () => missingRuntimeCredentialSlots(credentialSlots, cleanedCredentialOverrides),
+    [cleanedCredentialOverrides, credentialSlots]
+  );
+  const needsRuntimeCredential = credentialSlots.some((slot) => !slot.defaultCredentialId);
+  const credentialReason =
+    needsRuntimeCredential && credentialsQuery.isLoading
+      ? credentialDisabledReason(missingCredentialSlots, true)
+      : missingCredentialSlots.length
+        ? credentialDisabledReason(missingCredentialSlots, false)
+        : "";
   const baseRunDisabledReason = agent.archived
-    ? "该 Agent 已归档，不能发起新的运行。"
-    : activeRunQuery.isFetching
-      ? "正在同步运行状态，请稍候。"
-      : !modelId
-        ? "请先填写模型 ID，或在 Agent 配置中设置默认模型。"
-        : missingPromptVariables.length > 0
-          ? missingPromptReason(missingPromptVariables)
-          : !hasPromptInput
-            ? "请先填写 Initial Message。"
-            : "";
+    ? "该 Agent 已删除，不能发起新的运行。"
+    : credentialReason
+      ? credentialReason
+      : activeRunQuery.isFetching
+        ? "正在同步运行状态，请稍候。"
+        : !modelId
+          ? "请先填写模型 ID，或在 Agent 配置中设置默认模型。"
+          : missingPromptVariables.length > 0
+            ? missingPromptReason(missingPromptVariables)
+            : !hasPromptInput
+              ? "请先填写 Initial Message。"
+              : "";
   const canRun = !baseRunDisabledReason;
 
   const runMutation = useMutation({
@@ -238,7 +457,11 @@ function GenericAgentRunForm({ agent }: { agent: ManagedAgent }) {
       return startManagedAgentRun(agent.agent_id, {
         message: messageText,
         model_id: modelId,
-        params: promptVariables.length ? startPromptValues : undefined
+        params: promptVariables.length ? startPromptValues : undefined,
+        credential_overrides:
+          Object.keys(cleanedCredentialOverrides).length > 0
+            ? cleanedCredentialOverrides
+            : undefined
       });
     },
     onSuccess: (run) => {
@@ -252,12 +475,21 @@ function GenericAgentRunForm({ agent }: { agent: ManagedAgent }) {
     ? "正在提交运行请求，请稍候。"
     : baseRunDisabledReason;
 
-
   return (
     <section className="ai-assets-workspace">
       <div className="ai-assets-run-layout">
         <AgentContextCard agent={agent} reportAgent={false} />
         <div className="ai-assets-run-form">
+          <RuntimeCredentialCard
+            slots={credentialSlots}
+            credentials={credentials}
+            values={credentialOverrides}
+            loading={credentialsQuery.isLoading}
+            onChange={(slot, credentialId) =>
+              setCredentialOverrides((current) => ({ ...current, [slot]: credentialId }))
+            }
+          />
+
           {promptVariables.length > 0 ? (
             <Card title="Start Prompt Values" className="ai-assets-editor-section">
               <div className="ai-assets-prompt-values">
@@ -366,6 +598,7 @@ function ReportAgentRunForm({ agent }: { agent: ManagedAgent }) {
   const [weekRange, setWeekRange] = useState<[Dayjs, Dayjs]>(() => defaultWeekRange());
   const [runModelId, setRunModelId] = useState("");
   const [activeRunId, setActiveRunId] = useState<string>();
+  const [credentialOverrides, setCredentialOverrides] = useState<Record<string, string>>({});
 
   const activeRunQuery = useQuery<AIRun>({
     queryKey: ["managed-agent-run", activeRunId],
@@ -375,6 +608,11 @@ function ReportAgentRunForm({ agent }: { agent: ManagedAgent }) {
       const status = query.state.data?.status;
       return status === "pending" || status === "running" ? 2500 : false;
     }
+  });
+  const credentialsQuery = useQuery({
+    queryKey: ["managed-credentials"],
+    queryFn: () => fetchManagedCredentials(),
+    staleTime: 30_000
   });
 
   const reportType = options.some((option) => option.value === reportTypeInput)
@@ -386,17 +624,39 @@ function ReportAgentRunForm({ agent }: { agent: ManagedAgent }) {
     (key) => !startPromptValues[key]?.trim()
   );
   const promptPreview = template ? renderPromptPreview(template, startPromptValues) : "";
+  const credentialSlots = useMemo(() => runtimeCredentialSlots(agent), [agent]);
+  const credentials = useMemo(
+    () => credentialsQuery.data?.credentials ?? [],
+    [credentialsQuery.data]
+  );
+  const cleanedCredentialOverrides = useMemo(
+    () => compactCredentialOverrides(credentialOverrides),
+    [credentialOverrides]
+  );
+  const missingCredentialSlots = useMemo(
+    () => missingRuntimeCredentialSlots(credentialSlots, cleanedCredentialOverrides),
+    [cleanedCredentialOverrides, credentialSlots]
+  );
+  const needsRuntimeCredential = credentialSlots.some((slot) => !slot.defaultCredentialId);
+  const credentialReason =
+    needsRuntimeCredential && credentialsQuery.isLoading
+      ? credentialDisabledReason(missingCredentialSlots, true)
+      : missingCredentialSlots.length
+        ? credentialDisabledReason(missingCredentialSlots, false)
+        : "";
   const baseRunDisabledReason = agent.archived
-    ? "该 Agent 已归档，不能发起新的运行。"
-    : activeRunQuery.isFetching
-      ? "正在同步运行状态，请稍候。"
-      : options.length === 0
-        ? "当前账号没有该 Agent 支持的报告类型运行权限。"
-        : !modelId
-          ? "请先填写模型 ID，或在 Agent 配置中设置默认模型。"
-          : missingPromptVariables.length > 0
-            ? missingPromptReason(missingPromptVariables)
-            : "";
+    ? "该 Agent 已删除，不能发起新的运行。"
+    : credentialReason
+      ? credentialReason
+      : activeRunQuery.isFetching
+        ? "正在同步运行状态，请稍候。"
+        : options.length === 0
+          ? "当前账号没有该 Agent 支持的报告类型运行权限。"
+          : !modelId
+            ? "请先填写模型 ID，或在 Agent 配置中设置默认模型。"
+            : missingPromptVariables.length > 0
+              ? missingPromptReason(missingPromptVariables)
+              : "";
   const canRun = !baseRunDisabledReason;
 
   const runMutation = useMutation({
@@ -413,7 +673,11 @@ function ReportAgentRunForm({ agent }: { agent: ManagedAgent }) {
         target: { type: "self" },
         model_id: modelId,
         start_prompt_values: userPromptVariables.length ? startPromptValues : undefined,
-        message: runMessage.trim() || undefined
+        message: runMessage.trim() || undefined,
+        credential_overrides:
+          Object.keys(cleanedCredentialOverrides).length > 0
+            ? cleanedCredentialOverrides
+            : undefined
       });
     },
     onSuccess: (run) => {
@@ -427,12 +691,21 @@ function ReportAgentRunForm({ agent }: { agent: ManagedAgent }) {
     ? "正在提交运行请求，请稍候。"
     : baseRunDisabledReason;
 
-
   return (
     <section className="ai-assets-workspace">
       <div className="ai-assets-run-layout">
         <AgentContextCard agent={agent} reportAgent />
         <div className="ai-assets-run-form">
+          <RuntimeCredentialCard
+            slots={credentialSlots}
+            credentials={credentials}
+            values={credentialOverrides}
+            loading={credentialsQuery.isLoading}
+            onChange={(slot, credentialId) =>
+              setCredentialOverrides((current) => ({ ...current, [slot]: credentialId }))
+            }
+          />
+
           <Card title="报告参数" className="ai-assets-editor-section">
             {options.length === 0 ? (
               <Alert type="warning" showIcon message="当前账号没有可运行的报告类型" />
