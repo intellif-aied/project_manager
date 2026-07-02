@@ -473,6 +473,7 @@ export interface ManagedReportAgentRunPayload {
     department_id?: string;
   };
   model_id?: string;
+  selected_session_slice_keys?: string[];
   start_prompt_values?: Record<string, string>;
   message?: string;
   credential_overrides?: Record<string, string>;
@@ -1007,6 +1008,8 @@ export interface TokenAggregation {
 
 export interface SessionTokens {
   session_id: string;
+  slice_key?: string;
+  local_session_id?: string;
   session_ref: string;
   user_id: string;
   user_name: string;
@@ -1014,6 +1017,14 @@ export interface SessionTokens {
   models: string[];
   summary?: string;
   started_at: string;
+  activity_date?: string;
+  activity_start_at?: string;
+  activity_end_at?: string;
+  activity_dates?: string[];
+  slice_count?: number;
+  source_has_raw_log?: boolean;
+  is_estimated?: boolean;
+  token_slice_strategy?: string;
   input_tokens: number;
   output_tokens: number;
   cache_creation_tokens: number;

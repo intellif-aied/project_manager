@@ -47,6 +47,17 @@ function agentTagClass(agent: string) {
   return "tokens-agent-tag is-other";
 }
 
+function realSessionId(session: SessionTokens) {
+  return session.local_session_id || session.session_ref;
+}
+
+function formatActivityRange(session: SessionTokens) {
+  const start = session.activity_start_at || session.started_at;
+  const end = session.activity_end_at;
+  if (!end || end === start) return formatDateTime(start);
+  return `${formatDateTime(start)} ~ ${formatDateTime(end)}`;
+}
+
 export function TokensPage() {
   const { user } = useAuth();
   const today = dayjs();
@@ -241,7 +252,10 @@ export function TokensPage() {
 
       <div className="tokens-table-card">
         <Table<SessionTokens>
-          rowKey="session_id"
+          rowKey={(record) =>
+            record.slice_key ||
+            `${record.session_id}:${record.activity_date || record.activity_start_at || record.started_at}`
+          }
           dataSource={sessions}
           loading={tokensQuery.isLoading}
           pagination={{
@@ -258,24 +272,16 @@ export function TokensPage() {
           scroll={{ x: "max-content" }}
           columns={[
             {
-              title: "记录",
+              title: "真实 Session ID",
               key: "record",
-              width: 260,
+              width: 380,
               render: (_: unknown, s) => (
-                <Space orientation="vertical" size={0}>
-                  <span className="tokens-session-ref">{s.session_ref.slice(0, 12)}</span>
+                <Space className="tokens-session-cell" orientation="vertical" size={2}>
+                  <span className="tokens-session-id">{realSessionId(s)}</span>
                   {s.summary ? (
                     <span
+                      className="tokens-session-summary"
                       title={s.summary}
-                      style={{
-                        display: "inline-block",
-                        maxWidth: 220,
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                        color: "var(--color-text-secondary, #64748b)",
-                        fontSize: 12
-                      }}
                     >
                       {s.summary}
                     </span>
@@ -306,34 +312,6 @@ export function TokensPage() {
               width: 180
             },
             {
-              title: "Input",
-              dataIndex: "input_tokens",
-              align: "right" as const,
-              width: 100,
-              render: (v: number) => formatTokens(v)
-            },
-            {
-              title: "Output",
-              dataIndex: "output_tokens",
-              align: "right" as const,
-              width: 100,
-              render: (v: number) => formatTokens(v)
-            },
-            {
-              title: "Cache Create",
-              dataIndex: "cache_creation_tokens",
-              align: "right" as const,
-              width: 110,
-              render: (v: number) => formatTokens(v || 0)
-            },
-            {
-              title: "Cache Read",
-              dataIndex: "cache_read_tokens",
-              align: "right" as const,
-              width: 110,
-              render: (v: number) => <span className="tokens-cache-cell">{formatTokens(v || 0)}</span>
-            },
-            {
               title: "Total",
               dataIndex: "total_tokens",
               align: "right" as const,
@@ -341,10 +319,10 @@ export function TokensPage() {
               render: (v: number) => <span className="tokens-total-cell">{formatTokens(v)}</span>
             },
             {
-              title: "Started",
-              dataIndex: "started_at",
-              render: (v: string) => formatDateTime(v),
-              width: 140
+              title: "活动时间",
+              dataIndex: "activity_start_at",
+              render: (_: string, s) => <span className="tokens-activity-range">{formatActivityRange(s)}</span>,
+              width: 230
             }
           ]}
           locale={{
@@ -364,22 +342,10 @@ export function TokensPage() {
                 <Table.Summary.Cell index={0} colSpan={effectiveScope === "team" ? 4 : 3}>
                   本页小计（{sessions.length}）
                 </Table.Summary.Cell>
-                <Table.Summary.Cell index={3} align="right">
-                  {formatTokens(pageTotals.input)}
-                </Table.Summary.Cell>
-                <Table.Summary.Cell index={4} align="right">
-                  {formatTokens(pageTotals.output)}
-                </Table.Summary.Cell>
-                <Table.Summary.Cell index={5} align="right">
-                  {formatTokens(pageTotals.cacheCreate)}
-                </Table.Summary.Cell>
-                <Table.Summary.Cell index={6} align="right">
-                  <span className="tokens-cache-cell">{formatTokens(pageTotals.cacheRead)}</span>
-                </Table.Summary.Cell>
-                <Table.Summary.Cell index={7} align="right">
+                <Table.Summary.Cell index={effectiveScope === "team" ? 4 : 3} align="right">
                   <span className="tokens-total-cell">{formatTokens(pageTotals.total)}</span>
                 </Table.Summary.Cell>
-                <Table.Summary.Cell index={8} />
+                <Table.Summary.Cell index={effectiveScope === "team" ? 5 : 4} />
               </Table.Summary.Row>
             </Table.Summary>
           )}
@@ -389,4 +355,3 @@ export function TokensPage() {
     </PagePanel>
   );
 }
-

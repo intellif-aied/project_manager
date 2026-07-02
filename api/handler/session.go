@@ -225,13 +225,15 @@ func (h *SessionHandler) BatchUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type result struct {
-		SessionRef string `json:"session_ref"`
-		ID         string `json:"id"`
-		Status     string `json:"status"`
+		SessionRef string   `json:"session_ref"`
+		ID         string   `json:"id"`
+		Status     string   `json:"status"`
+		Warnings   []string `json:"warnings,omitempty"`
 	}
 	var results []result
 
 	for _, su := range batch.Sessions {
+		warnings := []string{}
 		if su.SessionRef == "" {
 			results = append(results, result{Status: "error: missing session_ref"})
 			continue
@@ -286,23 +288,31 @@ func (h *SessionHandler) BatchUpload(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
+		activityWarnings, err := h.replaceActivitySlices(sessionID, u.ID, agentType, su)
+		if err != nil {
+			results = append(results, result{SessionRef: su.SessionRef, ID: sessionID, Status: "error: activity_slices: " + err.Error()})
+			continue
+		}
+		warnings = append(warnings, activityWarnings...)
+
 		// Upload raw JSONL to MinIO if file is provided and storage is available
 		fileKey := "file_" + su.SessionRef
 		file, header, err := r.FormFile(fileKey)
 		if err == nil {
-			objectName := fmt.Sprintf("sessions/%s/%s.jsonl", u.ID, su.SessionRef)
-			ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-			uploadErr := h.store.Upload(ctx, objectName, file, header.Size, "application/x-jsonlines")
-			cancel()
-			file.Close()
-			if uploadErr != nil {
-				results = append(results, result{SessionRef: su.SessionRef, ID: sessionID, Status: "warning: uploaded metadata but log upload failed: " + uploadErr.Error()})
-				continue
-			}
-			_, err = h.db.Exec("UPDATE sessions SET raw_log_url = $1 WHERE id = $2", objectName, sessionID)
-			if err != nil {
-				results = append(results, result{SessionRef: su.SessionRef, ID: sessionID, Status: "warning: log uploaded but url save failed"})
-				continue
+			if h.store == nil {
+				warnings = append(warnings, "raw log storage is not configured")
+				file.Close()
+			} else {
+				objectName := fmt.Sprintf("sessions/%s/%s.jsonl", u.ID, su.SessionRef)
+				ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+				uploadErr := h.store.Upload(ctx, objectName, file, header.Size, "application/x-jsonlines")
+				cancel()
+				file.Close()
+				if uploadErr != nil {
+					warnings = append(warnings, "raw log upload failed: "+uploadErr.Error())
+				} else if _, err = h.db.Exec("UPDATE sessions SET raw_log_url = $1 WHERE id = $2", objectName, sessionID); err != nil {
+					warnings = append(warnings, "raw log url save failed")
+				}
 			}
 		}
 
@@ -315,7 +325,7 @@ func (h *SessionHandler) BatchUpload(w http.ResponseWriter, r *http.Request) {
 
 		h.matchTaskAsync(sessionID, u.ID, su.Summary)
 
-		results = append(results, result{SessionRef: su.SessionRef, ID: sessionID, Status: status})
+		results = append(results, result{SessionRef: su.SessionRef, ID: sessionID, Status: status, Warnings: warnings})
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -335,6 +345,205 @@ func sessionModels(su model.SessionUpload) []string {
 		return []string{su.Model}
 	}
 	return []string{}
+}
+
+func (h *SessionHandler) replaceActivitySlices(sessionID, userID, agentType string, su model.SessionUpload) ([]string, error) {
+	slices, warnings := normalizedActivitySlices(su, agentType)
+	tx, err := h.db.Begin()
+	if err != nil {
+		return warnings, err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec("DELETE FROM session_activity_slices WHERE session_id = $1", sessionID); err != nil {
+		return warnings, err
+	}
+	for _, slice := range slices {
+		toolCallsJSON, _ := json.Marshal(slice.ToolCalls)
+		if slice.TokenSliceStrategy == "" {
+			slice.TokenSliceStrategy = "exact"
+		}
+		if slice.SummaryStrategy == "" {
+			slice.SummaryStrategy = "rule"
+		}
+		if slice.ParserVersion == "" {
+			slice.ParserVersion = "v1"
+		}
+		if slice.SliceVersion <= 0 {
+			slice.SliceVersion = 1
+		}
+		if slice.Timezone == "" {
+			slice.Timezone = defaultActivityTimezone
+		}
+		if slice.AgentType == "" {
+			slice.AgentType = agentType
+		}
+		if slice.Model == "" {
+			slice.Model = su.Model
+		}
+		models := slice.Models
+		if len(models) == 0 {
+			models = sessionModels(su)
+		}
+		if slice.TotalTokens == 0 {
+			slice.TotalTokens = slice.InputTokens + slice.OutputTokens + slice.CacheCreationTokens + slice.CacheReadTokens
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO session_activity_slices (
+				session_id, user_id, activity_date, activity_start_at, activity_end_at, timezone,
+				agent_type, model, models, summary, excerpt, message_count, source_event_count,
+				tool_calls_json, git_commits, task_id, requirement_id,
+				input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, total_tokens,
+				source_has_raw_log, token_slice_strategy, summary_strategy, parser_version, slice_version, is_estimated
+			)
+			SELECT $1, $2, $3::date, $4, $5, $6,
+				$7, $8, $9, $10, $11, $12, $13,
+				$14, $15, s.task_id, s.requirement_id,
+				$16, $17, $18, $19, $20,
+				$21, $22, $23, $24, $25, $26
+			FROM sessions s WHERE s.id = $1`,
+			sessionID, userID, slice.ActivityDate, slice.ActivityStartAt, slice.ActivityEndAt, slice.Timezone,
+			slice.AgentType, slice.Model, pq.Array(models), truncateForStorage(slice.Summary, 2000), truncateForStorage(slice.Excerpt, 4000),
+			slice.MessageCount, slice.SourceEventCount, toolCallsJSON, arrayToTextArray(slice.GitCommits),
+			slice.InputTokens, slice.OutputTokens, slice.CacheCreationTokens, slice.CacheReadTokens, slice.TotalTokens,
+			slice.SourceHasRawLog, slice.TokenSliceStrategy, slice.SummaryStrategy, slice.ParserVersion, slice.SliceVersion, slice.IsEstimated,
+		); err != nil {
+			return warnings, err
+		}
+	}
+	return warnings, tx.Commit()
+}
+
+const defaultActivityTimezone = "Asia/Shanghai"
+
+func normalizedActivitySlices(su model.SessionUpload, agentType string) ([]model.SessionActivitySliceUpload, []string) {
+	warnings := []string{}
+	slices := append([]model.SessionActivitySliceUpload(nil), su.ActivitySlices...)
+	if len(slices) == 0 {
+		fallback, ok := fallbackActivitySlice(su, agentType)
+		if !ok {
+			return nil, []string{"activity_slices missing for cross-day or invalid session; no activity slice was stored"}
+		}
+		return []model.SessionActivitySliceUpload{fallback}, []string{"activity_slices missing; stored a single-day estimated slice"}
+	}
+
+	loc := activityLocation()
+	seen := map[string]bool{}
+	var total int64
+	out := make([]model.SessionActivitySliceUpload, 0, len(slices))
+	for _, slice := range slices {
+		if slice.ActivityStartAt.IsZero() || slice.ActivityEndAt.IsZero() {
+			warnings = append(warnings, "ignored activity slice with empty start/end")
+			continue
+		}
+		if slice.ActivityEndAt.Before(slice.ActivityStartAt) {
+			warnings = append(warnings, "ignored activity slice with end before start")
+			continue
+		}
+		if slice.ActivityDate == "" {
+			slice.ActivityDate = slice.ActivityStartAt.In(loc).Format("2006-01-02")
+		}
+		if slice.ActivityDate != slice.ActivityStartAt.In(loc).Format("2006-01-02") {
+			warnings = append(warnings, "ignored activity slice whose activity_date does not match activity_start_at")
+			continue
+		}
+		if seen[slice.ActivityDate] {
+			warnings = append(warnings, "ignored duplicate activity slice for "+slice.ActivityDate)
+			continue
+		}
+		if hasNegativeTokens(slice) {
+			warnings = append(warnings, "ignored activity slice with negative tokens")
+			continue
+		}
+		if !su.StartedAt.IsZero() && slice.ActivityStartAt.Before(su.StartedAt.Add(-5*time.Minute)) {
+			warnings = append(warnings, "activity slice starts before session started_at")
+		}
+		if su.EndedAt != nil && !su.EndedAt.IsZero() && slice.ActivityEndAt.After(su.EndedAt.Add(5*time.Minute)) {
+			warnings = append(warnings, "activity slice ends after session ended_at")
+		}
+		if slice.TotalTokens == 0 {
+			slice.TotalTokens = slice.InputTokens + slice.OutputTokens + slice.CacheCreationTokens + slice.CacheReadTokens
+		}
+		total += slice.TotalTokens
+		seen[slice.ActivityDate] = true
+		out = append(out, slice)
+	}
+	if su.TokenUsage != nil && su.TokenUsage.TotalTokens > 0 && total > su.TokenUsage.TotalTokens {
+		warnings = append(warnings, "activity slice token total exceeds session token total")
+	}
+	if len(out) == 0 {
+		warnings = append(warnings, "no valid activity slices were stored")
+	}
+	return out, warnings
+}
+
+func fallbackActivitySlice(su model.SessionUpload, agentType string) (model.SessionActivitySliceUpload, bool) {
+	if su.StartedAt.IsZero() {
+		return model.SessionActivitySliceUpload{}, false
+	}
+	loc := activityLocation()
+	startDate := su.StartedAt.In(loc).Format("2006-01-02")
+	end := su.StartedAt
+	if su.EndedAt != nil && !su.EndedAt.IsZero() {
+		end = *su.EndedAt
+	}
+	if end.In(loc).Format("2006-01-02") != startDate {
+		return model.SessionActivitySliceUpload{}, false
+	}
+	summary := ""
+	if su.Summary != nil {
+		summary = *su.Summary
+	}
+	slice := model.SessionActivitySliceUpload{
+		ActivityDate:       startDate,
+		ActivityStartAt:    su.StartedAt,
+		ActivityEndAt:      end,
+		Timezone:           defaultActivityTimezone,
+		AgentType:          agentType,
+		Model:              su.Model,
+		Models:             sessionModels(su),
+		Summary:            summary,
+		Excerpt:            summary,
+		ToolCalls:          su.ToolCalls,
+		GitCommits:         su.GitCommits,
+		SourceHasRawLog:    false,
+		TokenSliceStrategy: "estimated",
+		SummaryStrategy:    "rule",
+		ParserVersion:      "fallback-v1",
+		SliceVersion:       1,
+		IsEstimated:        true,
+	}
+	if su.TokenUsage != nil {
+		slice.InputTokens = su.TokenUsage.InputTokens
+		slice.OutputTokens = su.TokenUsage.OutputTokens
+		slice.CacheCreationTokens = su.TokenUsage.CacheCreationTokens
+		slice.CacheReadTokens = su.TokenUsage.CacheReadTokens
+		slice.TotalTokens = su.TokenUsage.TotalTokens
+	}
+	return slice, true
+}
+
+func hasNegativeTokens(slice model.SessionActivitySliceUpload) bool {
+	return slice.InputTokens < 0 || slice.OutputTokens < 0 || slice.CacheCreationTokens < 0 || slice.CacheReadTokens < 0 || slice.TotalTokens < 0
+}
+
+func activityLocation() *time.Location {
+	loc, err := time.LoadLocation(defaultActivityTimezone)
+	if err != nil {
+		return time.FixedZone(defaultActivityTimezone, 8*3600)
+	}
+	return loc
+}
+
+func truncateForStorage(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max])
 }
 
 func (h *SessionHandler) replaceTokenUsage(sessionID, userID string, su model.SessionUpload) error {

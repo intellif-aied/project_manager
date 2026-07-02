@@ -54,28 +54,50 @@ func loadUserInfoMap(ctx context.Context, db *sql.DB, userIDs []string) (map[str
 }
 
 type sessionsArgs struct {
-	Scope          reportScope   `json:"scope"`
-	Target         reportTarget  `json:"target,omitempty"`
-	DateRange      dateRangeArgs `json:"date_range"`
-	UserIDs        []string      `json:"user_ids,omitempty"`
-	Limit          int           `json:"limit,omitempty"`
-	IncludeSummary bool          `json:"include_summary,omitempty"`
+	Scope                    reportScope   `json:"scope"`
+	Target                   reportTarget  `json:"target,omitempty"`
+	DateRange                dateRangeArgs `json:"date_range"`
+	UserIDs                  []string      `json:"user_ids,omitempty"`
+	SelectedSessionSliceKeys []string      `json:"selected_session_slice_keys,omitempty"`
+	Limit                    int           `json:"limit,omitempty"`
+	IncludeSummary           bool          `json:"include_summary,omitempty"`
 }
 
 type sessionItem struct {
-	ID              string     `json:"id"`
-	UserID          string     `json:"user_id"`
-	Username        string     `json:"username"`
-	Role            string     `json:"role"`
-	TeamID          string     `json:"team_id"`
-	SessionRef      string     `json:"session_ref"`
-	StartedAt       *time.Time `json:"started_at"`
-	EndedAt         *time.Time `json:"ended_at,omitempty"`
-	Date            string     `json:"date"`
-	Summary         string     `json:"summary"`
-	Tags            []string   `json:"tags"`
-	TaskRefs        []string   `json:"task_refs"`
-	RequirementRefs []string   `json:"requirement_refs"`
+	ID                  string         `json:"id"`
+	SliceKey            string         `json:"slice_key,omitempty"`
+	UserID              string         `json:"user_id"`
+	Username            string         `json:"username"`
+	Role                string         `json:"role"`
+	TeamID              string         `json:"team_id"`
+	LocalSessionID      string         `json:"local_session_id,omitempty"`
+	SessionRef          string         `json:"session_ref"`
+	AgentType           string         `json:"agent_type"`
+	StartedAt           *time.Time     `json:"started_at"`
+	EndedAt             *time.Time     `json:"ended_at,omitempty"`
+	ActivityDate        string         `json:"activity_date,omitempty"`
+	ActivityStartAt     *time.Time     `json:"activity_start_at,omitempty"`
+	ActivityEndAt       *time.Time     `json:"activity_end_at,omitempty"`
+	ActivityDates       []string       `json:"activity_dates"`
+	Summary             string         `json:"summary"`
+	Excerpt             string         `json:"excerpt,omitempty"`
+	MessageCount        int            `json:"message_count"`
+	SourceEventCount    int            `json:"source_event_count"`
+	InputTokens         int64          `json:"input_tokens"`
+	OutputTokens        int64          `json:"output_tokens"`
+	CacheCreationTokens int64          `json:"cache_creation_tokens"`
+	CacheReadTokens     int64          `json:"cache_read_tokens"`
+	TotalTokens         int64          `json:"total_tokens"`
+	SliceCount          int            `json:"slice_count"`
+	SourceHasRawLog     bool           `json:"source_has_raw_log"`
+	TokenSliceStrategy  string         `json:"token_slice_strategy"`
+	SummaryStrategy     string         `json:"summary_strategy"`
+	IsEstimated         bool           `json:"is_estimated"`
+	Truncated           bool           `json:"truncated"`
+	ToolCallsJSON       map[string]int `json:"tool_calls_json"`
+	Tags                []string       `json:"tags"`
+	TaskRefs            []string       `json:"task_refs"`
+	RequirementRefs     []string       `json:"requirement_refs"`
 }
 
 func (h *ReportMCPHandler) toolGetSessions(ctx context.Context, r *http.Request, rawArgs json.RawMessage) (any, error) {
@@ -109,17 +131,40 @@ func (h *ReportMCPHandler) toolGetSessions(ctx context.Context, r *http.Request,
 			return nil, errForbidden
 		}
 	}
+	selectedSliceKeys, err := normalizeSelectedSessionSliceKeys(args.SelectedSessionSliceKeys)
+	if err != nil {
+		return nil, mcpErr("INVALID_ARGUMENT", err.Error())
+	}
 	limit := args.Limit
 	if limit <= 0 || limit > 200 {
 		limit = 100
 	}
 	rows, err := h.db.QueryContext(ctx, `
-		SELECT s.id::text, s.user_id::text, COALESCE(NULLIF(u.nickname,''),u.username), COALESCE(u.role,''), COALESCE(u.team_id::text,''),
-		       s.session_ref, s.started_at, s.ended_at, DATE(s.started_at), COALESCE(s.summary,'')
-		FROM sessions s JOIN users u ON u.id = s.user_id
-		WHERE s.started_at >= $1 AND s.started_at < ($2::date + 1)
-		  AND s.user_id = ANY($3)
-		ORDER BY s.started_at DESC LIMIT $4`, start, end, pq.Array(visible), limit)
+		SELECT s.id::text, sas.user_id::text, COALESCE(NULLIF(u.nickname,''),u.username), COALESCE(u.role,''), COALESCE(u.team_id::text,''),
+		       s.session_ref, s.agent_type, s.started_at, s.ended_at,
+		       sas.activity_date::text, sas.activity_start_at, sas.activity_end_at,
+		       ARRAY[sas.activity_date::text],
+		       COALESCE(NULLIF(sas.summary, ''), COALESCE(s.summary,'')),
+		       COALESCE(sas.excerpt, ''),
+		       COALESCE(sas.message_count, 0)::int,
+		       COALESCE(sas.source_event_count, 0)::int,
+		       COALESCE(sas.input_tokens, 0),
+		       COALESCE(sas.output_tokens, 0),
+		       COALESCE(sas.cache_creation_tokens, 0),
+		       COALESCE(sas.cache_read_tokens, 0),
+		       COALESCE(sas.total_tokens, 0),
+		       1::int,
+		       sas.source_has_raw_log,
+		       sas.token_slice_strategy,
+		       sas.summary_strategy,
+		       sas.is_estimated
+		FROM session_activity_slices sas
+		JOIN sessions s ON s.id = sas.session_id
+		JOIN users u ON u.id = sas.user_id
+		WHERE sas.activity_date >= $1::date AND sas.activity_date <= $2::date
+		  AND sas.user_id::text = ANY($3)
+		  AND (COALESCE(cardinality($4::text[]), 0) = 0 OR (s.id::text || ':' || sas.activity_date::text) = ANY($4::text[]))
+		ORDER BY sas.activity_end_at DESC LIMIT $5`, start, end, pq.Array(visible), pq.Array(selectedSliceKeys), limit)
 	if err != nil {
 		return nil, errMCPInternal
 	}
@@ -130,9 +175,13 @@ func (h *ReportMCPHandler) toolGetSessions(ctx context.Context, r *http.Request,
 	byUser := map[string]int{}
 	for rows.Next() {
 		var it sessionItem
-		var startedAt, endedAt sql.NullTime
+		var startedAt, endedAt, activityStartAt, activityEndAt sql.NullTime
+		var activityDates pq.StringArray
 		if err := rows.Scan(&it.ID, &it.UserID, &it.Username, &it.Role, &it.TeamID,
-			&it.SessionRef, &startedAt, &endedAt, &it.Date, &it.Summary); err != nil {
+			&it.SessionRef, &it.AgentType, &startedAt, &endedAt, &it.ActivityDate, &activityStartAt, &activityEndAt, &activityDates,
+			&it.Summary, &it.Excerpt, &it.MessageCount, &it.SourceEventCount,
+			&it.InputTokens, &it.OutputTokens, &it.CacheCreationTokens, &it.CacheReadTokens, &it.TotalTokens,
+			&it.SliceCount, &it.SourceHasRawLog, &it.TokenSliceStrategy, &it.SummaryStrategy, &it.IsEstimated); err != nil {
 			return nil, errMCPInternal
 		}
 		if startedAt.Valid {
@@ -143,11 +192,28 @@ func (h *ReportMCPHandler) toolGetSessions(ctx context.Context, r *http.Request,
 			t := endedAt.Time
 			it.EndedAt = &t
 		}
+		if activityStartAt.Valid {
+			t := activityStartAt.Time
+			it.ActivityStartAt = &t
+		}
+		if activityEndAt.Valid {
+			t := activityEndAt.Time
+			it.ActivityEndAt = &t
+		}
+		it.ActivityDates = []string(activityDates)
+		it.LocalSessionID = it.SessionRef
+		if it.ActivityDate != "" {
+			it.SliceKey = it.ID + ":" + it.ActivityDate
+		}
 		it.Tags = []string{}
 		it.TaskRefs = []string{}
 		it.RequirementRefs = []string{}
+		it.ToolCallsJSON = map[string]int{}
+		it.Truncated = len(sessions)+1 == limit
 		sessions = append(sessions, it)
-		byDate[it.Date]++
+		for _, date := range it.ActivityDates {
+			byDate[date]++
+		}
 		byUser[it.UserID]++
 	}
 	if err := rows.Err(); err != nil {

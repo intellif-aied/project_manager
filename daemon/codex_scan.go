@@ -115,7 +115,10 @@ func parseCodexJSONL(path string) *SessionInfo {
 
 	var lastTokens codexTokenInfo
 	var sawTokens bool
+	var prevTokens codexTokenInfo
+	var hasPrevTokens bool
 	var firstSummary string
+	activitySlices := map[string]*ActivitySlice{}
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
@@ -129,6 +132,7 @@ func parseCodexJSONL(path string) *SessionInfo {
 		s.NumLines++
 
 		ts, _ := time.Parse(time.RFC3339Nano, cl.Timestamp)
+		currentSlice := ensureActivitySlice(activitySlices, ts, "codex")
 		if !ts.IsZero() {
 			if s.StartedAt.IsZero() {
 				s.StartedAt = ts
@@ -159,6 +163,10 @@ func parseCodexJSONL(path string) *SessionInfo {
 				if tc.Model != "" {
 					s.Model = tc.Model
 					s.Models = appendDistinct(s.Models, tc.Model)
+					if currentSlice != nil {
+						currentSlice.Model = tc.Model
+						currentSlice.Models = appendDistinct(currentSlice.Models, tc.Model)
+					}
 				}
 				if tc.Cwd != "" && s.Cwd == "" {
 					s.Cwd = tc.Cwd
@@ -173,6 +181,12 @@ func parseCodexJSONL(path string) *SessionInfo {
 					if len(ev.Info) > 0 {
 						var ti codexTokenInfo
 						if err := json.Unmarshal(ev.Info, &ti); err == nil {
+							if currentSlice != nil {
+								addCodexTokenDelta(currentSlice, ti, prevTokens, hasPrevTokens)
+								currentSlice.TokenSliceStrategy = "delta"
+							}
+							prevTokens = ti
+							hasPrevTokens = true
 							lastTokens = ti
 							sawTokens = true
 						}
@@ -180,6 +194,10 @@ func parseCodexJSONL(path string) *SessionInfo {
 				case "user_message":
 					if firstSummary == "" && ev.Message != "" {
 						firstSummary = ev.Message
+					}
+					if currentSlice != nil && ev.Message != "" {
+						currentSlice.MessageCount++
+						appendSliceText(currentSlice, ev.Message)
 					}
 				}
 			}
@@ -192,6 +210,9 @@ func parseCodexJSONL(path string) *SessionInfo {
 						name = ri.Type
 					}
 					s.ToolCalls[name]++
+					if currentSlice != nil {
+						currentSlice.ToolCalls[name]++
+					}
 				}
 			}
 		}
@@ -211,6 +232,35 @@ func parseCodexJSONL(path string) *SessionInfo {
 	if firstSummary != "" {
 		s.Summary = truncate(firstSummary, 200)
 	}
+	finalizeActivitySlices(s, activitySlices)
 
 	return s
+}
+
+func addCodexTokenDelta(slice *ActivitySlice, current, previous codexTokenInfo, hasPrevious bool) {
+	if slice == nil {
+		return
+	}
+	input := current.Total.InputTokens
+	cacheRead := current.Total.CachedInputTokens
+	output := current.Total.OutputTokens + current.Total.ReasoningOutputTokens
+	total := current.Total.TotalTokens
+	if hasPrevious {
+		input -= previous.Total.InputTokens
+		cacheRead -= previous.Total.CachedInputTokens
+		output -= previous.Total.OutputTokens + previous.Total.ReasoningOutputTokens
+		total -= previous.Total.TotalTokens
+	}
+	if input < 0 || cacheRead < 0 || output < 0 || total < 0 {
+		slice.TokenSliceStrategy = "unknown"
+		slice.IsEstimated = true
+		return
+	}
+	slice.InputTokens += input
+	slice.CacheReadTokens += cacheRead
+	slice.OutputTokens += output
+	if total == 0 {
+		total = input + cacheRead + output
+	}
+	slice.TotalTokens += total
 }

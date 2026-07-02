@@ -103,8 +103,11 @@ export function aggregateDashboardTokenReport(
 
   const tokenByDate = new Map<string, number>();
   sessions.forEach((session) => {
-    if (!session.started_at) return;
-    const key = toDateKey(new Date(session.started_at));
+    const key =
+      session.activity_date ||
+      (session.activity_start_at ? toDateKey(new Date(session.activity_start_at)) : undefined) ||
+      (session.started_at ? toDateKey(new Date(session.started_at)) : undefined);
+    if (!key) return;
     tokenByDate.set(key, (tokenByDate.get(key) ?? 0) + Math.max(0, Number(session.total_tokens ?? 0)));
   });
 

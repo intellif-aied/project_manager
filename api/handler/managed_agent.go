@@ -46,17 +46,19 @@ const (
 )
 
 var reportSystemPromptKeys = map[string]struct{}{
-	"report_type":           {},
-	"period_json":           {},
-	"target_json":           {},
-	"period_start":          {},
-	"period_end":            {},
-	"scheduled_trigger_at":  {},
-	"run_id":                {},
-	"mcp_url":               {},
-	"credential":            {},
-	"credential_slot":       {},
-	reportMCPCredentialSlot: {},
+	"report_type":                      {},
+	"period_json":                      {},
+	"target_json":                      {},
+	"selected_session_slice_keys":      {},
+	"selected_session_slice_keys_json": {},
+	"period_start":                     {},
+	"period_end":                       {},
+	"scheduled_trigger_at":             {},
+	"run_id":                           {},
+	"mcp_url":                          {},
+	"credential":                       {},
+	"credential_slot":                  {},
+	reportMCPCredentialSlot:            {},
 }
 
 type ManagedAgentDefaults struct {
@@ -878,6 +880,7 @@ func (h *ManagedAgentHandler) ensureUserReportMCPEntry(ctx context.Context, clie
 }
 
 func (h *ManagedAgentHandler) ensureUserReportSkill(ctx context.Context, client *service.ManagedAgentClient) (bool, model.ManagedSkill, int, error) {
+	skillMD := h.reportSkillMarkdown()
 	resp, err := client.ListSkills(ctx, string(model.ManagedScopeMine))
 	if err != nil {
 		return false, model.ManagedSkill{}, 0, err
@@ -900,7 +903,7 @@ func (h *ManagedAgentHandler) ensureUserReportSkill(ctx context.Context, client 
 		Version:     h.defaults.ReportSkillVersion,
 		Name:        h.defaults.ReportSkillName,
 		Description: h.defaults.ReportSkillDescription,
-		SkillMD:     h.reportSkillMarkdown(),
+		SkillMD:     skillMD,
 	})
 	if err != nil {
 		return false, model.ManagedSkill{}, count, err
@@ -1113,10 +1116,10 @@ func defaultReportAgentInstructions(credentialSlot string) string {
 		defaultManagedAgentMarker,
 		"AIDA_REPORT_DEPLOYMENT:{{aida_deployment}}",
 		"你是 Aida 报告生成 Agent。根据 report_type 生成个人、小组或部门的日报/周报。",
-		"运行参数由 Aida 后端注入，包含 run_id、report_type、period、target。不要要求用户提供 session_ids、urls、token 或 credential。",
+		"运行参数由 Aida 后端注入，包含 run_id、report_type、period、target，以及可选的 selected_session_slice_keys。不要要求用户提供 session ids、urls、token 或 credential。",
 		"Aida Report MCP 已通过 " + credentialSlot + " 凭据槽配置当前用户 Authorization。调用已绑定的 MCP tools，不要手工拼接管理员 token。",
 		"必须使用当前用户身份调用 Aida Report MCP，并尊重 MCP 返回的权限边界和缺失来源事实。",
-		"先调用 get_existing_report 获取已有内容，再根据 report_type 调用 get_sessions/get_daily_reports/get_weekly_reports/get_tasks/get_requirements/get_report_inventory 等原子工具取数；读取工具使用 date_range 或 week_range，写回工具使用 period。",
+		"先调用 get_existing_report 获取已有内容，再根据 report_type 调用 get_sessions/get_daily_reports/get_weekly_reports/get_tasks/get_requirements/get_report_inventory 等原子工具取数；读取工具使用 date_range 或 week_range，写回工具使用 period。若 selected_session_slice_keys 非空，调用 get_sessions 时必须原样传入。",
 		"生成成功后调用 write_report_result，传入相同 run_id、report_type、period、target 和 content。",
 		"生成失败时调用 write_report_failure。不要编造 Aida 上下文之外的事实；如果上下文为空，应明确说明暂无记录。",
 	}, "\n")
@@ -1128,6 +1131,7 @@ func defaultReportAgentStartPromptTemplate(credentialSlot string) string {
 		"report_type={{ report_type }}",
 		"period={{ period_json }}",
 		"target={{ target_json }}",
+		"selected_session_slice_keys={{ selected_session_slice_keys_json }}",
 		"run_id={{ run_id }}",
 		"当前用户凭据已通过 " + credentialSlot + " credential slot 注入；优先调用已绑定的 Aida Report MCP tools 获取上下文并回写生成结果，不要手工拼接 Authorization。",
 	}, "\n")
@@ -1645,15 +1649,20 @@ func reportPeriodInputRef(reportType, date, weekStart, weekEnd string) map[strin
 	return map[string]string{"date": date}
 }
 
-func reportAgentStartPromptValues(runID, reportType, date, weekStart, weekEnd string, target reportTarget, mcpURL string) map[string]string {
+func reportAgentStartPromptValues(runID, reportType, date, weekStart, weekEnd string, target reportTarget, selectedSessionSliceKeys []string, mcpURL string) map[string]string {
 	_ = mcpURL
+	if selectedSessionSliceKeys == nil {
+		selectedSessionSliceKeys = []string{}
+	}
 	periodJSON, _ := json.Marshal(reportPeriodInputRef(reportType, date, weekStart, weekEnd))
 	targetJSON, _ := json.Marshal(target)
+	selectedKeysJSON, _ := json.Marshal(selectedSessionSliceKeys)
 	values := map[string]string{
-		"run_id":      runID,
-		"report_type": reportType,
-		"period_json": string(periodJSON),
-		"target_json": string(targetJSON),
+		"run_id":                           runID,
+		"report_type":                      reportType,
+		"period_json":                      string(periodJSON),
+		"target_json":                      string(targetJSON),
+		"selected_session_slice_keys_json": string(selectedKeysJSON),
 	}
 	if date != "" {
 		values["report_date"] = date
@@ -1704,6 +1713,7 @@ func buildReportRunMessage(startPromptValues map[string]string, message string, 
 		"report_type=" + strings.TrimSpace(startPromptValues["report_type"]),
 		"period=" + strings.TrimSpace(startPromptValues["period_json"]),
 		"target=" + strings.TrimSpace(startPromptValues["target_json"]),
+		"selected_session_slice_keys=" + strings.TrimSpace(startPromptValues["selected_session_slice_keys_json"]),
 		"run_id=" + strings.TrimSpace(startPromptValues["run_id"]),
 		"当前用户凭据已通过 " + strings.TrimSpace(credentialSlot) + " credential slot 注入；优先调用已绑定的 Aida Report MCP tools 获取上下文并回写生成结果，不要手工拼接 Authorization。",
 	}
@@ -2249,6 +2259,11 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	selectedSessionSliceKeys, err := normalizeSelectedSessionSliceKeys(req.SelectedSessionSliceKeys)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 
 	modelID := strings.TrimSpace(req.ModelID)
 	inputRef := map[string]any{
@@ -2259,6 +2274,9 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 		"model_id":        modelID,
 		"mcp_server":      h.defaults.ReportMCPSlug,
 		"credential_slot": h.defaults.ReportMCPCredentialSlot,
+	}
+	if len(selectedSessionSliceKeys) > 0 {
+		inputRef["selected_session_slice_keys"] = selectedSessionSliceKeys
 	}
 	if len(runtimeOverrides) > 0 {
 		inputRef["credential_override_slots"] = sortedStringMapKeys(runtimeOverrides)
@@ -2286,7 +2304,7 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 		return
 	}
 
-	systemPromptValues := reportAgentStartPromptValues(runID, req.ReportType, date, weekStart, weekEnd, target, h.reportMCPURL())
+	systemPromptValues := reportAgentStartPromptValues(runID, req.ReportType, date, weekStart, weekEnd, target, selectedSessionSliceKeys, h.reportMCPURL())
 	userMessage := strings.TrimSpace(req.Message)
 	if userMessage == "" {
 		userMessage = fallbackReportRunMessage(req.ReportType, date, weekStart, weekEnd, target)
@@ -3706,7 +3724,7 @@ func (h *ManagedAgentHandler) executeReportAgentScheduleRun(ctx context.Context,
 		_ = h.updateManagedScheduleAfterRun(ctx, schedule.ID, u.ID, runID, scheduledAt, err.Error(), advanceNext, schedule)
 		return h.loadAIRun(runID, u.ID)
 	}
-	systemPromptValues := reportAgentStartPromptValues(runID, reportType, period.Date, period.WeekStart, period.WeekEnd, target, h.reportMCPURL())
+	systemPromptValues := reportAgentStartPromptValues(runID, reportType, period.Date, period.WeekStart, period.WeekEnd, target, nil, h.reportMCPURL())
 	userMessage := strings.TrimSpace(schedule.InitialMessage)
 	if userMessage == "" {
 		userMessage = fallbackReportRunMessage(reportType, period.Date, period.WeekStart, period.WeekEnd, target)

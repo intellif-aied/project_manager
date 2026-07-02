@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -68,6 +69,34 @@ type SessionInfo struct {
 	TotalTok       int64
 	NumLines       int
 	SubFiles       []string // subagent JSONL file paths
+	ActivitySlices []ActivitySlice
+}
+
+type ActivitySlice struct {
+	ActivityDate        string         `json:"activity_date"`
+	ActivityStartAt     time.Time      `json:"activity_start_at"`
+	ActivityEndAt       time.Time      `json:"activity_end_at"`
+	Timezone            string         `json:"timezone,omitempty"`
+	AgentType           string         `json:"agent_type,omitempty"`
+	Model               string         `json:"model,omitempty"`
+	Models              []string       `json:"models,omitempty"`
+	Summary             string         `json:"summary,omitempty"`
+	Excerpt             string         `json:"excerpt,omitempty"`
+	MessageCount        int            `json:"message_count,omitempty"`
+	SourceEventCount    int            `json:"source_event_count,omitempty"`
+	ToolCalls           map[string]int `json:"tool_calls,omitempty"`
+	GitCommits          []string       `json:"git_commits,omitempty"`
+	InputTokens         int64          `json:"input_tokens,omitempty"`
+	OutputTokens        int64          `json:"output_tokens,omitempty"`
+	CacheCreationTokens int64          `json:"cache_creation_tokens,omitempty"`
+	CacheReadTokens     int64          `json:"cache_read_tokens,omitempty"`
+	TotalTokens         int64          `json:"total_tokens,omitempty"`
+	SourceHasRawLog     bool           `json:"source_has_raw_log"`
+	TokenSliceStrategy  string         `json:"token_slice_strategy,omitempty"`
+	SummaryStrategy     string         `json:"summary_strategy,omitempty"`
+	ParserVersion       string         `json:"parser_version,omitempty"`
+	SliceVersion        int            `json:"slice_version,omitempty"`
+	IsEstimated         bool           `json:"is_estimated"`
 }
 
 func (s *SessionInfo) Duration() time.Duration {
@@ -83,6 +112,108 @@ func (s *SessionInfo) Duration() time.Duration {
 
 func (s *SessionInfo) FormatTokens() string {
 	return formatTokens(s.TotalTok)
+}
+
+func activityLocation() *time.Location {
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		return time.FixedZone("Asia/Shanghai", 8*3600)
+	}
+	return loc
+}
+
+func activityDate(t time.Time) string {
+	return t.In(activityLocation()).Format("2006-01-02")
+}
+
+func ensureActivitySlice(slices map[string]*ActivitySlice, t time.Time, agentType string) *ActivitySlice {
+	if t.IsZero() {
+		return nil
+	}
+	date := activityDate(t)
+	slice := slices[date]
+	if slice == nil {
+		slice = &ActivitySlice{
+			ActivityDate:       date,
+			ActivityStartAt:    t,
+			ActivityEndAt:      t,
+			Timezone:           "Asia/Shanghai",
+			AgentType:          agentType,
+			ToolCalls:          map[string]int{},
+			SourceHasRawLog:    true,
+			TokenSliceStrategy: "exact",
+			SummaryStrategy:    "rule",
+			ParserVersion:      "daemon-v1",
+			SliceVersion:       1,
+		}
+		slices[date] = slice
+	}
+	if t.Before(slice.ActivityStartAt) {
+		slice.ActivityStartAt = t
+	}
+	if t.After(slice.ActivityEndAt) {
+		slice.ActivityEndAt = t
+	}
+	slice.SourceEventCount++
+	return slice
+}
+
+func appendSliceText(slice *ActivitySlice, text string) {
+	if slice == nil {
+		return
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+	if slice.Summary == "" {
+		slice.Summary = truncate(text, 200)
+	}
+	if slice.Excerpt == "" {
+		slice.Excerpt = truncate(text, 1200)
+		return
+	}
+	if len([]rune(slice.Excerpt)) < 1200 {
+		slice.Excerpt = truncate(slice.Excerpt+"\n"+text, 1200)
+	}
+}
+
+func finalizeActivitySlices(s *SessionInfo, slices map[string]*ActivitySlice) {
+	if len(slices) == 0 {
+		return
+	}
+	dates := make([]string, 0, len(slices))
+	for date := range slices {
+		dates = append(dates, date)
+	}
+	sort.Strings(dates)
+	s.ActivitySlices = make([]ActivitySlice, 0, len(dates))
+	for _, date := range dates {
+		slice := *slices[date]
+		if slice.AgentType == "" {
+			slice.AgentType = firstNonEmpty(s.AgentType, "claude_code")
+		}
+		if slice.Model == "" {
+			slice.Model = s.Model
+		}
+		if len(slice.Models) == 0 {
+			slice.Models = s.Models
+		}
+		if slice.TotalTokens == 0 {
+			slice.TotalTokens = slice.InputTokens + slice.OutputTokens + slice.CacheCreationTokens + slice.CacheReadTokens
+		}
+		if slice.MessageCount == 0 && slice.SourceEventCount > 0 {
+			slice.MessageCount = slice.SourceEventCount
+		}
+		if slice.Summary == "" {
+			slice.Summary = "当天有活动，但暂无可读摘要"
+			slice.SummaryStrategy = "empty"
+		}
+		if slice.ToolCalls == nil {
+			slice.ToolCalls = map[string]int{}
+		}
+		s.ActivitySlices = append(s.ActivitySlices, slice)
+	}
 }
 
 func formatTokens(n int64) string {
@@ -582,11 +713,17 @@ type sessionWithFile struct {
 func collectSessionsWithFiles(s *SessionInfo) []sessionWithFile {
 	var items []sessionWithFile
 	items = append(items, sessionWithFile{info: s, filePath: s.FilePath})
+	seenRefs := map[string]bool{}
+	if s.SessionRef != "" {
+		seenRefs[s.SessionRef] = true
+	}
 	for _, subFile := range s.SubFiles {
 		sub := parseJSONL(subFile)
-		if sub != nil && sub.SessionRef != "" {
-			items = append(items, sessionWithFile{info: sub, filePath: subFile})
+		if sub == nil || sub.SessionRef == "" || seenRefs[sub.SessionRef] {
+			continue
 		}
+		seenRefs[sub.SessionRef] = true
+		items = append(items, sessionWithFile{info: sub, filePath: subFile})
 	}
 	return items
 }
@@ -832,6 +969,7 @@ func parseJSONL(path string) *SessionInfo {
 
 	firstUserMsg := true
 	var lastTS time.Time
+	activitySlices := map[string]*ActivitySlice{}
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
@@ -849,12 +987,14 @@ func parseJSONL(path string) *SessionInfo {
 			s.SessionRef = event.SessionID
 		}
 
+		var currentSlice *ActivitySlice
 		if event.Timestamp != "" {
 			if t, err := time.Parse(time.RFC3339, event.Timestamp); err == nil {
 				lastTS = t
 				if s.StartedAt.IsZero() {
 					s.StartedAt = t
 				}
+				currentSlice = ensureActivitySlice(activitySlices, t, "claude_code")
 			}
 		}
 
@@ -867,11 +1007,15 @@ func parseJSONL(path string) *SessionInfo {
 
 		switch event.Type {
 		case "user":
+			if currentSlice != nil {
+				currentSlice.MessageCount++
+			}
 			if firstUserMsg && s.Summary == "" {
 				var msg UserMsg
 				if json.Unmarshal(event.Message, &msg) == nil {
 					for _, c := range msg.Content {
 						if c.Type == "text" && c.Text != "" {
+							appendSliceText(currentSlice, c.Text)
 							s.Summary = c.Text
 							if len(s.Summary) > 200 {
 								s.Summary = s.Summary[:197] + "..."
@@ -881,24 +1025,53 @@ func parseJSONL(path string) *SessionInfo {
 					}
 				}
 				firstUserMsg = false
+			} else {
+				var msg UserMsg
+				if json.Unmarshal(event.Message, &msg) == nil {
+					for _, c := range msg.Content {
+						if c.Type == "text" && c.Text != "" {
+							appendSliceText(currentSlice, c.Text)
+							break
+						}
+					}
+				}
 			}
 
 		case "assistant":
+			if currentSlice != nil {
+				currentSlice.MessageCount++
+			}
 			var msg AssistantMsg
 			if json.Unmarshal(event.Message, &msg) == nil {
 				if msg.Model != "" && msg.Model != "<synthetic>" {
 					s.Model = msg.Model
 					s.Models = appendDistinct(s.Models, msg.Model)
+					if currentSlice != nil {
+						currentSlice.Model = msg.Model
+						currentSlice.Models = appendDistinct(currentSlice.Models, msg.Model)
+					}
 				}
 				if msg.Usage != nil {
 					s.InputTok += msg.Usage.InputTokens
 					s.OutputTok += msg.Usage.OutputTokens
 					s.CacheCreateTok += msg.Usage.CacheCreationInputTokens
 					s.CacheReadTok += msg.Usage.CacheReadInputTokens
+					if currentSlice != nil {
+						currentSlice.InputTokens += msg.Usage.InputTokens
+						currentSlice.OutputTokens += msg.Usage.OutputTokens
+						currentSlice.CacheCreationTokens += msg.Usage.CacheCreationInputTokens
+						currentSlice.CacheReadTokens += msg.Usage.CacheReadInputTokens
+					}
 				}
 				for _, c := range msg.Content {
 					if c.Type == "tool_use" && c.Name != "" {
 						s.ToolCalls[c.Name]++
+						if currentSlice != nil {
+							currentSlice.ToolCalls[c.Name]++
+						}
+					}
+					if c.Type == "text" && c.Text != "" {
+						appendSliceText(currentSlice, c.Text)
 					}
 				}
 			}
@@ -909,6 +1082,7 @@ func parseJSONL(path string) *SessionInfo {
 	if !lastTS.IsZero() {
 		s.EndedAt = lastTS
 	}
+	finalizeActivitySlices(s, activitySlices)
 
 	if s.SessionRef == "" {
 		return nil
@@ -1000,6 +1174,9 @@ func buildUploadPayload(s *SessionInfo) map[string]any {
 	}
 	if len(s.Models) > 0 {
 		p["models"] = s.Models
+	}
+	if len(s.ActivitySlices) > 0 {
+		p["activity_slices"] = s.ActivitySlices
 	}
 	return p
 }

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -57,5 +59,36 @@ func TestFormatSessionListRowDefaultsClaudeAndCwd(t *testing.T) {
 		if !strings.Contains(row, want) {
 			t.Fatalf("formatSessionListRow() missing %q in %q", want, row)
 		}
+	}
+}
+
+func TestCollectSessionsWithFilesSkipsDuplicateSubagentRefs(t *testing.T) {
+	dir := t.TempDir()
+	parentPath := filepath.Join(dir, "parent.jsonl")
+	sameSubPath := filepath.Join(dir, "same-sub.jsonl")
+	distinctSubPath := filepath.Join(dir, "distinct-sub.jsonl")
+
+	writeClaudeSession := func(path, ref string) {
+		t.Helper()
+		line := `{"type":"user","sessionId":"` + ref + `","timestamp":"2026-07-02T09:00:00Z","message":{"content":[{"type":"text","text":"hello"}]}}` + "\n"
+		if err := os.WriteFile(path, []byte(line), 0600); err != nil {
+			t.Fatalf("write test session: %v", err)
+		}
+	}
+	writeClaudeSession(parentPath, "same-session")
+	writeClaudeSession(sameSubPath, "same-session")
+	writeClaudeSession(distinctSubPath, "distinct-session")
+
+	items := collectSessionsWithFiles(&SessionInfo{
+		SessionRef: "same-session",
+		FilePath:   parentPath,
+		SubFiles:   []string{sameSubPath, distinctSubPath},
+	})
+
+	if len(items) != 2 {
+		t.Fatalf("items len = %d, want parent + one distinct subagent", len(items))
+	}
+	if items[0].info.SessionRef != "same-session" || items[1].info.SessionRef != "distinct-session" {
+		t.Fatalf("unexpected refs: %#v", []string{items[0].info.SessionRef, items[1].info.SessionRef})
 	}
 }

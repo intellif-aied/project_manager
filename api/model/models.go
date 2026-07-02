@@ -437,16 +437,17 @@ type BatchSessionUpload struct {
 }
 
 type SessionUpload struct {
-	SessionRef   string         `json:"session_ref"`
-	AgentType    string         `json:"agent_type,omitempty"`
-	StartedAt    time.Time      `json:"started_at"`
-	EndedAt      *time.Time     `json:"ended_at,omitempty"`
-	DurationSecs *int           `json:"duration_secs,omitempty"`
-	Model        string         `json:"model"`
-	Summary      *string        `json:"summary,omitempty"`
-	ToolCalls    map[string]int `json:"tool_calls,omitempty"`
-	GitCommits   []string       `json:"git_commits,omitempty"`
-	TokenUsage   *TokenUpload   `json:"token_usage,omitempty"`
+	SessionRef     string                       `json:"session_ref"`
+	AgentType      string                       `json:"agent_type,omitempty"`
+	StartedAt      time.Time                    `json:"started_at"`
+	EndedAt        *time.Time                   `json:"ended_at,omitempty"`
+	DurationSecs   *int                         `json:"duration_secs,omitempty"`
+	Model          string                       `json:"model"`
+	Summary        *string                      `json:"summary,omitempty"`
+	ToolCalls      map[string]int               `json:"tool_calls,omitempty"`
+	GitCommits     []string                     `json:"git_commits,omitempty"`
+	TokenUsage     *TokenUpload                 `json:"token_usage,omitempty"`
+	ActivitySlices []SessionActivitySliceUpload `json:"activity_slices,omitempty"`
 }
 
 type TokenUpload struct {
@@ -456,6 +457,33 @@ type TokenUpload struct {
 	CacheReadTokens     int64    `json:"cache_read_tokens"`
 	TotalTokens         int64    `json:"total_tokens"`
 	Models              []string `json:"models,omitempty"`
+}
+
+type SessionActivitySliceUpload struct {
+	ActivityDate        string         `json:"activity_date"`
+	ActivityStartAt     time.Time      `json:"activity_start_at"`
+	ActivityEndAt       time.Time      `json:"activity_end_at"`
+	Timezone            string         `json:"timezone,omitempty"`
+	AgentType           string         `json:"agent_type,omitempty"`
+	Model               string         `json:"model,omitempty"`
+	Models              []string       `json:"models,omitempty"`
+	Summary             string         `json:"summary,omitempty"`
+	Excerpt             string         `json:"excerpt,omitempty"`
+	MessageCount        int            `json:"message_count,omitempty"`
+	SourceEventCount    int            `json:"source_event_count,omitempty"`
+	ToolCalls           map[string]int `json:"tool_calls,omitempty"`
+	GitCommits          []string       `json:"git_commits,omitempty"`
+	InputTokens         int64          `json:"input_tokens,omitempty"`
+	OutputTokens        int64          `json:"output_tokens,omitempty"`
+	CacheCreationTokens int64          `json:"cache_creation_tokens,omitempty"`
+	CacheReadTokens     int64          `json:"cache_read_tokens,omitempty"`
+	TotalTokens         int64          `json:"total_tokens,omitempty"`
+	SourceHasRawLog     bool           `json:"source_has_raw_log"`
+	TokenSliceStrategy  string         `json:"token_slice_strategy,omitempty"`
+	SummaryStrategy     string         `json:"summary_strategy,omitempty"`
+	ParserVersion       string         `json:"parser_version,omitempty"`
+	SliceVersion        int            `json:"slice_version,omitempty"`
+	IsEstimated         bool           `json:"is_estimated"`
 }
 
 type UpdateSessionTaskRequest struct {
@@ -813,13 +841,14 @@ type ManagedReportRunTarget struct {
 }
 
 type ManagedReportAgentRunRequest struct {
-	ReportType          string                 `json:"report_type"`
-	Period              ManagedReportRunPeriod `json:"period"`
-	Target              ManagedReportRunTarget `json:"target,omitempty"`
-	ModelID             string                 `json:"model_id,omitempty"`
-	StartPromptValues   map[string]string      `json:"start_prompt_values,omitempty"`
-	Message             string                 `json:"message,omitempty"`
-	CredentialOverrides map[string]string      `json:"credential_overrides,omitempty"`
+	ReportType               string                 `json:"report_type"`
+	Period                   ManagedReportRunPeriod `json:"period"`
+	Target                   ManagedReportRunTarget `json:"target,omitempty"`
+	ModelID                  string                 `json:"model_id,omitempty"`
+	SelectedSessionSliceKeys []string               `json:"selected_session_slice_keys,omitempty"`
+	StartPromptValues        map[string]string      `json:"start_prompt_values,omitempty"`
+	Message                  string                 `json:"message,omitempty"`
+	CredentialOverrides      map[string]string      `json:"credential_overrides,omitempty"`
 }
 
 type ManagedAgentSchedule struct {
@@ -1326,19 +1355,29 @@ type TokenAggregation struct {
 }
 
 type SessionTokens struct {
-	SessionID           string    `json:"session_id"`
-	SessionRef          string    `json:"session_ref"`
-	UserID              string    `json:"user_id"`
-	UserName            string    `json:"user_name"`
-	AgentType           string    `json:"agent_type"`
-	Models              []string  `json:"models"`
-	Summary             *string   `json:"summary,omitempty"`
-	StartedAt           time.Time `json:"started_at"`
-	InputTokens         int64     `json:"input_tokens"`
-	OutputTokens        int64     `json:"output_tokens"`
-	CacheCreationTokens int64     `json:"cache_creation_tokens"`
-	CacheReadTokens     int64     `json:"cache_read_tokens"`
-	TotalTokens         int64     `json:"total_tokens"`
+	SessionID           string     `json:"session_id"`
+	SliceKey            string     `json:"slice_key,omitempty"`
+	LocalSessionID      string     `json:"local_session_id,omitempty"`
+	SessionRef          string     `json:"session_ref"`
+	UserID              string     `json:"user_id"`
+	UserName            string     `json:"user_name"`
+	AgentType           string     `json:"agent_type"`
+	Models              []string   `json:"models"`
+	Summary             *string    `json:"summary,omitempty"`
+	StartedAt           time.Time  `json:"started_at"`
+	ActivityDate        string     `json:"activity_date,omitempty"`
+	ActivityStartAt     *time.Time `json:"activity_start_at,omitempty"`
+	ActivityEndAt       *time.Time `json:"activity_end_at,omitempty"`
+	ActivityDates       []string   `json:"activity_dates,omitempty"`
+	SliceCount          int        `json:"slice_count"`
+	SourceHasRawLog     bool       `json:"source_has_raw_log"`
+	IsEstimated         bool       `json:"is_estimated"`
+	TokenSliceStrategy  string     `json:"token_slice_strategy,omitempty"`
+	InputTokens         int64      `json:"input_tokens"`
+	OutputTokens        int64      `json:"output_tokens"`
+	CacheCreationTokens int64      `json:"cache_creation_tokens"`
+	CacheReadTokens     int64      `json:"cache_read_tokens"`
+	TotalTokens         int64      `json:"total_tokens"`
 }
 
 type PaginatedSessionTokens struct {

@@ -61,10 +61,15 @@ func reportMCPTools() []map[string]any {
 				"type":     "object",
 				"required": []string{"scope", "date_range"},
 				"properties": map[string]any{
-					"scope":           scopeSchema,
-					"target":          targetSchema,
-					"date_range":      dateRangeSchema,
-					"user_ids":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+					"scope":      scopeSchema,
+					"target":     targetSchema,
+					"date_range": dateRangeSchema,
+					"user_ids":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+					"selected_session_slice_keys": map[string]any{
+						"type":        "array",
+						"items":       map[string]any{"type": "string"},
+						"description": "Optional session activity slice keys in the format session_id:YYYY-MM-DD.",
+					},
 					"limit":           map[string]any{"type": "integer"},
 					"include_summary": map[string]any{"type": "boolean"},
 				},
@@ -237,6 +242,42 @@ func parseDateRange(r dateRangeArgs) (string, string, error) {
 		return "", "", errInvalidPeriod
 	}
 	return start, end, nil
+}
+
+func normalizeSelectedSessionSliceKeys(values []string) ([]string, error) {
+	if len(values) == 0 {
+		return []string{}, nil
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, raw := range values {
+		key := strings.TrimSpace(raw)
+		if key == "" {
+			continue
+		}
+		if strings.Count(key, ":") != 1 {
+			return nil, fmt.Errorf("selected_session_slice_keys must use session_id:YYYY-MM-DD")
+		}
+		sessionID, date, _ := strings.Cut(key, ":")
+		sessionID = strings.TrimSpace(sessionID)
+		date = strings.TrimSpace(date)
+		if sessionID == "" {
+			return nil, fmt.Errorf("selected_session_slice_keys must include session_id")
+		}
+		if _, err := parseDate(date); err != nil {
+			return nil, fmt.Errorf("selected_session_slice_keys must use YYYY-MM-DD dates")
+		}
+		normalized := sessionID + ":" + date
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		out = append(out, normalized)
+	}
+	if len(out) > 200 {
+		return nil, fmt.Errorf("selected_session_slice_keys supports at most 200 values")
+	}
+	return out, nil
 }
 
 func parseWeekRange(r weekRangeArgs) (string, string, error) {
