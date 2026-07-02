@@ -437,7 +437,7 @@ function PersonalDailyReportDetailContent({
           <Card>
             <Space size="large" wrap>
               <Text>日期：{formatDate(report.report_date)}</Text>
-              <Text>状态：{report.edited ? "已编辑" : report.generation_mode === "managed_agent" ? "AI已生成" : "已保存"}</Text>
+              <Text>状态：{report.edited ? "已编辑" : "已保存"}</Text>
               <Text>更新时间：{formatDateTime(report.updated_at)}</Text>
             </Space>
           </Card>

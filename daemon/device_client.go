@@ -94,6 +94,70 @@ func formatTokens(n int64) string {
 	}
 	return strconv.FormatInt(n, 10)
 }
+
+func printSessionListHeader() {
+	fmt.Printf("  %-4s  %-6s  %-19s  %-9s  %-9s  %-10s  %-22s  %-36s  %s\n",
+		"#", "Agent", "Started", "Tokens", "Duration", "Model", "Project/CWD", "Session", "Summary")
+	fmt.Println("  " + strings.Repeat("-", 156))
+}
+
+func formatSessionListRow(index int, s *SessionInfo) string {
+	if s == nil {
+		return ""
+	}
+	started := "-"
+	if !s.StartedAt.IsZero() {
+		started = s.StartedAt.Format("2006-01-02 15:04")
+	}
+	dur := "-"
+	if d := s.Duration(); d > 0 {
+		dur = fmt.Sprintf("%dm", int(d.Minutes()))
+	}
+	agent := s.AgentType
+	if agent == "" {
+		agent = "claude"
+	}
+	return fmt.Sprintf("  %-4d  %-6s  %-19s  %-9s  %-9s  %-10s  %-22s  %-36s  %s",
+		index,
+		truncate(agent, 6),
+		started,
+		s.FormatTokens(),
+		dur,
+		truncateMiddle(firstNonEmpty(s.Model, "-"), 10),
+		truncateMiddle(sessionProjectDisplay(s), 22),
+		firstNonEmpty(s.SessionRef, "-"),
+		truncate(firstNonEmpty(s.Summary, "-"), 48),
+	)
+}
+
+func sessionProjectDisplay(s *SessionInfo) string {
+	if s == nil {
+		return "-"
+	}
+	if s.ProjectDir != "" {
+		return s.ProjectDir
+	}
+	if s.Cwd != "" {
+		base := filepath.Base(s.Cwd)
+		if base != "." && base != string(filepath.Separator) {
+			return base
+		}
+		return s.Cwd
+	}
+	return "-"
+}
+
+func truncateMiddle(s string, n int) string {
+	runes := []rune(s)
+	if n <= 3 || len(runes) <= n {
+		return s
+	}
+	keep := n - 2
+	left := keep / 2
+	right := keep - left
+	return string(runes[:left]) + ".." + string(runes[len(runes)-right:])
+}
+
 func cmdLogin(args []string) {
 	cfg := loadConfig()
 
@@ -199,36 +263,10 @@ func cmdSessions(args []string) {
 		return
 	}
 
-	// Header
-	fmt.Printf("\n  %-4s  %-6s  %-19s  %-9s  %-9s  %-10s  %-22s  %s\n",
-		"#", "Agent", "Date", "Tokens", "Duration", "Model", "Project", "Summary")
-	fmt.Println("  " + strings.Repeat("-", 116))
+	printSessionListHeader()
 
 	for i, s := range sessions {
-		dateStr := s.StartedAt.Format("2006-01-02 15:04")
-		durStr := "-"
-		if d := s.Duration(); d > 0 {
-			durStr = fmt.Sprintf("%dm", int(d.Minutes()))
-		}
-		model := s.Model
-		if len(model) > 10 {
-			model = model[:7] + ".."
-		}
-		project := s.ProjectDir
-		if len(project) > 22 {
-			project = ".." + project[len(project)-20:]
-		}
-		summary := s.Summary
-		if len(summary) > 35 {
-			summary = summary[:32] + "..."
-		}
-		agent := s.AgentType
-		if agent == "" {
-			agent = "claude"
-		}
-
-		fmt.Printf("  %-4d  %-6s  %-19s  %-9s  %-9s  %-10s  %-22s  %s\n",
-			i+1, agent, dateStr, s.FormatTokens(), durStr, model, project, summary)
+		fmt.Println(formatSessionListRow(i+1, s))
 		if len(s.SubFiles) > 0 {
 			fmt.Printf("        %-38s %d sub-agent(s)\n", "", len(s.SubFiles))
 		}
@@ -282,13 +320,9 @@ func cmdUpload(args []string) {
 		// Interactive picker
 		fmt.Println("\nSelect sessions to upload:")
 		fmt.Println()
+		printSessionListHeader()
 		for i, s := range sessions {
-			dateStr := s.StartedAt.Format("2006-01-02 15:04")
-			summary := s.Summary
-			if len(summary) > 50 {
-				summary = summary[:47] + "..."
-			}
-			fmt.Printf("  %-3d  %s  %8s  %s\n", i+1, dateStr, s.FormatTokens(), summary)
+			fmt.Println(formatSessionListRow(i+1, s))
 		}
 		fmt.Println()
 		fmt.Print("Enter session numbers (e.g. 1,3,5 or 'all'): ")
@@ -306,6 +340,14 @@ func cmdUpload(args []string) {
 					toUpload = append(toUpload, sessions[n-1])
 				}
 			}
+		}
+	}
+
+	if uploadAll {
+		fmt.Println("\nSessions selected by --all:")
+		printSessionListHeader()
+		for i, s := range toUpload {
+			fmt.Println(formatSessionListRow(i+1, s))
 		}
 	}
 
@@ -963,10 +1005,14 @@ func buildUploadPayload(s *SessionInfo) map[string]any {
 }
 
 func truncate(s string, n int) string {
-	if len(s) <= n {
+	runes := []rune(s)
+	if len(runes) <= n {
 		return s
 	}
-	return s[:n-3] + "..."
+	if n <= 3 {
+		return string(runes[:n])
+	}
+	return string(runes[:n-3]) + "..."
 }
 
 func appendDistinct(list []string, v string) []string {

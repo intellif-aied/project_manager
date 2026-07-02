@@ -58,13 +58,14 @@ function reportStatus(report: DailyReport | TeamReport | DepartmentReport | null
   if (report && "product_status" in report && report.product_status) {
     if (report.product_status === "generation_failed") return <Tag color="red">生成失败</Tag>;
     if (report.product_status === "missing") return <Tag>暂无报告</Tag>;
-    if (report.product_status === "ai_generated") return <Tag color="blue">AI 已生成</Tag>;
-    if (report.product_status === "modified") return <Tag color="orange">本人已修改</Tag>;
-    if (report.product_status === "manual") return <Tag color="green">手写报告</Tag>;
+    if (report.product_status === "modified") return <Tag color="orange">已编辑</Tag>;
+    if (report.product_status === "ai_generated" || report.product_status === "manual") {
+      return <Tag color="blue">已保存</Tag>;
+    }
   }
   if (!report || !report.content?.trim()) return <Tag>暂无报告</Tag>;
   if ("generation_mode" in report && report.generation_mode === "managed_agent") {
-    return report.edited ? <Tag color="orange">本人已修改</Tag> : <Tag color="blue">AI 已生成</Tag>;
+    return report.edited ? <Tag color="orange">已编辑</Tag> : <Tag color="blue">已保存</Tag>;
   }
   if ("submitted_at" in report && report.submitted_at) return <Tag color="green">已保存</Tag>;
   if ("status" in report && report.status === "saved") return <Tag color="blue">已保存</Tag>;

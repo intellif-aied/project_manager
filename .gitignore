@@ -44,3 +44,8 @@ aida-releases-test/
 aida-releases-release/
 aida_release_*.tar.gz
 .cache/
+
+# Local generated files
+__pycache__/
+*.pyc
+doc/db-backups/

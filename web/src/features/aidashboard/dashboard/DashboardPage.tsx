@@ -112,7 +112,6 @@ type ReportStatus =
   | "已保存，未发送最新修改"
   | "已归档"
   | "生成失败";
-type ReportGenerateMode = "AI已生成" | "手写报告";
 type ReportModalStep = "sessions" | "source" | "editor";
 type ReportKind =
   | "personal_daily"
@@ -221,7 +220,6 @@ interface ReportItem {
   description: string;
   sourceSummary: string;
   sessionCount: number;
-  generateMode: ReportGenerateMode;
   skill: string;
   updatedAt: string;
   nextAt?: string;
@@ -302,12 +300,11 @@ const DEFAULT_MARKDOWN = `# 6 月 22 日日报
 * 对齐需求看板定位规则。`;
 
 function createReport(
-  overrides: Omit<ReportItem, "sessionCount" | "generateMode" | "skill" | "updatedAt"> &
+  overrides: Omit<ReportItem, "sessionCount" | "skill" | "updatedAt"> &
     Partial<ReportItem>
 ): ReportItem {
   return {
     sessionCount: 0,
-    generateMode: "AI已生成",
     skill: "默认日报 Skill",
     updatedAt: "-",
     ...overrides
@@ -342,7 +339,6 @@ function applyTodayDailyReportState(
     ...report,
     status,
     sessionCount: dailyReport.session_ids.length,
-    generateMode: dailyReport.edited ? "手写报告" : "AI已生成",
     updatedAt: formatDateTime(dailyReport.updated_at, "HH:mm")
   };
 }
@@ -365,7 +361,6 @@ function applyPersonalWeeklyReportState(
     ...report,
     status: weeklyReport.status === "submitted" ? "已发送" : "已保存",
     sessionCount: weeklyReport.source_session_ids.length,
-    generateMode: "AI已生成",
     updatedAt: formatDateTime(weeklyReport.updated_at, "HH:mm")
   };
 }
@@ -394,7 +389,6 @@ function applyTeamDailyReportState(
           ? "已保存，未发送最新修改"
           : "已保存",
     sessionCount: teamReport.source_daily_report_ids.length || teamReport.member_report_ids.length,
-    generateMode: "AI已生成",
     skill: "小组日报 Agent",
     updatedAt: formatDateTime(teamReport.updated_at, "HH:mm")
   };
@@ -424,7 +418,6 @@ function applyDepartmentDailyReportState(
         ? "已保存"
         : "待生成",
     sessionCount: departmentReport.source_team_report_ids.length,
-    generateMode: "AI已生成",
     skill: "部门日报 Agent",
     updatedAt: formatDateTime(departmentReport.updated_at, "HH:mm")
   };
@@ -1248,7 +1241,6 @@ export function DashboardPage() {
       updateReport(activeReport.id, {
         status: "草稿待确认",
         sessionCount: draft.selected_session_ids.length,
-        generateMode: "手写报告",
         skill: draft.skill_name,
         updatedAt: "刚刚",
         nextAt: "19:00"
@@ -1271,7 +1263,6 @@ export function DashboardPage() {
       updateReport(activeReport.id, {
         status: "草稿待确认",
         sessionCount: report.source_team_report_ids.length,
-        generateMode: "AI已生成",
         skill: "部门日报 Agent",
         updatedAt: "刚刚"
       });
@@ -1294,7 +1285,6 @@ export function DashboardPage() {
       updateReport(activeReport.id, {
         status: "草稿待确认",
         sessionCount: report.source_daily_report_ids.length || report.member_report_ids.length,
-        generateMode: "AI已生成",
         skill: "小组日报 Agent",
         updatedAt: "刚刚"
       });
@@ -1331,7 +1321,6 @@ export function DashboardPage() {
               ? "已保存，未发送最新修改"
               : "已保存",
         sessionCount: report.source_daily_report_ids.length || report.member_report_ids.length,
-        generateMode: "AI已生成",
         skill: "小组日报 Agent",
         updatedAt: "刚刚"
       });
@@ -1368,7 +1357,6 @@ export function DashboardPage() {
       updateReport(activeReport.id, {
         status: "已保存",
         sessionCount: report.source_team_report_ids.length,
-        generateMode: "AI已生成",
         skill: "部门日报 Agent",
         updatedAt: "刚刚"
       });
@@ -1401,7 +1389,6 @@ export function DashboardPage() {
       updateReport(activeReport.id, {
         status: "草稿待确认",
         sessionCount: saved.session_ids.length,
-        generateMode: "手写报告",
         skill: saved.edited ? "默认日报 Skill" : activeReport.skill,
         updatedAt: "刚刚"
       });
@@ -1537,7 +1524,6 @@ export function DashboardPage() {
     updateReport(activeReport.id, {
       status: "草稿待确认",
       sessionCount: activeReport.sessionCount,
-      generateMode: "AI已生成",
       skill: reportSkillDraft,
       updatedAt: "刚刚"
     });
@@ -3442,7 +3428,6 @@ function ReportModalContent({
           <span>{report.sourceSummary}</span>
         </div>
         <div className="console-editor-shell__meta">
-          <Tag color="blue">{report.generateMode}</Tag>
           <span>{getReportSourceMeta(report, coverage)}</span>
         </div>
         <GenerationSettingsPanel
@@ -3461,9 +3446,6 @@ function ReportModalContent({
     <div className="console-report-modal">
       <Steps size="small" current={1} items={getReportSourceSteps(report)} />
       <div className="console-editor-shell__meta">
-        <Tag color={report.generateMode === "AI已生成" ? "blue" : "gold"}>
-          {report.generateMode}
-        </Tag>
         {getEditorMeta(report).map((meta) => (
           <span key={meta}>{meta}</span>
         ))}

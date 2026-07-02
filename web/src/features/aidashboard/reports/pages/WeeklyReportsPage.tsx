@@ -121,7 +121,7 @@ function weeklyReportStatusTag(scope: WeeklyReportScope, report: WeeklyReportDat
   if (scope === "personal" && "status" in report && report.status === "submitted") {
     return <Tag color="green">已保存</Tag>;
   }
-  return <Tag color="green">手写报告</Tag>;
+  return <Tag color="blue">已保存</Tag>;
 }
 
 function weeklyReportContent(report: WeeklyReportData | null) {
