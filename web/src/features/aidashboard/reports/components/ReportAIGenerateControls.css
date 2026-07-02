@@ -1,0 +1,78 @@
+.console-report-workflow-modal .report-ai-generate-controls {
+  margin-right: auto;
+}
+
+.report-ai-generate-controls .ant-btn {
+  height: 34px;
+}
+
+.console-report-workflow-modal .ant-modal-footer .report-ai-generate-controls .ant-btn:not(:first-child) {
+  margin-inline-start: -1px;
+  border-start-start-radius: 0;
+  border-end-start-radius: 0;
+}
+
+.console-report-workflow-modal .ant-modal-footer .report-ai-generate-controls .ant-btn:not(:last-child) {
+  border-start-end-radius: 0;
+  border-end-end-radius: 0;
+}
+
+.report-ai-settings-modal.ant-modal {
+  top: clamp(12px, 3vh, 24px);
+  max-width: min(920px, calc(100vw - 32px));
+  padding-bottom: clamp(12px, 3vh, 24px);
+}
+
+.report-ai-settings-modal .ant-modal-container,
+.report-ai-settings-modal .ant-modal-content {
+  display: flex;
+  max-height: calc(100dvh - clamp(24px, 6vh, 48px));
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.report-ai-settings-modal .ant-modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-color: #cbd5e1 transparent;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+}
+
+.report-ai-settings-modal .ant-modal-footer {
+  flex: 0 0 auto;
+}
+
+.report-ai-settings {
+  display: grid;
+  gap: 12px;
+}
+
+.report-ai-settings__summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid #e6edf5;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.report-ai-settings__summary strong {
+  color: #172033;
+  font-size: 14px;
+}
+
+.report-ai-settings__summary span,
+.report-ai-settings > span {
+  color: #64748b;
+  font-size: 13px;
+}
+
+.report-ai-session-id {
+  color: #172033;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}

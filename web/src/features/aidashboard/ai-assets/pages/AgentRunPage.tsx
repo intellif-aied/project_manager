@@ -4,18 +4,21 @@ import {
   Button,
   Card,
   DatePicker,
+  Empty,
   Input,
+  Modal,
   Select,
   Space,
   Spin,
   Tag,
+  Table,
   Tooltip
 } from "antd";
 import { PlayCircleOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
 import type { Dayjs } from "dayjs";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import {
@@ -23,10 +26,17 @@ import {
   fetchManagedAgentRun,
   fetchManagedAgents,
   fetchManagedCredentials,
+  fetchSessionTokens,
   startManagedAgentRun,
   startReportAgentRun
 } from "../../api/client";
-import type { AIRun, ManagedAgent, ManagedCredential, ReportType } from "../../api/types";
+import type {
+  AIRun,
+  ManagedAgent,
+  ManagedCredential,
+  ReportType,
+  SessionTokens
+} from "../../api/types";
 import {
   AI_ASSETS_HOME,
   aiAssetsPath,
@@ -53,6 +63,8 @@ const REPORT_SYSTEM_PROMPT_KEYS = new Set([
   "report_type",
   "period_json",
   "target_json",
+  "selected_session_slice_keys",
+  "selected_session_slice_keys_json",
   "run_id",
   "mcp_url",
   "credential_slot",
@@ -123,6 +135,26 @@ function defaultWeekRange(): [Dayjs, Dayjs] {
   const weekday = today.day() === 0 ? 7 : today.day();
   const weekStart = today.subtract(weekday - 1, "day").startOf("day");
   return [weekStart, weekStart.add(6, "day")];
+}
+
+function reportPeriodPayload(reportType: ReportType, reportDate: Dayjs, weekRange: [Dayjs, Dayjs]) {
+  return isWeeklyReportType(reportType)
+    ? {
+        week_start: weekRange[0].format("YYYY-MM-DD"),
+        week_end: weekRange[1].format("YYYY-MM-DD")
+      }
+    : { date: reportDate.format("YYYY-MM-DD") };
+}
+
+function reportSessionRange(reportType: ReportType, reportDate: Dayjs, weekRange: [Dayjs, Dayjs]) {
+  if (isWeeklyReportType(reportType)) {
+    return {
+      from: weekRange[0].format("YYYY-MM-DD"),
+      to: weekRange[1].format("YYYY-MM-DD")
+    };
+  }
+  const date = reportDate.format("YYYY-MM-DD");
+  return { from: date, to: date };
 }
 
 function cleanAgentDescription(agent: ManagedAgent, reportAgent: boolean) {
@@ -235,6 +267,235 @@ function compactCredentialOverrides(overrides: Record<string, string>) {
     Object.entries(overrides)
       .map(([slot, credentialId]) => [slot.trim(), credentialId.trim()])
       .filter(([slot, credentialId]) => slot && credentialId)
+  );
+}
+
+function formatTokens(value: number) {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
+  return String(value);
+}
+
+function formatDateTime(iso?: string) {
+  if (!iso) return "-";
+  return new Date(iso).toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
+function realSessionId(session: SessionTokens) {
+  return session.local_session_id || session.session_ref || session.session_id;
+}
+
+function sessionSliceKey(session: SessionTokens) {
+  return (
+    session.slice_key ||
+    `${session.session_id}:${session.activity_date || session.activity_start_at || session.started_at}`
+  );
+}
+
+function formatActivityRange(session: SessionTokens) {
+  const start = session.activity_start_at || session.started_at;
+  const end = session.activity_end_at;
+  if (!end || end === start) return formatDateTime(start);
+  return `${formatDateTime(start)} ~ ${formatDateTime(end)}`;
+}
+
+function sessionSelectLabel(session: SessionTokens) {
+  const summary = session.summary ? ` · ${session.summary}` : "";
+  return `${realSessionId(session)} · ${formatActivityRange(session)}${summary}`;
+}
+
+function compactSelectedRecords(
+  keys: string[],
+  records: Record<string, SessionTokens>
+): Record<string, SessionTokens> {
+  const next: Record<string, SessionTokens> = {};
+  for (const key of keys) {
+    if (records[key]) next[key] = records[key];
+  }
+  return next;
+}
+
+function SessionSliceSelector({
+  from,
+  to,
+  selectedKeys,
+  selectedRecords,
+  onChange
+}: {
+  from: string;
+  to: string;
+  selectedKeys: string[];
+  selectedRecords: Record<string, SessionTokens>;
+  onChange: (keys: string[], records: Record<string, SessionTokens>) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(8);
+
+  useEffect(() => {
+    setPage(1);
+  }, [from, to]);
+
+  const sessionsQuery = useQuery({
+    queryKey: ["report-session-slices", from, to, page, pageSize],
+    queryFn: () =>
+      fetchSessionTokens({
+        from,
+        to,
+        scope: "mine",
+        page: String(page),
+        page_size: String(pageSize)
+      }),
+    enabled: open,
+    placeholderData: (previousData) => previousData,
+    staleTime: 30_000
+  });
+
+  const sessions = sessionsQuery.data?.items ?? [];
+  const selectedItems = useMemo(
+    () =>
+      selectedKeys.map((key) => ({
+        key,
+        label: selectedRecords[key] ? sessionSelectLabel(selectedRecords[key]) : key
+      })),
+    [selectedKeys, selectedRecords]
+  );
+  const removeSelectedKey = (key: string) => {
+    const normalized = selectedKeys.filter((item) => item !== key);
+    onChange(normalized, compactSelectedRecords(normalized, selectedRecords));
+  };
+
+  return (
+    <Card title="Session 切片（可选）" className="ai-assets-editor-section">
+      <div className="ai-assets-session-selector">
+        <div className="ai-assets-session-selector__control">
+          <div className="ai-assets-session-selector__panel">
+            {selectedItems.length > 0 ? (
+              <div className="ai-assets-session-selector__tags">
+                {selectedItems.map((item) => (
+                  <Tag
+                    key={item.key}
+                    closable
+                    className="ai-assets-session-selector__tag"
+                    onClose={(event) => {
+                      event.preventDefault();
+                      removeSelectedKey(item.key);
+                    }}
+                  >
+                    <span className="ai-assets-session-selector__tag-text">{item.label}</span>
+                  </Tag>
+                ))}
+              </div>
+            ) : (
+              <span className="ai-assets-session-selector__empty">
+                默认使用当前报告周期内的全部 Session
+              </span>
+            )}
+          </div>
+          <Button onClick={() => setOpen(true)}>选择 Session</Button>
+        </div>
+        <p className="ai-assets-field-help">
+          不选择时，报告会按当前日期或周期自动取数；选择后只使用选中的 Session 切片。
+        </p>
+      </div>
+
+      <Modal
+        title="选择 Session 切片"
+        open={open}
+        width={920}
+        className="ai-assets-session-modal"
+        onCancel={() => setOpen(false)}
+        onOk={() => setOpen(false)}
+        okText="完成"
+        cancelText="取消"
+      >
+        <div className="ai-assets-session-modal__summary">
+          <span>
+            {from === to ? from : `${from} ~ ${to}`} · 已选 {selectedKeys.length} 条
+          </span>
+          {selectedKeys.length > 0 ? (
+            <Button size="small" onClick={() => onChange([], {})}>
+              清空选择
+            </Button>
+          ) : null}
+        </div>
+        <Table<SessionTokens>
+          rowKey={sessionSliceKey}
+          dataSource={sessions}
+          loading={sessionsQuery.isLoading || sessionsQuery.isFetching}
+          size="middle"
+          scroll={{ x: 820 }}
+          rowSelection={{
+            selectedRowKeys: selectedKeys,
+            preserveSelectedRowKeys: true,
+            onChange: (keys, rows) => {
+              const normalized = keys.map(String);
+              const nextRecords = { ...selectedRecords };
+              rows.forEach((row) => {
+                nextRecords[sessionSliceKey(row)] = row;
+              });
+              Object.keys(nextRecords).forEach((key) => {
+                if (!normalized.includes(key)) delete nextRecords[key];
+              });
+              onChange(normalized, nextRecords);
+            }
+          }}
+          pagination={{
+            current: sessionsQuery.data?.page ?? page,
+            pageSize: sessionsQuery.data?.page_size ?? pageSize,
+            total: sessionsQuery.data?.total ?? 0,
+            showSizeChanger: true,
+            showTotal: (total) => `共 ${total} 条`,
+            onChange: (nextPage, nextPageSize) => {
+              setPage(nextPage);
+              setPageSize(nextPageSize);
+            }
+          }}
+          columns={[
+            {
+              title: "真实 Session ID",
+              key: "session",
+              width: 300,
+              render: (_: unknown, session) => (
+                <span className="ai-assets-session-id">{realSessionId(session)}</span>
+              )
+            },
+            {
+              title: "摘要",
+              dataIndex: "summary",
+              width: 260,
+              render: (summary?: string) =>
+                summary ? (
+                  <span className="ai-assets-session-summary" title={summary}>
+                    {summary}
+                  </span>
+                ) : (
+                  "-"
+                )
+            },
+            {
+              title: "活动时间",
+              key: "activity",
+              width: 190,
+              render: (_: unknown, session) => formatActivityRange(session)
+            },
+            {
+              title: "Total",
+              dataIndex: "total_tokens",
+              align: "right" as const,
+              width: 90,
+              render: (value: number) => formatTokens(value)
+            }
+          ]}
+          locale={{ emptyText: <Empty description="当前报告周期暂无 Session 切片" /> }}
+        />
+      </Modal>
+    </Card>
   );
 }
 
@@ -612,6 +873,10 @@ function ReportAgentRunForm({ agent }: { agent: ManagedAgent }) {
   const [runModelId, setRunModelId] = useState("");
   const [activeRunId, setActiveRunId] = useState<string>();
   const [credentialOverrides, setCredentialOverrides] = useState<Record<string, string>>({});
+  const [selectedSessionSliceKeys, setSelectedSessionSliceKeys] = useState<string[]>([]);
+  const [selectedSessionRecords, setSelectedSessionRecords] = useState<
+    Record<string, SessionTokens>
+  >({});
 
   const activeRunQuery = useQuery<AIRun>({
     queryKey: ["managed-agent-run", activeRunId],
@@ -631,12 +896,31 @@ function ReportAgentRunForm({ agent }: { agent: ManagedAgent }) {
   const reportType = options.some((option) => option.value === reportTypeInput)
     ? reportTypeInput
     : (options[0]?.value ?? reportTypeInput);
+  const period = reportPeriodPayload(reportType, reportDate, weekRange);
+  const sessionRange = reportSessionRange(reportType, reportDate, weekRange);
+  useEffect(() => {
+    setSelectedSessionSliceKeys([]);
+    setSelectedSessionRecords({});
+  }, [sessionRange.from, sessionRange.to]);
   const defaultModelId = agent.default_model_id?.trim() || "";
   const modelId = runModelId.trim() || defaultModelId;
   const missingPromptVariables = userPromptVariables.filter(
     (key) => !startPromptValues[key]?.trim()
   );
-  const promptPreview = template ? renderPromptPreview(template, startPromptValues) : "";
+  const promptPreviewValues = useMemo(
+    () => ({
+      ...startPromptValues,
+      report_type: reportType,
+      period_json: JSON.stringify(period),
+      target_json: JSON.stringify({ type: "self" }),
+      selected_session_slice_keys: selectedSessionSliceKeys.join("\n"),
+      selected_session_slice_keys_json: JSON.stringify(selectedSessionSliceKeys),
+      run_id: "运行时生成",
+      credential_slot: REPORT_SYSTEM_CREDENTIAL_SLOT
+    }),
+    [period, reportType, selectedSessionSliceKeys, startPromptValues]
+  );
+  const promptPreview = template ? renderPromptPreview(template, promptPreviewValues) : "";
   const credentialSlots = useMemo(() => runtimeCredentialSlots(agent), [agent]);
   const credentials = useMemo(
     () => credentialsQuery.data?.credentials ?? [],
@@ -674,17 +958,14 @@ function ReportAgentRunForm({ agent }: { agent: ManagedAgent }) {
 
   const runMutation = useMutation({
     mutationFn: () => {
-      const period = isWeeklyReportType(reportType)
-        ? {
-            week_start: weekRange[0].format("YYYY-MM-DD"),
-            week_end: weekRange[1].format("YYYY-MM-DD")
-          }
-        : { date: reportDate.format("YYYY-MM-DD") };
       return startReportAgentRun(agent.agent_id, {
         report_type: reportType,
         period,
         target: { type: "self" },
         model_id: modelId,
+        selected_session_slice_keys: selectedSessionSliceKeys.length
+          ? selectedSessionSliceKeys
+          : undefined,
         start_prompt_values: userPromptVariables.length ? startPromptValues : undefined,
         message: runMessage.trim() || undefined,
         credential_overrides:
@@ -789,6 +1070,17 @@ function ReportAgentRunForm({ agent }: { agent: ManagedAgent }) {
               </div>
             </Card>
           ) : null}
+
+          <SessionSliceSelector
+            from={sessionRange.from}
+            to={sessionRange.to}
+            selectedKeys={selectedSessionSliceKeys}
+            selectedRecords={selectedSessionRecords}
+            onChange={(keys, records) => {
+              setSelectedSessionSliceKeys(keys);
+              setSelectedSessionRecords(records);
+            }}
+          />
 
           <Card title="Initial Message" className="ai-assets-editor-section">
             <Input.TextArea

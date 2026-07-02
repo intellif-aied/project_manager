@@ -768,6 +768,7 @@ type ManagedAgent struct {
 	CreatedAt           int64                   `json:"created_at,omitempty"`
 	BusinessType        string                  `json:"business_type,omitempty"`
 	ReportTypes         []string                `json:"report_types,omitempty"`
+	IsDefaultReport     bool                    `json:"is_default_report,omitempty"`
 }
 
 type ListManagedSkillsResponse struct {

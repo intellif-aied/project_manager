@@ -419,6 +419,7 @@ export interface ManagedAgent {
   mcp_bindings?: ManagedMCPBinding[];
   business_type?: "generic" | "report";
   report_types?: ReportType[];
+  is_default_report?: boolean;
 }
 
 export interface UpsertManagedAgentPayload {

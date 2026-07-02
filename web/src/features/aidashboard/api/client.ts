@@ -589,6 +589,8 @@ export const createManagedAgent = (payload: UpsertManagedAgentPayload) =>
   unwrap(api.post<{ agent_id: string; managed_version?: number }>("/ai-assets/agents", payload));
 export const createDefaultReportAgent = () =>
   unwrap(api.post<ManagedAgent>("/ai-assets/report-agents/default"));
+export const setDefaultReportAgent = (agentId: string) =>
+  unwrap(api.post<ManagedAgent>(`/ai-assets/report-agents/${encodeURIComponent(agentId)}/default`));
 export const updateManagedAgent = (agentId: string, payload: UpsertManagedAgentPayload) =>
   unwrap(
     api.put<{ agent_id: string; managed_version?: number }>(`/ai-assets/agents/${agentId}`, payload)

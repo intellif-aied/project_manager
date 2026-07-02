@@ -562,9 +562,10 @@ func (h *ManagedAgentHandler) DeleteCredential(w http.ResponseWriter, r *http.Re
 }
 
 type managedAgentProfile struct {
-	AgentID      string
-	BusinessType string
-	ReportTypes  []string
+	AgentID         string
+	BusinessType    string
+	ReportTypes     []string
+	IsDefaultReport bool
 }
 
 func normalizeManagedAgentBusinessType(value string) string {
@@ -617,6 +618,7 @@ func (h *ManagedAgentHandler) mergeManagedAgentProfiles(ctx context.Context, use
 		}
 		agents[idx].BusinessType = profile.BusinessType
 		agents[idx].ReportTypes = append([]string{}, profile.ReportTypes...)
+		agents[idx].IsDefaultReport = profile.IsDefaultReport
 	}
 	return agents
 }
@@ -653,7 +655,7 @@ func (h *ManagedAgentHandler) loadManagedAgentProfiles(ctx context.Context, user
 		return out, nil
 	}
 	rows, err := h.db.QueryContext(ctx, fmt.Sprintf(`
-		SELECT agent_id, business_type, report_types
+		SELECT agent_id, business_type, report_types, COALESCE(is_default_report, false)
 		FROM managed_agent_profiles
 		WHERE user_id = $1 AND agent_id IN (%s)
 	`, strings.Join(placeholders, ",")), args...)
@@ -664,7 +666,7 @@ func (h *ManagedAgentHandler) loadManagedAgentProfiles(ctx context.Context, user
 	for rows.Next() {
 		var profile managedAgentProfile
 		var raw []byte
-		if err := rows.Scan(&profile.AgentID, &profile.BusinessType, &raw); err != nil {
+		if err := rows.Scan(&profile.AgentID, &profile.BusinessType, &raw, &profile.IsDefaultReport); err != nil {
 			return out, err
 		}
 		_ = json.Unmarshal(raw, &profile.ReportTypes)
@@ -702,6 +704,34 @@ func (h *ManagedAgentHandler) upsertManagedAgentProfile(ctx context.Context, use
 	return err
 }
 
+func (h *ManagedAgentHandler) setDefaultReportAgentProfile(ctx context.Context, userID, agentID string, reportTypes []string) error {
+	if h.db == nil || strings.TrimSpace(userID) == "" || strings.TrimSpace(agentID) == "" {
+		return nil
+	}
+	reportTypes = normalizeManagedAgentReportTypes(reportTypes)
+	raw, err := json.Marshal(reportTypes)
+	if err != nil {
+		return err
+	}
+	if _, err := h.db.ExecContext(ctx, `
+		UPDATE managed_agent_profiles
+		SET is_default_report = false, updated_at = now()
+		WHERE user_id = $1 AND is_default_report = true AND agent_id <> $2
+	`, userID, agentID); err != nil {
+		return err
+	}
+	_, err = h.db.ExecContext(ctx, `
+		INSERT INTO managed_agent_profiles (agent_id, user_id, business_type, report_types, is_default_report, updated_at)
+		VALUES ($1, $2, $3, $4::jsonb, true, now())
+		ON CONFLICT (agent_id, user_id) DO UPDATE SET
+			business_type = EXCLUDED.business_type,
+			report_types = EXCLUDED.report_types,
+			is_default_report = true,
+			updated_at = now()
+	`, agentID, userID, managedAgentBusinessReport, string(raw))
+	return err
+}
+
 func (h *ManagedAgentHandler) loadManagedAgentProfile(ctx context.Context, userID, agentID string) (*managedAgentProfile, error) {
 	if h.db == nil || strings.TrimSpace(userID) == "" || strings.TrimSpace(agentID) == "" {
 		return nil, nil
@@ -709,10 +739,10 @@ func (h *ManagedAgentHandler) loadManagedAgentProfile(ctx context.Context, userI
 	var profile managedAgentProfile
 	var raw []byte
 	err := h.db.QueryRowContext(ctx, `
-		SELECT agent_id, business_type, report_types
+		SELECT agent_id, business_type, report_types, COALESCE(is_default_report, false)
 		FROM managed_agent_profiles
 		WHERE user_id = $1 AND agent_id = $2
-	`, userID, agentID).Scan(&profile.AgentID, &profile.BusinessType, &raw)
+	`, userID, agentID).Scan(&profile.AgentID, &profile.BusinessType, &raw, &profile.IsDefaultReport)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -959,12 +989,13 @@ func (h *ManagedAgentHandler) CreateDefaultReportAgent(w http.ResponseWriter, r 
 				existing = managedAgentFromUpsertRequest(patch)
 			}
 		}
-		if err := h.upsertManagedAgentProfile(r.Context(), u.ID, existing.AgentID, managedAgentBusinessReport, supportedReportTypes); err != nil {
+		if err := h.setDefaultReportAgentProfile(r.Context(), u.ID, existing.AgentID, supportedReportTypes); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
 		existing.BusinessType = managedAgentBusinessReport
 		existing.ReportTypes = append([]string{}, supportedReportTypes...)
+		existing.IsDefaultReport = true
 		writeJSON(w, http.StatusOK, existing)
 		return
 	}
@@ -980,7 +1011,7 @@ func (h *ManagedAgentHandler) CreateDefaultReportAgent(w http.ResponseWriter, r 
 		writeManagedAgentError(w, err)
 		return
 	}
-	if err := h.upsertManagedAgentProfile(r.Context(), u.ID, created.AgentID, managedAgentBusinessReport, supportedReportTypes); err != nil {
+	if err := h.setDefaultReportAgentProfile(r.Context(), u.ID, created.AgentID, supportedReportTypes); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -989,6 +1020,56 @@ func (h *ManagedAgentHandler) CreateDefaultReportAgent(w http.ResponseWriter, r 
 	agent.ManagedVersion = created.ManagedVersion
 	agent.BusinessType = managedAgentBusinessReport
 	agent.ReportTypes = append([]string{}, supportedReportTypes...)
+	agent.IsDefaultReport = true
+	writeJSON(w, http.StatusOK, agent)
+}
+
+func (h *ManagedAgentHandler) SetDefaultReportAgent(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureConfigured(w) {
+		return
+	}
+	u := getUser(r)
+	if u == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	agentID := strings.TrimSpace(chi.URLParam(r, "agentId"))
+	if agentID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "agent_id is required"})
+		return
+	}
+	client := h.clientForRequest(r)
+	agent, err := findMyManagedAgent(r, client, agentID)
+	if err != nil {
+		writeManagedAgentError(w, err)
+		return
+	}
+	if agent == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found"})
+		return
+	}
+	profile, err := h.loadManagedAgentProfile(r.Context(), u.ID, agentID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	supported := []string{}
+	if profile != nil && profile.BusinessType == managedAgentBusinessReport {
+		supported = normalizeManagedAgentReportTypes(profile.ReportTypes)
+	} else {
+		supported = reportTypesForAgent(*agent)
+	}
+	if len(supported) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"code": "NOT_REPORT_AGENT", "error": "agent is not a Report Agent"})
+		return
+	}
+	if err := h.setDefaultReportAgentProfile(r.Context(), u.ID, agentID, supported); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	agent.BusinessType = managedAgentBusinessReport
+	agent.ReportTypes = append([]string{}, supported...)
+	agent.IsDefaultReport = true
 	writeJSON(w, http.StatusOK, agent)
 }
 
@@ -1169,6 +1250,7 @@ func (h *ManagedAgentHandler) selectReportAgentForUser(ctx context.Context, user
 		return model.ManagedAgent{}, false, err
 	}
 	profileAgents := []model.ManagedAgent{}
+	defaultProfileAgents := []model.ManagedAgent{}
 	for _, agent := range agents {
 		if agent.Archived {
 			continue
@@ -1179,7 +1261,14 @@ func (h *ManagedAgentHandler) selectReportAgentForUser(ctx context.Context, user
 		}
 		agent.BusinessType = managedAgentBusinessReport
 		agent.ReportTypes = normalizeManagedAgentReportTypes(profile.ReportTypes)
+		agent.IsDefaultReport = profile.IsDefaultReport
+		if profile.IsDefaultReport {
+			defaultProfileAgents = append(defaultProfileAgents, agent)
+		}
 		profileAgents = append(profileAgents, agent)
+	}
+	if len(defaultProfileAgents) > 0 {
+		return bestReportAgent(defaultProfileAgents, h), true, nil
 	}
 	if len(profileAgents) > 0 {
 		return bestReportAgent(profileAgents, h), true, nil

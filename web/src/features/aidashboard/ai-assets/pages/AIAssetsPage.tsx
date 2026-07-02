@@ -10,6 +10,8 @@ import {
   PlusOutlined,
   ReloadOutlined,
   RobotOutlined,
+  StarFilled,
+  StarOutlined,
   ToolOutlined
 } from "@ant-design/icons";
 import {
@@ -47,6 +49,7 @@ import {
   fetchManagedSkillMarkdown,
   fetchManagedSkills,
   runManagedAgentScheduleNow,
+  setDefaultReportAgent,
   updateManagedAgentSchedule
 } from "../../api/client";
 import type {
@@ -71,6 +74,7 @@ import {
   type AssetTab,
   errorMessage,
   getAIAssetsTabFromSearch,
+  isReportAgentAsset,
   isSystemBuiltinMCP,
   isSystemBuiltinSkill,
   refKey
@@ -383,6 +387,15 @@ export function AIAssetsPage() {
     onError: (err: unknown) => message.error(errorMessage(err))
   });
 
+  const setDefaultReportAgentMutation = useMutation({
+    mutationFn: setDefaultReportAgent,
+    onSuccess: () => {
+      message.success("默认报告 Agent 已更新");
+      void queryClient.invalidateQueries({ queryKey: ["managed-agents"] });
+    },
+    onError: (err: unknown) => message.error(errorMessage(err))
+  });
+
   const archiveSkillMutation = useMutation({
     mutationFn: (payload: { slug: string; version: string; archived: boolean }) =>
       archiveManagedSkill(payload.slug, payload.version, payload.archived),
@@ -686,14 +699,18 @@ export function AIAssetsPage() {
     {
       title: "状态",
       dataIndex: "archived",
-      width: 100,
-      render: (archived: boolean) =>
-        archived ? <Tag color="default">已删除</Tag> : <Tag color="blue">可用</Tag>
+      width: 150,
+      render: (archived: boolean, record) => (
+        <Space size={4} wrap>
+          {archived ? <Tag color="default">已删除</Tag> : <Tag color="blue">可用</Tag>}
+          {record.is_default_report ? <Tag color="purple">默认报告</Tag> : null}
+        </Space>
+      )
     },
     {
       title: "操作",
       key: "actions",
-      width: 210,
+      width: 300,
       render: (_: unknown, record) => (
         <Space size={4} className="resource-actions">
           <Button
@@ -718,6 +735,26 @@ export function AIAssetsPage() {
           >
             编辑
           </Button>
+          {isReportAgentAsset(record) ? (
+            <Button
+              type="link"
+              className="resource-action"
+              icon={record.is_default_report ? <StarFilled /> : <StarOutlined />}
+              disabled={platformBlocked || record.archived || record.is_default_report}
+              title={
+                record.is_default_report
+                  ? "当前默认报告 Agent"
+                  : "设为日报、周报弹窗默认使用的报告 Agent"
+              }
+              loading={
+                setDefaultReportAgentMutation.isPending &&
+                setDefaultReportAgentMutation.variables === record.agent_id
+              }
+              onClick={() => setDefaultReportAgentMutation.mutate(record.agent_id)}
+            >
+              {record.is_default_report ? "默认" : "设为默认"}
+            </Button>
+          ) : null}
           {record.archived ? (
             <Button
               type="link"
@@ -1027,6 +1064,7 @@ export function AIAssetsPage() {
                 <span>{agent.description || agent.agent_id}</span>
               </span>
               {agent.archived ? <Tag color="default">已删除</Tag> : <Tag color="blue">可用</Tag>}
+              {agent.is_default_report ? <Tag color="purple">默认报告</Tag> : null}
             </header>
             <div className="ai-assets-mobile-card__meta">
               <MobileMeta label="Engine" value={agent.engine} />
@@ -1058,6 +1096,20 @@ export function AIAssetsPage() {
               >
                 编辑
               </Button>
+              {isReportAgentAsset(agent) ? (
+                <Button
+                  size="small"
+                  icon={agent.is_default_report ? <StarFilled /> : <StarOutlined />}
+                  loading={
+                    setDefaultReportAgentMutation.isPending &&
+                    setDefaultReportAgentMutation.variables === agent.agent_id
+                  }
+                  disabled={platformBlocked || agent.archived || agent.is_default_report}
+                  onClick={() => setDefaultReportAgentMutation.mutate(agent.agent_id)}
+                >
+                  {agent.is_default_report ? "默认" : "设为默认"}
+                </Button>
+              ) : null}
               {agent.archived ? (
                 <Button
                   size="small"

@@ -1155,7 +1155,10 @@ func TestCreateDefaultReportAgentCreatesWhenOnlyOrdinaryAgentExists(t *testing.T
 
 	mock.ExpectQuery("SELECT agent_id, business_type, report_types").
 		WithArgs("307", "agent-generic").
-		WillReturnRows(sqlmock.NewRows([]string{"agent_id", "business_type", "report_types"}))
+		WillReturnRows(sqlmock.NewRows([]string{"agent_id", "business_type", "report_types", "is_default_report"}))
+	mock.ExpectExec("UPDATE managed_agent_profiles").
+		WithArgs("307", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("INSERT INTO managed_agent_profiles").
 		WithArgs(sqlmock.AnyArg(), "307", managedAgentBusinessReport, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -1321,8 +1324,11 @@ func TestCreateDefaultReportAgentReturnsExistingReportAgent(t *testing.T) {
 
 	mock.ExpectQuery("SELECT agent_id, business_type, report_types").
 		WithArgs("307", "agent-report").
-		WillReturnRows(sqlmock.NewRows([]string{"agent_id", "business_type", "report_types"}).
-			AddRow("agent-report", managedAgentBusinessReport, []byte(`["personal_daily"]`)))
+		WillReturnRows(sqlmock.NewRows([]string{"agent_id", "business_type", "report_types", "is_default_report"}).
+			AddRow("agent-report", managedAgentBusinessReport, []byte(`["personal_daily"]`), false))
+	mock.ExpectExec("UPDATE managed_agent_profiles").
+		WithArgs("307", "agent-report").
+		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("INSERT INTO managed_agent_profiles").
 		WithArgs("agent-report", "307", managedAgentBusinessReport, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -1395,8 +1401,8 @@ func TestSelectReportAgentPrefersProfileBusinessType(t *testing.T) {
 	}
 	mock.ExpectQuery("SELECT agent_id, business_type, report_types").
 		WithArgs("307", "agent-generic", "agent-report").
-		WillReturnRows(sqlmock.NewRows([]string{"agent_id", "business_type", "report_types"}).
-			AddRow("agent-report", managedAgentBusinessReport, []byte(`["personal_daily","personal_weekly"]`)))
+		WillReturnRows(sqlmock.NewRows([]string{"agent_id", "business_type", "report_types", "is_default_report"}).
+			AddRow("agent-report", managedAgentBusinessReport, []byte(`["personal_daily","personal_weekly"]`), false))
 
 	h := NewManagedAgentHandlerWithDefaults(db, nil, testManagedAgentDefaults())
 	selected, found, err := h.selectReportAgentForUser(context.Background(), "307", agents)
@@ -1624,8 +1630,8 @@ func TestStartReportAgentRunFallsBackToMessageWhenTemplateMissing(t *testing.T) 
 	}
 	mock.ExpectQuery("SELECT agent_id, business_type, report_types").
 		WithArgs("305", "agent-report").
-		WillReturnRows(sqlmock.NewRows([]string{"agent_id", "business_type", "report_types"}).
-			AddRow("agent-report", managedAgentBusinessReport, []byte(`["personal_daily"]`)))
+		WillReturnRows(sqlmock.NewRows([]string{"agent_id", "business_type", "report_types", "is_default_report"}).
+			AddRow("agent-report", managedAgentBusinessReport, []byte(`["personal_daily"]`), false))
 	mock.ExpectQuery("INSERT INTO ai_runs").
 		WithArgs("305", reportAgentRunBusinessType, "agent-report", "MiniMax-M2.5", safeInputRef).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("run-report"))
@@ -1733,8 +1739,8 @@ func TestExecuteManagedAgentScheduleRunUsesUserScopedClient(t *testing.T) {
 	now := time.Date(2026, 7, 1, 10, 54, 7, 0, time.UTC)
 	mock.ExpectQuery("SELECT agent_id, business_type, report_types").
 		WithArgs("305", "agent-report").
-		WillReturnRows(sqlmock.NewRows([]string{"agent_id", "business_type", "report_types"}).
-			AddRow("agent-report", managedAgentBusinessReport, []byte(`["personal_daily"]`)))
+		WillReturnRows(sqlmock.NewRows([]string{"agent_id", "business_type", "report_types", "is_default_report"}).
+			AddRow("agent-report", managedAgentBusinessReport, []byte(`["personal_daily"]`), false))
 	mock.ExpectQuery("INSERT INTO ai_runs").
 		WithArgs("305", reportAgentRunBusinessType, "agent-report", "MiniMax-M2.5", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("run-report"))
@@ -1809,8 +1815,8 @@ func TestEnsureScheduleAgentRunnableUsesLocalReportProfile(t *testing.T) {
 
 	mock.ExpectQuery("SELECT agent_id, business_type, report_types").
 		WithArgs("305", "agent-report").
-		WillReturnRows(sqlmock.NewRows([]string{"agent_id", "business_type", "report_types"}).
-			AddRow("agent-report", managedAgentBusinessReport, []byte(`["team_daily"]`)))
+		WillReturnRows(sqlmock.NewRows([]string{"agent_id", "business_type", "report_types", "is_default_report"}).
+			AddRow("agent-report", managedAgentBusinessReport, []byte(`["team_daily"]`), false))
 
 	h := NewManagedAgentHandler(db, service.NewManagedAgentClient(platform.URL, "platform-token"))
 	if err := h.ensureScheduleAgentRunnable(context.Background(), h.client, "305", "agent-report", scheduleRunKindReport); err != nil {
@@ -2003,7 +2009,7 @@ func TestCreateAgentScheduleValidatesAndReturnsSchedule(t *testing.T) {
 	now := time.Date(2026, 6, 26, 10, 0, 0, 0, time.UTC)
 	mock.ExpectQuery("SELECT agent_id, business_type, report_types").
 		WithArgs("user-1", "agent-1").
-		WillReturnRows(sqlmock.NewRows([]string{"agent_id", "business_type", "report_types"}))
+		WillReturnRows(sqlmock.NewRows([]string{"agent_id", "business_type", "report_types", "is_default_report"}))
 	mock.ExpectQuery("INSERT INTO managed_agent_schedules").
 		WithArgs("user-1", "日报定时", "agent-1", "generic_agent", "Kimi-K2.6", "生成日报", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), "weekly", sqlmock.AnyArg(), "19:00", "Asia/Shanghai", true, sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("schedule-1"))
@@ -2057,8 +2063,8 @@ func TestCreateReportAgentScheduleUsesLocalProfileWhenPlatformTypeIsGeneric(t *t
 	now := time.Date(2026, 7, 1, 10, 0, 0, 0, time.UTC)
 	mock.ExpectQuery("SELECT agent_id, business_type, report_types").
 		WithArgs("305", "agent-report").
-		WillReturnRows(sqlmock.NewRows([]string{"agent_id", "business_type", "report_types"}).
-			AddRow("agent-report", managedAgentBusinessReport, []byte(`["team_daily"]`)))
+		WillReturnRows(sqlmock.NewRows([]string{"agent_id", "business_type", "report_types", "is_default_report"}).
+			AddRow("agent-report", managedAgentBusinessReport, []byte(`["team_daily"]`), false))
 	mock.ExpectQuery("INSERT INTO managed_agent_schedules").
 		WithArgs("305", "团队日报定时", "agent-report", scheduleRunKindReport, "MiniMax-M2.5", "", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), "daily", sqlmock.AnyArg(), "19:00", "Asia/Shanghai", false, sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("schedule-report"))
@@ -2099,8 +2105,8 @@ func TestCreateReportAgentScheduleRejectsEmployeeTeamReportSelfTarget(t *testing
 
 	mock.ExpectQuery("SELECT agent_id, business_type, report_types").
 		WithArgs("307", "agent-report").
-		WillReturnRows(sqlmock.NewRows([]string{"agent_id", "business_type", "report_types"}).
-			AddRow("agent-report", managedAgentBusinessReport, []byte(`["team_daily"]`)))
+		WillReturnRows(sqlmock.NewRows([]string{"agent_id", "business_type", "report_types", "is_default_report"}).
+			AddRow("agent-report", managedAgentBusinessReport, []byte(`["team_daily"]`), false))
 
 	h := NewManagedAgentHandlerWithDefaults(db, nil, testManagedAgentDefaults())
 	body := `{"name":"团队日报定时","agent_id":"agent-report","run_kind":"report_agent","model_id":"MiniMax-M2.5","report_config":{"report_type":"team_daily"},"schedule_type":"daily","time_of_day":"19:00","timezone":"Asia/Shanghai","enabled":false}`

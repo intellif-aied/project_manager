@@ -224,6 +224,7 @@ func main() {
 		r.Get("/ai-assets/agents", managedAgentH.ListMyAgents)
 		r.Post("/ai-assets/agents", managedAgentH.CreateMyAgent)
 		r.Post("/ai-assets/report-agents/default", managedAgentH.CreateDefaultReportAgent)
+		r.Post("/ai-assets/report-agents/{agentId}/default", managedAgentH.SetDefaultReportAgent)
 		r.Put("/ai-assets/agents/{agentId}", managedAgentH.UpdateMyAgent)
 		r.Post("/ai-assets/agents/{agentId}/archive", managedAgentH.ArchiveMyAgent)
 		r.Post("/ai-assets/agents/{agentId}/runs", managedAgentH.StartAgentRun)

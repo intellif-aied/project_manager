@@ -38,8 +38,10 @@ import type {
   PaginatedPersonalWeeklyReports,
   PersonalWeeklyReport,
   PersonalWeeklyReportListItem,
+  ReportType,
   TeamWeeklyReport
 } from "../../api/types";
+import { ReportAIGenerateControls } from "../components/ReportAIGenerateControls";
 import {
   RequirementMetricCard,
   RequirementMetricGrid
@@ -114,6 +116,18 @@ function weeklyReportModalTitle(scope: WeeklyReportScope) {
   if (scope === "team") return "小组周报";
   if (scope === "department") return "部门周报";
   return "我的周报";
+}
+
+function weeklyReportType(scope: WeeklyReportScope): ReportType {
+  if (scope === "team") return "team_weekly";
+  if (scope === "department") return "department_weekly";
+  return "personal_weekly";
+}
+
+function weeklyReportTarget(scope: WeeklyReportScope) {
+  if (scope === "team") return { type: "team" as const };
+  if (scope === "department") return { type: "department" as const };
+  return { type: "self" as const };
 }
 
 function weeklyReportStatusTag(scope: WeeklyReportScope, report: WeeklyReportData | null) {
@@ -454,6 +468,28 @@ function WeeklyReportEditorModal({
     onError: (err: unknown) => message.error(errorMessage(err))
   });
 
+  const confirmBeforeAIGenerate = () => {
+    if (!hasUnsavedContentChange) return true;
+    return new Promise<boolean>((resolve) => {
+      Modal.confirm({
+        title: "当前内容尚未保存",
+        content: "AI 生成完成后会刷新报告正文，未保存的修改可能被覆盖。是否继续？",
+        okText: "继续生成",
+        cancelText: "继续编辑",
+        onOk: () => resolve(true),
+        onCancel: () => resolve(false)
+      });
+    });
+  };
+
+  const handleAIGenerated = () => {
+    setContent("");
+    setContentTouched(false);
+    invalidate();
+    void reportQuery.refetch();
+    onDone?.();
+  };
+
   const handleClose = () => {
     if (hasUnsavedContentChange) {
       Modal.confirm({
@@ -477,6 +513,16 @@ function WeeklyReportEditorModal({
       destroyOnHidden
       footer={
         <Space>
+          <ReportAIGenerateControls
+            reportType={weeklyReportType(scope)}
+            period={{ week_start: weekStart, week_end: weekEnd }}
+            target={weeklyReportTarget(scope)}
+            allowSessionSelection={scope === "personal"}
+            sessionRange={{ from: weekStart, to: weekEnd }}
+            disabled={reportQuery.isLoading || saveMutation.isPending}
+            onBeforeGenerate={confirmBeforeAIGenerate}
+            onGenerated={handleAIGenerated}
+          />
           <Button onClick={handleClose} disabled={saveMutation.isPending}>
             取消
           </Button>

@@ -21,8 +21,10 @@ import {
 import type {
   DailyReport,
   DepartmentReport,
+  ReportType,
   TeamReport
 } from "../../api/types";
+import { ReportAIGenerateControls } from "./ReportAIGenerateControls";
 
 import "./DailyReportGenerateModal.css";
 
@@ -52,6 +54,18 @@ function scopeName(scope: DailyGenerateScope) {
   if (scope === "team") return "小组日报";
   if (scope === "department") return "部门日报";
   return "我的日报";
+}
+
+function dailyReportType(scope: DailyGenerateScope): ReportType {
+  if (scope === "team") return "team_daily";
+  if (scope === "department") return "department_daily";
+  return "personal_daily";
+}
+
+function dailyReportTarget(scope: DailyGenerateScope) {
+  if (scope === "team") return { type: "team" as const };
+  if (scope === "department") return { type: "department" as const };
+  return { type: "self" as const };
 }
 
 function reportStatus(report: DailyReport | TeamReport | DepartmentReport | null) {
@@ -195,6 +209,28 @@ export function DailyReportGenerateModal({
     onError: (error: unknown) => message.error(errorMessage(error))
   });
 
+  const confirmBeforeAIGenerate = () => {
+    if (!hasUnsavedContentChange) return true;
+    return new Promise<boolean>((resolve) => {
+      Modal.confirm({
+        title: "当前内容尚未保存",
+        content: "AI 生成完成后会刷新报告正文，未保存的修改可能被覆盖。是否继续？",
+        okText: "继续生成",
+        cancelText: "继续编辑",
+        onOk: () => resolve(true),
+        onCancel: () => resolve(false)
+      });
+    });
+  };
+
+  const handleAIGenerated = () => {
+    setManualMode(false);
+    setContent("");
+    setContentTouched(false);
+    void queryClient.invalidateQueries({ queryKey: ["reports", "daily"] });
+    void queryClient.invalidateQueries({ queryKey: ["reports"] });
+  };
+
   const handleClose = () => {
     if (hasUnsavedContentChange) {
       Modal.confirm({
@@ -217,6 +253,16 @@ export function DailyReportGenerateModal({
       onCancel={handleClose}
       footer={
         <Space>
+          <ReportAIGenerateControls
+            reportType={dailyReportType(scope)}
+            period={{ date }}
+            target={dailyReportTarget(scope)}
+            allowSessionSelection={scope === "personal"}
+            sessionRange={{ from: date, to: date }}
+            disabled={loading || saveMutation.isPending}
+            onBeforeGenerate={confirmBeforeAIGenerate}
+            onGenerated={handleAIGenerated}
+          />
           <Button onClick={handleClose} disabled={saveMutation.isPending}>
             取消
           </Button>
