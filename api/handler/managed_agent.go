@@ -619,6 +619,20 @@ func (h *ManagedAgentHandler) mergeManagedAgentProfiles(ctx context.Context, use
 	return agents
 }
 
+func (h *ManagedAgentHandler) filterOtherDeploymentDefaultReportAgents(agents []model.ManagedAgent) []model.ManagedAgent {
+	if len(agents) == 0 {
+		return agents
+	}
+	filtered := make([]model.ManagedAgent, 0, len(agents))
+	for _, agent := range agents {
+		if isMarkedDefaultReportAgent(agent) && !h.isCurrentDeploymentDefaultReportAgent(agent) {
+			continue
+		}
+		filtered = append(filtered, agent)
+	}
+	return filtered
+}
+
 func (h *ManagedAgentHandler) loadManagedAgentProfiles(ctx context.Context, userID string, agentIDs []string) (map[string]managedAgentProfile, error) {
 	out := map[string]managedAgentProfile{}
 	if h.db == nil || strings.TrimSpace(userID) == "" || len(agentIDs) == 0 {
@@ -726,6 +740,7 @@ func (h *ManagedAgentHandler) ListMyAgents(w http.ResponseWriter, r *http.Reques
 		if u != nil {
 			resp.Agents = h.mergeManagedAgentProfiles(r.Context(), u.ID, resp.Agents)
 		}
+		resp.Agents = h.filterOtherDeploymentDefaultReportAgents(resp.Agents)
 		if !includeArchived {
 			resp.Agents = filterArchivedManagedAgents(resp.Agents)
 		}
@@ -2242,7 +2257,7 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 		"period":          reportPeriodInputRef(req.ReportType, date, weekStart, weekEnd),
 		"target":          target,
 		"model_id":        modelID,
-		"mcp_url":         h.reportMCPURL(),
+		"mcp_server":      h.defaults.ReportMCPSlug,
 		"credential_slot": h.defaults.ReportMCPCredentialSlot,
 	}
 	if len(runtimeOverrides) > 0 {
@@ -3670,7 +3685,7 @@ func (h *ManagedAgentHandler) executeReportAgentScheduleRun(ctx context.Context,
 	inputRef["period_start"] = period.Start
 	inputRef["period_end"] = period.End
 	inputRef["period_display"] = period.Display
-	inputRef["mcp_url"] = h.reportMCPURL()
+	inputRef["mcp_server"] = h.defaults.ReportMCPSlug
 	inputRef["credential_slot"] = h.defaults.ReportMCPCredentialSlot
 	runID, err := h.insertPendingManagedSessionAIRun(u.ID, reportAgentRunBusinessType, schedule.AgentID, modelID, inputRef)
 	if err != nil {

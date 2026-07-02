@@ -1481,7 +1481,7 @@ func TestStartReportAgentRunUsesSessionCredentialOverrides(t *testing.T) {
 
 	now := time.Date(2026, 6, 30, 10, 0, 0, 0, time.UTC)
 	safeInputRef := jsonStringArg{
-		require: []string{"personal_daily", "2026-06-30", "https://aida.example.com/api/v1/mcp/reports", reportMCPCredentialSlot, "credential_override_slots", "mcp-custom"},
+		require: []string{"personal_daily", "2026-06-30", "aida-report-mcp", reportMCPCredentialSlot, "credential_override_slots", "mcp-custom"},
 		forbid:  []string{"user-token", "cred-1", "cred-custom", "mcp_" + "authorization"},
 	}
 	mock.ExpectQuery("SELECT agent_id, business_type, report_types").

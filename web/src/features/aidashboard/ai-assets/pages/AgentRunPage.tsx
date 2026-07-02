@@ -48,6 +48,7 @@ import "../components/AgentWorkspace.css";
 const AI_ASSETS_RETURN_PATH = aiAssetsPath("agents");
 
 const REPORT_TYPES_MARKER = "AIDA_REPORT_AGENT_TYPES:";
+const REPORT_SYSTEM_CREDENTIAL_SLOT = "AIDA_REPORT_MCP_AUTH";
 const REPORT_SYSTEM_PROMPT_KEYS = new Set([
   "report_type",
   "period_json",
@@ -55,7 +56,7 @@ const REPORT_SYSTEM_PROMPT_KEYS = new Set([
   "run_id",
   "mcp_url",
   "credential_slot",
-  "AIDA_REPORT_MCP_AUTH"
+  REPORT_SYSTEM_CREDENTIAL_SLOT
 ]);
 
 const REPORT_TYPE_OPTIONS: Array<{ label: string; value: ReportType; roles: UserRole[] }> = [
@@ -154,6 +155,9 @@ function modelCardTitle(required: boolean) {
 
 function reportRuntimeCredentialSlots(agent: ManagedAgent) {
   const slots = new Set<string>();
+  if (isReportAgent(agent)) {
+    slots.add(REPORT_SYSTEM_CREDENTIAL_SLOT);
+  }
   for (const server of agent.mcp_servers ?? []) {
     const slot = server.credential_slot?.trim();
     if (server.name === REPORT_SYSTEM_MCP_SLUG && slot) slots.add(slot);
