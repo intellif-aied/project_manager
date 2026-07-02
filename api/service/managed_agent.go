@@ -221,12 +221,28 @@ type CreateManagedCredentialResponse struct {
 	CredentialID string `json:"credential_id"`
 }
 
+func (c *ManagedAgentClient) ListCredentials(ctx context.Context) (*model.ListManagedCredentialsResponse, error) {
+	var out model.ListManagedCredentialsResponse
+	if err := c.do(ctx, http.MethodGet, "/api/credential/list", nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 func (c *ManagedAgentClient) CreateCredential(ctx context.Context, req CreateManagedCredentialRequest) (*CreateManagedCredentialResponse, error) {
 	var out CreateManagedCredentialResponse
 	if err := c.do(ctx, http.MethodPost, "/api/credential", req, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
+}
+
+func (c *ManagedAgentClient) DeleteCredential(ctx context.Context, credentialID string) (map[string]any, error) {
+	var out map[string]any
+	if err := c.do(ctx, http.MethodDelete, "/api/credential/"+urlPathEscape(credentialID), nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 type CreateManagedSessionRequest struct {

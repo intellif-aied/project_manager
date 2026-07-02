@@ -307,8 +307,16 @@ func TestStartAgentRunAllowsDefaultModelAndRecordsManualRun(t *testing.T) {
 
 	var submitted service.SubmitManagedTaskRequest
 	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/task/submit" {
-			t.Fatalf("platform path = %s", r.URL.Path)
+		if r.Method == http.MethodGet && r.URL.Path == "/api/my/agents" {
+			writeJSON(w, http.StatusOK, model.ListManagedAgentsResponse{Agents: []model.ManagedAgent{{
+				AgentID: "agent-1",
+				Name:    "default model agent",
+				Engine:  "claude-code",
+			}}})
+			return
+		}
+		if r.Method != http.MethodPost || r.URL.Path != "/api/task/submit" {
+			t.Fatalf("platform path = %s %s", r.Method, r.URL.Path)
 		}
 		if got := r.Header.Get("Authorization"); got != "Bearer platform-token" {
 			t.Fatalf("authorization = %q", got)
@@ -366,8 +374,16 @@ func TestStartAgentRunDoesNotInjectReportMCPParams(t *testing.T) {
 
 	var submitted service.SubmitManagedTaskRequest
 	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/task/submit" {
-			t.Fatalf("platform path = %s", r.URL.Path)
+		if r.Method == http.MethodGet && r.URL.Path == "/api/my/agents" {
+			writeJSON(w, http.StatusOK, model.ListManagedAgentsResponse{Agents: []model.ManagedAgent{{
+				AgentID: "agent-1",
+				Name:    "generic report params",
+				Engine:  "claude-code",
+			}}})
+			return
+		}
+		if r.Method != http.MethodPost || r.URL.Path != "/api/task/submit" {
+			t.Fatalf("platform path = %s %s", r.Method, r.URL.Path)
 		}
 		if err := json.NewDecoder(r.Body).Decode(&submitted); err != nil {
 			t.Fatal(err)
@@ -422,7 +438,7 @@ func TestStartAgentRunDoesNotInjectReportMCPParams(t *testing.T) {
 	}
 }
 
-func TestStartAgentRunRetriesReportMCPBindingWithCredentialedSession(t *testing.T) {
+func TestStartAgentRunUsesCredentialedSessionForReportMCPBinding(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
@@ -435,30 +451,23 @@ func TestStartAgentRunRetriesReportMCPBindingWithCredentialedSession(t *testing.
 		Engine:              "claude-code",
 		DefaultModelID:      "MiniMax-M2.5",
 		StartPromptTemplate: "测试 {{ text }}",
+		CredentialSlots: []model.ManagedCredentialSlot{{
+			Name:     reportMCPCredentialSlot,
+			Required: true,
+		}},
 		Skills: []model.ManagedSkillRef{{
 			Owner: "alice", Slug: service.ReportSkillSlug, Version: service.ReportSkillVersion,
 		}},
 		MCPBindings: []model.ManagedMCPBinding{{
-			Owner: "alice", Slug: service.ReportMCPSlug, Version: service.ReportMCPVersion,
+			Owner: "alice", Slug: service.ReportMCPSlug, Version: service.ReportMCPVersion, CredentialSlot: reportMCPCredentialSlot,
 		}},
 	}
-	var updatedAgent model.UpsertManagedAgentRequest
 	var createdCredential service.CreateManagedCredentialRequest
 	var createdSession service.CreateManagedSessionRequest
 	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodPost && r.URL.Path == "/api/task/submit":
-			writeJSON(w, http.StatusBadRequest, map[string]string{
-				"code":    "MCP_CONFIG_INVALID",
-				"message": "mcp entry aida-report-mcp@report-v1 requires a credential: bind a credential slot",
-			})
 		case r.Method == http.MethodGet && r.URL.Path == "/api/my/agents":
 			writeJSON(w, http.StatusOK, model.ListManagedAgentsResponse{Agents: []model.ManagedAgent{reportMCPAgent}})
-		case r.Method == http.MethodPut && r.URL.Path == "/api/my/agents/agent-cred":
-			if err := json.NewDecoder(r.Body).Decode(&updatedAgent); err != nil {
-				t.Fatal(err)
-			}
-			writeJSON(w, http.StatusOK, model.UpsertManagedAgentResponse{AgentID: "agent-cred", ManagedVersion: 2})
 		case r.Method == http.MethodPost && r.URL.Path == "/api/credential":
 			if err := json.NewDecoder(r.Body).Decode(&createdCredential); err != nil {
 				t.Fatal(err)
@@ -493,7 +502,7 @@ func TestStartAgentRunRetriesReportMCPBindingWithCredentialedSession(t *testing.
 	mock.ExpectQuery("SELECT id::text").
 		WithArgs("run-cred", "user-1").
 		WillReturnRows(sqlmock.NewRows(aiRunColumns()).
-			AddRow("run-cred", "user-1", "manual_agent_run", nil, "managed_session", "agent-cred", nil, nil, "session-1", "MiniMax-M2.5", "running", []byte(`{"message":"生成报告","params":{"text":"test","report_type":"personal_daily"},"trigger_source":"manual","credential_slot":"AIDA_REPORT_MCP_AUTH","credential_override":"redacted"}`), []byte(`{}`), nil, now, nil, now))
+			AddRow("run-cred", "user-1", "manual_agent_run", nil, "managed_session", "agent-cred", nil, nil, "session-1", "MiniMax-M2.5", "running", []byte(`{"message":"生成报告","params":{"text":"test","report_type":"personal_daily"},"trigger_source":"manual","credential_slots":["AIDA_REPORT_MCP_AUTH"],"credential_override":"redacted"}`), []byte(`{}`), nil, now, nil, now))
 
 	h := NewManagedAgentHandlerWithDefaults(db, service.NewManagedAgentClient(platform.URL, "platform-token"), testManagedAgentDefaults())
 	req := httptest.NewRequest(http.MethodPost, "/ai-assets/agents/agent-cred/runs", bytes.NewBufferString(`{"message":"生成报告","model_id":"MiniMax-M2.5","params":{"text":"test","report_type":"personal_daily"}}`))
@@ -506,12 +515,6 @@ func TestStartAgentRunRetriesReportMCPBindingWithCredentialedSession(t *testing.
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
-	}
-	if !hasCredentialSlot(updatedAgent.CredentialSlots, reportMCPCredentialSlot) {
-		t.Fatalf("credential slots = %#v", updatedAgent.CredentialSlots)
-	}
-	if !h.hasRunnableReportMCPBinding(updatedAgent.MCPBindings) {
-		t.Fatalf("mcp bindings = %#v", updatedAgent.MCPBindings)
 	}
 	if createdCredential.Value != "user-token" {
 		t.Fatalf("credential value = %q", createdCredential.Value)
@@ -527,6 +530,198 @@ func TestStartAgentRunRetriesReportMCPBindingWithCredentialedSession(t *testing.
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestStartAgentRunUsesCredentialedSessionForDefaultBoundMCP(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	agent := model.ManagedAgent{
+		AgentID:        "agent-github",
+		Name:           "github agent",
+		Engine:         "claude-code",
+		DefaultModelID: "MiniMax-M2.5",
+		CredentialSlots: []model.ManagedCredentialSlot{{
+			Name:     "mcp-github",
+			Required: true,
+		}},
+		DefaultBindings: map[string]string{"mcp-github": "cred-default"},
+		MCPBindings: []model.ManagedMCPBinding{{
+			Owner: "alice", Slug: "github", Version: "1.0.0", CredentialSlot: "mcp-github",
+		}},
+	}
+	var createdSession service.CreateManagedSessionRequest
+	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/my/agents":
+			writeJSON(w, http.StatusOK, model.ListManagedAgentsResponse{Agents: []model.ManagedAgent{agent}})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/session":
+			if err := json.NewDecoder(r.Body).Decode(&createdSession); err != nil {
+				t.Fatal(err)
+			}
+			writeJSON(w, http.StatusOK, service.CreateManagedSessionResponse{
+				SessionID: "session-github",
+				Status:    "running",
+				ModelID:   "MiniMax-M2.5",
+			})
+		default:
+			t.Fatalf("unexpected platform request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer platform.Close()
+
+	now := time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC)
+	inputRef := jsonStringArg{require: []string{"查 issue", "repository"}, forbid: []string{"cred-default"}}
+	mock.ExpectQuery("INSERT INTO ai_runs").
+		WithArgs("user-1", "manual_agent_run", "agent-github", "MiniMax-M2.5", inputRef).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("run-github"))
+	mock.ExpectExec("UPDATE ai_runs SET external_session_id").
+		WithArgs("session-github", "MiniMax-M2.5", "running", inputRef, "run-github", "user-1").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectQuery("SELECT id::text").
+		WithArgs("run-github", "user-1").
+		WillReturnRows(sqlmock.NewRows(aiRunColumns()).
+			AddRow("run-github", "user-1", "manual_agent_run", nil, "managed_session", "agent-github", nil, nil, "session-github", "MiniMax-M2.5", "running", []byte(`{"message":"查 issue","params":{"repository":"org/repo"},"trigger_source":"manual"}`), []byte(`{}`), nil, now, nil, now))
+
+	h := NewManagedAgentHandler(db, service.NewManagedAgentClient(platform.URL, "platform-token"))
+	req := httptest.NewRequest(http.MethodPost, "/ai-assets/agents/agent-github/runs", bytes.NewBufferString(`{"message":"查 issue","model_id":"MiniMax-M2.5","params":{"repository":"org/repo"}}`))
+	req.Header.Set("Authorization", "Bearer user-token")
+	req = requestWithUser(req, &model.User{ID: "user-1", Username: "alice", Role: "employee"})
+	req = requestWithURLParam(req, "agentId", "agent-github")
+	rec := httptest.NewRecorder()
+
+	h.StartAgentRun(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if len(createdSession.CredentialOverrides) != 0 {
+		t.Fatalf("custom MCP with default binding should not create overrides: %#v", createdSession.CredentialOverrides)
+	}
+	if createdSession.StartPromptValues["repository"] != "org/repo" || createdSession.StartPromptValues["message"] != "查 issue" {
+		t.Fatalf("start prompt values = %#v", createdSession.StartPromptValues)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestStartAgentRunUsesRuntimeCredentialOverride(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	agent := model.ManagedAgent{
+		AgentID:        "agent-github",
+		Name:           "github agent",
+		Engine:         "claude-code",
+		DefaultModelID: "MiniMax-M2.5",
+		CredentialSlots: []model.ManagedCredentialSlot{{
+			Name:     "mcp-github",
+			Required: true,
+		}},
+		MCPBindings: []model.ManagedMCPBinding{{
+			Owner: "alice", Slug: "github", Version: "1.0.0", CredentialSlot: "mcp-github",
+		}},
+	}
+	var createdSession service.CreateManagedSessionRequest
+	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/my/agents":
+			writeJSON(w, http.StatusOK, model.ListManagedAgentsResponse{Agents: []model.ManagedAgent{agent}})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/session":
+			if err := json.NewDecoder(r.Body).Decode(&createdSession); err != nil {
+				t.Fatal(err)
+			}
+			writeJSON(w, http.StatusOK, service.CreateManagedSessionResponse{
+				SessionID: "session-github",
+				Status:    "running",
+				ModelID:   "MiniMax-M2.5",
+			})
+		default:
+			t.Fatalf("unexpected platform request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer platform.Close()
+
+	now := time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC)
+	inputRef := jsonStringArg{require: []string{"查 issue", "repository", "credential_override_slots", "mcp-github"}, forbid: []string{"cred-runtime"}}
+	mock.ExpectQuery("INSERT INTO ai_runs").
+		WithArgs("user-1", "manual_agent_run", "agent-github", "MiniMax-M2.5", inputRef).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("run-github"))
+	mock.ExpectExec("UPDATE ai_runs SET external_session_id").
+		WithArgs("session-github", "MiniMax-M2.5", "running", inputRef, "run-github", "user-1").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectQuery("SELECT id::text").
+		WithArgs("run-github", "user-1").
+		WillReturnRows(sqlmock.NewRows(aiRunColumns()).
+			AddRow("run-github", "user-1", "manual_agent_run", nil, "managed_session", "agent-github", nil, nil, "session-github", "MiniMax-M2.5", "running", []byte(`{"message":"查 issue","params":{"repository":"org/repo"},"trigger_source":"manual","credential_override_slots":["mcp-github"],"credential_override":"redacted"}`), []byte(`{}`), nil, now, nil, now))
+
+	h := NewManagedAgentHandler(db, service.NewManagedAgentClient(platform.URL, "platform-token"))
+	req := httptest.NewRequest(http.MethodPost, "/ai-assets/agents/agent-github/runs", bytes.NewBufferString(`{"message":"查 issue","model_id":"MiniMax-M2.5","params":{"repository":"org/repo"},"credential_overrides":{"mcp-github":"cred-runtime"}}`))
+	req.Header.Set("Authorization", "Bearer user-token")
+	req = requestWithUser(req, &model.User{ID: "user-1", Username: "alice", Role: "employee"})
+	req = requestWithURLParam(req, "agentId", "agent-github")
+	rec := httptest.NewRecorder()
+
+	h.StartAgentRun(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if createdSession.CredentialOverrides["mcp-github"] != "cred-runtime" {
+		t.Fatalf("credential overrides = %#v", createdSession.CredentialOverrides)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestStartAgentRunRejectsMissingDefaultCredentialBinding(t *testing.T) {
+	agent := model.ManagedAgent{
+		AgentID: "agent-missing-credential",
+		Name:    "missing credential",
+		Engine:  "claude-code",
+		CredentialSlots: []model.ManagedCredentialSlot{{
+			Name:     "mcp-github",
+			Required: true,
+		}},
+		MCPBindings: []model.ManagedMCPBinding{{
+			Owner: "alice", Slug: "github", Version: "1.0.0", CredentialSlot: "mcp-github",
+		}},
+	}
+	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/my/agents" {
+			t.Fatalf("unexpected platform request: %s %s", r.Method, r.URL.Path)
+		}
+		writeJSON(w, http.StatusOK, model.ListManagedAgentsResponse{Agents: []model.ManagedAgent{agent}})
+	}))
+	defer platform.Close()
+
+	h := NewManagedAgentHandler(nil, service.NewManagedAgentClient(platform.URL, "platform-token"))
+	req := httptest.NewRequest(http.MethodPost, "/ai-assets/agents/agent-missing-credential/runs", bytes.NewBufferString(`{"message":"查 issue","model_id":"MiniMax-M2.5"}`))
+	req.Header.Set("Authorization", "Bearer user-token")
+	req = requestWithUser(req, &model.User{ID: "user-1", Username: "alice", Role: "employee"})
+	req = requestWithURLParam(req, "agentId", "agent-missing-credential")
+	rec := httptest.NewRecorder()
+
+	h.StartAgentRun(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var got map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["code"] != "CREDENTIAL_REQUIRED" || !strings.Contains(rec.Body.String(), "mcp-github") {
+		t.Fatalf("body = %s", rec.Body.String())
 	}
 }
 
@@ -1190,8 +1385,12 @@ func TestStartReportAgentRunUsesSessionCredentialOverrides(t *testing.T) {
 		DefaultModelID:      "MiniMax-M2.5",
 		Instructions:        defaultReportAgentInstructions(reportMCPCredentialSlot),
 		StartPromptTemplate: defaultReportAgentStartPromptTemplate(reportMCPCredentialSlot),
+		CredentialSlots:     []model.ManagedCredentialSlot{{Name: "mcp-custom", Required: true}},
 		Skills:              []model.ManagedSkillRef{{Slug: service.ReportSkillSlug, Version: service.ReportSkillVersion}},
-		MCPBindings:         []model.ManagedMCPBinding{{Slug: "aida-report-mcp", Version: "report-v1"}},
+		MCPBindings: []model.ManagedMCPBinding{
+			{Slug: "aida-report-mcp", Version: "report-v1"},
+			{Owner: "alice", Slug: "custom-mcp", Version: "1.0.0", CredentialSlot: "mcp-custom"},
+		},
 	}
 	var createdCredential service.CreateManagedCredentialRequest
 	var createdSession service.CreateManagedSessionRequest
@@ -1241,8 +1440,8 @@ func TestStartReportAgentRunUsesSessionCredentialOverrides(t *testing.T) {
 
 	now := time.Date(2026, 6, 30, 10, 0, 0, 0, time.UTC)
 	safeInputRef := jsonStringArg{
-		require: []string{"personal_daily", "2026-06-30", "https://aida.example.com/api/v1/mcp/reports", reportMCPCredentialSlot},
-		forbid:  []string{"user-token", "cred-1", "mcp_" + "authorization"},
+		require: []string{"personal_daily", "2026-06-30", "https://aida.example.com/api/v1/mcp/reports", reportMCPCredentialSlot, "credential_override_slots", "mcp-custom"},
+		forbid:  []string{"user-token", "cred-1", "cred-custom", "mcp_" + "authorization"},
 	}
 	mock.ExpectQuery("SELECT agent_id, business_type, report_types").
 		WithArgs("user-1", "agent-report").
@@ -1259,7 +1458,7 @@ func TestStartReportAgentRunUsesSessionCredentialOverrides(t *testing.T) {
 			AddRow("run-report", "user-1", reportAgentRunBusinessType, nil, "managed_session", "agent-report", nil, nil, "session-1", "MiniMax-M2.5", "running", []byte(`{"trigger_source":"manual","report_type":"personal_daily","period":{"date":"2026-06-30"},"target":{"type":"self","user_id":"user-1"},"model_id":"MiniMax-M2.5","mcp_url":"https://aida.example.com/api/v1/mcp/reports","credential_slot":"AIDA_REPORT_MCP_AUTH","start_prompt_values":{"report_type":"personal_daily","run_id":"run-report"},"credential_override":"redacted"}`), []byte(`{}`), nil, now, nil, now))
 
 	h := NewManagedAgentHandlerWithDefaults(db, service.NewManagedAgentClient(platform.URL, "platform-token"), testManagedAgentDefaults())
-	req := httptest.NewRequest(http.MethodPost, "/ai-assets/report-agents/agent-report/runs", bytes.NewBufferString(`{"report_type":"personal_daily","period":{"date":"2026-06-30"},"target":{"type":"self"},"model_id":"MiniMax-M2.5"}`))
+	req := httptest.NewRequest(http.MethodPost, "/ai-assets/report-agents/agent-report/runs", bytes.NewBufferString(`{"report_type":"personal_daily","period":{"date":"2026-06-30"},"target":{"type":"self"},"model_id":"MiniMax-M2.5","credential_overrides":{"mcp-custom":"cred-custom"}}`))
 	req.Host = "aida.example.com"
 	req.Header.Set("X-Forwarded-Proto", "https")
 	req.Header.Set("Authorization", "Bearer user-token")
@@ -1280,6 +1479,9 @@ func TestStartReportAgentRunUsesSessionCredentialOverrides(t *testing.T) {
 	}
 	if createdSession.CredentialOverrides[reportMCPCredentialSlot] != "cred-1" {
 		t.Fatalf("credential overrides = %#v", createdSession.CredentialOverrides)
+	}
+	if createdSession.CredentialOverrides["mcp-custom"] != "cred-custom" {
+		t.Fatalf("custom credential overrides = %#v", createdSession.CredentialOverrides)
 	}
 	if !hasCredentialSlot(updatedAgent.CredentialSlots, reportMCPCredentialSlot) || updatedAgent.MCPBindings[0].CredentialSlot != reportMCPCredentialSlot {
 		t.Fatalf("report dependency repair = %#v", updatedAgent)

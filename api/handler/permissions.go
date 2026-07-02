@@ -63,13 +63,7 @@ func (h *RequirementHandler) canCreateRequirement(u *model.User, teamIDs []strin
 	if isGlobalRequirementManager(u.Role) {
 		return true
 	}
-	if u.Role != "team_leader" || !hasTeam(u) {
-		return false
-	}
-	if len(teamIDs) != 1 {
-		return false
-	}
-	return teamIDs[0] == *u.TeamID
+	return u.Role == "team_leader" && len(teamIDs) > 0
 }
 
 func (h *RequirementHandler) canManageRequirement(u *model.User, requirementID string) (bool, error) {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -531,6 +532,34 @@ func (h *ManagedAgentHandler) DeleteMCPEntry(w http.ResponseWriter, r *http.Requ
 	}
 	client := h.clientForRequest(r)
 	h.proxyJSON(w, func() (any, error) { return client.DeleteMCPEntry(r.Context(), slug, version) })
+}
+
+func (h *ManagedAgentHandler) ListCredentials(w http.ResponseWriter, r *http.Request) {
+	h.proxyJSON(w, func() (any, error) {
+		return h.clientForRequest(r).ListCredentials(r.Context())
+	})
+}
+
+func (h *ManagedAgentHandler) CreateCredential(w http.ResponseWriter, r *http.Request) {
+	var req service.CreateManagedCredentialRequest
+	if err := readJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		return
+	}
+	h.proxyJSON(w, func() (any, error) {
+		return h.clientForRequest(r).CreateCredential(r.Context(), req)
+	})
+}
+
+func (h *ManagedAgentHandler) DeleteCredential(w http.ResponseWriter, r *http.Request) {
+	credentialID := chi.URLParam(r, "credentialId")
+	if strings.TrimSpace(credentialID) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "credential_id is required"})
+		return
+	}
+	h.proxyJSON(w, func() (any, error) {
+		return h.clientForRequest(r).DeleteCredential(r.Context(), credentialID)
+	})
 }
 
 type managedAgentProfile struct {
@@ -1335,6 +1364,19 @@ func (h *ManagedAgentHandler) hasRunnableReportMCPBinding(bindings []model.Manag
 	return false
 }
 
+func findManagedAgent(ctx context.Context, client *service.ManagedAgentClient, agentID string) (*model.ManagedAgent, error) {
+	resp, err := client.ListMyAgents(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, agent := range resp.Agents {
+		if agent.AgentID == agentID && !agent.Archived {
+			return &agent, nil
+		}
+	}
+	return nil, nil
+}
+
 func findMyManagedAgent(r *http.Request, client *service.ManagedAgentClient, agentID string) (*model.ManagedAgent, error) {
 	resp, err := client.ListMyAgents(r.Context())
 	if err != nil {
@@ -1346,6 +1388,37 @@ func findMyManagedAgent(r *http.Request, client *service.ManagedAgentClient, age
 		}
 	}
 	return nil, nil
+}
+
+func sortedStringKeys(values map[string]struct{}) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func sortedStringMapKeys(values map[string]string) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func cleanCredentialOverrides(values map[string]string) map[string]string {
+	cleaned := map[string]string{}
+	for slot, credentialID := range values {
+		slot = strings.TrimSpace(slot)
+		credentialID = strings.TrimSpace(credentialID)
+		if slot == "" || credentialID == "" {
+			continue
+		}
+		cleaned[slot] = credentialID
+	}
+	return cleaned
 }
 
 func reportTypesForAgent(agent model.ManagedAgent) []string {
@@ -1536,15 +1609,27 @@ func (h *ManagedAgentHandler) StartAgentRun(w http.ResponseWriter, r *http.Reque
 	}
 
 	client := h.clientForRequest(r)
+	agent, err := findManagedAgent(r.Context(), client, agentID)
+	if err != nil {
+		writeManagedAgentError(w, err)
+		return
+	}
+	if agent == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found"})
+		return
+	}
+
+	if h.agentRequiresCredentialedSession(*agent) {
+		h.startCredentialedGenericAgentSession(w, r, u, client, *agent, req, params)
+		return
+	}
+
 	submitResp, err := client.SubmitTask(r.Context(), service.SubmitManagedTaskRequest{
 		AgentID: agentID,
 		ModelID: req.ModelID,
 		Params:  params,
 	})
 	if err != nil {
-		if h.retryCredentialedReportMCPAgentRun(w, r, u, client, agentID, req, params, err) {
-			return
-		}
 		writeManagedAgentError(w, err)
 		return
 	}
@@ -1560,6 +1645,151 @@ func (h *ManagedAgentHandler) StartAgentRun(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	run, err := h.loadAIRun(runID, u.ID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, run)
+}
+
+func (h *ManagedAgentHandler) agentRequiresCredentialedSession(agent model.ManagedAgent) bool {
+	for _, slot := range agent.CredentialSlots {
+		if slot.Required && strings.TrimSpace(slot.Name) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *ManagedAgentHandler) reportMCPCredentialSlots(bindings []model.ManagedMCPBinding) []string {
+	slots := []string{}
+	for _, binding := range bindings {
+		if binding.Slug != h.defaults.ReportMCPSlug || binding.Version != h.defaults.ReportMCPVersion {
+			continue
+		}
+		slot := strings.TrimSpace(binding.CredentialSlot)
+		if slot == "" {
+			continue
+		}
+		if !containsString(slots, slot) {
+			slots = append(slots, slot)
+		}
+	}
+	return slots
+}
+
+func (h *ManagedAgentHandler) missingRequiredCredentialSlots(agent model.ManagedAgent, reportSlots map[string]struct{}, credentialOverrides map[string]string) []string {
+	missing := []string{}
+	for _, slot := range agent.CredentialSlots {
+		name := strings.TrimSpace(slot.Name)
+		if !slot.Required || name == "" {
+			continue
+		}
+		if _, ok := reportSlots[name]; ok {
+			continue
+		}
+		if agent.DefaultBindings != nil && strings.TrimSpace(agent.DefaultBindings[name]) != "" {
+			continue
+		}
+		if credentialOverrides != nil && strings.TrimSpace(credentialOverrides[name]) != "" {
+			continue
+		}
+		missing = append(missing, name)
+	}
+	return missing
+}
+
+func (h *ManagedAgentHandler) startCredentialedGenericAgentSession(w http.ResponseWriter, r *http.Request, u *model.User, client *service.ManagedAgentClient, agent model.ManagedAgent, req model.ManagedAgentManualRunRequest, params map[string]string) {
+	reportSlots := map[string]struct{}{}
+	for _, slot := range h.reportMCPCredentialSlots(agent.MCPBindings) {
+		reportSlots[slot] = struct{}{}
+	}
+	runtimeOverrides := cleanCredentialOverrides(req.CredentialOverrides)
+	for slot := range reportSlots {
+		delete(runtimeOverrides, slot)
+	}
+	missing := h.missingRequiredCredentialSlots(agent, reportSlots, runtimeOverrides)
+	if len(missing) > 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"code":  "CREDENTIAL_REQUIRED",
+			"error": "required credential slots are not bound to usable default credentials",
+			"slots": missing,
+		})
+		return
+	}
+
+	token := bearerTokenFromRequest(r)
+	if len(reportSlots) > 0 && token == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "current user token is required"})
+		return
+	}
+
+	inputRef := map[string]any{
+		"message":        req.Message,
+		"params":         req.Params,
+		"trigger_source": "manual",
+	}
+	if len(reportSlots) > 0 {
+		inputRef["credential_slots"] = sortedStringKeys(reportSlots)
+		inputRef["credential_override"] = "redacted"
+	}
+	if len(runtimeOverrides) > 0 {
+		inputRef["credential_override_slots"] = sortedStringMapKeys(runtimeOverrides)
+		inputRef["credential_override"] = "redacted"
+	}
+	runID, err := h.insertPendingManagedSessionAIRun(u.ID, "manual_agent_run", agent.AgentID, req.ModelID, inputRef)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	overrides := copyStringMap(runtimeOverrides)
+	if len(reportSlots) > 0 {
+		credential, err := client.CreateCredential(r.Context(), service.CreateManagedCredentialRequest{
+			Name:  "Aida Report MCP Auth " + runID,
+			Kind:  "secret",
+			Value: token,
+			Metadata: map[string]string{
+				"aida_user_id": u.ID,
+				"ai_run_id":    runID,
+				"purpose":      "generic_agent_report_mcp_auth",
+			},
+		})
+		if err != nil {
+			_ = h.markAIRunSubmitFailed(r, runID, u.ID, err.Error())
+			writeManagedAgentError(w, err)
+			return
+		}
+		for slot := range reportSlots {
+			overrides[slot] = credential.CredentialID
+		}
+	}
+
+	sessionReq := service.CreateManagedSessionRequest{
+		AgentID:           agent.AgentID,
+		ModelID:           req.ModelID,
+		StartPromptValues: params,
+	}
+	if len(overrides) > 0 {
+		sessionReq.CredentialOverrides = overrides
+	}
+	sessionResp, err := client.CreateSession(r.Context(), sessionReq)
+	if err != nil {
+		_ = h.markAIRunSubmitFailed(r, runID, u.ID, err.Error())
+		writeManagedAgentError(w, err)
+		return
+	}
+	modelID := req.ModelID
+	if modelID == "" && sessionResp.ModelID != "" {
+		modelID = sessionResp.ModelID
+	}
+	inputRef["external_session_id"] = sessionResp.SessionID
+	inputRef["external_status"] = sessionResp.Status
+	if err := h.attachSessionAIRun(runID, u.ID, sessionResp, modelID, inputRef); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
 	run, err := h.loadAIRun(runID, u.ID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -1797,6 +2027,26 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 		writeJSON(w, http.StatusBadRequest, map[string]string{"code": "REPORT_MCP_REQUIRED", "error": "Report Agent must bind Aida Report MCP"})
 		return
 	}
+	reportSlots := map[string]struct{}{}
+	for _, slot := range h.reportMCPCredentialSlots(agent.MCPBindings) {
+		reportSlots[slot] = struct{}{}
+	}
+	if len(reportSlots) == 0 {
+		reportSlots[h.defaults.ReportMCPCredentialSlot] = struct{}{}
+	}
+	runtimeOverrides := cleanCredentialOverrides(req.CredentialOverrides)
+	for slot := range reportSlots {
+		delete(runtimeOverrides, slot)
+	}
+	missing := h.missingRequiredCredentialSlots(*agent, reportSlots, runtimeOverrides)
+	if len(missing) > 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"code":  "CREDENTIAL_REQUIRED",
+			"error": "required credential slots are not bound to usable default credentials",
+			"slots": missing,
+		})
+		return
+	}
 
 	period := periodArgs{Date: req.Period.Date, WeekStart: req.Period.WeekStart, WeekEnd: req.Period.WeekEnd}
 	date, weekStart, weekEnd, err := resolveReportPeriod(req.ReportType, period)
@@ -1829,6 +2079,10 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 		"model_id":        modelID,
 		"mcp_url":         h.reportMCPURL(),
 		"credential_slot": h.defaults.ReportMCPCredentialSlot,
+	}
+	if len(runtimeOverrides) > 0 {
+		inputRef["credential_override_slots"] = sortedStringMapKeys(runtimeOverrides)
+		inputRef["credential_override"] = "redacted"
 	}
 	runID, err := h.insertPendingManagedSessionAIRun(u.ID, reportAgentRunBusinessType, agentID, modelID, inputRef)
 	if err != nil {
@@ -1864,14 +2118,16 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 		return
 	}
 	sessionMessage := buildReportRunMessage(startPromptValues, userMessage, h.defaults.ReportMCPCredentialSlot)
+	overrides := copyStringMap(runtimeOverrides)
+	for slot := range reportSlots {
+		overrides[slot] = credential.CredentialID
+	}
 	sessionResp, err := client.CreateSession(r.Context(), service.CreateManagedSessionRequest{
-		AgentID:           agentID,
-		ModelID:           modelID,
-		StartPromptValues: startPromptValues,
-		Message:           sessionMessage,
-		CredentialOverrides: map[string]string{
-			h.defaults.ReportMCPCredentialSlot: credential.CredentialID,
-		},
+		AgentID:             agentID,
+		ModelID:             modelID,
+		StartPromptValues:   startPromptValues,
+		Message:             sessionMessage,
+		CredentialOverrides: overrides,
 	})
 	if err != nil {
 		_ = h.markAIRunSubmitFailed(r, runID, u.ID, err.Error())
@@ -3066,16 +3322,93 @@ func (h *ManagedAgentHandler) executeManagedAgentScheduleRun(ctx context.Context
 	if schedule.RunKind == scheduleRunKindReport {
 		return h.executeReportAgentScheduleRun(ctx, client, schedule, u, resolvedToken, modelID, inputRef, scheduledAt, advanceNext)
 	}
-	runID, err := h.insertPendingAIRun(u.ID, scheduledAgentRunBusinessType, schedule.AgentID, modelID, inputRef)
-	if err != nil {
-		return nil, err
-	}
 	params := copyStringMap(schedule.StartPromptValues)
 	if strings.TrimSpace(schedule.InitialMessage) != "" {
 		params["message"] = schedule.InitialMessage
 	}
 	params["trigger_source"] = triggerSource
 	params["schedule_id"] = schedule.ID
+	agent, err := findManagedAgent(ctx, client, schedule.AgentID)
+	insertRun := h.insertPendingAIRun
+	if agent != nil && h.agentRequiresCredentialedSession(*agent) {
+		insertRun = h.insertPendingManagedSessionAIRun
+	}
+	runID, insertErr := insertRun(u.ID, scheduledAgentRunBusinessType, schedule.AgentID, modelID, inputRef)
+	if insertErr != nil {
+		return nil, insertErr
+	}
+	if err != nil {
+		_ = h.markAIRunSubmitFailedContext(ctx, runID, u.ID, err.Error())
+		_ = h.updateManagedScheduleAfterRun(ctx, schedule.ID, u.ID, runID, scheduledAt, err.Error(), advanceNext, schedule)
+		return h.loadAIRun(runID, u.ID)
+	}
+	if agent != nil && h.agentRequiresCredentialedSession(*agent) {
+		reportSlots := map[string]struct{}{}
+		for _, slot := range h.reportMCPCredentialSlots(agent.MCPBindings) {
+			reportSlots[slot] = struct{}{}
+		}
+		missing := h.missingRequiredCredentialSlots(*agent, reportSlots, nil)
+		if len(missing) > 0 {
+			errMsg := "required credential slots are not bound to usable default credentials: " + strings.Join(missing, ",")
+			_ = h.markAIRunSubmitFailedContext(ctx, runID, u.ID, errMsg)
+			_ = h.updateManagedScheduleAfterRun(ctx, schedule.ID, u.ID, runID, scheduledAt, errMsg, advanceNext, schedule)
+			return h.loadAIRun(runID, u.ID)
+		}
+		overrides := map[string]string{}
+		if len(reportSlots) > 0 {
+			if strings.TrimSpace(resolvedToken) == "" {
+				errMsg := "current user token is required"
+				_ = h.markAIRunSubmitFailedContext(ctx, runID, u.ID, errMsg)
+				_ = h.updateManagedScheduleAfterRun(ctx, schedule.ID, u.ID, runID, scheduledAt, errMsg, advanceNext, schedule)
+				return h.loadAIRun(runID, u.ID)
+			}
+			inputRef["credential_slots"] = sortedStringKeys(reportSlots)
+			inputRef["credential_override"] = "redacted"
+			credential, err := client.CreateCredential(ctx, service.CreateManagedCredentialRequest{
+				Name:  "Aida Report MCP Auth " + runID,
+				Kind:  "secret",
+				Value: resolvedToken,
+				Metadata: map[string]string{
+					"aida_user_id": u.ID,
+					"ai_run_id":    runID,
+					"purpose":      "scheduled_generic_agent_report_mcp_auth",
+				},
+			})
+			if err != nil {
+				_ = h.markAIRunSubmitFailedContext(ctx, runID, u.ID, err.Error())
+				_ = h.updateManagedScheduleAfterRun(ctx, schedule.ID, u.ID, runID, scheduledAt, err.Error(), advanceNext, schedule)
+				return h.loadAIRun(runID, u.ID)
+			}
+			for slot := range reportSlots {
+				overrides[slot] = credential.CredentialID
+			}
+		}
+		sessionReq := service.CreateManagedSessionRequest{
+			AgentID:           schedule.AgentID,
+			ModelID:           modelID,
+			StartPromptValues: params,
+		}
+		if len(overrides) > 0 {
+			sessionReq.CredentialOverrides = overrides
+		}
+		sessionResp, sessionErr := client.CreateSession(ctx, sessionReq)
+		if sessionErr != nil {
+			_ = h.markAIRunSubmitFailedContext(ctx, runID, u.ID, sessionErr.Error())
+			_ = h.updateManagedScheduleAfterRun(ctx, schedule.ID, u.ID, runID, scheduledAt, sessionErr.Error(), advanceNext, schedule)
+			return h.loadAIRun(runID, u.ID)
+		}
+		inputRef["external_session_id"] = sessionResp.SessionID
+		inputRef["external_status"] = sessionResp.Status
+		if sessionResp.ModelID != "" {
+			modelID = sessionResp.ModelID
+			inputRef["model_id"] = modelID
+		}
+		if err := h.attachSessionAIRun(runID, u.ID, sessionResp, modelID, inputRef); err != nil {
+			return nil, err
+		}
+		_ = h.updateManagedScheduleAfterRun(ctx, schedule.ID, u.ID, runID, scheduledAt, "", advanceNext, schedule)
+		return h.loadAIRun(runID, u.ID)
+	}
 	submitResp, submitErr := client.SubmitTask(ctx, service.SubmitManagedTaskRequest{
 		AgentID: schedule.AgentID,
 		ModelID: modelID,

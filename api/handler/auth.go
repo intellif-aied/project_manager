@@ -788,7 +788,7 @@ func parseBootstrapAdminUIDs(raw string) map[int64]bool {
 }
 
 func loadUserByID(db *sql.DB, id string) (*model.User, error) {
-	rows, err := db.Query(userSelectSQL()+" WHERE u.id::text = $1", id)
+	rows, err := db.Query(userSelectSQL()+" WHERE "+userIdentityMatchesSQL(), id)
 	if err != nil {
 		return nil, err
 	}
@@ -804,7 +804,7 @@ func loadUserByID(db *sql.DB, id string) (*model.User, error) {
 }
 
 func loadAidaUserByID(db *sql.DB, id string) (*model.User, error) {
-	rows, err := db.Query(userSelectSQL()+" WHERE u.id::text = $1 AND u.aida_enabled = true", id)
+	rows, err := db.Query(userSelectSQL()+" WHERE "+userIdentityMatchesSQL()+" AND u.aida_enabled = true", id)
 	if err != nil {
 		return nil, err
 	}
@@ -842,6 +842,10 @@ func userSelectSQL() string {
 			u.employee_id, u.app_role, u.team_id::text, COALESCE(t.name, ''), u.local_enabled, u.last_synced_at, u.created_at, u.updated_at
 		FROM users u
 		LEFT JOIN teams t ON t.id = u.team_id`
+}
+
+func userIdentityMatchesSQL() string {
+	return "(u.id::text = $1 OR u.employee_id = $1 OR u.username = $1)"
 }
 
 func scanUser(rows interface{ Scan(dest ...any) error }, u *model.User) error {

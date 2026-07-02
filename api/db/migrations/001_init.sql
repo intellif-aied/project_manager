@@ -1,4 +1,4 @@
--- Aida fresh development schema. Authentication is delegated to AIHub.
+-- Aida fresh schema. Authentication is delegated to AIHub.
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 CREATE TABLE teams (
@@ -363,22 +363,47 @@ ALTER TABLE department_weekly_reports
     FOREIGN KEY (managed_agent_run_id) REFERENCES ai_runs(id);
 
 CREATE TABLE managed_agent_schedules (
-    id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id        BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    name           TEXT NOT NULL,
-    agent_id       TEXT NOT NULL,
-    model_id       TEXT,
-    message        TEXT NOT NULL,
-    params_json    JSONB NOT NULL DEFAULT '{}'::jsonb,
-    schedule_type  TEXT NOT NULL DEFAULT 'daily' CHECK (schedule_type IN ('daily', 'weekly')),
-    weekdays_json  JSONB NOT NULL DEFAULT '[]'::jsonb,
-    time_of_day    TEXT NOT NULL,
-    timezone       TEXT NOT NULL DEFAULT 'Asia/Shanghai',
-    enabled        BOOLEAN NOT NULL DEFAULT true,
-    last_run_at    TIMESTAMPTZ,
-    last_ai_run_id UUID REFERENCES ai_runs(id),
-    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+    id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id                  BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name                     TEXT NOT NULL,
+    agent_id                 TEXT NOT NULL,
+    model_id                 TEXT,
+    message                  TEXT NOT NULL,
+    params_json              JSONB NOT NULL DEFAULT '{}'::jsonb,
+    schedule_type            TEXT NOT NULL DEFAULT 'daily' CHECK (schedule_type IN ('daily', 'weekly')),
+    weekdays_json            JSONB NOT NULL DEFAULT '[]'::jsonb,
+    time_of_day              TEXT NOT NULL,
+    timezone                 TEXT NOT NULL DEFAULT 'Asia/Shanghai',
+    enabled                  BOOLEAN NOT NULL DEFAULT true,
+    last_run_at              TIMESTAMPTZ,
+    last_ai_run_id           UUID REFERENCES ai_runs(id),
+    run_kind                 TEXT NOT NULL DEFAULT 'generic_agent'
+        CHECK (run_kind IN ('generic_agent', 'report_agent')),
+    start_prompt_values_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    report_config_json       JSONB NOT NULL DEFAULT '{}'::jsonb,
+    next_run_at              TIMESTAMPTZ,
+    last_error               TEXT,
+    last_skip_reason         TEXT,
+    last_skip_at             TIMESTAMPTZ,
+    last_skipped_trigger_at  TIMESTAMPTZ,
+    created_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at               TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_managed_agent_schedules_user ON managed_agent_schedules(user_id, created_at DESC);
 CREATE INDEX idx_managed_agent_schedules_enabled ON managed_agent_schedules(enabled, time_of_day);
+CREATE INDEX idx_managed_agent_schedules_due
+    ON managed_agent_schedules(enabled, next_run_at)
+    WHERE enabled = true;
+
+CREATE TABLE managed_agent_profiles (
+    agent_id      TEXT NOT NULL,
+    user_id       BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    business_type TEXT NOT NULL DEFAULT 'generic',
+    report_types  JSONB NOT NULL DEFAULT '[]'::jsonb,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (agent_id, user_id),
+    CONSTRAINT managed_agent_profiles_business_type_check
+        CHECK (business_type IN ('generic', 'report'))
+);
+CREATE INDEX idx_managed_agent_profiles_user ON managed_agent_profiles(user_id);
