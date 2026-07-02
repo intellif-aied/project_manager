@@ -480,6 +480,14 @@ export interface ManagedReportAgentRunPayload {
   credential_overrides?: Record<string, string>;
 }
 
+export interface ManagedReportAgentUnavailable {
+  available: false;
+  code: "DEFAULT_REPORT_AGENT_NOT_CONFIGURED";
+  message: string;
+}
+
+export type ManagedReportAgentRunResponse = AIRun | ManagedReportAgentUnavailable;
+
 export interface ManagedAgentSchedule {
   id: string;
   user_id: string;

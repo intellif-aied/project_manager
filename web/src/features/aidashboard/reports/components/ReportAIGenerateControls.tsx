@@ -13,11 +13,14 @@ import {
 } from "../../api/client";
 import type {
   AIRun,
+  ManagedReportAgentUnavailable,
+  ManagedReportAgentRunResponse,
   ManagedReportAgentRunPayload,
   ReportType,
   SessionTokens
 } from "../../api/types";
 import { aiAssetsPath, errorMessage } from "../../ai-assets/utils/agentAssets";
+import { useAuth } from "@/shared/auth/authContext";
 import { HttpError } from "@/shared/request/types";
 
 import "./ReportAIGenerateControls.css";
@@ -54,11 +57,18 @@ function sessionSliceKey(record: SessionTokens) {
 }
 
 function reportRunStorageKey(
+  userId: string,
   reportType: ReportType,
   period: ReportPeriodPayload,
   target: ReportTargetPayload
 ) {
-  return `aida:report-ai-run:${JSON.stringify({ reportType, period, target })}`;
+  return `aida:report-ai-run:${JSON.stringify({ userId, reportType, period, target })}`;
+}
+
+function isReportAgentUnavailable(
+  response: ManagedReportAgentRunResponse
+): response is ManagedReportAgentUnavailable {
+  return "available" in response && response.available === false;
 }
 
 function readStoredRunId(key: string) {
@@ -98,6 +108,7 @@ export function ReportAIGenerateControls({
   onGenerated
 }: ReportAIGenerateControlsProps) {
   const { message } = App.useApp();
+  const { user } = useAuth();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -109,9 +120,10 @@ export function ReportAIGenerateControls({
 
   const from = sessionRange?.from ?? "";
   const to = sessionRange?.to ?? "";
+  const currentUserId = user?.id ?? "anonymous";
   const storageKey = useMemo(
-    () => reportRunStorageKey(reportType, period, target),
-    [period, reportType, target]
+    () => reportRunStorageKey(currentUserId, reportType, period, target),
+    [currentUserId, period, reportType, target]
   );
 
   useEffect(() => {
@@ -140,13 +152,28 @@ export function ReportAIGenerateControls({
 
   const activeRunQuery = useQuery<AIRun>({
     queryKey: ["managed-agent-run", activeRunId],
-    queryFn: () => fetchManagedAgentRun(activeRunId as string),
+    queryFn: () => fetchManagedAgentRun(activeRunId as string, { skipErrorHandler: true }),
     enabled: Boolean(activeRunId),
+    retry: (failureCount, err) => {
+      if (err instanceof HttpError && (err.status === 403 || err.status === 404)) {
+        return false;
+      }
+      return failureCount < 2;
+    },
     refetchInterval: (query) => {
       const status = query.state.data?.status;
       return status === "pending" || status === "running" ? 2500 : false;
     }
   });
+
+  useEffect(() => {
+    const err = activeRunQuery.error;
+    if (!activeRunId || !(err instanceof HttpError)) return;
+    if (err.status !== 403 && err.status !== 404) return;
+    clearStoredRunId(storageKey, activeRunId);
+    setActiveRunId(undefined);
+    setHandledRunId(undefined);
+  }, [activeRunId, activeRunQuery.error, storageKey]);
 
   const columns = useMemo<ColumnsType<SessionTokens>>(
     () => [
@@ -193,9 +220,19 @@ export function ReportAIGenerateControls({
         target,
         selected_session_slice_keys:
           allowSessionSelection && selectedKeys.length > 0 ? selectedKeys : undefined
-      });
+      }, { skipErrorHandler: true });
     },
     onSuccess: (run) => {
+      if (isReportAgentUnavailable(run)) {
+        Modal.confirm({
+          title: "未配置默认报告 Agent",
+          content: run.message || "请先在 AI 资产中创建或设置默认报告 Agent。",
+          okText: "去配置",
+          cancelText: "取消",
+          onOk: () => navigate(aiAssetsPath("agents"))
+        });
+        return;
+      }
       storeRunId(storageKey, run.id);
       setActiveRunId(run.id);
       setHandledRunId(undefined);

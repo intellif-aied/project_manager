@@ -24,6 +24,7 @@ import type {
   ManagedAgent,
   ManagedAgentManualRunPayload,
   ManagedReportAgentRunPayload,
+  ManagedReportAgentRunResponse,
   ManagedAgentSchedule,
   ManagedCredential,
   ManagedMCPEntry,
@@ -599,15 +600,25 @@ export const archiveManagedAgent = (agentId: string, archived: boolean) =>
   unwrap(api.post<Record<string, unknown>>(`/ai-assets/agents/${encodeURIComponent(agentId)}/archive`, { archived }));
 export const startManagedAgentRun = (agentId: string, payload: ManagedAgentManualRunPayload) =>
   unwrap(api.post<AIRun>(`/ai-assets/agents/${agentId}/runs`, payload));
-export const startReportAgentRun = (agentId: string, payload: ManagedReportAgentRunPayload) =>
-  unwrap(api.post<AIRun>(`/ai-assets/report-agents/${agentId}/runs`, payload));
+export const startReportAgentRun = (
+  agentId: string,
+  payload: ManagedReportAgentRunPayload,
+  options?: { skipErrorHandler?: boolean }
+) =>
+  unwrap(
+    api.post<ManagedReportAgentRunResponse>(
+      `/ai-assets/report-agents/${agentId}/runs`,
+      payload,
+      options
+    )
+  );
 export const fetchManagedAgentRuns = (params?: {
   agent_id?: string;
   business_type?: string;
   page_size?: string;
 }) => unwrap(api.get<{ runs: AIRun[] }>("/ai-assets/agent-runs", params));
-export const fetchManagedAgentRun = (runId: string) =>
-  unwrap(api.get<AIRun>(`/ai-assets/agent-runs/${runId}`));
+export const fetchManagedAgentRun = (runId: string, options?: { skipErrorHandler?: boolean }) =>
+  unwrap(api.get<AIRun>(`/ai-assets/agent-runs/${runId}`, undefined, options));
 export const fetchManagedAgentSchedules = () =>
   unwrap(api.get<{ schedules: ManagedAgentSchedule[] }>("/ai-assets/agent-schedules"));
 export const previewManagedAgentSchedule = (payload: PreviewManagedAgentSchedulePayload) =>

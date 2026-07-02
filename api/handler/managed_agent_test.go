@@ -1849,8 +1849,19 @@ func TestStartReportAgentRunDefaultDoesNotCreateAssets(t *testing.T) {
 
 	h.StartReportAgentRun(rec, req)
 
-	if rec.Code != http.StatusNotFound {
+	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		Available bool   `json:"available"`
+		Code      string `json:"code"`
+		Message   string `json:"message"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Available || got.Code != "DEFAULT_REPORT_AGENT_NOT_CONFIGURED" || got.Message == "" {
+		t.Fatalf("response = %#v", got)
 	}
 }
 

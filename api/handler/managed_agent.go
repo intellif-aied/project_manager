@@ -2248,7 +2248,11 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 			return
 		}
 		if !found {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "default Report Agent not found"})
+			writeJSON(w, http.StatusOK, map[string]any{
+				"available": false,
+				"code":      "DEFAULT_REPORT_AGENT_NOT_CONFIGURED",
+				"message":   "未配置默认报告 Agent",
+			})
 			return
 		}
 		agentID = selected.AgentID
@@ -2449,7 +2453,10 @@ func (h *ManagedAgentHandler) GetAgentRun(w http.ResponseWriter, r *http.Request
 	runID := chi.URLParam(r, "runId")
 	run, err := h.loadAIRun(runID, u.ID)
 	if err == sql.ErrNoRows {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		writeJSON(w, http.StatusNotFound, map[string]string{
+			"code":    "AI_RUN_NOT_FOUND",
+			"message": "运行记录不存在或已失效",
+		})
 		return
 	}
 	if err != nil {

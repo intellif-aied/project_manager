@@ -34,6 +34,8 @@ import type {
   AIRun,
   ManagedAgent,
   ManagedCredential,
+  ManagedReportAgentUnavailable,
+  ManagedReportAgentRunResponse,
   ReportType,
   SessionTokens
 } from "../../api/types";
@@ -155,6 +157,12 @@ function reportSessionRange(reportType: ReportType, reportDate: Dayjs, weekRange
   }
   const date = reportDate.format("YYYY-MM-DD");
   return { from: date, to: date };
+}
+
+function isReportAgentUnavailable(
+  response: ManagedReportAgentRunResponse
+): response is ManagedReportAgentUnavailable {
+  return "available" in response && response.available === false;
 }
 
 function cleanAgentDescription(agent: ManagedAgent, reportAgent: boolean) {
@@ -975,6 +983,10 @@ function ReportAgentRunForm({ agent }: { agent: ManagedAgent }) {
       });
     },
     onSuccess: (run) => {
+      if (isReportAgentUnavailable(run)) {
+        message.warning(run.message || "未配置默认报告 Agent");
+        return;
+      }
       message.success("Report Agent 已提交运行");
       setActiveRunId(run.id);
       void queryClient.invalidateQueries({ queryKey: ["managed-agent-runs"] });
