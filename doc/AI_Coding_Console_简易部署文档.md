@@ -64,16 +64,27 @@
 
 ## 4.2 网络与端口规划
 
-默认部署端口如下，可按需调整：
+当前推荐部署为单公网入口：外网只开放服务器 `80` 端口，其余服务只在 Docker 内网互通。
 
-| 服务 | 容器端口 | 宿主机示例端口 | 说明 |
+以服务器公网入口 `113.100.143.91:9180` 为例：
+
+| 访问对象 | 对外地址 | 说明 |
+|---|---|---|
+| Web | `http://113.100.143.91:9180/` | 浏览器页面入口 |
+| API | `http://113.100.143.91:9180/api/v1` | 前端与 `aida` CLI 统一入口 |
+| 健康检查 | `http://113.100.143.91:9180/health` | 由 Web Nginx 反代到 API |
+| CLI 安装包 | `http://113.100.143.91:9180/statics-live/aida/` | 由 Web Nginx 反代到 MinIO |
+
+内部端口仍然存在但不映射到公网：
+
+| 服务 | 容器端口 | 宿主机端口 | 说明 |
 |---|---:|---:|---|
-| Web | 80 | 13000 | 用户访问入口 |
-| API | 8080 | 18090 | 前端与 CLI 调用 |
-| PostgreSQL | 5432 | 15433 或不暴露 | 生产建议仅内网可达 |
-| MinIO API | 9000 | 9000 | 对象存储与 CLI 安装包下载 |
-| MinIO Console | 9001 | 9001 | 管理控制台 |
-| Consumer | 8090 | 通常不对外暴露 | 仅 API 内部调用 |
+| Web | 80 | 80 | 唯一公网入口 |
+| API | 8080 | 不暴露 | 只允许 Web Nginx 和容器内服务访问 |
+| PostgreSQL | 5432 | 不暴露 | 生产数据服务，不对外开放 |
+| MinIO API | 9000 | 不暴露 | 通过 `/statics-live/` 下载静态包 |
+| MinIO Console | 9001 | 不暴露 | 如需管理，建议 SSH 隧道临时访问 |
+| Consumer | 8090 | 不暴露 | 仅 API 内部调用 |
 
 ## 4.3 Claude 登录前置条件
 
@@ -214,100 +225,38 @@ cd /data/ai-coding-console
 
 ## 7.2 部署版 `docker-compose.yml`
 
-下面是一份可直接落地的参考配置。请按实际 IP、域名、密码、镜像标签调整。
+仓库已提供单端口部署模板：
 
-```yaml
-services:
-  db:
-    image: postgres:16
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: aidashboard
-      POSTGRES_USER: aidashboard
-      POSTGRES_PASSWORD: devpassword
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    ports:
-      - "15433:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U aidashboard"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
-  minio:
-    image: minio/minio:latest
-    restart: unless-stopped
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin123
-    volumes:
-      - minio_data:/data
-    ports:
-      - "9000:9000"
-      - "9001:9001"
-    healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
-  api:
-    image: 192.168.14.129:80/aied/ai-coding-console-api:20260626
-    restart: unless-stopped
-    environment:
-      DATABASE_URL: "postgres://aidashboard:devpassword@db:5432/aidashboard?sslmode=disable"
-      JWT_SECRET: "please-change-in-production"
-      CORS_ORIGIN: "http://服务器IP:13000"
-      MINIO_ENDPOINT: "minio:9000"
-      MINIO_ACCESS_KEY: "minioadmin"
-      MINIO_SECRET_KEY: "minioadmin123"
-      MINIO_BUCKET: "aidashboard"
-      MINIO_USE_SSL: "false"
-      MINIO_EXTERNAL_ENDPOINT: "http://服务器IP:9000"
-      REPORT_GENERATOR_URL: "http://consumer:8090"
-      TZ: "Asia/Shanghai"
-    depends_on:
-      db:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-    ports:
-      - "18090:8080"
-
-  web:
-    image: 192.168.14.129:80/aied/ai-coding-console-web:20260626
-    restart: unless-stopped
-    environment:
-      AIHUB_RUNTIME_CONFIG_apiBaseUrl: "/api/v1"
-      AIHUB_RUNTIME_CONFIG_authApiBaseUrl: "/api/v1"
-      AIHUB_RUNTIME_CONFIG_userApiBaseUrl: "/api/v1"
-      AIHUB_RUNTIME_CONFIG_appTitle: "AI Coding Console"
-    depends_on:
-      - api
-    ports:
-      - "13000:80"
-
-  consumer:
-    image: 192.168.14.129:80/aied/ai-coding-console-consumer:20260626
-    restart: unless-stopped
-    command: ["aida", "serve"]
-    environment:
-      DATABASE_URL: "postgres://aidashboard:devpassword@db:5432/aidashboard?sslmode=disable"
-      AIDA_CLAUDE_TIMEOUT: "10m"
-      PORT: "8090"
-      TZ: "Asia/Shanghai"
-    volumes:
-      - /home/<部署用户>/.claude:/root/.claude
-    depends_on:
-      db:
-        condition: service_healthy
-
-volumes:
-  pgdata:
-  minio_data:
+```text
+deploy/docker-compose.single-port.yml
 ```
+
+服务器部署时复制为部署目录里的 `docker-compose.yml`：
+
+```bash
+cp deploy/docker-compose.single-port.yml /data/ai-coding-console/docker-compose.yml
+cp deploy/nginx.conf /data/ai-coding-console/nginx.conf
+cd /data/ai-coding-console
+```
+
+建议在部署目录创建 `.env`，固定服务器地址、镜像标签和密码：
+
+```bash
+cat > .env <<'EOF'
+PUBLIC_BASE_URL=http://113.100.143.91:9180
+IMAGE_REGISTRY=192.168.14.129:80/aied
+IMAGE_TAG=20260626
+
+POSTGRES_PASSWORD=请替换为强密码
+MINIO_ROOT_PASSWORD=请替换为强密码
+JWT_SECRET=请替换为强随机字符串
+CLAUDE_HOME=/home/intellif/.claude
+AIDA_BOOTSTRAP_ADMIN_UIDS=1
+TZ=Asia/Shanghai
+EOF
+```
+
+这份模板只有 `web` 映射 `80:80`，`api`、`db`、`minio`、`consumer` 都不暴露宿主机端口。`nginx.conf` 会挂载到 Web 容器内，用于保留外网端口并统一反代 `/api/v1/`、`/health`、`/statics-live/`。
 
 ## 7.3 关键配置说明
 
@@ -319,14 +268,24 @@ volumes:
 
 ### `CORS_ORIGIN`
 
-- 必须与用户实际访问前端页面的地址一致
-- 如果使用域名，填写域名地址
+- 单端口部署填写 `PUBLIC_BASE_URL`，例如 `http://113.100.143.91:9180`
+- 如果使用域名，填写域名地址，例如 `http://aida.example.com`
 - 如果多个来源，按后端支持格式配置
+
+### `AIDA_PUBLIC_BASE_URL`
+
+- 必须是外部可访问的 Web 根地址，例如 `http://113.100.143.91:9180`
+- 报告 Agent 会用它生成 MCP 地址：`http://113.100.143.91:9180/api/v1/mcp/reports`
+
+### `AIDA_BOOTSTRAP_ADMIN_UIDS`
+
+- 填 AIHub 用户 ID，不是登录名
+- 当前默认管理员 `admin` 的 AIHub 用户 ID 为 `1`，因此填写 `AIDA_BOOTSTRAP_ADMIN_UIDS=1`
 
 ### `MINIO_EXTERNAL_ENDPOINT`
 
-- 填写客户端可访问的 MinIO 对外地址
-- 用于对象访问链接与 CLI 安装包地址
+- 单端口部署填写 `PUBLIC_BASE_URL`，例如 `http://113.100.143.91:9180`
+- CLI 安装包通过 Web Nginx 的 `/statics-live/` 反代访问 MinIO，不再对外开放 `9000`
 
 ### `REPORT_GENERATOR_URL`
 
@@ -405,20 +364,23 @@ docker compose up -d
 ### 前端页面
 
 ```text
-http://服务器IP:13000
+http://113.100.143.91:9180/
 ```
 
 ### API
 
 ```text
-http://服务器IP:18090
+http://113.100.143.91:9180/health
+http://113.100.143.91:9180/api/v1
 ```
 
-### MinIO Console
+### CLI 安装包
 
 ```text
-http://服务器IP:9001
+http://113.100.143.91:9180/statics-live/aida/install.sh
 ```
+
+单端口部署不对公网开放 MinIO Console。如果必须管理 MinIO，建议通过 SSH 隧道或临时内网访问处理，不要长期暴露 `9001`。
 
 ## 9.2 默认账号
 
@@ -578,8 +540,8 @@ make release-test-dir
 
 ```bash
 make release-prod-dir \
-  AIDA_RELEASE_URL=http://<服务器IP>:9000/statics-live/aida \
-  AIDA_API_URL=http://<服务器IP>:18090/api/v1
+  AIDA_RELEASE_URL=http://113.100.143.91:9180/statics-live/aida \
+  AIDA_API_URL=http://113.100.143.91:9180/api/v1
 ```
 
 产物目录：
@@ -599,8 +561,8 @@ make release-prod-dir \
 假设你把生成目录拷贝到了服务器 `/tmp/aida-releases`：
 
 ```bash
-docker run --rm --network host -v /tmp/aida-releases:/data:ro --entrypoint sh minio/mc -c '
-  mc alias set local http://localhost:9000 minioadmin minioadmin123
+docker compose --profile tools run --rm -v /tmp/aida-releases:/data:ro mc '
+  mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
   mc mb -p local/statics-live 2>/dev/null || true
   mc cp /data/* local/statics-live/aida/
   mc anonymous set download local/statics-live/aida
@@ -618,8 +580,8 @@ docker run --rm --network host -v /tmp/aida-releases:/data:ro --entrypoint sh mi
 ### Linux / macOS Apple Silicon
 
 ```bash
-curl -fsSL http://<服务器IP>:9000/statics-live/aida/install.sh \
-  | AIDA_API_URL=http://<服务器IP>:18090/api/v1 AIDA_TOKEN=<用户JWT> bash
+curl -fsSL http://113.100.143.91:9180/statics-live/aida/install.sh \
+  | AIDA_API_URL=http://113.100.143.91:9180/api/v1 AIDA_TOKEN=<用户JWT> bash
 ```
 
 `install.sh` 会按当前系统选择二进制：Linux x86_64 下载 `aida-linux-amd64`，macOS arm64 下载 `aida-darwin-arm64`。
@@ -627,13 +589,13 @@ curl -fsSL http://<服务器IP>:9000/statics-live/aida/install.sh \
 ### Windows
 
 ```powershell
-$env:AIDA_API_URL="http://<服务器IP>:18090/api/v1"; $env:AIDA_TOKEN="<用户JWT>"; Invoke-RestMethod http://<服务器IP>:9000/statics-live/aida/install.ps1 | Invoke-Expression
+$env:AIDA_API_URL="http://113.100.143.91:9180/api/v1"; $env:AIDA_TOKEN="<用户JWT>"; Invoke-RestMethod http://113.100.143.91:9180/statics-live/aida/install.ps1 | Invoke-Expression
 ```
 
 如果不带 `AIDA_TOKEN`，安装后可手动登录：
 
 ```bash
-aida login --server http://<服务器IP>:18090/api/v1 --token <jwt>
+aida login --server http://113.100.143.91:9180/api/v1 --token <jwt>
 ```
 
 Windows 注意事项：
@@ -642,28 +604,15 @@ Windows 注意事项：
 - 不要再套一层 `powershell -Command`
 - 否则 PATH 刷新只会发生在子进程里
 
-## 12.4 可选：通过 Nginx 去掉 `:9000`
+## 12.4 单端口 Nginx 入口
 
-如果希望安装地址变成：
+`web` 镜像内置 Nginx 已配置：
 
-```text
-http://<服务器IP>/statics-live/aida/install.sh
-```
+- `/api/v1/` 反代到 `api:8080`
+- `/health` 反代到 `api:8080`
+- `/statics-live/` 反代到 `minio:9000/statics-live/`
 
-可在服务器 Nginx 上配置反向代理：
-
-```nginx
-server {
-    listen 80;
-    server_name <服务器IP或域名>;
-
-    location /statics-live/ {
-        proxy_pass http://127.0.0.1:9000/statics-live/;
-        proxy_set_header Host $host;
-        proxy_buffering off;
-    }
-}
-```
+因此服务器不需要额外维护一份宿主机 Nginx 配置；只要使用 `deploy/docker-compose.single-port.yml` 并对外开放 `80` 即可。
 
 ---
 

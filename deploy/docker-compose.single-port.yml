@@ -1,0 +1,110 @@
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-aidashboard}
+      POSTGRES_USER: ${POSTGRES_USER:-aidashboard}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-db-password}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aidashboard}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-change-me-minio-password}
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    image: ${IMAGE_REGISTRY:-192.168.14.129:80/aied}/ai-coding-console-api:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: "postgres://${POSTGRES_USER:-aidashboard}:${POSTGRES_PASSWORD:-change-me-db-password}@db:5432/${POSTGRES_DB:-aidashboard}?sslmode=disable"
+      JWT_SECRET: ${JWT_SECRET:-change-me-jwt-secret}
+      AI_API_URL: ${AI_API_URL:-}
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_MODEL: ${AI_MODEL:-}
+      AIHUB_HOST: ${AIHUB_HOST:-}
+      AIHUB_TOKEN: ${AIHUB_TOKEN:-}
+      AIHUB_SECRET: ${AIHUB_SECRET:-}
+      AIDA_BOOTSTRAP_ADMIN_UIDS: ${AIDA_BOOTSTRAP_ADMIN_UIDS:-1}
+      CORS_ORIGIN: ${PUBLIC_BASE_URL:-http://113.100.143.91:9180}
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-change-me-minio-password}
+      MINIO_BUCKET: ${MINIO_BUCKET:-aidashboard}
+      MINIO_USE_SSL: "false"
+      MINIO_EXTERNAL_ENDPOINT: ${PUBLIC_BASE_URL:-http://113.100.143.91:9180}
+      REPORT_GENERATOR_URL: http://consumer:8090
+      MANAGED_AGENT_URL: ${MANAGED_AGENT_URL:-}
+      MANAGED_AGENT_TOKEN: ${MANAGED_AGENT_TOKEN:-}
+      MANAGED_AGENT_DEFAULT_ENGINE: ${MANAGED_AGENT_DEFAULT_ENGINE:-claude-code}
+      MANAGED_AGENT_DEFAULT_MODEL_ID: ${MANAGED_AGENT_DEFAULT_MODEL_ID:-MiniMax-M2.5}
+      MANAGED_AGENT_REPORT_ASSET_REPAIR: ${MANAGED_AGENT_REPORT_ASSET_REPAIR:-true}
+      AIDA_PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://113.100.143.91:9180}
+      TZ: ${TZ:-Asia/Shanghai}
+    depends_on:
+      db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+  web:
+    image: ${IMAGE_REGISTRY:-192.168.14.129:80/aied}/ai-coding-console-web:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      AIHUB_RUNTIME_CONFIG_apiBaseUrl: /api/v1
+      AIHUB_RUNTIME_CONFIG_authApiBaseUrl: /api/v1
+      AIHUB_RUNTIME_CONFIG_userApiBaseUrl: /api/v1
+      AIHUB_RUNTIME_CONFIG_appTitle: AI Coding Console
+    depends_on:
+      - api
+      - minio
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "80:80"
+
+  consumer:
+    image: ${IMAGE_REGISTRY:-192.168.14.129:80/aied}/ai-coding-console-consumer:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    command: ["aida", "serve"]
+    environment:
+      DATABASE_URL: "postgres://${POSTGRES_USER:-aidashboard}:${POSTGRES_PASSWORD:-change-me-db-password}@db:5432/${POSTGRES_DB:-aidashboard}?sslmode=disable"
+      AIDA_CLAUDE_TIMEOUT: ${AIDA_CLAUDE_TIMEOUT:-10m}
+      PORT: "8090"
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      - ${CLAUDE_HOME:-/home/intellif/.claude}:/root/.claude
+    depends_on:
+      db:
+        condition: service_healthy
+
+  mc:
+    image: minio/mc:latest
+    profiles: ["tools"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-change-me-minio-password}
+    entrypoint: ["/bin/sh", "-c"]
+    depends_on:
+      minio:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  minio_data:
