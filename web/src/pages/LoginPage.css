@@ -93,18 +93,11 @@
   margin-bottom: 46px;
 }
 
-.login-page__brand-mark {
-  display: grid;
+.login-page__brand-logo {
+  display: block;
   width: 52px;
   height: 52px;
-  place-items: center;
-  border: 1px solid rgba(105, 177, 255, 0.55);
-  border-radius: 8px;
-  color: #082f66;
-  background: linear-gradient(135deg, #e6f4ff, #bae0ff);
-  box-shadow: 0 18px 42px rgba(22, 119, 255, 0.2);
-  font-size: 18px;
-  font-weight: 800;
+  object-fit: contain;
 }
 
 .login-page__brand-row strong,
@@ -472,7 +465,7 @@
     grid-template-columns: 44px minmax(0, 1fr);
   }
 
-  .login-page__brand-mark {
+  .login-page__brand-logo {
     width: 44px;
     height: 44px;
   }

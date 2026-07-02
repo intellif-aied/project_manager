@@ -18,16 +18,16 @@ import "./LoginPage.css";
 const DASHBOARD_PATH = "/dashboard";
 
 const accessSignals = [
-  { label: "身份验证", status: "Encrypted", tone: "cyan" },
-  { label: "权限校验", status: "Scoped", tone: "amber" },
-  { label: "安全连接", status: "Private", tone: "green" },
+  { label: "身份验证", status: "已加密", tone: "cyan" },
+  { label: "权限校验", status: "已校验", tone: "amber" },
+  { label: "安全连接", status: "内部专线", tone: "green" },
 ];
 
 const operationLines = [
-  "Secure channel established",
-  "Identity policy prepared",
-  "Access scope verified",
-  "Workspace handoff ready",
+  "已建立安全连接",
+  "已加载身份校验策略",
+  "已完成访问范围校验",
+  "工作台环境准备就绪",
 ];
 
 export function LoginPage() {
@@ -51,15 +51,15 @@ export function LoginPage() {
       <section className="login-page__shell login-page__shell--login" aria-labelledby="login-title">
         <div className="login-page__intro">
           <div className="login-page__brand-row">
-            <span className="login-page__brand-mark">AI</span>
+            <img className="login-page__brand-logo" src="/logo.svg" alt="" aria-hidden="true" />
             <span>
               <strong>{runtimeConfig.appTitle}</strong>
-              <em>AI delivery command center</em>
+              <em>内部协作控制台</em>
             </span>
           </div>
 
           <div className="login-page__hero">
-            <p className="login-page__eyebrow">Aida Ops Console</p>
+            <p className="login-page__eyebrow">Aida 内部工作台</p>
             <h1>进入 Aida 内部工作台</h1>
             <p>
               使用授权账号访问团队协作环境，保持入口清晰、安全、专注。
@@ -149,7 +149,10 @@ export function LoginPage() {
             <Form.Item
               label="密码"
               name="password"
-              rules={[{ required: true, message: "请输入密码" }]}
+              rules={[
+                { required: true, message: "请输入密码" },
+                { min: 3, message: "密码至少 3 位" }
+              ]}
             >
               <Input.Password
                 prefix={<LockOutlined />}

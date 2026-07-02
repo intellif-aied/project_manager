@@ -54,6 +54,59 @@ function getErrorMessage(payload: unknown, fallback: string) {
   return pickString(payload, ["message", "msg", "error"]) ?? fallback;
 }
 
+function normalizeLoginErrorMessage(message: string, status?: number) {
+  const normalized = message.trim().toLowerCase();
+
+  if (normalized.includes("username and password are required")) {
+    return "请输入账号和密码。";
+  }
+  if (normalized.includes("invalid request body")) {
+    return "登录请求格式不正确，请刷新页面后重试。";
+  }
+  if (normalized.includes("invalid username or password")) {
+    return "账号或密码错误，请重新输入。";
+  }
+  if (normalized.includes("aihub host is not configured")) {
+    return "登录服务未配置，请联系管理员处理。";
+  }
+  if (normalized.includes("aihub token missing uid")) {
+    return "登录服务返回异常，请稍后重试。";
+  }
+  if (normalized.includes("aida access is not enabled")) {
+    return "当前账号尚未开通 Aida 访问权限，请联系管理员开通。";
+  }
+  if (normalized.includes("aida access is disabled")) {
+    return "当前账号已被停用，请联系管理员处理。";
+  }
+  if (normalized.includes("failed") || normalized.includes("unreachable") || normalized.includes("timeout")) {
+    return "登录服务暂时不可用，请稍后重试。";
+  }
+  if (status === 401) {
+    return "账号或密码错误，请重新输入。";
+  }
+  if (status === 403) {
+    return "当前账号无权登录 Aida，请联系管理员处理。";
+  }
+  if (status === 500 || status === 502 || status === 503 || status === 504) {
+    return "登录服务暂时不可用，请稍后重试。";
+  }
+  return "登录失败，请稍后重试。";
+}
+
+function normalizeCurrentUserErrorMessage(message: string, status?: number) {
+  const normalized = message.trim().toLowerCase();
+  if (normalized.includes("not authenticated") || status === 401) {
+    return "登录状态已失效，请重新登录。";
+  }
+  if (status === 403) {
+    return "当前账号无权访问该页面，请联系管理员处理。";
+  }
+  if (status === 500 || status === 502 || status === 503 || status === 504) {
+    return "用户信息加载失败，请稍后重试。";
+  }
+  return "用户信息加载失败，请稍后重试。";
+}
+
 function resolveUser(payload: unknown): User {
   const record = getRecord(payload);
   if (!record) {
@@ -106,8 +159,9 @@ export async function loginWithPassword(credentials: LoginCredentials): Promise<
   });
   const payload = await readPayload(response);
   if (!response.ok) {
+    const rawMessage = getErrorMessage(payload, "登录失败，请检查工号或密码");
     throw new AuthRequestError(
-      getErrorMessage(payload, "登录失败，请检查工号或密码"),
+      normalizeLoginErrorMessage(rawMessage, response.status),
       response.status
     );
   }
@@ -124,7 +178,8 @@ export async function fetchCurrentUser(token: string, signal?: AbortSignal): Pro
   });
   const payload = await readPayload(response);
   if (!response.ok) {
-    throw new AuthRequestError(getErrorMessage(payload, "当前用户加载失败"), response.status);
+    const rawMessage = getErrorMessage(payload, "当前用户加载失败");
+    throw new AuthRequestError(normalizeCurrentUserErrorMessage(rawMessage, response.status), response.status);
   }
   return resolveUser(payload);
 }

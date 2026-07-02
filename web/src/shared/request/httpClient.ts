@@ -96,13 +96,11 @@ function handleHttpError(error: AxiosError, skipErrorHandler?: boolean) {
   }
 
   if (status === 403) {
+    const forbiddenMessage = getPayloadMessage(payload) ?? "暂无访问权限";
     if (!skipErrorHandler) {
-      feedback.message()?.error("暂无访问权限");
-      if (window.location.pathname !== "/403") {
-        window.location.assign("/403");
-      }
+      feedback.message()?.error(forbiddenMessage);
     }
-    throw new HttpError("暂无访问权限", { status, payload });
+    throw new HttpError(forbiddenMessage, { status, payload });
   }
 
   if (!skipErrorHandler) {
