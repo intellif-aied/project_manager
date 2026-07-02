@@ -71,6 +71,7 @@ type ManagedAgentDefaults struct {
 	ReportMCPVersion               string
 	ReportMCPName                  string
 	ReportMCPDescription           string
+	ReportMCPURL                   string
 	ReportMCPCredentialSlot        string
 	ReportAgentName                string
 	ReportAgentDescription         string
@@ -132,6 +133,7 @@ func normalizeManagedAgentDefaults(defaults ManagedAgentDefaults) ManagedAgentDe
 	if defaults.ReportMCPDescription == "" {
 		defaults.ReportMCPDescription = "Aida generic Report MCP endpoint.\n" + defaultReportAssetsMarker
 	}
+	defaults.ReportMCPURL = strings.TrimRight(strings.TrimSpace(defaults.ReportMCPURL), "/")
 	defaults.ReportMCPCredentialSlot = strings.TrimSpace(defaults.ReportMCPCredentialSlot)
 	if defaults.ReportMCPCredentialSlot == "" {
 		defaults.ReportMCPCredentialSlot = reportMCPCredentialSlot
@@ -277,7 +279,7 @@ func (h *ManagedAgentHandler) isReportMCPRef(slug, version string) bool {
 func (h *ManagedAgentHandler) filterReportSystemSkills(skills []model.ManagedSkill) []model.ManagedSkill {
 	filtered := make([]model.ManagedSkill, 0, len(skills))
 	for _, skill := range skills {
-		if h.isReportSkillRef(skill.Slug, skill.Version) {
+		if strings.TrimSpace(skill.Slug) == h.defaults.ReportSkillSlug && (h.isReportSkillRef(skill.Slug, skill.Version) || strings.Contains(skill.Description, defaultReportAssetsMarker)) {
 			continue
 		}
 		filtered = append(filtered, skill)
@@ -288,7 +290,7 @@ func (h *ManagedAgentHandler) filterReportSystemSkills(skills []model.ManagedSki
 func (h *ManagedAgentHandler) filterReportSystemMCPEntries(entries []model.ManagedMCPEntry) []model.ManagedMCPEntry {
 	filtered := make([]model.ManagedMCPEntry, 0, len(entries))
 	for _, entry := range entries {
-		if h.isReportMCPRef(entry.Slug, entry.Version) {
+		if strings.TrimSpace(entry.Slug) == h.defaults.ReportMCPSlug && (h.isReportMCPRef(entry.Slug, entry.Version) || strings.Contains(entry.Description, defaultReportAssetsMarker)) {
 			continue
 		}
 		filtered = append(filtered, entry)
@@ -462,11 +464,6 @@ func (h *ManagedAgentHandler) ListMCPEntries(w http.ResponseWriter, r *http.Requ
 	includeArchived := includeArchivedManagedAssets(r)
 	client := h.clientForRequest(r)
 	h.proxyJSON(w, func() (any, error) {
-		if includeSystem {
-			if _, _, _, err := h.ensureUserReportMCPEntry(r.Context(), client); err != nil {
-				return nil, err
-			}
-		}
 		resp, err := client.ListMCPEntries(r.Context(), scope)
 		if err != nil {
 			return nil, err
@@ -836,6 +833,9 @@ func (h *ManagedAgentHandler) ensureUserReportMCPEntry(ctx context.Context, clie
 		if entry.Archived {
 			continue
 		}
+		if strings.TrimSpace(expectedURL) != "" && strings.TrimSpace(entry.URL) != "" && strings.TrimSpace(entry.URL) != expectedURL {
+			return false, model.ManagedMCPEntry{}, count, fmt.Errorf("Aida Report MCP %s@%s points to %s, expected %s; bump MANAGED_AGENT_REPORT_MCP_VERSION for this deployment or fix the platform registry", h.defaults.ReportMCPSlug, h.defaults.ReportMCPVersion, entry.URL, expectedURL)
+		}
 		count++
 		if first.EntryID == "" {
 			first = entry
@@ -931,10 +931,6 @@ func (h *ManagedAgentHandler) CreateDefaultReportAgent(w http.ResponseWriter, r 
 			writeManagedAgentError(w, err)
 			return
 		}
-		if _, _, _, err := h.ensureUserReportMCPEntry(r.Context(), client); err != nil {
-			writeManagedAgentError(w, err)
-			return
-		}
 		if h.defaults.ReportAssetRepair && isMarkedDefaultReportAgent(existing) {
 			patch, needsRepair := h.repairedDefaultReportAgentRequest(existing, owner)
 			if needsRepair {
@@ -956,10 +952,6 @@ func (h *ManagedAgentHandler) CreateDefaultReportAgent(w http.ResponseWriter, r 
 	}
 
 	if _, _, _, err := h.ensureUserReportSkill(r.Context(), client); err != nil {
-		writeManagedAgentError(w, err)
-		return
-	}
-	if _, _, _, err := h.ensureUserReportMCPEntry(r.Context(), client); err != nil {
 		writeManagedAgentError(w, err)
 		return
 	}
@@ -994,11 +986,15 @@ func managedAgentFromUpsertRequest(req model.UpsertManagedAgentRequest) model.Ma
 		CredentialSlots:     req.CredentialSlots,
 		DefaultBindings:     req.DefaultBindings,
 		Skills:              req.Skills,
+		MCPServers:          req.MCPServers,
 		MCPBindings:         req.MCPBindings,
 	}
 }
 
 func (h *ManagedAgentHandler) reportMCPURL() string {
+	if h.defaults.ReportMCPURL != "" {
+		return h.defaults.ReportMCPURL
+	}
 	return h.defaults.AIDAPublicBaseURL + "/api/v1/mcp/reports"
 }
 
@@ -1013,6 +1009,7 @@ func (h *ManagedAgentHandler) reportTemplateVars() map[string]string {
 		"skill_version":          h.defaults.ReportSkillVersion,
 		"skill_name":             h.defaults.ReportSkillName,
 		"agent_name":             h.defaults.ReportAgentName,
+		"aida_deployment":        h.reportDeploymentValue(),
 	}
 }
 
@@ -1065,6 +1062,16 @@ func (h *ManagedAgentHandler) defaultReportMCPBinding(owner string) model.Manage
 	}
 }
 
+func (h *ManagedAgentHandler) defaultReportMCPServer() model.ManagedMCPServer {
+	return model.ManagedMCPServer{
+		Name:           h.defaults.ReportMCPSlug,
+		URL:            h.reportMCPURL(),
+		CredentialSlot: h.defaults.ReportMCPCredentialSlot,
+		AuthHeader:     "Authorization",
+		AuthScheme:     "Bearer",
+	}
+}
+
 func (h *ManagedAgentHandler) defaultReportAgentRequest(owner string) model.UpsertManagedAgentRequest {
 	return model.UpsertManagedAgentRequest{
 		Name:                h.defaults.ReportAgentName,
@@ -1078,7 +1085,8 @@ func (h *ManagedAgentHandler) defaultReportAgentRequest(owner string) model.Upse
 			Required: true,
 		}},
 		Skills:      []model.ManagedSkillRef{{Owner: owner, Slug: h.defaults.ReportSkillSlug, Version: h.defaults.ReportSkillVersion}},
-		MCPBindings: []model.ManagedMCPBinding{h.defaultReportMCPBinding(owner)},
+		MCPServers:  []model.ManagedMCPServer{h.defaultReportMCPServer()},
+		MCPBindings: []model.ManagedMCPBinding{},
 	}
 }
 
@@ -1088,6 +1096,7 @@ func defaultReportAgentInstructions(credentialSlot string) string {
 		defaultReportAgentMarker,
 		defaultReportAgentTypesPrefix + strings.Join(supportedReportTypes, ","),
 		defaultManagedAgentMarker,
+		"AIDA_REPORT_DEPLOYMENT:{{aida_deployment}}",
 		"你是 Aida 报告生成 Agent。根据 report_type 生成个人、小组或部门的日报/周报。",
 		"运行参数由 Aida 后端注入，包含 run_id、report_type、period、target。不要要求用户提供 session_ids、urls、token 或 credential。",
 		"Aida Report MCP 已通过 " + credentialSlot + " 凭据槽配置当前用户 Authorization。调用已绑定的 MCP tools，不要手工拼接管理员 token。",
@@ -1105,7 +1114,6 @@ func defaultReportAgentStartPromptTemplate(credentialSlot string) string {
 		"period={{ period_json }}",
 		"target={{ target_json }}",
 		"run_id={{ run_id }}",
-		"mcp_url={{ mcp_url }}",
 		"当前用户凭据已通过 " + credentialSlot + " credential slot 注入；优先调用已绑定的 Aida Report MCP tools 获取上下文并回写生成结果，不要手工拼接 Authorization。",
 	}, "\n")
 }
@@ -1116,7 +1124,7 @@ func (h *ManagedAgentHandler) selectDefaultReportAgent(agents []model.ManagedAge
 		if agent.Archived {
 			continue
 		}
-		if isMarkedDefaultReportAgent(agent) {
+		if h.isCurrentDeploymentDefaultReportAgent(agent) {
 			marked = append(marked, agent)
 		}
 	}
@@ -1187,7 +1195,7 @@ func (h *ManagedAgentHandler) reportAgentScore(agent model.ManagedAgent) int {
 	if strings.TrimSpace(agent.DefaultModelID) != "" {
 		score += 10
 	}
-	if h.hasReportMCPBinding(agent.MCPBindings) {
+	if h.hasReportMCPBinding(agent.MCPBindings) || h.hasReportMCPServer(agent.MCPServers) {
 		score += 10
 	}
 	if strings.TrimSpace(agent.Instructions) != "" {
@@ -1207,6 +1215,30 @@ func isMarkedDefaultReportAgent(agent model.ManagedAgent) bool {
 	return strings.Contains(text, defaultReportAgentMarker) && strings.Contains(text, defaultManagedAgentMarker)
 }
 
+func (h *ManagedAgentHandler) reportDeploymentValue() string {
+	value := strings.TrimSpace(h.defaults.AIDAPublicBaseURL)
+	if value == "" {
+		value = strings.TrimSpace(h.reportMCPURL())
+	}
+	return value
+}
+
+func (h *ManagedAgentHandler) reportDeploymentMarker() string {
+	return "AIDA_REPORT_DEPLOYMENT:" + h.reportDeploymentValue()
+}
+
+func (h *ManagedAgentHandler) isCurrentDeploymentDefaultReportAgent(agent model.ManagedAgent) bool {
+	if !isMarkedDefaultReportAgent(agent) {
+		return false
+	}
+	text := strings.Join([]string{agent.Description, agent.Instructions, agent.StartPromptTemplate}, "\n")
+	marker := h.reportDeploymentMarker()
+	if strings.Contains(text, marker) {
+		return true
+	}
+	return !strings.Contains(text, "AIDA_REPORT_DEPLOYMENT:")
+}
+
 func (h *ManagedAgentHandler) repairedDefaultReportAgentRequest(agent model.ManagedAgent, owner string) (model.UpsertManagedAgentRequest, bool) {
 	req := model.UpsertManagedAgentRequest{
 		AgentID:             agent.AgentID,
@@ -1219,6 +1251,7 @@ func (h *ManagedAgentHandler) repairedDefaultReportAgentRequest(agent model.Mana
 		CredentialSlots:     agent.CredentialSlots,
 		DefaultBindings:     agent.DefaultBindings,
 		Skills:              agent.Skills,
+		MCPServers:          agent.MCPServers,
 		MCPBindings:         agent.MCPBindings,
 	}
 	changed := false
@@ -1245,14 +1278,16 @@ func (h *ManagedAgentHandler) repairedDefaultReportAgentRequest(agent model.Mana
 		})
 		changed = true
 	}
-	if !h.hasReportMCPBinding(req.MCPBindings) {
-		req.MCPBindings = append(req.MCPBindings, h.defaultReportMCPBinding(owner))
-		changed = true
-	} else if ensureReportMCPBindingCredentialSlot(req.MCPBindings, h.defaults.ReportMCPSlug, h.defaults.ReportMCPVersion, h.defaults.ReportMCPCredentialSlot) {
+	if servers, ok := h.ensureCurrentReportMCPServer(req.MCPServers); ok {
+		req.MCPServers = servers
 		changed = true
 	}
-	if !h.hasReportSkillRef(req.Skills) {
-		req.Skills = append(req.Skills, model.ManagedSkillRef{Owner: owner, Slug: h.defaults.ReportSkillSlug, Version: h.defaults.ReportSkillVersion})
+	if bindings, ok := h.removeReportMCPBindings(req.MCPBindings); ok {
+		req.MCPBindings = bindings
+		changed = true
+	}
+	if skills, ok := h.ensureCurrentReportSkillRef(req.Skills, owner); ok {
+		req.Skills = skills
 		changed = true
 	}
 	instructions := strings.TrimSpace(req.Instructions)
@@ -1282,6 +1317,7 @@ func (h *ManagedAgentHandler) repairedReportAgentDependencyRequest(agent model.M
 		CredentialSlots:     agent.CredentialSlots,
 		DefaultBindings:     agent.DefaultBindings,
 		Skills:              agent.Skills,
+		MCPServers:          agent.MCPServers,
 		MCPBindings:         agent.MCPBindings,
 	}
 	changed := false
@@ -1292,14 +1328,16 @@ func (h *ManagedAgentHandler) repairedReportAgentDependencyRequest(agent model.M
 		})
 		changed = true
 	}
-	if !h.hasReportMCPBinding(req.MCPBindings) {
-		req.MCPBindings = append(req.MCPBindings, h.defaultReportMCPBinding(owner))
-		changed = true
-	} else if ensureReportMCPBindingCredentialSlot(req.MCPBindings, h.defaults.ReportMCPSlug, h.defaults.ReportMCPVersion, h.defaults.ReportMCPCredentialSlot) {
+	if servers, ok := h.ensureCurrentReportMCPServer(req.MCPServers); ok {
+		req.MCPServers = servers
 		changed = true
 	}
-	if !h.hasReportSkillRef(req.Skills) {
-		req.Skills = append(req.Skills, model.ManagedSkillRef{Owner: owner, Slug: h.defaults.ReportSkillSlug, Version: h.defaults.ReportSkillVersion})
+	if bindings, ok := h.removeReportMCPBindings(req.MCPBindings); ok {
+		req.MCPBindings = bindings
+		changed = true
+	}
+	if skills, ok := h.ensureCurrentReportSkillRef(req.Skills, owner); ok {
+		req.Skills = skills
 		changed = true
 	}
 	return req, changed
@@ -1338,6 +1376,113 @@ func ensureReportMCPBindingCredentialSlot(bindings []model.ManagedMCPBinding, sl
 	return changed
 }
 
+func (h *ManagedAgentHandler) ensureCurrentReportMCPBinding(bindings []model.ManagedMCPBinding, owner string) ([]model.ManagedMCPBinding, bool) {
+	changed := false
+	foundCurrent := false
+	out := make([]model.ManagedMCPBinding, 0, len(bindings)+1)
+	for _, binding := range bindings {
+		if binding.Slug != h.defaults.ReportMCPSlug {
+			out = append(out, binding)
+			continue
+		}
+		if binding.Version != h.defaults.ReportMCPVersion {
+			changed = true
+			continue
+		}
+		if foundCurrent {
+			changed = true
+			continue
+		}
+		if binding.CredentialSlot != h.defaults.ReportMCPCredentialSlot {
+			binding.CredentialSlot = h.defaults.ReportMCPCredentialSlot
+			changed = true
+		}
+		if strings.TrimSpace(binding.Owner) == "" && strings.TrimSpace(owner) != "" {
+			binding.Owner = owner
+			changed = true
+		}
+		foundCurrent = true
+		out = append(out, binding)
+	}
+	if !foundCurrent {
+		out = append(out, h.defaultReportMCPBinding(owner))
+		changed = true
+	}
+	return out, changed
+}
+
+func (h *ManagedAgentHandler) ensureCurrentReportMCPServer(servers []model.ManagedMCPServer) ([]model.ManagedMCPServer, bool) {
+	changed := false
+	found := false
+	expected := h.defaultReportMCPServer()
+	out := make([]model.ManagedMCPServer, 0, len(servers)+1)
+	for _, server := range servers {
+		if server.Name != h.defaults.ReportMCPSlug {
+			out = append(out, server)
+			continue
+		}
+		if found {
+			changed = true
+			continue
+		}
+		if server.URL != expected.URL || server.CredentialSlot != expected.CredentialSlot || server.AuthHeader != expected.AuthHeader || server.AuthScheme != expected.AuthScheme {
+			server = expected
+			changed = true
+		}
+		found = true
+		out = append(out, server)
+	}
+	if !found {
+		out = append(out, expected)
+		changed = true
+	}
+	return out, changed
+}
+
+func (h *ManagedAgentHandler) removeReportMCPBindings(bindings []model.ManagedMCPBinding) ([]model.ManagedMCPBinding, bool) {
+	changed := false
+	out := make([]model.ManagedMCPBinding, 0, len(bindings))
+	for _, binding := range bindings {
+		if binding.Slug == h.defaults.ReportMCPSlug {
+			changed = true
+			continue
+		}
+		out = append(out, binding)
+	}
+	return out, changed
+}
+
+func (h *ManagedAgentHandler) ensureCurrentReportSkillRef(skills []model.ManagedSkillRef, owner string) ([]model.ManagedSkillRef, bool) {
+	changed := false
+	foundCurrent := false
+	out := make([]model.ManagedSkillRef, 0, len(skills)+1)
+	for _, skill := range skills {
+		if skill.Slug != h.defaults.ReportSkillSlug {
+			out = append(out, skill)
+			continue
+		}
+		if skill.Version != h.defaults.ReportSkillVersion {
+			changed = true
+			continue
+		}
+		if foundCurrent {
+			changed = true
+			continue
+		}
+		if strings.TrimSpace(skill.Owner) == "" && strings.TrimSpace(owner) != "" {
+			skill.Owner = owner
+			changed = true
+		}
+		foundCurrent = true
+		out = append(out, skill)
+	}
+	if !foundCurrent {
+		out = append(out, model.ManagedSkillRef{Owner: owner, Slug: h.defaults.ReportSkillSlug, Version: h.defaults.ReportSkillVersion})
+		changed = true
+	}
+	return out, changed
+}
+
 func containsDefaultMarkers(text string) bool {
 	return strings.Contains(text, defaultReportAgentMarker) && strings.Contains(text, defaultManagedAgentMarker)
 }
@@ -1355,8 +1500,22 @@ func (h *ManagedAgentHandler) hasReportMCPBinding(bindings []model.ManagedMCPBin
 	return false
 }
 
-func (h *ManagedAgentHandler) hasRunnableReportMCPBinding(bindings []model.ManagedMCPBinding) bool {
-	for _, binding := range bindings {
+func (h *ManagedAgentHandler) hasReportMCPServer(servers []model.ManagedMCPServer) bool {
+	for _, server := range servers {
+		if server.Name == h.defaults.ReportMCPSlug {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *ManagedAgentHandler) hasRunnableReportMCP(agent model.ManagedAgent) bool {
+	for _, server := range agent.MCPServers {
+		if server.Name == h.defaults.ReportMCPSlug && server.CredentialSlot == h.defaults.ReportMCPCredentialSlot {
+			return true
+		}
+	}
+	for _, binding := range agent.MCPBindings {
 		if binding.Slug == h.defaults.ReportMCPSlug && binding.Version == h.defaults.ReportMCPVersion && binding.CredentialSlot == h.defaults.ReportMCPCredentialSlot {
 			return true
 		}
@@ -1472,6 +1631,7 @@ func reportPeriodInputRef(reportType, date, weekStart, weekEnd string) map[strin
 }
 
 func reportAgentStartPromptValues(runID, reportType, date, weekStart, weekEnd string, target reportTarget, mcpURL string) map[string]string {
+	_ = mcpURL
 	periodJSON, _ := json.Marshal(reportPeriodInputRef(reportType, date, weekStart, weekEnd))
 	targetJSON, _ := json.Marshal(target)
 	values := map[string]string{
@@ -1479,7 +1639,6 @@ func reportAgentStartPromptValues(runID, reportType, date, weekStart, weekEnd st
 		"report_type": reportType,
 		"period_json": string(periodJSON),
 		"target_json": string(targetJSON),
-		"mcp_url":     mcpURL,
 	}
 	if date != "" {
 		values["report_date"] = date
@@ -1531,7 +1690,6 @@ func buildReportRunMessage(startPromptValues map[string]string, message string, 
 		"period=" + strings.TrimSpace(startPromptValues["period_json"]),
 		"target=" + strings.TrimSpace(startPromptValues["target_json"]),
 		"run_id=" + strings.TrimSpace(startPromptValues["run_id"]),
-		"mcp_url=" + strings.TrimSpace(startPromptValues["mcp_url"]),
 		"当前用户凭据已通过 " + strings.TrimSpace(credentialSlot) + " credential slot 注入；优先调用已绑定的 Aida Report MCP tools 获取上下文并回写生成结果，不要手工拼接 Authorization。",
 	}
 	message = strings.TrimSpace(message)
@@ -1662,9 +1820,18 @@ func (h *ManagedAgentHandler) agentRequiresCredentialedSession(agent model.Manag
 	return false
 }
 
-func (h *ManagedAgentHandler) reportMCPCredentialSlots(bindings []model.ManagedMCPBinding) []string {
+func (h *ManagedAgentHandler) reportMCPCredentialSlots(agent model.ManagedAgent) []string {
 	slots := []string{}
-	for _, binding := range bindings {
+	for _, server := range agent.MCPServers {
+		if server.Name != h.defaults.ReportMCPSlug {
+			continue
+		}
+		slot := strings.TrimSpace(server.CredentialSlot)
+		if slot != "" && !containsString(slots, slot) {
+			slots = append(slots, slot)
+		}
+	}
+	for _, binding := range agent.MCPBindings {
 		if binding.Slug != h.defaults.ReportMCPSlug || binding.Version != h.defaults.ReportMCPVersion {
 			continue
 		}
@@ -1702,7 +1869,7 @@ func (h *ManagedAgentHandler) missingRequiredCredentialSlots(agent model.Managed
 
 func (h *ManagedAgentHandler) startCredentialedGenericAgentSession(w http.ResponseWriter, r *http.Request, u *model.User, client *service.ManagedAgentClient, agent model.ManagedAgent, req model.ManagedAgentManualRunRequest, params map[string]string) {
 	reportSlots := map[string]struct{}{}
-	for _, slot := range h.reportMCPCredentialSlots(agent.MCPBindings) {
+	for _, slot := range h.reportMCPCredentialSlots(agent) {
 		reportSlots[slot] = struct{}{}
 	}
 	runtimeOverrides := cleanCredentialOverrides(req.CredentialOverrides)
@@ -1818,6 +1985,7 @@ func (h *ManagedAgentHandler) repairedReportMCPOnlyCredentialRequest(agent model
 		CredentialSlots:     agent.CredentialSlots,
 		DefaultBindings:     agent.DefaultBindings,
 		Skills:              agent.Skills,
+		MCPServers:          agent.MCPServers,
 		MCPBindings:         agent.MCPBindings,
 	}
 	if !h.hasReportMCPBinding(req.MCPBindings) {
@@ -2007,10 +2175,6 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 		writeManagedAgentError(w, err)
 		return
 	}
-	if _, _, _, err := h.ensureUserReportMCPEntry(r.Context(), client); err != nil {
-		writeManagedAgentError(w, err)
-		return
-	}
 	if h.defaults.ReportAssetRepair {
 		patch, needsRepair := h.repairedReportAgentDependencyRequest(*agent, currentManagedOwner(u))
 		if needsRepair {
@@ -2020,15 +2184,16 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 			}
 			agent.CredentialSlots = patch.CredentialSlots
 			agent.Skills = patch.Skills
+			agent.MCPServers = patch.MCPServers
 			agent.MCPBindings = patch.MCPBindings
 		}
 	}
-	if !h.hasRunnableReportMCPBinding(agent.MCPBindings) {
+	if !h.hasRunnableReportMCP(*agent) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"code": "REPORT_MCP_REQUIRED", "error": "Report Agent must bind Aida Report MCP"})
 		return
 	}
 	reportSlots := map[string]struct{}{}
-	for _, slot := range h.reportMCPCredentialSlots(agent.MCPBindings) {
+	for _, slot := range h.reportMCPCredentialSlots(*agent) {
 		reportSlots[slot] = struct{}{}
 	}
 	if len(reportSlots) == 0 {
@@ -3344,7 +3509,7 @@ func (h *ManagedAgentHandler) executeManagedAgentScheduleRun(ctx context.Context
 	}
 	if agent != nil && h.agentRequiresCredentialedSession(*agent) {
 		reportSlots := map[string]struct{}{}
-		for _, slot := range h.reportMCPCredentialSlots(agent.MCPBindings) {
+		for _, slot := range h.reportMCPCredentialSlots(*agent) {
 			reportSlots[slot] = struct{}{}
 		}
 		missing := h.missingRequiredCredentialSlots(*agent, reportSlots, nil)

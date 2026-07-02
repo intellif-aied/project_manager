@@ -292,7 +292,7 @@ func (h *TaskHandler) Update(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "insufficient permissions to update task"})
 		return
 	}
-	if req.AssigneeID != nil {
+	if req.AssigneeID != nil && taskAssigneeChanged(task.AssigneeID, req.AssigneeID) {
 		reassignAllowed, message, err := h.canReassignTask(u, req.AssigneeID)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -377,6 +377,16 @@ func (h *TaskHandler) Update(w http.ResponseWriter, r *http.Request) {
 	h.updateRequirementProgress(id)
 
 	h.Get(w, r)
+}
+
+func taskAssigneeChanged(current sql.NullString, next *string) bool {
+	if next == nil {
+		return false
+	}
+	if !current.Valid {
+		return *next != ""
+	}
+	return current.String != *next
 }
 
 func (h *TaskHandler) UpdateStatus(w http.ResponseWriter, r *http.Request) {

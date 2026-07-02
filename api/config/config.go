@@ -31,6 +31,7 @@ type Config struct {
 	ManagedAgentReportMCPVersion        string
 	ManagedAgentReportMCPName           string
 	ManagedAgentReportMCPDescription    string
+	ManagedAgentReportMCPURL            string
 	ManagedAgentReportCredentialSlot    string
 	ManagedAgentReportAgentName         string
 	ManagedAgentReportAgentDescription  string
@@ -75,6 +76,7 @@ func Load() *Config {
 		ManagedAgentReportMCPVersion:        getEnv("MANAGED_AGENT_REPORT_MCP_VERSION", "report-v1"),
 		ManagedAgentReportMCPName:           getEnv("MANAGED_AGENT_REPORT_MCP_NAME", "Aida Report MCP"),
 		ManagedAgentReportMCPDescription:    getEnv("MANAGED_AGENT_REPORT_MCP_DESCRIPTION", ""),
+		ManagedAgentReportMCPURL:            getEnv("MANAGED_AGENT_REPORT_MCP_URL", ""),
 		ManagedAgentReportCredentialSlot:    getEnv("MANAGED_AGENT_REPORT_CREDENTIAL_SLOT", "AIDA_REPORT_MCP_AUTH"),
 		ManagedAgentReportAgentName:         getEnv("MANAGED_AGENT_REPORT_AGENT_NAME", "报告生成 Agent"),
 		ManagedAgentReportAgentDescription:  getEnv("MANAGED_AGENT_REPORT_AGENT_DESCRIPTION", "默认报告生成 Agent。"),

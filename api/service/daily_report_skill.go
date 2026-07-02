@@ -85,25 +85,11 @@ Use this skill when generating Aida reports. The run input must include report_t
 
 ## Required MCP
 
-The Aida Report MCP server is bound to this Agent as:
-
-- slug: %s
-- version: %s
-- url: %s
+The Aida Report MCP server is already bound to this Agent by Aida as server name %s.
 
 The MCP server requires the current Aida user token in the Authorization header. The token is supplied by Aida through the %s credential slot at run time. Never ask the user for a token, never print credentials, and never hand-build an Authorization header.
 
-Prefer calling the bound MCP tools by tool name. Do not manually fetch mcp_url unless the runtime only exposes raw MCP HTTP. If raw MCP HTTP is required, use JSON-RPC tools/call:
-
-    {
-      "jsonrpc": "2.0",
-      "id": 1,
-      "method": "tools/call",
-      "params": {
-        "name": "get_sessions",
-        "arguments": {}
-      }
-    }
+Call the bound MCP tools by tool name. Do not manually fetch MCP URLs or construct raw HTTP requests.
 
 Tool results use the MCP text-content shape:
 
@@ -169,7 +155,7 @@ Do not send period to read-list tools that require date_range or week_range. Do 
 - If there is insufficient context, say so in the Markdown instead of filling gaps.
 - Missing daily/weekly reports are facts; include them only when relevant to the selected report type.
 - Never expose run_id, MCP URLs, token, credential slots, or internal configuration in the user-facing report.
-`, formatReportTypeList(data.SupportedReportTypes), data.MCPSlug, data.MCPVersion, data.MCPURL, data.CredentialSlot)
+`, formatReportTypeList(data.SupportedReportTypes), data.MCPSlug, data.CredentialSlot)
 }
 
 func formatReportTypeList(reportTypes []string) string {

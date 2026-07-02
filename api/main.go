@@ -61,6 +61,7 @@ func main() {
 		ReportMCPVersion:               cfg.ManagedAgentReportMCPVersion,
 		ReportMCPName:                  cfg.ManagedAgentReportMCPName,
 		ReportMCPDescription:           cfg.ManagedAgentReportMCPDescription,
+		ReportMCPURL:                   cfg.ManagedAgentReportMCPURL,
 		ReportMCPCredentialSlot:        cfg.ManagedAgentReportCredentialSlot,
 		ReportAgentName:                cfg.ManagedAgentReportAgentName,
 		ReportAgentDescription:         cfg.ManagedAgentReportAgentDescription,

@@ -94,10 +94,22 @@ func TestBuildReportRunMessageIncludesSystemParams(t *testing.T) {
 		`period={"date":"2026-07-01"}`,
 		`target={"type":"self","user_id":"305"}`,
 		"run_id=run-report",
-		"mcp_url=https://aida.example.com/api/v1/mcp/reports",
 		reportMCPCredentialSlot,
 		"请重点关注风险",
 	)
+	if strings.Contains(message, "mcp_url=") {
+		t.Fatalf("message should not expose mcp_url: %q", message)
+	}
+}
+
+func TestReportMCPURLUsesExplicitOverride(t *testing.T) {
+	h := NewManagedAgentHandlerWithDefaults(nil, nil, ManagedAgentDefaults{
+		AIDAPublicBaseURL: "https://public-aida.example.com",
+		ReportMCPURL:      "http://10.0.0.8/api/v1/mcp/reports/",
+	})
+	if got := h.reportMCPURL(); got != "http://10.0.0.8/api/v1/mcp/reports" {
+		t.Fatalf("reportMCPURL = %q", got)
+	}
 }
 
 func TestManagedAgentProxyReturnsNotConfiguredCode(t *testing.T) {
@@ -1110,7 +1122,6 @@ func TestCreateDefaultReportAgentCreatesWhenOnlyOrdinaryAgentExists(t *testing.T
 	defer db.Close()
 
 	var createdSkill service.CreateManagedSkillRequest
-	var createdMCP model.CreateManagedMCPEntryRequest
 	var createdAgent model.UpsertManagedAgentRequest
 	ordinaryAgent := model.ManagedAgent{AgentID: "agent-generic", Name: "通用 Agent", Engine: "codex"}
 	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1131,13 +1142,6 @@ func TestCreateDefaultReportAgentCreatesWhenOnlyOrdinaryAgentExists(t *testing.T
 				SkillMD:     r.FormValue("skill_md"),
 			}
 			writeJSON(w, http.StatusOK, service.CreateManagedSkillResponse{SkillID: "skill-1", Owner: "t05", Slug: createdSkill.Slug, Version: createdSkill.Version})
-		case r.Method == http.MethodGet && r.URL.Path == "/api/mcp/list":
-			writeJSON(w, http.StatusOK, model.ListManagedMCPEntriesResponse{})
-		case r.Method == http.MethodPost && r.URL.Path == "/api/mcp":
-			if err := json.NewDecoder(r.Body).Decode(&createdMCP); err != nil {
-				t.Fatal(err)
-			}
-			writeJSON(w, http.StatusOK, model.ManagedMCPEntry{EntryID: "mcp-1", Slug: createdMCP.Slug, Version: createdMCP.Version, URL: createdMCP.URL})
 		case r.Method == http.MethodPost && r.URL.Path == "/api/my/agents":
 			if err := json.NewDecoder(r.Body).Decode(&createdAgent); err != nil {
 				t.Fatal(err)
@@ -1170,9 +1174,6 @@ func TestCreateDefaultReportAgentCreatesWhenOnlyOrdinaryAgentExists(t *testing.T
 	if createdSkill.Slug != service.ReportSkillSlug || createdSkill.Version != service.ReportSkillVersion || !strings.Contains(createdSkill.SkillMD, "get_sessions") {
 		t.Fatalf("created skill = %#v", createdSkill)
 	}
-	if createdMCP.Slug != "aida-report-mcp" || createdMCP.Version != "report-v1" || createdMCP.CredentialEnv != reportMCPCredentialSlot || strings.Contains(fmt.Sprint(createdMCP), "user-token") {
-		t.Fatalf("created mcp = %#v", createdMCP)
-	}
 	if createdAgent.AgentID == "" || createdAgent.Name != defaultReportAgentName {
 		t.Fatalf("created agent request=%#v", createdAgent)
 	}
@@ -1191,11 +1192,14 @@ func TestCreateDefaultReportAgentCreatesWhenOnlyOrdinaryAgentExists(t *testing.T
 	if !hasSkillRef(createdAgent.Skills, service.ReportSkillSlug, service.ReportSkillVersion) {
 		t.Fatalf("skills = %#v", createdAgent.Skills)
 	}
-	if !h.hasReportMCPBinding(createdAgent.MCPBindings) {
-		t.Fatalf("mcp bindings = %#v", createdAgent.MCPBindings)
+	if len(createdAgent.MCPBindings) != 0 {
+		t.Fatalf("report mcp should be inline, bindings = %#v", createdAgent.MCPBindings)
 	}
-	if !hasCredentialSlot(createdAgent.CredentialSlots, reportMCPCredentialSlot) || createdAgent.MCPBindings[0].CredentialSlot != reportMCPCredentialSlot {
-		t.Fatalf("credential wiring slots=%#v bindings=%#v", createdAgent.CredentialSlots, createdAgent.MCPBindings)
+	if len(createdAgent.MCPServers) != 1 || createdAgent.MCPServers[0].Name != service.ReportMCPSlug || createdAgent.MCPServers[0].CredentialSlot != reportMCPCredentialSlot || strings.Contains(fmt.Sprint(createdAgent.MCPServers), "user-token") {
+		t.Fatalf("inline mcp wiring slots=%#v servers=%#v", createdAgent.CredentialSlots, createdAgent.MCPServers)
+	}
+	if !hasCredentialSlot(createdAgent.CredentialSlots, reportMCPCredentialSlot) {
+		t.Fatalf("credential slots=%#v", createdAgent.CredentialSlots)
 	}
 	var got model.ManagedAgent
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
@@ -1209,8 +1213,7 @@ func TestCreateDefaultReportAgentCreatesWhenOnlyOrdinaryAgentExists(t *testing.T
 	}
 }
 
-func TestEnsureReportMCPEntryKeepsExistingDifferentURL(t *testing.T) {
-	createCalled := false
+func TestEnsureReportMCPEntryRejectsExistingDifferentURL(t *testing.T) {
 	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/mcp/list":
@@ -1220,8 +1223,7 @@ func TestEnsureReportMCPEntryKeepsExistingDifferentURL(t *testing.T) {
 				URL:     "https://old-aida.example.com/api/v1/mcp/reports",
 			}}})
 		case r.Method == http.MethodPost && r.URL.Path == "/api/mcp":
-			createCalled = true
-			t.Fatalf("should not create or overwrite mismatched mcp entry")
+			t.Fatalf("should not create over mismatched immutable mcp entry")
 		default:
 			t.Fatalf("unexpected platform request: %s %s", r.Method, r.URL.Path)
 		}
@@ -1230,11 +1232,50 @@ func TestEnsureReportMCPEntryKeepsExistingDifferentURL(t *testing.T) {
 
 	h := NewManagedAgentHandlerWithDefaults(nil, service.NewManagedAgentClient(platform.URL, "platform-token"), testManagedAgentDefaults())
 	err := h.ensureReportMCPEntry(httptest.NewRequest(http.MethodPost, "/", nil), h.client)
-	if err != nil {
-		t.Fatalf("expected existing user MCP to be kept without overwrite, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "bump MANAGED_AGENT_REPORT_MCP_VERSION") {
+		t.Fatalf("expected explicit mcp version error, got %v", err)
 	}
-	if createCalled {
-		t.Fatal("should not create or overwrite existing mcp entry")
+}
+
+func TestRepairedReportAgentDependencyMovesReportMCPToInlineServer(t *testing.T) {
+	h := NewManagedAgentHandlerWithDefaults(nil, nil, ManagedAgentDefaults{
+		ReportMCPSlug:           service.ReportMCPSlug,
+		ReportMCPVersion:        "report-prod-v1",
+		ReportMCPCredentialSlot: reportMCPCredentialSlot,
+		ReportSkillSlug:         service.ReportSkillSlug,
+		ReportSkillVersion:      "1.0.1-prod",
+	})
+	agent := model.ManagedAgent{
+		AgentID: "agent-report",
+		MCPBindings: []model.ManagedMCPBinding{
+			{Owner: "t03", Slug: service.ReportMCPSlug, Version: service.ReportMCPVersion, CredentialSlot: reportMCPCredentialSlot},
+			{Owner: "t03", Slug: "custom-mcp", Version: "1.0.0", CredentialSlot: "custom-slot"},
+		},
+		Skills: []model.ManagedSkillRef{
+			{Owner: "t03", Slug: service.ReportSkillSlug, Version: service.ReportSkillVersion},
+			{Owner: "t03", Slug: "custom-skill", Version: "1.0.0"},
+		},
+	}
+
+	req, changed := h.repairedReportAgentDependencyRequest(agent, "t03")
+	if !changed {
+		t.Fatal("expected stale system assets to be replaced")
+	}
+	if len(req.MCPBindings) != 1 || req.MCPBindings[0].Slug != "custom-mcp" {
+		t.Fatalf("custom binding should be preserved and report binding removed, got %#v", req.MCPBindings)
+	}
+	if len(req.MCPServers) != 1 || req.MCPServers[0].Name != service.ReportMCPSlug || req.MCPServers[0].CredentialSlot != reportMCPCredentialSlot {
+		t.Fatalf("current report mcp server = %#v", req.MCPServers)
+	}
+	if len(req.Skills) != 2 {
+		t.Fatalf("skills = %#v", req.Skills)
+	}
+	if req.Skills[0].Slug != "custom-skill" {
+		t.Fatalf("custom skill should be preserved, got %#v", req.Skills)
+	}
+	gotSkill := req.Skills[1]
+	if gotSkill.Slug != service.ReportSkillSlug || gotSkill.Version != "1.0.1-prod" || gotSkill.Owner != "t03" {
+		t.Fatalf("current report skill = %#v", gotSkill)
 	}
 }
 
@@ -1320,7 +1361,7 @@ func TestReportAgentRepairRequestDoesNotOverwriteCustomInstructions(t *testing.T
 	}
 	h := NewManagedAgentHandlerWithDefaults(nil, nil, testManagedAgentDefaults())
 	repairReq, changed := h.repairedDefaultReportAgentRequest(existing, "t05")
-	if !changed || repairReq.DefaultModelID != "MiniMax-M2.5" || !h.hasReportMCPBinding(repairReq.MCPBindings) || !hasCredentialSlot(repairReq.CredentialSlots, reportMCPCredentialSlot) {
+	if !changed || repairReq.DefaultModelID != "MiniMax-M2.5" || !h.hasReportMCPServer(repairReq.MCPServers) || !hasCredentialSlot(repairReq.CredentialSlots, reportMCPCredentialSlot) {
 		t.Fatalf("repair request = %#v changed=%v", repairReq, changed)
 	}
 	if repairReq.Engine != "codex" {
@@ -1483,23 +1524,31 @@ func TestStartReportAgentRunUsesSessionCredentialOverrides(t *testing.T) {
 	if createdSession.CredentialOverrides["mcp-custom"] != "cred-custom" {
 		t.Fatalf("custom credential overrides = %#v", createdSession.CredentialOverrides)
 	}
-	if !hasCredentialSlot(updatedAgent.CredentialSlots, reportMCPCredentialSlot) || updatedAgent.MCPBindings[0].CredentialSlot != reportMCPCredentialSlot {
+	if !hasCredentialSlot(updatedAgent.CredentialSlots, reportMCPCredentialSlot) || len(updatedAgent.MCPServers) != 1 || updatedAgent.MCPServers[0].CredentialSlot != reportMCPCredentialSlot {
 		t.Fatalf("report dependency repair = %#v", updatedAgent)
+	}
+	if len(updatedAgent.MCPBindings) != 1 || updatedAgent.MCPBindings[0].Slug != "custom-mcp" {
+		t.Fatalf("custom mcp binding should be preserved, got %#v", updatedAgent.MCPBindings)
 	}
 	if _, ok := createdSession.StartPromptValues["mcp_"+"authorization"]; ok {
 		t.Fatalf("start prompt values should not contain authorization field: %#v", createdSession.StartPromptValues)
 	}
-	if createdSession.StartPromptValues["run_id"] != "run-report" || createdSession.StartPromptValues["mcp_url"] != "https://aida.example.com/api/v1/mcp/reports" {
+	if createdSession.StartPromptValues["run_id"] != "run-report" {
 		t.Fatalf("start prompt values = %#v", createdSession.StartPromptValues)
+	}
+	if _, ok := createdSession.StartPromptValues["mcp_url"]; ok {
+		t.Fatalf("start prompt values should not expose mcp_url: %#v", createdSession.StartPromptValues)
 	}
 	requireContainsAll(t, createdSession.Message,
 		"report_type=personal_daily",
 		"run_id=run-report",
 		"period=",
 		"target=",
-		"mcp_url=https://aida.example.com/api/v1/mcp/reports",
 		reportMCPCredentialSlot,
 	)
+	if strings.Contains(createdSession.Message, "mcp_url=") {
+		t.Fatalf("session message should not expose mcp_url: %q", createdSession.Message)
+	}
 	if strings.Contains(createdSession.Message, "user-token") || strings.Contains(createdSession.Message, "cred-1") {
 		t.Fatalf("session message leaked credential material: %q", createdSession.Message)
 	}
@@ -1525,8 +1574,8 @@ func TestStartReportAgentRunFallsBackToMessageWhenTemplateMissing(t *testing.T) 
 			Name:     reportMCPCredentialSlot,
 			Required: true,
 		}},
-		Skills:      []model.ManagedSkillRef{{Owner: "t03", Slug: service.ReportSkillSlug, Version: service.ReportSkillVersion}},
-		MCPBindings: []model.ManagedMCPBinding{{Owner: "t03", Slug: "aida-report-mcp", Version: "report-v1", CredentialSlot: reportMCPCredentialSlot}},
+		Skills:     []model.ManagedSkillRef{{Owner: "t03", Slug: service.ReportSkillSlug, Version: service.ReportSkillVersion}},
+		MCPServers: []model.ManagedMCPServer{{Name: service.ReportMCPSlug, URL: "https://aida.example.com/api/v1/mcp/reports", CredentialSlot: reportMCPCredentialSlot, AuthHeader: "Authorization", AuthScheme: "Bearer"}},
 	}
 	var createdSession service.CreateManagedSessionRequest
 	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1582,8 +1631,8 @@ func TestStartReportAgentRunFallsBackToMessageWhenTemplateMissing(t *testing.T) 
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("run-report"))
 	mock.ExpectExec("UPDATE ai_runs SET external_session_id").
 		WithArgs("session-1", "MiniMax-M2.5", "running", jsonStringArg{
-			require: []string{"personal_daily", "2026-07-01", "请生成 Aida 报告。", "report_type=personal_daily", "run_id=run-report", "period=", "target=", "mcp_url=https://aida.example.com/api/v1/mcp/reports"},
-			forbid:  []string{"cred-1"},
+			require: []string{"personal_daily", "2026-07-01", "请生成 Aida 报告。", "report_type=personal_daily", "run_id=run-report", "period=", "target="},
+			forbid:  []string{"mcp_url=https://aida.example.com/api/v1/mcp/reports", "cred-1"},
 		}, "run-report", "305").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectQuery("SELECT id::text").
@@ -1614,9 +1663,11 @@ func TestStartReportAgentRunFallsBackToMessageWhenTemplateMissing(t *testing.T) 
 		"run_id=run-report",
 		"period=",
 		"target=",
-		"mcp_url=https://aida.example.com/api/v1/mcp/reports",
 		reportMCPCredentialSlot,
 	)
+	if strings.Contains(createdSession.Message, "mcp_url=") {
+		t.Fatalf("fallback message should not expose mcp_url: %q", createdSession.Message)
+	}
 	if createdSession.StartPromptValues["report_type"] != "personal_daily" {
 		t.Fatalf("start prompt values = %#v", createdSession.StartPromptValues)
 	}
@@ -1727,9 +1778,11 @@ func TestExecuteManagedAgentScheduleRunUsesUserScopedClient(t *testing.T) {
 		"run_id=run-report",
 		"period=",
 		"target=",
-		"mcp_url=https://aida.example.com/api/v1/mcp/reports",
 		reportMCPCredentialSlot,
 	)
+	if strings.Contains(createdSession.Message, "mcp_url=") {
+		t.Fatalf("fallback message should not expose mcp_url: %q", createdSession.Message)
+	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
 	}
@@ -1827,8 +1880,8 @@ func TestDailyReportIntegrationReturnsMCPAndSkill(t *testing.T) {
 	if got.Skill.Slug != service.DailyReportSkillSlug || got.Skill.Version != service.DailyReportSkillVersion {
 		t.Fatalf("skill ref = %s@%s", got.Skill.Slug, got.Skill.Version)
 	}
-	if !strings.Contains(got.Skill.SkillMD, got.MCP.URL) {
-		t.Fatalf("skill markdown should include mcp url")
+	if strings.Contains(got.Skill.SkillMD, got.MCP.URL) {
+		t.Fatalf("skill markdown should not include mcp url")
 	}
 	if len(got.MCP.Tools) != 9 {
 		t.Fatalf("tools = %#v", got.MCP.Tools)

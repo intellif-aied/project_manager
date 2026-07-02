@@ -695,6 +695,15 @@ type ManagedMCPBinding struct {
 	CredentialSlot string `json:"credential_slot,omitempty"`
 }
 
+type ManagedMCPServer struct {
+	Name           string            `json:"name"`
+	URL            string            `json:"url"`
+	CredentialSlot string            `json:"credential_slot,omitempty"`
+	AuthHeader     string            `json:"auth_header,omitempty"`
+	AuthScheme     string            `json:"auth_scheme,omitempty"`
+	Headers        map[string]string `json:"headers,omitempty"`
+}
+
 type ManagedCredentialSlot struct {
 	Name     string `json:"name"`
 	Required bool   `json:"required,omitempty"`
@@ -726,6 +735,7 @@ type ManagedAgent struct {
 	Archived            bool                    `json:"archived"`
 	IsPublic            bool                    `json:"is_public"`
 	Skills              []ManagedSkillRef       `json:"skills,omitempty"`
+	MCPServers          []ManagedMCPServer      `json:"mcp_servers,omitempty"`
 	MCPBindings         []ManagedMCPBinding     `json:"mcp_bindings,omitempty"`
 	CreatedAt           int64                   `json:"created_at,omitempty"`
 	BusinessType        string                  `json:"business_type,omitempty"`
@@ -759,6 +769,7 @@ type UpsertManagedAgentRequest struct {
 	CredentialSlots     []ManagedCredentialSlot `json:"credential_slots"`
 	DefaultBindings     map[string]string       `json:"default_bindings"`
 	Skills              []ManagedSkillRef       `json:"skills"`
+	MCPServers          []ManagedMCPServer      `json:"mcp_servers"`
 	MCPBindings         []ManagedMCPBinding     `json:"mcp_bindings"`
 	BusinessType        string                  `json:"business_type,omitempty"`
 	ReportTypes         []string                `json:"report_types,omitempty"`
