@@ -681,7 +681,7 @@ export function AIAssetsPage() {
       title: "MCP",
       dataIndex: "mcp_bindings",
       width: 120,
-      render: (items?: ManagedMCPBinding[]) => items?.length ?? 0
+      render: (items: ManagedMCPBinding[] | undefined, record) => (items?.length ?? 0) + (record.mcp_servers?.length ?? 0)
     },
     {
       title: "状态",
@@ -1035,7 +1035,7 @@ export function AIAssetsPage() {
                 value={agent.current_version_id || agent.managed_version || "-"}
               />
               <MobileMeta label="Skill" value={agent.skills?.length ?? 0} />
-              <MobileMeta label="MCP" value={agent.mcp_bindings?.length ?? 0} />
+              <MobileMeta label="MCP" value={(agent.mcp_bindings?.length ?? 0) + (agent.mcp_servers?.length ?? 0)} />
             </div>
             <div className="ai-assets-mobile-card__actions">
               <Button

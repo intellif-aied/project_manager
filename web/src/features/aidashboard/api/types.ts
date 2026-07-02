@@ -409,6 +409,13 @@ export interface ManagedAgent {
   credential_slots?: ManagedCredentialSlot[];
   default_bindings?: Record<string, string>;
   skills?: ManagedSkillRef[];
+  mcp_servers?: Array<{
+    name: string;
+    url: string;
+    credential_slot?: string;
+    auth_header?: string;
+    auth_scheme?: string;
+  }>;
   mcp_bindings?: ManagedMCPBinding[];
   business_type?: "generic" | "report";
   report_types?: ReportType[];
@@ -425,6 +432,13 @@ export interface UpsertManagedAgentPayload {
   credential_slots?: ManagedCredentialSlot[];
   default_bindings?: Record<string, string>;
   skills?: ManagedSkillRef[];
+  mcp_servers?: Array<{
+    name: string;
+    url: string;
+    credential_slot?: string;
+    auth_header?: string;
+    auth_scheme?: string;
+  }>;
   mcp_bindings?: ManagedMCPBinding[];
   business_type?: "generic" | "report";
   report_types?: ReportType[];

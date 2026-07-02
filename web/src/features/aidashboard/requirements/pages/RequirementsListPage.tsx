@@ -2837,6 +2837,7 @@ function TaskEditModal({
     }),
     [task]
   );
+  const canReassign = task.can_reassign === true;
 
   useEffect(() => {
     if (open) {
@@ -2853,15 +2854,17 @@ function TaskEditModal({
       priority: MockTaskPriority;
       due_date?: dayjs.Dayjs;
       acceptance_criteria?: string[];
-    }) =>
-      requirementsBoardApi.updateTask(task.id, {
+    }) => {
+      const payload = {
         title: normalizeRequiredText(values.title),
-        assignee_id: values.assignee_id,
         priority: values.priority,
         due_date: values.due_date ? values.due_date.format("YYYY-MM-DD") : undefined,
         acceptance_criteria: normalizeCriteria(values.acceptance_criteria),
-        base_version: task.version
-      }),
+        base_version: task.version,
+        ...(canReassign ? { assignee_id: values.assignee_id } : {})
+      };
+      return requirementsBoardApi.updateTask(task.id, payload);
+    },
     onSuccess: (updated) => {
       message.success("任务已更新");
       void invalidateRequirementTaskWorkspace(queryClient, {
@@ -2908,7 +2911,7 @@ function TaskEditModal({
           <Select
             placeholder="选择负责人"
             loading={assigneesQuery.isLoading}
-            disabled={assigneesQuery.isLoading || assigneesQuery.isError}
+            disabled={!canReassign || assigneesQuery.isLoading || assigneesQuery.isError}
             options={(assigneesQuery.data ?? []).map((item: MockAssignee) => ({
               value: item.id,
               label: `${item.name} (${item.employee_id})`

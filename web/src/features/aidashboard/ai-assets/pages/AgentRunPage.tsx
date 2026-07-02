@@ -154,6 +154,10 @@ function modelCardTitle(required: boolean) {
 
 function reportRuntimeCredentialSlots(agent: ManagedAgent) {
   const slots = new Set<string>();
+  for (const server of agent.mcp_servers ?? []) {
+    const slot = server.credential_slot?.trim();
+    if (server.name === REPORT_SYSTEM_MCP_SLUG && slot) slots.add(slot);
+  }
   for (const binding of agent.mcp_bindings ?? []) {
     const isReportMCP =
       binding.slug === REPORT_SYSTEM_MCP_SLUG &&
@@ -174,6 +178,11 @@ function runtimeCredentialSlots(agent: ManagedAgent): RuntimeCredentialSlot[] {
   const reportSlots = reportRuntimeCredentialSlots(agent);
   const defaultBindings = agent.default_bindings ?? {};
   const mcpLabels = new Map<string, string>();
+  for (const server of agent.mcp_servers ?? []) {
+    const slot = server.credential_slot?.trim();
+    if (!slot) continue;
+    mcpLabels.set(slot, server.name);
+  }
   for (const binding of agent.mcp_bindings ?? []) {
     const slot = binding.credential_slot?.trim();
     if (!slot) continue;
