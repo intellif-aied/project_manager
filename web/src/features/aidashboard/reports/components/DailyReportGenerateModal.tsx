@@ -1,6 +1,6 @@
-import { EditOutlined, SaveOutlined } from "@ant-design/icons";
+import { CalendarOutlined, EditOutlined, SaveOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, App, Button, Empty, Input, Modal, Space, Tag } from "antd";
+import { Alert, App, Button, DatePicker, Empty, Input, Modal, Space, Tag } from "antd";
 import { useEffect, useMemo, useState } from "react";
 import dayjs from "dayjs";
 
@@ -41,6 +41,8 @@ interface DailyReportGenerateModalProps {
   reportId?: string;
   reportDate?: string;
   title?: string;
+  readOnly?: boolean;
+  allowDateSwitch?: boolean;
   onClose: () => void;
   onDone?: (result: DailyReport | TeamReport | DepartmentReport, scope: DailyGenerateScope) => void;
 }
@@ -95,12 +97,15 @@ export function DailyReportGenerateModal({
   reportId,
   reportDate,
   title,
+  readOnly = false,
+  allowDateSwitch = false,
   onClose,
   onDone
 }: DailyReportGenerateModalProps) {
   const { message } = App.useApp();
   const queryClient = useQueryClient();
-  const date = normalizedDate(reportDate);
+  const [selectedDate, setSelectedDate] = useState(() => normalizedDate(reportDate));
+  const date = selectedDate;
   const [content, setContent] = useState("");
   const [contentTouched, setContentTouched] = useState(false);
   const [manualMode, setManualMode] = useState(false);
@@ -163,8 +168,16 @@ export function DailyReportGenerateModal({
   const editorContent = contentTouched ? content : currentReport?.content ?? "";
   const personalReport = scope === "personal" ? personalReportQuery.data ?? null : null;
   const hasUnsavedContentChange = contentTouched && editorContent !== (currentReport?.content ?? "");
-  const allowSessionSettings = scope === "personal";
+  const canSwitchDate = allowDateSwitch && !readOnly && !reportId;
+  const allowSessionSettings = scope === "personal" && !readOnly;
   const showSessionSettings = allowSessionSettings && settingsOpen;
+  const canEditContent = !readOnly;
+  const shouldShowEditor = readOnly ? hasContent : showEditor;
+
+  useEffect(() => {
+    if (!open) return;
+    setSelectedDate(normalizedDate(reportDate));
+  }, [open, reportDate]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -180,6 +193,27 @@ export function DailyReportGenerateModal({
     return () => window.clearTimeout(timer);
   }, [date, open, reportId, scope]);
 
+  const changeDate = (nextDate: string) => {
+    if (nextDate === date) return;
+    setSelectedDate(nextDate);
+  };
+
+  const handleDateChange = (value: dayjs.Dayjs | null) => {
+    if (!value) return;
+    const nextDate = value.format("YYYY-MM-DD");
+    if (!hasUnsavedContentChange) {
+      changeDate(nextDate);
+      return;
+    }
+    Modal.confirm({
+      title: "当前内容尚未保存",
+      content: "切换日期后会重新加载报告内容，未保存的修改将丢失。是否继续？",
+      okText: "切换",
+      cancelText: "继续编辑",
+      onOk: () => changeDate(nextDate)
+    });
+  };
+
   const saveMutation = useMutation({
     mutationFn: async () => {
       const nextContent = editorContent.trim();
@@ -188,7 +222,7 @@ export function DailyReportGenerateModal({
       }
 
       if (scope === "personal") {
-        const report = personalReport ?? await fetchTodayReport();
+        const report = personalReport ?? await fetchTodayReport(date);
         return saveReport(report.id, {
           content: nextContent,
           session_ids: report.session_ids ?? []
@@ -262,22 +296,24 @@ export function DailyReportGenerateModal({
       onCancel={handleClose}
       footer={
         <Space>
-          <ReportAIGenerateControls
-            reportType={dailyReportType(scope)}
-            period={{ date }}
-            target={dailyReportTarget(scope)}
-            allowSessionSelection={allowSessionSettings}
-            settingsOpen={showSessionSettings}
-            selectedSessionSliceKeys={selectedSessionSliceKeys}
-            onToggleSettings={() => setSettingsOpen((value) => !value)}
-            disabled={loading || saveMutation.isPending}
-            onBeforeGenerate={confirmBeforeAIGenerate}
-            onGenerated={handleAIGenerated}
-          />
+          {canEditContent ? (
+            <ReportAIGenerateControls
+              reportType={dailyReportType(scope)}
+              period={{ date }}
+              target={dailyReportTarget(scope)}
+              allowSessionSelection={allowSessionSettings}
+              settingsOpen={showSessionSettings}
+              selectedSessionSliceKeys={selectedSessionSliceKeys}
+              onToggleSettings={() => setSettingsOpen((value) => !value)}
+              disabled={loading || saveMutation.isPending}
+              onBeforeGenerate={confirmBeforeAIGenerate}
+              onGenerated={handleAIGenerated}
+            />
+          ) : null}
           <Button onClick={handleClose} disabled={saveMutation.isPending}>
-            取消
+            {readOnly ? "关闭" : "取消"}
           </Button>
-          {showEditor ? (
+          {canEditContent && showEditor ? (
             <Button
               type="primary"
               icon={<SaveOutlined />}
@@ -287,7 +323,7 @@ export function DailyReportGenerateModal({
             >
               保存
             </Button>
-          ) : (
+          ) : canEditContent ? (
             <Button
               type="primary"
               icon={<EditOutlined />}
@@ -300,7 +336,7 @@ export function DailyReportGenerateModal({
             >
               直接填写
             </Button>
-          )}
+          ) : null}
         </Space>
       }
     >
@@ -309,6 +345,16 @@ export function DailyReportGenerateModal({
         <div className="console-report-management__summary">
           <span>
             <strong>{date}</strong>
+            {canSwitchDate ? (
+              <DatePicker
+                className="console-report-inline-picker"
+                value={dayjs(date)}
+                allowClear={false}
+                suffixIcon={<CalendarOutlined />}
+                inputReadOnly
+                onChange={handleDateChange}
+              />
+            ) : null}
             <em>{scopeName(scope)}</em>
           </span>
           {reportStatus(currentReport)}
@@ -317,17 +363,19 @@ export function DailyReportGenerateModal({
           <div className="console-report-management__main">
             {loading ? (
               <div className="console-session-empty">正在加载报告内容...</div>
-            ) : showEditor ? (
+            ) : shouldShowEditor ? (
               <div className="console-report-editor-layout">
                 <div className="console-report-editor-layout__main">
                   <div className="console-session-modal__section">
                     <strong>报告正文</strong>
-                    <span>可编辑保存当前报告内容。</span>
+                    <span>{readOnly ? "查看当前报告内容。" : "可编辑保存当前报告内容。"}</span>
                   </div>
                   <TextArea
                     rows={18}
+                    readOnly={readOnly}
                     value={editorContent}
                     onChange={(event) => {
+                      if (readOnly) return;
                       setContent(event.target.value);
                       setContentTouched(true);
                     }}

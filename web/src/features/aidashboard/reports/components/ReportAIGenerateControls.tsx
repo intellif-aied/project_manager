@@ -68,6 +68,13 @@ function reportRunStorageKey(
   return `aida:report-ai-run:${JSON.stringify({ userId, reportType, period, target })}`;
 }
 
+function reportPeriodLabel(period: ReportPeriodPayload) {
+  if (period.date) return period.date;
+  if (period.week_start && period.week_end) return `${period.week_start} 至 ${period.week_end}`;
+  if (period.week_start) return period.week_start;
+  return "当前周期";
+}
+
 function isReportAgentUnavailable(
   response: ManagedReportAgentRunResponse
 ): response is ManagedReportAgentUnavailable {
@@ -124,6 +131,7 @@ export function ReportAIGenerateControls({
     () => reportRunStorageKey(currentUserId, reportType, period, target),
     [currentUserId, period, reportType, target]
   );
+  const periodLabel = useMemo(() => reportPeriodLabel(period), [period]);
 
   useEffect(() => {
     setActiveRunId(readStoredRunId(storageKey));
@@ -188,7 +196,10 @@ export function ReportAIGenerateControls({
       setActiveRunId(run.id);
       setHandledRunId(undefined);
       void queryClient.invalidateQueries({ queryKey: ["managed-agent-runs"] });
-      message.loading({ content: "AI 正在生成报告...", key: "report-ai-generate", duration: 0 });
+      message.loading({
+        content: `${periodLabel} AI 生成已开始，可关闭弹窗稍后查看。`,
+        duration: 2
+      });
     },
     onError: (err: unknown) => {
       if (err instanceof Error && err.message === "__AIDA_REPORT_AI_CANCELLED__") return;
@@ -212,7 +223,7 @@ export function ReportAIGenerateControls({
     if (run.status === "succeeded") {
       setHandledRunId(run.id);
       clearStoredRunId(storageKey, run.id);
-      message.success({ content: "AI 生成完成", key: "report-ai-generate" });
+      message.success({ content: `${periodLabel} AI 生成完成` });
       void queryClient.invalidateQueries({ queryKey: ["reports"] });
       void queryClient.invalidateQueries({ queryKey: ["managed-agent-runs"] });
       onGenerated?.(run);
@@ -222,11 +233,10 @@ export function ReportAIGenerateControls({
       setHandledRunId(run.id);
       clearStoredRunId(storageKey, run.id);
       message.error({
-        content: run.error_message || "AI 生成失败",
-        key: "report-ai-generate"
+        content: run.error_message || `${periodLabel} AI 生成失败`
       });
     }
-  }, [activeRunQuery.data, handledRunId, message, onGenerated, queryClient, storageKey]);
+  }, [activeRunQuery.data, handledRunId, message, onGenerated, periodLabel, queryClient, storageKey]);
 
   const generating =
     runMutation.isPending ||

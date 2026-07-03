@@ -153,8 +153,40 @@
   background: #f8fbff;
 }
 
-.reports-list-card .ant-table-pagination {
-  margin: 14px 16px 16px !important;
+.reports-list-card .ant-table-tbody > tr:last-child > td {
+  border-bottom: 0;
+}
+
+.reports-list-card .ant-pagination.ant-table-pagination {
+  margin: 0 !important;
+  padding: 14px 16px 16px;
+  background: #f8fafc;
+  border-top: 1px solid #dfe8f2;
+}
+
+.reports-list-card .ant-pagination.ant-table-pagination.ant-table-pagination-end {
+  justify-content: flex-end;
+}
+
+.reports-list-card .ant-pagination.ant-table-pagination .ant-pagination-total-text {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.reports-list-card .ant-pagination.ant-table-pagination .ant-select-selector,
+.reports-list-card .ant-pagination.ant-table-pagination .ant-pagination-item,
+.reports-list-card .ant-pagination.ant-table-pagination .ant-pagination-prev,
+.reports-list-card .ant-pagination.ant-table-pagination .ant-pagination-next {
+  border-radius: 8px !important;
+}
+
+.reports-list-card .ant-pagination.ant-table-pagination .ant-pagination-item-active {
+  border-color: #2563eb;
+}
+
+.reports-list-card .ant-pagination.ant-table-pagination .ant-pagination-item-active a {
+  color: #2563eb;
+  font-weight: 700;
 }
 
 .reports-list-card .ant-btn-link {
@@ -580,8 +612,8 @@
     padding-inline: 12px;
   }
 
-  .reports-list-card .ant-table-pagination {
-    margin-inline: 12px !important;
+  .reports-list-card .ant-pagination.ant-table-pagination {
+    padding-inline: 12px;
   }
 
   .reports-team-card__head,

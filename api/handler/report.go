@@ -239,7 +239,7 @@ func (h *ReportHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 func (h *ReportHandler) GetOrCreateToday(w http.ResponseWriter, r *http.Request) {
 	u := getUser(r)
-	today := time.Now().Format("2006-01-02")
+	reportDate := reportDateFromRequest(r)
 
 	var dr model.DailyReport
 	var feishuURL, submittedContent, status, submittedTo sql.NullString
@@ -256,7 +256,7 @@ func (h *ReportHandler) GetOrCreateToday(w http.ResponseWriter, r *http.Request)
 		FROM daily_reports dr
 		JOIN users u ON u.id = dr.user_id
 		LEFT JOIN ai_runs ar ON ar.id = dr.managed_agent_run_id
-		WHERE dr.user_id = $1 AND dr.report_date = $2`, u.ID, today).Scan(
+		WHERE dr.user_id = $1 AND dr.report_date = $2`, u.ID, reportDate).Scan(
 		&dr.ID, &dr.UserID, &dr.UserName, &dr.ReportDate, &dr.Content, &dr.Edited,
 		&feishuURL, &sessionIDsStr, &status, &submittedContent, &savedAt, &submittedAt, &submittedTo,
 		&generationMode, &managedAgentRunID, &agentID, &agentVersionID, &modelID, &generatedAt,
@@ -264,11 +264,11 @@ func (h *ReportHandler) GetOrCreateToday(w http.ResponseWriter, r *http.Request)
 	)
 
 	if err == sql.ErrNoRows {
-		content := h.generateReportContent(u.ID, today)
+		content := h.generateReportContent(u.ID, reportDate)
 		var reportID string
 		err := h.db.QueryRow(`
 			INSERT INTO daily_reports (user_id, report_date, content)
-			VALUES ($1, $2, $3) RETURNING id`, u.ID, today, content).Scan(&reportID)
+			VALUES ($1, $2, $3) RETURNING id`, u.ID, reportDate, content).Scan(&reportID)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
@@ -278,7 +278,7 @@ func (h *ReportHandler) GetOrCreateToday(w http.ResponseWriter, r *http.Request)
 			ID:         reportID,
 			UserID:     u.ID,
 			UserName:   u.Name,
-			ReportDate: today,
+			ReportDate: reportDate,
 			Content:    content,
 		}
 	} else if err != nil {

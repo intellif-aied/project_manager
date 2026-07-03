@@ -376,6 +376,8 @@ export function PersonalWeeklyReportModal({
   open,
   weekStart,
   weekEnd,
+  readOnly = false,
+  allowWeekSwitch = false,
   onClose,
   onDone
 }: {
@@ -383,6 +385,7 @@ export function PersonalWeeklyReportModal({
   weekStart: string;
   weekEnd: string;
   readOnly?: boolean;
+  allowWeekSwitch?: boolean;
   onClose: () => void;
   onDone?: () => void;
 }) {
@@ -392,6 +395,8 @@ export function PersonalWeeklyReportModal({
       scope="personal"
       weekStart={weekStart}
       weekEnd={weekEnd}
+      readOnly={readOnly}
+      allowWeekSwitch={allowWeekSwitch}
       onClose={onClose}
       onDone={onDone}
     />
@@ -403,6 +408,8 @@ function WeeklyReportEditorModal({
   scope,
   weekStart,
   weekEnd,
+  readOnly = false,
+  allowWeekSwitch = false,
   onClose,
   onDone
 }: {
@@ -410,23 +417,27 @@ function WeeklyReportEditorModal({
   scope: WeeklyReportScope;
   weekStart: string;
   weekEnd: string;
+  readOnly?: boolean;
+  allowWeekSwitch?: boolean;
   onClose: () => void;
   onDone?: () => void;
 }) {
   const queryClient = useQueryClient();
   const { message } = App.useApp();
+  const [selectedWeekStart, setSelectedWeekStart] = useState(weekStart);
   const [content, setContent] = useState("");
   const [contentTouched, setContentTouched] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [selectedSessionSliceKeys, setSelectedSessionSliceKeys] = useState<string[]>([]);
   const title = weeklyReportModalTitle(scope);
+  const selectedWeekEnd = selectedWeekStart === weekStart ? weekEnd : weekEndOf(selectedWeekStart);
 
   const reportQuery = useQuery<WeeklyReportData | null>({
-    queryKey: ["reports", "weekly", "editor", scope, weekStart],
+    queryKey: ["reports", "weekly", "editor", scope, selectedWeekStart],
     queryFn: async () => {
-      if (scope === "team") return fetchTeamWeeklyReportCurrentOrNull(weekStart);
-      if (scope === "department") return fetchDepartmentWeeklyReportCurrentOrNull(weekStart);
-      return fetchPersonalWeeklyReportCurrentOrNull(weekStart);
+      if (scope === "team") return fetchTeamWeeklyReportCurrentOrNull(selectedWeekStart);
+      if (scope === "department") return fetchDepartmentWeeklyReportCurrentOrNull(selectedWeekStart);
+      return fetchPersonalWeeklyReportCurrentOrNull(selectedWeekStart);
     },
     enabled: open,
     staleTime: 0
@@ -435,8 +446,14 @@ function WeeklyReportEditorModal({
   const report = reportQuery.data ?? null;
   const editorContent = contentTouched ? content : weeklyReportContent(report);
   const hasUnsavedContentChange = contentTouched && editorContent !== weeklyReportContent(report);
-  const allowSessionSettings = scope === "personal";
+  const allowSessionSettings = scope === "personal" && !readOnly;
   const showSessionSettings = allowSessionSettings && settingsOpen;
+  const canSwitchWeek = allowWeekSwitch && !readOnly;
+
+  useEffect(() => {
+    if (!open) return;
+    setSelectedWeekStart(weekStart);
+  }, [open, weekStart]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -447,11 +464,32 @@ function WeeklyReportEditorModal({
       setSelectedSessionSliceKeys([]);
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [open, scope, weekStart]);
+  }, [open, scope, selectedWeekStart]);
+
+  const changeWeek = (nextWeekStart: string) => {
+    if (nextWeekStart === selectedWeekStart) return;
+    setSelectedWeekStart(nextWeekStart);
+  };
+
+  const handleWeekChange = (value: dayjs.Dayjs | null) => {
+    if (!value) return;
+    const nextWeekStart = weekStartOf(value);
+    if (!hasUnsavedContentChange) {
+      changeWeek(nextWeekStart);
+      return;
+    }
+    Modal.confirm({
+      title: "当前内容尚未保存",
+      content: "切换周后会重新加载报告内容，未保存的修改将丢失。是否继续？",
+      okText: "切换",
+      cancelText: "继续编辑",
+      onOk: () => changeWeek(nextWeekStart)
+    });
+  };
 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ["reports", "weekly"] });
-    void queryClient.invalidateQueries({ queryKey: ["reports", "weekly", "editor", scope, weekStart] });
+    void queryClient.invalidateQueries({ queryKey: ["reports", "weekly", "editor", scope, selectedWeekStart] });
   };
 
   const saveMutation = useMutation({
@@ -461,12 +499,12 @@ function WeeklyReportEditorModal({
         throw new Error("请先填写周报内容");
       }
       if (scope === "team") {
-        return saveTeamWeeklyReport({ week_start: weekStart, content: nextContent });
+        return saveTeamWeeklyReport({ week_start: selectedWeekStart, content: nextContent });
       }
       if (scope === "department") {
-        return saveDepartmentWeeklyReportCurrent({ week_start: weekStart, content: nextContent });
+        return saveDepartmentWeeklyReportCurrent({ week_start: selectedWeekStart, content: nextContent });
       }
-      return savePersonalWeeklyReport({ week_start: weekStart, content: nextContent });
+      return savePersonalWeeklyReport({ week_start: selectedWeekStart, content: nextContent });
     },
     onSuccess: (saved) => {
       setContent(saved.content);
@@ -523,29 +561,33 @@ function WeeklyReportEditorModal({
       destroyOnHidden
       footer={
         <Space>
-          <ReportAIGenerateControls
-            reportType={weeklyReportType(scope)}
-            period={{ week_start: weekStart, week_end: weekEnd }}
-            target={weeklyReportTarget(scope)}
-            allowSessionSelection={allowSessionSettings}
-            settingsOpen={showSessionSettings}
-            selectedSessionSliceKeys={selectedSessionSliceKeys}
-            onToggleSettings={() => setSettingsOpen((value) => !value)}
-            disabled={reportQuery.isLoading || saveMutation.isPending}
-            onBeforeGenerate={confirmBeforeAIGenerate}
-            onGenerated={handleAIGenerated}
-          />
+          {!readOnly ? (
+            <ReportAIGenerateControls
+              reportType={weeklyReportType(scope)}
+              period={{ week_start: selectedWeekStart, week_end: selectedWeekEnd }}
+              target={weeklyReportTarget(scope)}
+              allowSessionSelection={allowSessionSettings}
+              settingsOpen={showSessionSettings}
+              selectedSessionSliceKeys={selectedSessionSliceKeys}
+              onToggleSettings={() => setSettingsOpen((value) => !value)}
+              disabled={reportQuery.isLoading || saveMutation.isPending}
+              onBeforeGenerate={confirmBeforeAIGenerate}
+              onGenerated={handleAIGenerated}
+            />
+          ) : null}
           <Button onClick={handleClose} disabled={saveMutation.isPending}>
-            取消
+            {readOnly ? "关闭" : "取消"}
           </Button>
-          <Button
-            type="primary"
-            loading={saveMutation.isPending}
-            disabled={reportQuery.isLoading}
-            onClick={() => saveMutation.mutate()}
-          >
-            保存
-          </Button>
+          {!readOnly ? (
+            <Button
+              type="primary"
+              loading={saveMutation.isPending}
+              disabled={reportQuery.isLoading}
+              onClick={() => saveMutation.mutate()}
+            >
+              保存
+            </Button>
+          ) : null}
         </Space>
       }
     >
@@ -555,7 +597,18 @@ function WeeklyReportEditorModal({
         ) : null}
         <div className="console-report-management__summary">
           <span>
-            <strong>{weeklyRange(weekStart, weekEnd)}</strong>
+            <strong>{weeklyRange(selectedWeekStart, selectedWeekEnd)}</strong>
+            {canSwitchWeek ? (
+              <DatePicker
+                className="console-report-inline-picker"
+                picker="week"
+                value={dayjs(selectedWeekStart)}
+                allowClear={false}
+                suffixIcon={<CalendarOutlined />}
+                inputReadOnly
+                onChange={handleWeekChange}
+              />
+            ) : null}
             <em>{title}</em>
           </span>
           {weeklyReportStatusTag(scope, report)}
@@ -573,12 +626,14 @@ function WeeklyReportEditorModal({
                   </div>
                   <TextArea
                     rows={18}
+                    readOnly={readOnly}
                     value={editorContent}
                     onChange={(event) => {
+                      if (readOnly) return;
                       setContent(event.target.value);
                       setContentTouched(true);
                     }}
-                    placeholder="暂无报告，可直接填写。"
+                    placeholder={readOnly ? "暂无报告内容" : "暂无报告，可直接填写。"}
                   />
                 </div>
               </div>
@@ -587,8 +642,8 @@ function WeeklyReportEditorModal({
           {allowSessionSettings ? (
             <ReportAISettingsPanel
               open={settingsOpen}
-              from={weekStart}
-              to={weekEnd}
+              from={selectedWeekStart}
+              to={selectedWeekEnd}
               selectedKeys={selectedSessionSliceKeys}
               onSelectedKeysChange={setSelectedSessionSliceKeys}
               onClose={() => setSettingsOpen(false)}
@@ -633,12 +688,12 @@ function PersonalWeeklyHistory({
 export function WeeklyReportsPage() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
-  const [weekStart, setWeekStart] = useState(() => weekStartOf(dayjs()));
   const [roleTab, setRoleTab] = useState<"mine" | "team" | "department">("mine");
   const [modalTarget, setModalTarget] = useState<{
     scope: "mine" | "team" | "department";
     weekStart: string;
     mode: "view" | "edit";
+    allowWeekSwitch?: boolean;
   } | null>(null);
 
   if (!user) return null;
@@ -656,12 +711,13 @@ export function WeeklyReportsPage() {
           ]
         : [{ label: "我的周报记录", value: "mine" }];
   const activeTab = tabOptions.some((item) => item.value === roleTab) ? roleTab : "mine";
+  const currentWeekStart = weekStartOf(dayjs());
   const openLabel =
     activeTab === "team"
-      ? "打开本周小组周报"
+      ? "填写小组周报"
       : activeTab === "department"
-        ? "打开本周部门周报"
-        : "打开本周周报";
+        ? "填写部门周报"
+        : "填写周报";
   const invalidateWeekly = () => {
     void queryClient.invalidateQueries({ queryKey: ["reports", "weekly"] });
   };
@@ -684,16 +740,16 @@ export function WeeklyReportsPage() {
                 options={tabOptions}
               />
             ) : null}
-            <DatePicker
-              value={dayjs(weekStart)}
-              allowClear={false}
-              onChange={(value) => value && setWeekStart(weekStartOf(value))}
-            />
           </Space>
           <Button
             type="primary"
             icon={<FileTextOutlined />}
-            onClick={() => setModalTarget({ scope: activeTab, weekStart, mode: "edit" })}
+            onClick={() => setModalTarget({
+              scope: activeTab,
+              weekStart: currentWeekStart,
+              mode: "edit",
+              allowWeekSwitch: true
+            })}
           >
             {openLabel}
           </Button>
@@ -703,16 +759,21 @@ export function WeeklyReportsPage() {
       {activeTab === "mine" ? (
         <PersonalWeeklyRecordsTable
           onOpen={(recordWeekStart) => setModalTarget({ scope: "mine", weekStart: recordWeekStart, mode: "view" })}
+          onEdit={(recordWeekStart) => setModalTarget({ scope: "mine", weekStart: recordWeekStart, mode: "edit" })}
         />
       ) : null}
       {activeTab === "team" ? (
         <TeamWeeklyRecordsTable
           onOpen={(recordWeekStart) => setModalTarget({ scope: "team", weekStart: recordWeekStart, mode: "view" })}
+          onEdit={(recordWeekStart) => setModalTarget({ scope: "team", weekStart: recordWeekStart, mode: "edit" })}
         />
       ) : null}
       {activeTab === "department" ? (
         <DepartmentWeeklyRecordsTable
           onOpen={(recordWeekStart) => setModalTarget({ scope: "department", weekStart: recordWeekStart, mode: "view" })}
+          onEdit={(recordWeekStart) =>
+            setModalTarget({ scope: "department", weekStart: recordWeekStart, mode: "edit" })
+          }
         />
       ) : null}
 
@@ -722,6 +783,7 @@ export function WeeklyReportsPage() {
           weekStart={modalTarget.weekStart}
           weekEnd={weekEndOf(modalTarget.weekStart)}
           readOnly={modalTarget.mode === "view"}
+          allowWeekSwitch={modalTarget.allowWeekSwitch}
           onClose={() => setModalTarget(null)}
           onDone={invalidateWeekly}
         />
@@ -732,6 +794,7 @@ export function WeeklyReportsPage() {
           weekStart={modalTarget.weekStart}
           weekEnd={weekEndOf(modalTarget.weekStart)}
           readOnly={modalTarget.mode === "view"}
+          allowWeekSwitch={modalTarget.allowWeekSwitch}
           onClose={() => setModalTarget(null)}
           onDone={invalidateWeekly}
         />
@@ -742,6 +805,7 @@ export function WeeklyReportsPage() {
           weekStart={modalTarget.weekStart}
           weekEnd={weekEndOf(modalTarget.weekStart)}
           readOnly={modalTarget.mode === "view"}
+          allowWeekSwitch={modalTarget.allowWeekSwitch}
           onClose={() => setModalTarget(null)}
           onDone={invalidateWeekly}
         />
@@ -751,12 +815,14 @@ export function WeeklyReportsPage() {
 }
 
 function PersonalWeeklyRecordsTable({
-  onOpen
+  onOpen,
+  onEdit
 }: {
   onOpen: (weekStart: string) => void;
+  onEdit: (weekStart: string) => void;
 }) {
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
+  const [pageSize, setPageSize] = useState(10);
   const reportsQuery = useQuery<PaginatedPersonalWeeklyReports>({
     queryKey: ["reports", "weekly", "mine", "history", { page, pageSize }],
     queryFn: () => fetchPersonalWeeklyReports({ page: String(page), page_size: String(pageSize) }),
@@ -776,11 +842,16 @@ function PersonalWeeklyRecordsTable({
     {
       title: "操作",
       key: "actions",
-      width: 120,
+      width: 140,
       render: (_, record) => (
-        <Button size="small" type="link" onClick={() => onOpen(formatWeekDate(record.week_start))}>
-          打开
-        </Button>
+        <Space size={4}>
+          <Button size="small" type="link" onClick={() => onOpen(formatWeekDate(record.week_start))}>
+            打开
+          </Button>
+          <Button size="small" type="link" onClick={() => onEdit(formatWeekDate(record.week_start))}>
+            编辑
+          </Button>
+        </Space>
       )
     }
   ];
@@ -800,6 +871,7 @@ function PersonalWeeklyRecordsTable({
             pageSize,
             total: reportsQuery.data?.total ?? 0,
             showSizeChanger: true,
+            showTotal: (total) => `共 ${total} 条记录`,
             onChange: (next, size) => {
               setPage(size !== pageSize ? 1 : next);
               setPageSize(size);
@@ -812,9 +884,11 @@ function PersonalWeeklyRecordsTable({
 }
 
 function TeamWeeklyRecordsTable({
-  onOpen
+  onOpen,
+  onEdit
 }: {
   onOpen: (weekStart: string) => void;
+  onEdit: (weekStart: string) => void;
 }) {
   const reportsQuery = useQuery<TeamWeeklyReport[]>({
     queryKey: ["reports", "weekly", "team", "history"],
@@ -835,11 +909,16 @@ function TeamWeeklyRecordsTable({
     {
       title: "操作",
       key: "actions",
-      width: 120,
+      width: 140,
       render: (_, record) => (
-        <Button size="small" type="link" onClick={() => onOpen(formatWeekDate(record.week_start))}>
-          打开
-        </Button>
+        <Space size={4}>
+          <Button size="small" type="link" onClick={() => onOpen(formatWeekDate(record.week_start))}>
+            打开
+          </Button>
+          <Button size="small" type="link" onClick={() => onEdit(formatWeekDate(record.week_start))}>
+            编辑
+          </Button>
+        </Space>
       )
     }
   ];
@@ -854,6 +933,11 @@ function TeamWeeklyRecordsTable({
           columns={columns}
           dataSource={reportsQuery.data ?? []}
           loading={reportsQuery.isLoading}
+          pagination={{
+            pageSize: 10,
+            showSizeChanger: true,
+            showTotal: (total) => `共 ${total} 条记录`
+          }}
         />
       )}
     </Card>
@@ -861,9 +945,11 @@ function TeamWeeklyRecordsTable({
 }
 
 function DepartmentWeeklyRecordsTable({
-  onOpen
+  onOpen,
+  onEdit
 }: {
   onOpen: (weekStart: string) => void;
+  onEdit: (weekStart: string) => void;
 }) {
   const reportsQuery = useQuery<DepartmentWeeklyReport[]>({
     queryKey: ["reports", "weekly", "department", "history"],
@@ -882,11 +968,16 @@ function DepartmentWeeklyRecordsTable({
     {
       title: "操作",
       key: "actions",
-      width: 120,
+      width: 140,
       render: (_, record) => (
-        <Button size="small" type="link" onClick={() => onOpen(formatWeekDate(record.week_start))}>
-          打开
-        </Button>
+        <Space size={4}>
+          <Button size="small" type="link" onClick={() => onOpen(formatWeekDate(record.week_start))}>
+            打开
+          </Button>
+          <Button size="small" type="link" onClick={() => onEdit(formatWeekDate(record.week_start))}>
+            编辑
+          </Button>
+        </Space>
       )
     }
   ];
@@ -901,6 +992,11 @@ function DepartmentWeeklyRecordsTable({
           columns={columns}
           dataSource={reportsQuery.data ?? []}
           loading={reportsQuery.isLoading}
+          pagination={{
+            pageSize: 10,
+            showSizeChanger: true,
+            showTotal: (total) => `共 ${total} 条记录`
+          }}
         />
       )}
     </Card>
@@ -1132,6 +1228,8 @@ export function TeamWeeklyReportModal({
   open,
   weekStart,
   weekEnd,
+  readOnly = false,
+  allowWeekSwitch = false,
   onClose,
   onDone
 }: {
@@ -1139,6 +1237,7 @@ export function TeamWeeklyReportModal({
   weekStart: string;
   weekEnd: string;
   readOnly?: boolean;
+  allowWeekSwitch?: boolean;
   onClose: () => void;
   onDone?: () => void;
 }) {
@@ -1148,6 +1247,8 @@ export function TeamWeeklyReportModal({
       scope="team"
       weekStart={weekStart}
       weekEnd={weekEnd}
+      readOnly={readOnly}
+      allowWeekSwitch={allowWeekSwitch}
       onClose={onClose}
       onDone={onDone}
     />
@@ -1463,6 +1564,8 @@ export function DepartmentWeeklyReportModal({
   open,
   weekStart,
   weekEnd,
+  readOnly = false,
+  allowWeekSwitch = false,
   onClose,
   onDone
 }: {
@@ -1470,6 +1573,7 @@ export function DepartmentWeeklyReportModal({
   weekStart: string;
   weekEnd: string;
   readOnly?: boolean;
+  allowWeekSwitch?: boolean;
   onClose: () => void;
   onDone?: () => void;
 }) {
@@ -1479,6 +1583,8 @@ export function DepartmentWeeklyReportModal({
       scope="department"
       weekStart={weekStart}
       weekEnd={weekEnd}
+      readOnly={readOnly}
+      allowWeekSwitch={allowWeekSwitch}
       onClose={onClose}
       onDone={onDone}
     />

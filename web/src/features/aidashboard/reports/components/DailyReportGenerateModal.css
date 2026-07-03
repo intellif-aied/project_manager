@@ -219,6 +219,82 @@
   min-height: 0;
 }
 
+.console-report-management__summary > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.console-report-inline-picker.ant-picker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px !important;
+  min-height: 28px !important;
+  max-height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  box-shadow: none !important;
+  line-height: 1;
+  outline: none !important;
+  transition:
+    background-color 0.16s ease,
+    color 0.16s ease;
+}
+
+.console-report-inline-picker.ant-picker:hover,
+.console-report-inline-picker.ant-picker-focused {
+  background: rgba(15, 99, 255, 0.08);
+  box-shadow: none !important;
+}
+
+.console-report-inline-picker .ant-picker-input {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+}
+
+.console-report-inline-picker .ant-picker-input > input {
+  position: absolute;
+  inset: 0;
+  width: 0;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  color: transparent;
+  caret-color: transparent;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.console-report-inline-picker .ant-picker-suffix {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  color: #2563eb;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.console-report-inline-picker .ant-picker-suffix .anticon,
+.console-report-inline-picker .ant-picker-suffix svg {
+  display: block;
+}
+
+.console-report-inline-picker:hover .ant-picker-suffix,
+.console-report-inline-picker.ant-picker-focused .ant-picker-suffix {
+  color: #1d4ed8;
+}
+
 .console-report-editor-layout {
   display: grid;
   gap: 14px;

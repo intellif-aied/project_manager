@@ -291,7 +291,13 @@ export const fetchReports = async (params?: Record<string, string>) => {
     updated_at: item.updated_at
   }));
 };
-export const fetchTodayReport = () => unwrap(api.get<DailyReport>("/reports/today"));
+export const fetchTodayReport = (reportDate?: string) =>
+  unwrap(
+    api.get<DailyReport>(
+      "/reports/today",
+      reportDate ? { report_date: reportDate } : undefined
+    )
+  );
 export const generateTodayReportDraft = (payload: GenerateReportDraftPayload) =>
   unwrap(api.post<GenerateReportDraftResponse>("/reports/today/draft", payload));
 export const generateTodayReport = (reportDate?: string) =>

@@ -978,6 +978,7 @@ export function DashboardPage() {
   const [dailyGenerateTarget, setDailyGenerateTarget] = useState<{
     scope: DailyGenerateScope;
     reportDate?: string;
+    allowDateSwitch?: boolean;
   } | null>(null);
   const [weeklyMineOpen, setWeeklyMineOpen] = useState(false);
   const [teamWeeklyOpen, setTeamWeeklyOpen] = useState(false);
@@ -1439,15 +1440,15 @@ export function DashboardPage() {
 
   const openReportModal = (reportItem: ReportItem, step?: ReportModalStep) => {
     if (reportItem.kind === "personal_daily") {
-      setDailyGenerateTarget({ scope: "personal", reportDate });
+      setDailyGenerateTarget({ scope: "personal", reportDate, allowDateSwitch: true });
       return;
     }
     if (reportItem.kind === "team_daily") {
-      setDailyGenerateTarget({ scope: "team", reportDate });
+      setDailyGenerateTarget({ scope: "team", reportDate, allowDateSwitch: true });
       return;
     }
     if (reportItem.kind === "department_daily") {
-      setDailyGenerateTarget({ scope: "department", reportDate });
+      setDailyGenerateTarget({ scope: "department", reportDate, allowDateSwitch: true });
       return;
     }
     if (reportItem.kind === "personal_weekly") {
@@ -1766,6 +1767,7 @@ export function DashboardPage() {
           open
           scope={dailyGenerateTarget.scope}
           reportDate={dailyGenerateTarget.reportDate}
+          allowDateSwitch={dailyGenerateTarget.allowDateSwitch}
           onClose={() => setDailyGenerateTarget(null)}
           onDone={() => {
             void queryClient.invalidateQueries({ queryKey: ["reports"] });
@@ -1784,6 +1786,7 @@ export function DashboardPage() {
         open={weeklyMineOpen}
         weekStart={weekStart}
         weekEnd={weekEnd}
+        allowWeekSwitch
         onClose={() => setWeeklyMineOpen(false)}
         onDone={() => {
           void queryClient.invalidateQueries({ queryKey: ["reports", "weekly"] });
@@ -1798,6 +1801,7 @@ export function DashboardPage() {
           open
           weekStart={weekStart}
           weekEnd={weekEnd}
+          allowWeekSwitch
           onClose={() => setTeamWeeklyOpen(false)}
           onDone={() => {
             void queryClient.invalidateQueries({ queryKey: ["reports", "weekly"] });
@@ -1810,6 +1814,7 @@ export function DashboardPage() {
           open
           weekStart={weekStart}
           weekEnd={weekEnd}
+          allowWeekSwitch
           onClose={() => setDepartmentWeeklyOpen(false)}
           onDone={() => {
             void queryClient.invalidateQueries({ queryKey: ["reports", "weekly"] });

@@ -90,7 +90,7 @@ function departmentStatus(record: DepartmentReportListItem) {
 
 function useTablePagination() {
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
+  const [pageSize, setPageSize] = useState(10);
   return {
     page,
     pageSize,
@@ -100,6 +100,7 @@ function useTablePagination() {
       total,
       showSizeChanger: true,
       pageSizeOptions,
+      showTotal: (value: number) => `共 ${value} 条记录`,
       onChange: (next: number, size: number) => {
         setPage(size && size !== pageSize ? 1 : next);
         if (size && size !== pageSize) setPageSize(size);
@@ -117,7 +118,13 @@ export function ReportsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const [dateRange, setDateRange] = useState<[Dayjs, Dayjs] | null>(null);
-  const [generateTarget, setGenerateTarget] = useState<{ scope: DailyGenerateScope; reportId?: string; reportDate?: string } | null>(null);
+  const [generateTarget, setGenerateTarget] = useState<{
+    scope: DailyGenerateScope;
+    reportId?: string;
+    reportDate?: string;
+    readOnly?: boolean;
+    allowDateSwitch?: boolean;
+  } | null>(null);
 
   const options =
     user?.role === "director" || user?.role === "admin"
@@ -139,7 +146,7 @@ export function ReportsPage() {
   const from = dateRange?.[0].format("YYYY-MM-DD");
   const to = dateRange?.[1].format("YYYY-MM-DD");
   const openLabel =
-    activeTab === "team" ? "打开今日小组日报" : activeTab === "department" ? "打开今日部门日报" : "打开今日日报";
+    activeTab === "team" ? "填写小组日报" : activeTab === "department" ? "填写部门日报" : "填写日报";
   const canOpenCurrentReport = activeTab !== "team" || user?.role === "team_leader";
 
   const handleTabChange = (value: DailyTab) => {
@@ -169,7 +176,11 @@ export function ReportsPage() {
             <RangePicker value={dateRange} onChange={(value) => setDateRange(value as [Dayjs, Dayjs] | null)} />
           </Space>
           {canOpenCurrentReport ? (
-            <Button type="primary" icon={<EditOutlined />} onClick={() => setGenerateTarget({ scope: activeTab })}>
+            <Button
+              type="primary"
+              icon={<EditOutlined />}
+              onClick={() => setGenerateTarget({ scope: activeTab, allowDateSwitch: true })}
+            >
               {openLabel}
             </Button>
           ) : null}
@@ -180,7 +191,12 @@ export function ReportsPage() {
           key={`personal:${from ?? ""}:${to ?? ""}`}
           from={from}
           to={to}
-          onView={(record) => setGenerateTarget({ scope: "personal", reportId: record.id, reportDate: record.report_date })}
+          onOpen={(record) =>
+            setGenerateTarget({ scope: "personal", reportId: record.id, reportDate: record.report_date, readOnly: true })
+          }
+          onEdit={(record) =>
+            setGenerateTarget({ scope: "personal", reportId: record.id, reportDate: record.report_date })
+          }
         />
       ) : null}
       {activeTab === "team" ? (
@@ -188,7 +204,12 @@ export function ReportsPage() {
           key={`team:${from ?? ""}:${to ?? ""}`}
           from={from}
           to={to}
-          onView={(record) => setGenerateTarget({ scope: "team", reportId: record.id, reportDate: record.report_date })}
+          onOpen={(record) =>
+            setGenerateTarget({ scope: "team", reportId: record.id, reportDate: record.report_date, readOnly: true })
+          }
+          onEdit={(record) =>
+            setGenerateTarget({ scope: "team", reportId: record.id, reportDate: record.report_date })
+          }
         />
       ) : null}
       {activeTab === "department" ? (
@@ -196,7 +217,12 @@ export function ReportsPage() {
           key={`department:${from ?? ""}:${to ?? ""}`}
           from={from}
           to={to}
-          onView={(record) => setGenerateTarget({ scope: "department", reportId: record.id, reportDate: record.report_date })}
+          onOpen={(record) =>
+            setGenerateTarget({ scope: "department", reportId: record.id, reportDate: record.report_date, readOnly: true })
+          }
+          onEdit={(record) =>
+            setGenerateTarget({ scope: "department", reportId: record.id, reportDate: record.report_date })
+          }
         />
       ) : null}
       {generateTarget ? (
@@ -205,6 +231,8 @@ export function ReportsPage() {
           scope={generateTarget.scope}
           reportId={generateTarget.reportId}
           reportDate={generateTarget.reportDate}
+          readOnly={generateTarget.readOnly}
+          allowDateSwitch={generateTarget.allowDateSwitch}
           onClose={() => setGenerateTarget(null)}
           onDone={() => {
             void queryClient.invalidateQueries({ queryKey: ["reports", "daily"] });
@@ -219,11 +247,13 @@ export function ReportsPage() {
 function PersonalDailyTable({
   from,
   to,
-  onView
+  onOpen,
+  onEdit
 }: {
   from?: string;
   to?: string;
-  onView: (record: DailyReportListItem) => void;
+  onOpen: (record: DailyReportListItem) => void;
+  onEdit: (record: DailyReportListItem) => void;
 }) {
   const { user } = useAuth();
   const { page, pageSize, tablePagination } = useTablePagination();
@@ -247,11 +277,16 @@ function PersonalDailyTable({
     {
       title: "操作",
       key: "actions",
-      width: 120,
+      width: 140,
       render: (_, record) => (
-        <Button size="small" type="link" onClick={() => onView(record)}>
-          打开
-        </Button>
+        <Space size={4}>
+          <Button size="small" type="link" onClick={() => onOpen(record)}>
+            打开
+          </Button>
+          <Button size="small" type="link" onClick={() => onEdit(record)}>
+            编辑
+          </Button>
+        </Space>
       )
     }
   ];
@@ -279,11 +314,13 @@ function PersonalDailyTable({
 function TeamDailyTable({
   from,
   to,
-  onView
+  onOpen,
+  onEdit
 }: {
   from?: string;
   to?: string;
-  onView: (record: TeamReportListItem) => void;
+  onOpen: (record: TeamReportListItem) => void;
+  onEdit: (record: TeamReportListItem) => void;
 }) {
   const { page, pageSize, tablePagination } = useTablePagination();
 
@@ -310,11 +347,14 @@ function TeamDailyTable({
     {
       title: "操作",
       key: "actions",
-      width: 120,
+      width: 140,
       render: (_, record) => (
-        <Space>
-          <Button size="small" type="link" onClick={() => onView(record)}>
+        <Space size={4}>
+          <Button size="small" type="link" onClick={() => onOpen(record)}>
             打开
+          </Button>
+          <Button size="small" type="link" onClick={() => onEdit(record)}>
+            编辑
           </Button>
         </Space>
       )
@@ -343,11 +383,13 @@ function TeamDailyTable({
 function DepartmentDailyTable({
   from,
   to,
-  onView
+  onOpen,
+  onEdit
 }: {
   from?: string;
   to?: string;
-  onView: (record: DepartmentReportListItem) => void;
+  onOpen: (record: DepartmentReportListItem) => void;
+  onEdit: (record: DepartmentReportListItem) => void;
 }) {
   const { page, pageSize, tablePagination } = useTablePagination();
 
@@ -373,11 +415,14 @@ function DepartmentDailyTable({
     {
       title: "操作",
       key: "actions",
-      width: 120,
+      width: 140,
       render: (_, record) => (
-        <Space>
-          <Button size="small" type="link" onClick={() => onView(record)}>
+        <Space size={4}>
+          <Button size="small" type="link" onClick={() => onOpen(record)}>
             打开
+          </Button>
+          <Button size="small" type="link" onClick={() => onEdit(record)}>
+            编辑
           </Button>
         </Space>
       )
