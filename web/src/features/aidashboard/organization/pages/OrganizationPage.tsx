@@ -73,6 +73,15 @@ interface CreateTeamFormValues {
   director_user_id?: string;
 }
 
+interface RoleTeamChangeFormValues {
+  team_id: string;
+}
+
+interface PendingRoleTeamChange {
+  user: User;
+  appRole: UserRole;
+}
+
 function displayUser(user: User) {
   return user.nickname?.trim() || user.name?.trim() || user.username || user.employee_id || `用户 ${user.id}`;
 }
@@ -136,6 +145,8 @@ export function OrganizationPage() {
   const [editingTeam, setEditingTeam] = useState<Team | null>(null);
   const [createTeamError, setCreateTeamError] = useState<string>();
   const [createTeamForm] = Form.useForm<CreateTeamFormValues>();
+  const [roleTeamChange, setRoleTeamChange] = useState<PendingRoleTeamChange | null>(null);
+  const [roleTeamForm] = Form.useForm<RoleTeamChangeFormValues>();
   const isAdmin = currentUser?.role === "admin";
 
   const usersQuery = useQuery<User[]>({
@@ -248,6 +259,48 @@ export function OrganizationPage() {
     onError: (error) => message.error(getApiErrorMessage(error, "用户配置更新失败"))
   });
 
+  const submitRoleTeamChange = async (values: RoleTeamChangeFormValues) => {
+    if (!roleTeamChange) return;
+    try {
+      await updateUserMutation.mutateAsync({
+        id: roleTeamChange.user.id,
+        data: {
+          app_role: roleTeamChange.appRole,
+          team_id: values.team_id
+        }
+      });
+      setRoleTeamChange(null);
+      roleTeamForm.resetFields();
+    } catch {
+      // Error is shown by updateUserMutation.onError.
+    }
+  };
+
+  const handleRoleChange = (record: User, appRole: UserRole) => {
+    const currentRole = record.app_role ?? record.role;
+    if (appRole === currentRole) return;
+    if (roleRequiresTeam(appRole)) {
+      if (record.team_id) {
+        updateUserMutation.mutate({
+          id: record.id,
+          data: { app_role: appRole, team_id: record.team_id }
+        });
+        return;
+      }
+      if (teams.length === 0) {
+        void message.warning("请先创建小组，再设置工程师或组长角色");
+        return;
+      }
+      setRoleTeamChange({ user: record, appRole });
+      roleTeamForm.resetFields();
+      return;
+    }
+    updateUserMutation.mutate({
+      id: record.id,
+      data: { app_role: appRole, clear_team: true }
+    });
+  };
+
   const aihubColumns: TableProps<AIHubUser>["columns"] = [
     {
       title: "nickname",
@@ -309,9 +362,7 @@ export function OrganizationPage() {
           value={record.app_role ?? record.role}
           options={ROLE_OPTIONS}
           disabled={updateUserMutation.isPending || record.id === currentUser?.id}
-          onChange={(appRole) =>
-            updateUserMutation.mutate({ id: record.id, data: { app_role: appRole } })
-          }
+          onChange={(appRole) => handleRoleChange(record, appRole)}
         />
       )
     },
@@ -319,23 +370,32 @@ export function OrganizationPage() {
       title: "Aida 小组",
       dataIndex: "team_id",
       width: 190,
-      render: (_: string, record) => (
-        <Select
-          size="small"
-          value={roleForcesNoTeam(record.app_role ?? record.role) ? "" : record.team_id ?? ""}
-          options={[
-            { value: "", label: "未分组" },
-            ...teams.map((team) => ({ value: team.id, label: team.name }))
-          ]}
-          disabled={updateUserMutation.isPending || roleForcesNoTeam(record.app_role ?? record.role)}
-          onChange={(teamID) =>
-            updateUserMutation.mutate({
-              id: record.id,
-              data: teamID ? { team_id: teamID } : { clear_team: true }
-            })
-          }
-        />
-      )
+      render: (_: string, record) => {
+        const appRole = record.app_role ?? record.role;
+        const needsTeam = roleRequiresTeam(appRole);
+        const forcesNoTeam = roleForcesNoTeam(appRole);
+        return (
+          <Select
+            size="small"
+            value={forcesNoTeam ? "" : record.team_id ?? ""}
+            options={[
+              ...(needsTeam ? [] : [{ value: "", label: "未分组" }]),
+              ...teams.map((team) => ({ value: team.id, label: team.name }))
+            ]}
+            disabled={updateUserMutation.isPending || forcesNoTeam}
+            onChange={(teamID) => {
+              if (needsTeam && !teamID) {
+                void message.warning("工程师和组长必须选择小组");
+                return;
+              }
+              updateUserMutation.mutate({
+                id: record.id,
+                data: teamID ? { team_id: teamID } : { clear_team: true }
+              });
+            }}
+          />
+        );
+      }
     },
     {
       title: "Aida 访问",
@@ -549,6 +609,45 @@ export function OrganizationPage() {
           />
         </TableLayout>
       </PagePanel>
+
+      <Modal
+        title="选择 Aida 小组"
+        open={Boolean(roleTeamChange)}
+        confirmLoading={updateUserMutation.isPending}
+        okText="确认修改"
+        cancelText="取消"
+        onCancel={() => {
+          if (updateUserMutation.isPending) return;
+          setRoleTeamChange(null);
+          roleTeamForm.resetFields();
+        }}
+        onOk={() => roleTeamForm.submit()}
+        destroyOnHidden
+      >
+        {roleTeamChange ? (
+          <>
+            <Alert
+              type="info"
+              showIcon
+              message={`将 ${displayUser(roleTeamChange.user)} 设置为 ${ROLE_LABELS[roleTeamChange.appRole]}，需要同时选择所属小组。`}
+              className="org-modal-alert"
+            />
+            <Form
+              form={roleTeamForm}
+              layout="vertical"
+              requiredMark={false}
+              onFinish={(values) => void submitRoleTeamChange(values)}
+            >
+              <Form.Item label="Aida 小组" name="team_id" rules={[{ required: true, message: "请选择小组" }]}>
+                <Select
+                  placeholder="请选择小组"
+                  options={teams.map((team) => ({ value: team.id, label: team.name }))}
+                />
+              </Form.Item>
+            </Form>
+          </>
+        ) : null}
+      </Modal>
 
       <Modal
         title="从 AIHub 添加用户"
