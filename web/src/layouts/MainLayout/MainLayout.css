@@ -5,7 +5,7 @@
   height: 100vh;
   min-height: 100vh;
   overflow: hidden;
-  background: #eef3f7;
+  background: #e8eef5;
 }
 
 .main-layout__workspace {
@@ -13,9 +13,9 @@
   height: 100vh;
   min-height: 100vh;
   background:
-    radial-gradient(circle at 92% 2%, rgba(22, 119, 255, 0.07), transparent 28%),
-    radial-gradient(circle at 64% 0%, rgba(34, 211, 238, 0.035), transparent 26%),
-    linear-gradient(180deg, #f8fbff 0%, #f2f6fb 46%, #eef3f7 100%);
+    radial-gradient(circle at 88% 0%, rgba(37, 99, 235, 0.07), transparent 30%),
+    radial-gradient(circle at 48% 0%, rgba(20, 184, 166, 0.035), transparent 28%),
+    linear-gradient(180deg, #f8fafc 0%, #f1f5f9 46%, #e8eef5 100%);
 }
 
 .main-layout__content {
@@ -26,9 +26,9 @@
   overflow: auto;
   overscroll-behavior: contain;
   background:
-    linear-gradient(rgba(148, 163, 184, 0.024) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(148, 163, 184, 0.02) 1px, transparent 1px),
-    radial-gradient(circle at 12% 0%, rgba(22, 119, 255, 0.028), transparent 30%), transparent;
+    linear-gradient(rgba(100, 116, 139, 0.026) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(100, 116, 139, 0.022) 1px, transparent 1px),
+    radial-gradient(circle at 8% 0%, rgba(37, 99, 235, 0.03), transparent 28%), transparent;
   background-size:
     72px 72px,
     72px 72px,

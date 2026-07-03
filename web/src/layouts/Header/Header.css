@@ -9,14 +9,13 @@
   padding: 0 24px 0 28px;
   color: #182230;
   background:
-    linear-gradient(90deg, rgba(250, 252, 253, 0.96), rgba(246, 249, 252, 0.9)),
-    radial-gradient(circle at 26% 0%, rgba(22, 119, 255, 0.1), transparent 38%),
-    radial-gradient(circle at 74% 0%, rgba(34, 211, 238, 0.055), transparent 32%);
-  border-bottom: 1px solid rgba(186, 224, 255, 0.42);
+    linear-gradient(90deg, rgba(255, 255, 255, 0.92), rgba(247, 250, 252, 0.86)),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(244, 248, 251, 0.68));
+  border-bottom: 1px solid rgba(203, 213, 225, 0.68);
   box-shadow:
-    0 1px 0 rgba(255, 255, 255, 0.78),
-    0 10px 26px rgba(15, 23, 42, 0.028);
-  backdrop-filter: blur(16px);
+    0 1px 0 rgba(255, 255, 255, 0.92) inset,
+    0 14px 34px rgba(15, 23, 42, 0.045);
+  backdrop-filter: blur(18px) saturate(135%);
 }
 
 .app-header::after {
@@ -29,10 +28,10 @@
   content: "";
   background: linear-gradient(
     90deg,
-    rgba(24, 34, 48, 0.05),
-    rgba(105, 177, 255, 0.16),
-    rgba(34, 211, 238, 0.08),
-    rgba(24, 34, 48, 0.03)
+    rgba(15, 23, 42, 0.08),
+    rgba(37, 99, 235, 0.2),
+    rgba(20, 184, 166, 0.12),
+    rgba(15, 23, 42, 0.04)
   );
 }
 
@@ -52,16 +51,16 @@
 .app-header__context {
   display: grid;
   min-width: 0;
-  gap: 3px;
+  gap: 5px;
 }
 
 .app-header__eyebrow {
   overflow: hidden;
-  color: #0958d9;
+  color: #475569;
   font-size: 10px;
   font-weight: 800;
   line-height: 1;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.14em;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -80,8 +79,9 @@
 }
 
 .app-header__page .page-nav__breadcrumb li:last-child .ant-breadcrumb-link {
-  color: #182230;
-  font-weight: 750;
+  color: #0f172a;
+  font-size: 15px;
+  font-weight: 780;
 }
 
 .app-header .ant-btn {
@@ -107,8 +107,8 @@
   padding: 4px 12px 4px 5px;
   color: #182230;
   cursor: pointer;
-  background: rgba(255, 255, 255, 0.78);
-  border: 1px solid rgba(203, 213, 225, 0.9);
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid rgba(203, 213, 225, 0.92);
   border-radius: 999px;
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.82),
@@ -225,10 +225,10 @@
 
 .user-menu:hover {
   background: #ffffff;
-  border-color: rgba(22, 119, 255, 0.26);
+  border-color: rgba(37, 99, 235, 0.28);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.9),
-    0 12px 26px rgba(22, 119, 255, 0.08);
+    0 12px 26px rgba(37, 99, 235, 0.09);
 }
 
 .user-menu--loading {
