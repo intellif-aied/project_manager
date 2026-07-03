@@ -122,7 +122,8 @@ export const createRequirement = (data: {
   description: string;
   priority: string;
   deadline?: string;
-  team_ids: string[];
+  owner_id?: string;
+  team_ids?: string[];
   feishu_doc_url?: string;
   acceptance_criteria?: string[];
 }) => unwrap(api.post<Requirement>("/requirements", data));

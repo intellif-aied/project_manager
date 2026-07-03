@@ -39,6 +39,10 @@ type Requirement struct {
 	CreatorID          string                 `json:"creator_id"`
 	CreatorName        string                 `json:"creator_name"`
 	CreatorRole        string                 `json:"creator_role"`
+	OwnerID            *string                `json:"owner_id,omitempty"`
+	OwnerName          *string                `json:"owner_name,omitempty"`
+	OwnerTeamID        *string                `json:"owner_team_id,omitempty"`
+	OwnerTeamName      *string                `json:"owner_team_name,omitempty"`
 	Status             string                 `json:"status"`
 	Priority           string                 `json:"priority"`
 	Progress           int                    `json:"progress"`
@@ -369,6 +373,7 @@ type CreateRequirementRequest struct {
 	FeishuDocURL       *string  `json:"feishu_doc_url,omitempty"`
 	Priority           string   `json:"priority"`
 	Deadline           *string  `json:"deadline,omitempty"`
+	OwnerID            *string  `json:"owner_id,omitempty"`
 	TeamIDs            []string `json:"team_ids"`
 	AcceptanceCriteria []string `json:"acceptance_criteria,omitempty"`
 }
@@ -380,6 +385,9 @@ type UpdateRequirementRequest struct {
 	Priority           *string   `json:"priority,omitempty"`
 	Status             *string   `json:"status,omitempty"`
 	Deadline           *string   `json:"deadline,omitempty"`
+	OwnerID            *string   `json:"owner_id,omitempty"`
+	ClearOwner         bool      `json:"clear_owner,omitempty"`
+	TeamIDs            *[]string `json:"team_ids,omitempty"`
 	AcceptanceCriteria *[]string `json:"acceptance_criteria,omitempty"`
 	BaseVersion        int64     `json:"base_version"`
 }

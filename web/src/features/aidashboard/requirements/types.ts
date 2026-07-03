@@ -44,6 +44,10 @@ export interface BoardRequirement {
   creator_id: string;
   creator_name: string;
   creator_role: string;
+  owner_id?: string;
+  owner_name?: string;
+  owner_team_id?: string;
+  owner_team_name?: string;
   status: RequirementStage;
   priority: RequirementPriority;
   progress: number;
@@ -96,7 +100,8 @@ export interface CreateBoardRequirementInput {
   description: string;
   priority: RequirementPriority;
   deadline?: string;
-  team_ids: string[];
+  owner_id?: string;
+  team_ids?: string[];
   feishu_doc_url?: string;
   acceptance_criteria: string[];
 }
@@ -108,6 +113,9 @@ export interface UpdateBoardRequirementInput {
   status?: RequirementStage;
   deadline?: string;
   feishu_doc_url?: string;
+  owner_id?: string;
+  clear_owner?: boolean;
+  team_ids?: string[];
   acceptance_criteria?: string[];
   base_version: number;
 }

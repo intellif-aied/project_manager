@@ -400,7 +400,7 @@ function applyDepartmentDailyReportState(
   loaded: boolean
 ): ReportItem {
   if (!loaded) return report;
-  if (!departmentReport) {
+  if (!departmentReport || !departmentReport.id) {
     return {
       ...report,
       status: "待生成",
@@ -2308,7 +2308,15 @@ function renderPrimaryReportAction(
       }`}
       type={report.status === "待生成" ? "primary" : "default"}
       icon={<EditOutlined />}
-      onClick={() => onOpen(report, "editor")}
+      onMouseDown={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onOpen(report, "editor");
+      }}
     >
       {getReportButtonText(report)}
     </Button>

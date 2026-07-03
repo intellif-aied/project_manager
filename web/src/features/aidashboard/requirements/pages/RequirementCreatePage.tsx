@@ -23,7 +23,6 @@ import {
   normalizeOptionalText,
   normalizeRequiredText,
   optionalUrlRules,
-  requiredArrayRules,
   requiredSelectRules,
   titleRules
 } from "../validation/requirementTaskValidation";
@@ -33,7 +32,8 @@ interface CreateFormValues {
   description: string;
   priority: RequirementPriority;
   deadline?: dayjs.Dayjs;
-  team_ids: string[];
+  owner_id?: string;
+  team_ids?: string[];
   feishu_doc_url?: string;
   acceptance_criteria: string[];
 }
@@ -52,6 +52,11 @@ export function RequirementCreatePage() {
     queryFn: () => requirementsBoardApi.listTeams(),
     staleTime: 5 * 60_000
   });
+  const assigneesQuery = useQuery({
+    queryKey: ["requirements-board", "assignees"],
+    queryFn: () => requirementsBoardApi.listAssignees(),
+    staleTime: 5 * 60_000
+  });
 
   const createMutation = useMutation({
     mutationFn: (values: CreateFormValues) =>
@@ -60,7 +65,8 @@ export function RequirementCreatePage() {
         description: normalizeRequiredText(values.description),
         priority: values.priority,
         deadline: values.deadline?.format("YYYY-MM-DD"),
-        team_ids: values.team_ids,
+        owner_id: values.owner_id,
+        team_ids: values.team_ids ?? [],
         feishu_doc_url: normalizeOptionalText(values.feishu_doc_url),
         acceptance_criteria: normalizeCriteria(values.acceptance_criteria)
       })
@@ -84,6 +90,16 @@ export function RequirementCreatePage() {
       setCreatedRequirement(created);
     } catch (error) {
       setFormError(error instanceof Error ? error.message : "创建需求失败，请稍后重试");
+    }
+  };
+
+  const handleOwnerChange = (ownerId?: string) => {
+    if (!ownerId) return;
+    const owner = assigneesQuery.data?.find((item) => item.id === ownerId);
+    if (!owner?.team_id) return;
+    const currentTeamIds = form.getFieldValue("team_ids") ?? [];
+    if (!currentTeamIds.includes(owner.team_id)) {
+      form.setFieldValue("team_ids", [...currentTeamIds, owner.team_id]);
     }
   };
 
@@ -130,7 +146,7 @@ export function RequirementCreatePage() {
   return (
     <PagePanel
       title="新建需求"
-      description="定义业务目标、验收标准和参与团队"
+      description="定义业务目标、验收标准、负责人和协作范围"
       className="aidashboard-form-page"
       backTo={backTo}
       onBack={handleCancel}
@@ -152,7 +168,7 @@ export function RequirementCreatePage() {
               type="error"
               showIcon
               message="参与团队加载失败"
-              description="团队数据是创建需求的必填信息，请重试后继续。"
+              description="暂时无法选择参与团队，可重试后补充，也可以先创建需求。"
               action={<Button onClick={() => void teamsQuery.refetch()}>重试</Button>}
             />
           ) : null}
@@ -203,7 +219,7 @@ export function RequirementCreatePage() {
             <section className="aidashboard-form__section">
               <div className="aidashboard-form__section-head">
                 <h2>交付信息</h2>
-                <p>设定优先级、截止日期和参与团队。</p>
+                <p>负责人和参与团队都可以稍后补充。</p>
               </div>
               <div className="aidashboard-form__grid aidashboard-form__grid--simple">
                 <Form.Item
@@ -223,6 +239,20 @@ export function RequirementCreatePage() {
                 <Form.Item label="截止日期" name="deadline">
                   <DatePicker />
                 </Form.Item>
+                <Form.Item label="负责人" name="owner_id">
+                  <Select
+                    allowClear
+                    showSearch
+                    loading={assigneesQuery.isLoading}
+                    placeholder={assigneesQuery.isError ? "负责人加载失败" : "可稍后指定"}
+                    optionFilterProp="label"
+                    onChange={handleOwnerChange}
+                    options={(assigneesQuery.data ?? []).map((assignee) => ({
+                      value: assignee.id,
+                      label: assignee.name
+                    }))}
+                  />
+                </Form.Item>
                 <Form.Item
                   label="飞书文档"
                   name="feishu_doc_url"
@@ -234,13 +264,13 @@ export function RequirementCreatePage() {
               <Form.Item
                 label="参与团队"
                 name="team_ids"
-                rules={requiredArrayRules("团队")}
+                extra="未明确协作团队时可以先留空"
               >
                 <Select
                   mode="multiple"
                   loading={teamsQuery.isLoading}
                   disabled={teamsQuery.isLoading || teamsQuery.isError}
-                  placeholder={teamsQuery.isError ? "团队加载失败" : "选择团队"}
+                  placeholder={teamsQuery.isError ? "团队加载失败" : "可稍后指定"}
                   options={(teamsQuery.data ?? []).map((team) => ({
                     value: team.id,
                     label: team.name
@@ -252,7 +282,6 @@ export function RequirementCreatePage() {
             <FormSubmitButton
               submitText="创建需求"
               loading={submitting}
-              disabled={teamsQuery.isLoading || teamsQuery.isError}
               onCancel={handleCancel}
               sticky
             />

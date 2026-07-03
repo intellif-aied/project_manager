@@ -1798,6 +1798,18 @@ func (h *ReportHandler) GetDepartmentReportToday(w http.ResponseWriter, r *http.
 	}
 	reportDate := reportDateFromRequest(r)
 	dr, err := h.getDepartmentReportByDate(reportDate)
+	if err == sql.ErrNoRows {
+		now := time.Now()
+		writeJSON(w, http.StatusOK, model.DepartmentReport{
+			ReportDate:          reportDate,
+			Content:             "",
+			SourceTeamReportIDs: []string{},
+			CreatedAt:           now,
+			UpdatedAt:           now,
+			ProductStatus:       "missing",
+		})
+		return
+	}
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 		return

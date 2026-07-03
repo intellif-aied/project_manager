@@ -63,6 +63,10 @@ export interface Requirement {
   creator_id: string;
   creator_name: string;
   creator_role: string;
+  owner_id?: string;
+  owner_name?: string;
+  owner_team_id?: string;
+  owner_team_name?: string;
   status: RequirementStatus;
   priority: RequirementPriority;
   progress: number;

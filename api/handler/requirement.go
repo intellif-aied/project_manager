@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/aidashboard/api/model"
@@ -27,9 +28,12 @@ func (h *RequirementHandler) List(w http.ResponseWriter, r *http.Request) {
 	query := `
 		SELECT r.id, r.title, r.description, r.feishu_doc_url, r.acceptance_criteria,
 			r.creator_id, COALESCE(COALESCE(NULLIF(u.nickname,''), u.username),''), r.creator_role, r.status, r.priority,
+			r.owner_id::text, COALESCE(NULLIF(owner.nickname,''), owner.username), owner.team_id::text, owner_team.name,
 			r.progress, r.deadline, r.completed_at, r.created_at, r.updated_at, r.version
 		FROM requirements r
 		JOIN users u ON u.id = r.creator_id
+		LEFT JOIN users owner ON owner.id = r.owner_id
+		LEFT JOIN teams owner_team ON owner_team.id = owner.team_id
 		WHERE 1=1`
 	args := []any{}
 	argIdx := 1
@@ -47,15 +51,17 @@ func (h *RequirementHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if u.Role == "team_leader" && u.TeamID != nil {
-		query += fmt.Sprintf(" AND (r.creator_id = $%d OR EXISTS (SELECT 1 FROM requirement_teams rt WHERE rt.requirement_id = r.id AND rt.team_id = $%d))", argIdx, argIdx+1)
+		query += fmt.Sprintf(" AND (r.creator_id = $%d OR r.owner_id = $%d OR EXISTS (SELECT 1 FROM requirement_teams rt WHERE rt.requirement_id = r.id AND rt.team_id = $%d))", argIdx, argIdx, argIdx+1)
 		args = append(args, u.ID, *u.TeamID)
 		argIdx += 2
 	} else if u.Role == "employee" && u.TeamID != nil {
-		query += fmt.Sprintf(" AND EXISTS (SELECT 1 FROM requirement_teams rt WHERE rt.requirement_id = r.id AND rt.team_id = $%d)", argIdx)
-		args = append(args, *u.TeamID)
-		argIdx++
+		query += fmt.Sprintf(" AND (r.owner_id = $%d OR r.creator_id = $%d OR EXISTS (SELECT 1 FROM requirement_teams rt WHERE rt.requirement_id = r.id AND rt.team_id = $%d))", argIdx, argIdx, argIdx+1)
+		args = append(args, u.ID, *u.TeamID)
+		argIdx += 2
 	} else if u.Role == "employee" {
-		query += " AND 1=0"
+		query += fmt.Sprintf(" AND (r.owner_id = $%d OR r.creator_id = $%d)", argIdx, argIdx)
+		args = append(args, u.ID)
+		argIdx++
 	}
 
 	query += " ORDER BY r.created_at DESC"
@@ -74,12 +80,15 @@ func (h *RequirementHandler) List(w http.ResponseWriter, r *http.Request) {
 		var deadline sql.NullString
 		var feishuURL sql.NullString
 		var completedAt sql.NullTime
+		var ownerID, ownerName, ownerTeamID, ownerTeamName sql.NullString
 		if err := rows.Scan(&req.ID, &req.Title, &req.Description, &feishuURL, &acStr,
 			&req.CreatorID, &req.CreatorName, &req.CreatorRole, &req.Status, &req.Priority,
+			&ownerID, &ownerName, &ownerTeamID, &ownerTeamName,
 			&req.Progress, &deadline, &completedAt, &req.CreatedAt, &req.UpdatedAt, &req.Version); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
+		applyRequirementOwner(&req, ownerID, ownerName, ownerTeamID, ownerTeamName)
 		req.FeishuDocURL = nullStringPtr(feishuURL)
 		req.Deadline = nullStringPtr(deadline)
 		req.AcceptanceCriteria = parseTextArray(acStr)
@@ -107,16 +116,21 @@ func (h *RequirementHandler) Get(w http.ResponseWriter, r *http.Request) {
 	var deadline sql.NullString
 	var feishuURL sql.NullString
 	var completedAt sql.NullTime
+	var ownerID, ownerName, ownerTeamID, ownerTeamName sql.NullString
 
 	err := h.db.QueryRow(`
 		SELECT r.id, r.title, r.description, r.feishu_doc_url, r.acceptance_criteria,
 			r.creator_id, COALESCE(COALESCE(NULLIF(u.nickname,''), u.username),''), r.creator_role, r.status, r.priority,
+			r.owner_id::text, COALESCE(NULLIF(owner.nickname,''), owner.username), owner.team_id::text, owner_team.name,
 			r.progress, r.deadline, r.completed_at, r.created_at, r.updated_at, r.version
 		FROM requirements r
 		JOIN users u ON u.id = r.creator_id
+		LEFT JOIN users owner ON owner.id = r.owner_id
+		LEFT JOIN teams owner_team ON owner_team.id = owner.team_id
 		WHERE r.id = $1`, id).Scan(
 		&req.ID, &req.Title, &req.Description, &feishuURL, &acStr,
 		&req.CreatorID, &req.CreatorName, &req.CreatorRole, &req.Status, &req.Priority,
+		&ownerID, &ownerName, &ownerTeamID, &ownerTeamName,
 		&req.Progress, &deadline, &completedAt, &req.CreatedAt, &req.UpdatedAt, &req.Version,
 	)
 	if err == sql.ErrNoRows {
@@ -140,6 +154,7 @@ func (h *RequirementHandler) Get(w http.ResponseWriter, r *http.Request) {
 	req.Deadline = nullStringPtr(deadline)
 	req.AcceptanceCriteria = parseTextArray(acStr)
 	req.CompletedAt = nullTimePtr(completedAt)
+	applyRequirementOwner(&req, ownerID, ownerName, ownerTeamID, ownerTeamName)
 	h.loadTeams(&req)
 	h.loadProjection(&req, u)
 	writeJSON(w, http.StatusOK, req)
@@ -157,8 +172,13 @@ func (h *RequirementHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "title and description required"})
 		return
 	}
-	if len(req.TeamIDs) == 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "at least one team_id required"})
+	ownerID, ownerErr := h.normalizeRequirementOwnerID(req.OwnerID)
+	if ownerErr != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": ownerErr.Error()})
+		return
+	}
+	if err := h.ensureRequirementOwner(ownerID); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	if !h.canCreateRequirement(u, req.TeamIDs) {
@@ -171,12 +191,19 @@ func (h *RequirementHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	ac := req.AcceptanceCriteria
 
+	tx, err := h.db.Begin()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	defer tx.Rollback()
+
 	var reqID string
-	err := h.db.QueryRow(`
-		INSERT INTO requirements (title, description, feishu_doc_url, acceptance_criteria, creator_id, creator_role, priority, deadline)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+	err = tx.QueryRow(`
+		INSERT INTO requirements (title, description, feishu_doc_url, acceptance_criteria, creator_id, creator_role, priority, deadline, owner_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
 		req.Title, req.Description, nullString(req.FeishuDocURL),
-		arrayToTextArray(ac), u.ID, u.Role, req.Priority, nullString(req.Deadline),
+		arrayToTextArray(ac), u.ID, u.Role, req.Priority, nullString(req.Deadline), nullableUserID(ownerID),
 	).Scan(&reqID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -184,23 +211,41 @@ func (h *RequirementHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, tid := range req.TeamIDs {
-		h.db.Exec("INSERT INTO requirement_teams (requirement_id, team_id) VALUES ($1, $2)", reqID, tid)
+		if _, err := tx.Exec("INSERT INTO requirement_teams (requirement_id, team_id) VALUES ($1, $2)", reqID, tid); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid team_id"})
+			return
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
 	}
 
 	autoFollow(h.db, u.ID, "requirement", reqID)
+	if ownerID != nil && *ownerID != u.ID {
+		autoFollow(h.db, *ownerID, "requirement", reqID)
+	}
 
 	var result model.Requirement
 	var acStr string
 	var deadline sql.NullString
 	var feishuURL sql.NullString
 	var completedAt sql.NullTime
+	var resultOwnerID, resultOwnerName, resultOwnerTeamID, resultOwnerTeamName sql.NullString
 	err = h.db.QueryRow(`
 		SELECT r.id, r.title, r.description, r.feishu_doc_url, r.acceptance_criteria,
 			r.creator_id, COALESCE(COALESCE(NULLIF(u.nickname,''), u.username),''), r.creator_role, r.status, r.priority,
+			r.owner_id::text, COALESCE(NULLIF(owner.nickname,''), owner.username), owner.team_id::text, owner_team.name,
 			r.progress, r.deadline, r.completed_at, r.created_at, r.updated_at, r.version
-		FROM requirements r JOIN users u ON u.id = r.creator_id WHERE r.id = $1`, reqID).Scan(
+		FROM requirements r
+		JOIN users u ON u.id = r.creator_id
+		LEFT JOIN users owner ON owner.id = r.owner_id
+		LEFT JOIN teams owner_team ON owner_team.id = owner.team_id
+		WHERE r.id = $1`, reqID).Scan(
 		&result.ID, &result.Title, &result.Description, &feishuURL, &acStr,
 		&result.CreatorID, &result.CreatorName, &result.CreatorRole, &result.Status, &result.Priority,
+		&resultOwnerID, &resultOwnerName, &resultOwnerTeamID, &resultOwnerTeamName,
 		&result.Progress, &deadline, &completedAt, &result.CreatedAt, &result.UpdatedAt, &result.Version,
 	)
 	if err != nil {
@@ -211,6 +256,7 @@ func (h *RequirementHandler) Create(w http.ResponseWriter, r *http.Request) {
 	result.Deadline = nullStringPtr(deadline)
 	result.AcceptanceCriteria = parseTextArray(acStr)
 	result.CompletedAt = nullTimePtr(completedAt)
+	applyRequirementOwner(&result, resultOwnerID, resultOwnerName, resultOwnerTeamID, resultOwnerTeamName)
 	h.loadTeams(&result)
 	h.loadProjection(&result, u)
 	writeJSON(w, http.StatusCreated, result)
@@ -239,6 +285,26 @@ func (h *RequirementHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if !allowed {
 		writeRequirementForbiddenOrNotFound(w, h.db, id, "insufficient permissions to update requirement")
 		return
+	}
+
+	ownerTouched := req.OwnerID != nil || req.ClearOwner
+	var ownerID *string
+	if req.OwnerID != nil {
+		var ownerErr error
+		ownerID, ownerErr = h.normalizeRequirementOwnerID(req.OwnerID)
+		if ownerErr != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": ownerErr.Error()})
+			return
+		}
+		if ownerID == nil {
+			req.ClearOwner = true
+		}
+	}
+	if ownerTouched && !req.ClearOwner {
+		if err := h.ensureRequirementOwner(ownerID); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
 	}
 
 	sets := []string{}
@@ -280,13 +346,22 @@ func (h *RequirementHandler) Update(w http.ResponseWriter, r *http.Request) {
 		args = append(args, *req.FeishuDocURL)
 		argIdx++
 	}
+	if ownerTouched {
+		if req.ClearOwner {
+			sets = append(sets, "owner_id = NULL")
+		} else {
+			sets = append(sets, fmt.Sprintf("owner_id = $%d", argIdx))
+			args = append(args, nullableUserID(ownerID))
+			argIdx++
+		}
+	}
 	if req.AcceptanceCriteria != nil {
 		sets = append(sets, fmt.Sprintf("acceptance_criteria = $%d", argIdx))
 		args = append(args, arrayToTextArray(*req.AcceptanceCriteria))
 		argIdx++
 	}
 
-	if len(sets) == 0 {
+	if len(sets) == 0 && req.TeamIDs == nil {
 		writeNoFieldsToUpdate(w)
 		return
 	}
@@ -295,7 +370,32 @@ func (h *RequirementHandler) Update(w http.ResponseWriter, r *http.Request) {
 	args = append(args, id, req.BaseVersion)
 	query := fmt.Sprintf("UPDATE requirements SET %s WHERE id = $%d AND version = $%d", strings.Join(sets, ", "), argIdx, argIdx+1)
 
-	res, err := h.db.Exec(query, args...)
+	if req.TeamIDs == nil {
+		res, err := h.db.Exec(query, args...)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if rows, _ := res.RowsAffected(); rows == 0 {
+			writeRequirementNotFoundOrConflict(w, h.db, id)
+			return
+		}
+		if ownerTouched && !req.ClearOwner && ownerID != nil {
+			autoFollow(h.db, *ownerID, "requirement", id)
+		}
+
+		h.Get(w, r)
+		return
+	}
+
+	tx, err := h.db.Begin()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	defer tx.Rollback()
+
+	res, err := tx.Exec(query, args...)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -303,6 +403,25 @@ func (h *RequirementHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if rows, _ := res.RowsAffected(); rows == 0 {
 		writeRequirementNotFoundOrConflict(w, h.db, id)
 		return
+	}
+	if req.TeamIDs != nil {
+		if _, err := tx.Exec(`DELETE FROM requirement_teams WHERE requirement_id = $1`, id); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		for _, tid := range *req.TeamIDs {
+			if _, err := tx.Exec(`INSERT INTO requirement_teams (requirement_id, team_id) VALUES ($1, $2)`, id, tid); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid team_id"})
+				return
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if ownerTouched && !req.ClearOwner && ownerID != nil {
+		autoFollow(h.db, *ownerID, "requirement", id)
 	}
 
 	h.Get(w, r)
@@ -536,6 +655,8 @@ func (h *RequirementHandler) RegenerateAC(w http.ResponseWriter, r *http.Request
 }
 
 func (h *RequirementHandler) loadTeams(req *model.Requirement) {
+	req.TeamIDs = []string{}
+	req.TeamNames = []string{}
 	rows, err := h.db.Query(`
 		SELECT t.id, t.name FROM teams t
 		JOIN requirement_teams rt ON rt.team_id = t.id
@@ -627,6 +748,56 @@ func (h *RequirementHandler) loadProjection(req *model.Requirement, u *model.Use
 			}
 		}
 	}
+}
+
+func applyRequirementOwner(req *model.Requirement, ownerID, ownerName, ownerTeamID, ownerTeamName sql.NullString) {
+	req.OwnerID = nullStringPtr(ownerID)
+	req.OwnerName = nullStringPtr(ownerName)
+	req.OwnerTeamID = nullStringPtr(ownerTeamID)
+	req.OwnerTeamName = nullStringPtr(ownerTeamName)
+}
+
+func (h *RequirementHandler) normalizeRequirementOwnerID(raw *string) (*string, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	value := strings.TrimSpace(*raw)
+	if value == "" {
+		return nil, nil
+	}
+	if _, err := strconv.ParseInt(value, 10, 64); err != nil {
+		return nil, fmt.Errorf("invalid owner_id")
+	}
+	return &value, nil
+}
+
+func (h *RequirementHandler) ensureRequirementOwner(ownerID *string) error {
+	if ownerID == nil {
+		return nil
+	}
+	var ok bool
+	if err := h.db.QueryRow(`
+		SELECT EXISTS(
+			SELECT 1 FROM users
+			WHERE id = $1 AND local_enabled = true
+		)`, *ownerID).Scan(&ok); err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("owner not found")
+	}
+	return nil
+}
+
+func nullableUserID(id *string) sql.NullInt64 {
+	if id == nil || strings.TrimSpace(*id) == "" {
+		return sql.NullInt64{}
+	}
+	value, err := strconv.ParseInt(strings.TrimSpace(*id), 10, 64)
+	if err != nil {
+		return sql.NullInt64{}
+	}
+	return sql.NullInt64{Int64: value, Valid: true}
 }
 
 func isRequirementStatus(status string) bool {

@@ -34,26 +34,22 @@ func (h *RequirementHandler) canViewRequirement(u *model.User, requirementID str
 	if isGlobalRequirementManager(u.Role) {
 		return h.requirementExists(requirementID)
 	}
-	if !hasTeam(u) {
-		return false, nil
-	}
 	var allowed bool
 	query := `
 		SELECT EXISTS(
 			SELECT 1 FROM requirements r
 			WHERE r.id = $1
-			  AND (EXISTS (
+			  AND (r.creator_id = $2 OR r.owner_id = $2`
+	args := []any{requirementID, u.ID}
+	if hasTeam(u) {
+		query += ` OR EXISTS (
 				SELECT 1 FROM requirement_teams rt
-				WHERE rt.requirement_id = r.id AND rt.team_id = $2
+				WHERE rt.requirement_id = r.id AND rt.team_id = $3
 			  )`
-	if u.Role == "team_leader" {
-		query += ` OR r.creator_id = $3`
+		args = append(args, *u.TeamID)
 	}
 	query += `))`
-	if u.Role == "team_leader" {
-		return allowed, h.db.QueryRow(query, requirementID, *u.TeamID, u.ID).Scan(&allowed)
-	}
-	return allowed, h.db.QueryRow(query, requirementID, *u.TeamID).Scan(&allowed)
+	return allowed, h.db.QueryRow(query, args...).Scan(&allowed)
 }
 
 func (h *RequirementHandler) canCreateRequirement(u *model.User, teamIDs []string) bool {
@@ -63,7 +59,7 @@ func (h *RequirementHandler) canCreateRequirement(u *model.User, teamIDs []strin
 	if isGlobalRequirementManager(u.Role) {
 		return true
 	}
-	return u.Role == "team_leader" && len(teamIDs) > 0
+	return u.Role == "team_leader"
 }
 
 func (h *RequirementHandler) canManageRequirement(u *model.User, requirementID string) (bool, error) {
@@ -73,10 +69,22 @@ func (h *RequirementHandler) canManageRequirement(u *model.User, requirementID s
 	if isGlobalRequirementManager(u.Role) {
 		return h.requirementExists(requirementID)
 	}
-	if u.Role != "team_leader" {
-		return false, nil
+	var allowed bool
+	query := `
+		SELECT EXISTS(
+			SELECT 1 FROM requirements r
+			WHERE r.id = $1
+			  AND (r.creator_id = $2 OR r.owner_id = $2`
+	args := []any{requirementID, u.ID}
+	if u.Role == "team_leader" && hasTeam(u) {
+		query += ` OR EXISTS (
+				SELECT 1 FROM requirement_teams rt
+				WHERE rt.requirement_id = r.id AND rt.team_id = $3
+			  )`
+		args = append(args, *u.TeamID)
 	}
-	return h.canViewRequirement(u, requirementID)
+	query += `))`
+	return allowed, h.db.QueryRow(query, args...).Scan(&allowed)
 }
 
 func (h *RequirementHandler) requirementExists(requirementID string) (bool, error) {
@@ -120,7 +128,13 @@ func (h *TaskHandler) canViewTaskRecord(u *model.User, task taskAccessRecord) (b
 		return true, nil
 	}
 	if !hasTeam(u) {
-		return false, nil
+		var allowed bool
+		err := h.db.QueryRow(`
+			SELECT EXISTS(
+				SELECT 1 FROM requirements r
+				WHERE r.id = $1 AND (r.owner_id = $2 OR r.creator_id = $2)
+			)`, task.RequirementID, u.ID).Scan(&allowed)
+		return allowed, err
 	}
 	var allowed bool
 	query := `
@@ -135,11 +149,18 @@ func (h *TaskHandler) canViewTaskRecord(u *model.User, task taskAccessRecord) (b
 				WHERE assignee.id = $3 AND assignee.team_id = $2
 			)`
 	if u.Role == "team_leader" {
-		query += ` OR $4 = $5`
+		query += ` OR EXISTS (
+				SELECT 1 FROM requirements r
+				WHERE r.id = $1 AND (r.owner_id = $5 OR r.creator_id = $5)
+			) OR $4 = $5`
 		err := h.db.QueryRow(query+`)`, task.RequirementID, *u.TeamID, task.AssigneeID, task.CreatorTLID, u.ID).Scan(&allowed)
 		return allowed, err
 	}
-	err := h.db.QueryRow(query+`)`, task.RequirementID, *u.TeamID, task.AssigneeID).Scan(&allowed)
+	query += ` OR EXISTS (
+			SELECT 1 FROM requirements r
+			WHERE r.id = $1 AND (r.owner_id = $4 OR r.creator_id = $4)
+		)`
+	err := h.db.QueryRow(query+`)`, task.RequirementID, *u.TeamID, task.AssigneeID, u.ID).Scan(&allowed)
 	return allowed, err
 }
 
@@ -184,9 +205,16 @@ func (h *TaskHandler) canCreateTask(u *model.User, requirementID string, assigne
 		var ok bool
 		err := h.db.QueryRow(`
 			SELECT EXISTS(
-				SELECT 1 FROM requirement_teams
-				WHERE requirement_id = $1 AND team_id = $2
-			)`, requirementID, *u.TeamID).Scan(&ok)
+				SELECT 1
+				WHERE EXISTS (
+					SELECT 1 FROM requirement_teams
+					WHERE requirement_id = $1 AND team_id = $2
+				)
+				OR EXISTS (
+					SELECT 1 FROM requirements
+					WHERE id = $1 AND (owner_id = $3 OR creator_id = $3)
+				)
+			)`, requirementID, *u.TeamID, u.ID).Scan(&ok)
 		if err != nil || !ok {
 			return ok, "requirement is not assigned to your team", err
 		}
@@ -203,15 +231,31 @@ func (h *TaskHandler) canCreateTask(u *model.User, requirementID string, assigne
 		}
 		return true, "", nil
 	case "employee":
-		if !hasTeam(u) || *assigneeID != u.ID {
+		if *assigneeID != u.ID {
 			return false, "employee can only create tasks assigned to self", nil
 		}
 		var ok bool
-		err := h.db.QueryRow(`
-			SELECT EXISTS(
-				SELECT 1 FROM requirement_teams
-				WHERE requirement_id = $1 AND team_id = $2
-			)`, requirementID, *u.TeamID).Scan(&ok)
+		var err error
+		if hasTeam(u) {
+			err = h.db.QueryRow(`
+				SELECT EXISTS(
+					SELECT 1
+					WHERE EXISTS (
+						SELECT 1 FROM requirement_teams
+						WHERE requirement_id = $1 AND team_id = $2
+					)
+					OR EXISTS (
+						SELECT 1 FROM requirements
+						WHERE id = $1 AND (owner_id = $3 OR creator_id = $3)
+					)
+				)`, requirementID, *u.TeamID, u.ID).Scan(&ok)
+		} else {
+			err = h.db.QueryRow(`
+				SELECT EXISTS(
+					SELECT 1 FROM requirements
+					WHERE id = $1 AND (owner_id = $2 OR creator_id = $2)
+				)`, requirementID, u.ID).Scan(&ok)
+		}
 		if err != nil || !ok {
 			return ok, "requirement is not assigned to your team", err
 		}
@@ -229,10 +273,28 @@ func (h *TaskHandler) canManageTask(u *model.User, task taskAccessRecord) (bool,
 		return true, nil
 	}
 	if u.Role == "employee" {
-		return task.AssigneeID.Valid && task.AssigneeID.String == u.ID, nil
+		if task.AssigneeID.Valid && task.AssigneeID.String == u.ID {
+			return true, nil
+		}
+		var allowed bool
+		err := h.db.QueryRow(`
+			SELECT EXISTS(
+				SELECT 1 FROM requirements
+				WHERE id = $1 AND (owner_id = $2 OR creator_id = $2)
+			)`, task.RequirementID, u.ID).Scan(&allowed)
+		return allowed, err
 	}
-	if u.Role != "team_leader" || !hasTeam(u) {
+	if u.Role != "team_leader" {
 		return false, nil
+	}
+	if !hasTeam(u) {
+		var allowed bool
+		err := h.db.QueryRow(`
+			SELECT EXISTS(
+				SELECT 1 FROM requirements
+				WHERE id = $1 AND (owner_id = $2 OR creator_id = $2)
+			)`, task.RequirementID, u.ID).Scan(&allowed)
+		return allowed, err
 	}
 	var allowed bool
 	err := h.db.QueryRow(`
@@ -246,6 +308,10 @@ func (h *TaskHandler) canManageTask(u *model.User, task taskAccessRecord) (bool,
 			   OR EXISTS(
 					SELECT 1 FROM requirement_teams rt
 					WHERE rt.requirement_id = $5 AND rt.team_id = $4
+			   )
+			   OR EXISTS(
+					SELECT 1 FROM requirements r
+					WHERE r.id = $5 AND (r.owner_id = $2 OR r.creator_id = $2)
 			   )
 		)`, task.CreatorTLID, u.ID, task.AssigneeID, *u.TeamID, task.RequirementID).Scan(&allowed)
 	return allowed, err
@@ -297,7 +363,11 @@ func (h *RequirementHandler) applyRequirementPermissions(req *model.Requirement,
 	manageable, _ := h.canManageRequirement(u, req.ID)
 	canCreate := false
 	if req.Status != "cancelled" {
+		isOwner := req.OwnerID != nil && *req.OwnerID == u.ID
+		isCreator := req.CreatorID == u.ID
 		if isGlobalTaskManager(u.Role) {
+			canCreate = true
+		} else if isOwner || isCreator {
 			canCreate = true
 		} else if u.Role == "team_leader" && hasTeam(u) {
 			canCreate = containsString(req.TeamIDs, *u.TeamID)

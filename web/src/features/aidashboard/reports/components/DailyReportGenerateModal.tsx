@@ -230,13 +230,13 @@ export function DailyReportGenerateModal({
       }
 
       if (scope === "team") {
-        if (currentReport) {
+        if (currentReport?.id) {
           return updateTeamReport(currentReport.id, { content: nextContent });
         }
         return saveTeamReportCurrent({ report_date: date, content: nextContent });
       }
 
-      if (currentReport) {
+      if (currentReport?.id) {
         return updateDepartmentReport(currentReport.id, { content: nextContent });
       }
       return saveDepartmentReportCurrent({ report_date: date, content: nextContent });

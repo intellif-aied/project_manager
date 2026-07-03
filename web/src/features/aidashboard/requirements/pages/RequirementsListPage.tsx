@@ -16,6 +16,7 @@ import {
   StopOutlined,
   TeamOutlined,
   UnorderedListOutlined,
+  UserOutlined,
   WarningOutlined
 } from "@ant-design/icons";
 import { DragDropContext, Draggable, Droppable } from "@hello-pangea/dnd";
@@ -58,6 +59,8 @@ import { PagePanel } from "@/shared/components/PagePanel/PagePanel";
 import { isEditConflict } from "@/shared/request/apiError";
 import { appendSearch } from "@/shared/utils/urlQuery";
 
+import { fetchSessionTokens } from "../../api/client";
+import type { SessionTokens } from "../../api/types";
 import { TaskStatusTag } from "../../dashboard/shared";
 import { AcceptanceCriteriaEditor } from "../components/AcceptanceCriteriaEditor";
 import {
@@ -247,7 +250,7 @@ function PriorityPill({ priority }: { priority: RequirementPriority | MockTaskPr
 }
 
 function RequirementTeamCell({ requirement }: { requirement: MockRequirement }) {
-  const teams = requirement.team_names.length ? requirement.team_names : [requirement.creator_name || "未分配团队"];
+  const teams = requirement.team_names.length ? requirement.team_names : ["未指定参与团队"];
   const visibleTeams = teams.slice(0, 2);
   const restCount = Math.max(0, teams.length - visibleTeams.length);
   const title = teams.join("、");
@@ -283,6 +286,14 @@ function formatDate(value?: string) {
   return value ? dayjs(value).format("YYYY-MM-DD") : "未设置";
 }
 
+function getRequirementOwnerLabel(requirement: MockRequirement) {
+  return requirement.owner_name || "未指定负责人";
+}
+
+function getRequirementTeamLabel(requirement: MockRequirement) {
+  return requirement.team_names.length ? requirement.team_names.join("、") : "未指定参与团队";
+}
+
 function formatTokens(value: number) {
   if (!value) return "0";
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
@@ -311,6 +322,21 @@ function formatTokenSourceTime(value: string) {
   return dayjs(value).format("MM-DD HH:mm");
 }
 
+function realSessionId(session: SessionTokens) {
+  return session.local_session_id || session.session_ref;
+}
+
+function sessionRowKey(session: SessionTokens) {
+  return session.slice_key || `${session.session_id}:${session.activity_date || session.activity_start_at || session.started_at}`;
+}
+
+function formatSessionActivityRange(session: SessionTokens) {
+  const start = session.activity_start_at || session.started_at;
+  const end = session.activity_end_at;
+  if (!end || end === start) return formatTokenSourceTime(start);
+  return `${formatTokenSourceTime(start)} ~ ${formatTokenSourceTime(end)}`;
+}
+
 function formatEvidenceCount(value: number) {
   if (!value) return "暂无关联 session";
   return `关联 session ${formatTokens(value)} Token`;
@@ -334,6 +360,8 @@ export function RequirementsListPage() {
   const [searchDraft, setSearchDraft] = useState(searchParams.get("keyword") ?? "");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [selectedRequirement, setSelectedRequirement] = useState<MockRequirement>();
+  const [statusEditRequirement, setStatusEditRequirement] = useState<MockRequirement>();
+  const [ownerPromptRequirement, setOwnerPromptRequirement] = useState<MockRequirement>();
   const [selectedTask, setSelectedTask] = useState<MockTask>();
   const [creatorOpen, setCreatorOpen] = useState(false);
 
@@ -430,6 +458,7 @@ export function RequirementsListPage() {
       id: string;
       nextStatus: RequirementStage;
       baseVersion: number;
+      promptOwnerAfterSave?: boolean;
     }) => requirementsBoardApi.updateRequirementStage(id, nextStatus, baseVersion),
     onMutate: async ({ id, nextStatus }) => {
       const queryKey = ["requirements-board", "requirements"] as const;
@@ -447,13 +476,22 @@ export function RequirementsListPage() {
       if (handleEditConflict(error, message, queryClient)) return;
       message.error(error instanceof Error ? error.message : "需求阶段更新失败");
     },
-    onSuccess: (updated) => {
-      message.success("需求阶段已更新");
+    onSuccess: (updated, variables) => {
+      const shouldPromptOwner = Boolean(variables.promptOwnerAfterSave && !updated.owner_id);
+      if (!shouldPromptOwner) {
+        message.success("需求阶段已更新");
+      }
+      queryClient.setQueryData<MockRequirement[]>(
+        ["requirements-board", "requirements"],
+        (current = []) => current.map((item) => (item.id === updated.id ? updated : item))
+      );
       if (selectedRequirement?.id === updated.id) {
         setSelectedRequirement(updated);
       }
-    },
-    onSettled: () => void invalidateRequirementTaskWorkspace(queryClient)
+      if (shouldPromptOwner) {
+        setOwnerPromptRequirement(updated);
+      }
+    }
   });
 
   const requirements = requirementsQuery.data ?? EMPTY_REQUIREMENTS;
@@ -501,6 +539,7 @@ export function RequirementsListPage() {
         requirement.title,
         requirement.description,
         requirement.creator_name,
+        requirement.owner_name ?? "",
         ...requirement.team_names,
         ...requirement.acceptance_criteria,
         ...requirementTasks.flatMap((task) => [task.title, task.assignee_name ?? ""])
@@ -584,21 +623,28 @@ export function RequirementsListPage() {
   );
 
   const visibleColumns = status === "cancelled" ? [CANCELLED_COLUMN] : STATUS_COLUMNS;
+  const shouldPromptOwnerAfterStatus = (requirement: MockRequirement, nextStatus: RequirementStage) =>
+    !requirement.owner_id && ["review", "active", "completed"].includes(nextStatus);
+
+  const mutateRequirementStatus = (requirement: MockRequirement, nextStatus: RequirementStage) => {
+    statusMutation.mutate({
+      id: requirement.id,
+      nextStatus,
+      baseVersion: requirement.version,
+      promptOwnerAfterSave: shouldPromptOwnerAfterStatus(requirement, nextStatus)
+    });
+  };
 
   const handleDrop = (result: DropResult) => {
     if (!result.destination || !canMoveRequirement) return;
     const nextStatus = result.destination.droppableId as RequirementStage;
     const requirement = requirements.find((item) => item.id === result.draggableId);
     if (!requirement || requirement.status === nextStatus || nextStatus === "cancelled") return;
-    statusMutation.mutate({ id: requirement.id, nextStatus, baseVersion: requirement.version });
+    updateRequirementStatus(requirement, nextStatus);
   };
   const updateRequirementStatus = (requirement: MockRequirement, nextStatus: RequirementStage) => {
     if (!canMoveRequirement || requirement.status === nextStatus || nextStatus === "cancelled") return;
-    statusMutation.mutate({
-      id: requirement.id,
-      nextStatus,
-      baseVersion: requirement.version
-    });
+    mutateRequirementStatus(requirement, nextStatus);
   };
 
   const toggleRequirement = (id: string) => {
@@ -939,6 +985,59 @@ export function RequirementsListPage() {
           clearNavigationTarget();
         }}
       />
+      <Modal
+        className="requirements-owner-prompt-modal"
+        open={Boolean(ownerPromptRequirement)}
+        title={null}
+        closable={false}
+        width={440}
+        footer={null}
+        onCancel={() => setOwnerPromptRequirement(undefined)}
+        destroyOnHidden
+      >
+        <div className="requirements-owner-prompt-modal__panel">
+          <div className="requirements-owner-prompt-modal__topline">
+            <span>阶段已更新</span>
+          </div>
+          <div className="requirements-owner-prompt-modal__content">
+            <div className="requirements-owner-prompt-modal__icon">
+              <UserOutlined />
+            </div>
+            <div>
+              <strong>建议补充负责人</strong>
+              <p>指定负责人后，需求会进入对应成员的关注范围，后续拆分任务也更清晰。</p>
+            </div>
+          </div>
+          <div className="requirements-owner-prompt-modal__footer">
+            <Button onClick={() => setOwnerPromptRequirement(undefined)}>稍后处理</Button>
+            <Button
+              type="primary"
+              onClick={() => {
+                const target = ownerPromptRequirement;
+                setOwnerPromptRequirement(undefined);
+                if (target) {
+                  window.setTimeout(() => setStatusEditRequirement(target), 120);
+                }
+              }}
+            >
+              指定负责人
+            </Button>
+          </div>
+        </div>
+      </Modal>
+      {statusEditRequirement ? (
+        <RequirementEditModal
+          open={Boolean(statusEditRequirement)}
+          requirement={statusEditRequirement}
+          onCancel={() => setStatusEditRequirement(undefined)}
+          onSaved={(updated) => {
+            setStatusEditRequirement(undefined);
+            if (selectedRequirement?.id === updated.id) {
+              setSelectedRequirement(updated);
+            }
+          }}
+        />
+      ) : null}
     </PagePanel>
   );
 }
@@ -967,10 +1066,8 @@ function RequirementCard({
   const blockedTasks = tasks.filter((task) => task.status === "blocked").length;
   const completedTasks = tasks.filter((task) => task.status === "done").length;
   const tokenTotal = aggregateRequirementTokens(requirement, tasks, tokenSourceMap);
-  const ownerLine =
-    requirement.team_names.length > 0
-      ? requirement.team_names.join("、")
-      : requirement.creator_name;
+  const ownerLine = getRequirementOwnerLabel(requirement);
+  const teamLine = getRequirementTeamLabel(requirement);
   const taskProgressLabel = tasks.length
     ? `${completedTasks}/${tasks.length} 个任务完成`
     : "待拆解";
@@ -1031,8 +1128,8 @@ function RequirementCard({
           </div>
 
           <footer className="requirements-board__card-meta">
-            <span title={ownerLine || "未分配团队"}>
-              <TeamOutlined /> {ownerLine || "未分配团队"}
+            <span title={`负责人：${ownerLine}；参与团队：${teamLine}`}>
+              <UserOutlined /> {ownerLine}
             </span>
             <span title={dateLabel}>
               <CalendarOutlined /> {dateLabel}
@@ -1091,8 +1188,19 @@ function RequirementTree({
       )
     },
     {
-      title: "团队",
+      title: "负责人",
       key: "owner",
+      width: 120,
+      ellipsis: true,
+      render: (_, requirement) => (
+        <span className="requirements-tree__text" title={getRequirementOwnerLabel(requirement)}>
+          {getRequirementOwnerLabel(requirement)}
+        </span>
+      )
+    },
+    {
+      title: "参与团队",
+      key: "teams",
       width: 150,
       ellipsis: true,
       render: (_, requirement) => <RequirementTeamCell requirement={requirement} />
@@ -1309,7 +1417,6 @@ function RequirementTree({
 
 interface TokenSourcePickerProps {
   open: boolean;
-  sources: MockTokenSource[];
   excludeIds: string[];
   onCancel: () => void;
   onConfirm: (ids: string[]) => Promise<void> | void;
@@ -1318,67 +1425,79 @@ interface TokenSourcePickerProps {
 
 function TokenSourcePicker({
   open,
-  sources,
   excludeIds,
   onCancel,
   onConfirm,
   confirmLoading
 }: TokenSourcePickerProps) {
   const [selected, setSelected] = useState<string[]>([]);
-  const [keyword, setKeyword] = useState("");
-  const [tool, setTool] = useState<string>();
+  const [selectedRows, setSelectedRows] = useState<Record<string, SessionTokens>>({});
+  const [dateRange, setDateRange] = useState<[string, string]>();
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const excludeSet = useMemo(() => new Set(excludeIds), [excludeIds]);
+  const sessionsQuery = useQuery({
+    queryKey: ["requirements-board", "linkable-session-tokens", page, pageSize, dateRange],
+    queryFn: () =>
+      fetchSessionTokens({
+        scope: "mine",
+        ...(dateRange ? { from: dateRange[0], to: dateRange[1] } : {}),
+        page: String(page),
+        page_size: String(pageSize)
+      }),
+    enabled: open,
+    placeholderData: (previousData) => previousData,
+    staleTime: 60_000
+  });
+  const sessions = useMemo(() => sessionsQuery.data?.items ?? [], [sessionsQuery.data]);
   const available = useMemo(
-    () => sources.filter((source) => !excludeSet.has(source.id) && source.token > 0),
-    [sources, excludeSet]
+    () => sessions.filter((source) => !excludeSet.has(source.session_id) && source.total_tokens > 0),
+    [sessions, excludeSet]
   );
-  const toolOptions = useMemo(
-    () =>
-      Array.from(new Set(available.map((source) => source.tool).filter(Boolean))).map((value) => ({
-        value,
-        label: value
-      })),
-    [available]
-  );
-  const filteredAvailable = useMemo(() => {
-    const normalizedKeyword = keyword.trim().toLowerCase();
-    return available.filter((source) => {
-      const keywordMatched =
-        !normalizedKeyword ||
-        [source.summary, source.uploader, source.tool].join(" ").toLowerCase().includes(normalizedKeyword);
-      const toolMatched = !tool || source.tool === tool;
-      return keywordMatched && toolMatched;
-    });
-  }, [available, keyword, tool]);
   const selectedTokenTotal = useMemo(
     () =>
       selected.reduce((total, id) => {
-        const source = available.find((item) => item.id === id);
-        return total + (source?.token ?? 0);
+        const source = selectedRows[id];
+        return total + (source?.total_tokens ?? 0);
       }, 0),
-    [available, selected]
+    [selected, selectedRows]
+  );
+  const selectedSessionIds = useMemo(
+    () => Array.from(new Set(selected.map((id) => selectedRows[id]?.session_id).filter(Boolean))),
+    [selected, selectedRows]
   );
 
-  const columns: TableProps<MockTokenSource>["columns"] = [
+  const columns: TableProps<SessionTokens>["columns"] = [
+    {
+      title: "Session",
+      key: "record",
+      width: 260,
+      render: (_, source) => <span className="tokens-session-id">{realSessionId(source)}</span>
+    },
     {
       title: "摘要",
       dataIndex: "summary",
-      ellipsis: true
-    },
-    { title: "工具", dataIndex: "tool", width: 100 },
-    { title: "上传人", dataIndex: "uploader", width: 100 },
-    {
-      title: "时间",
-      dataIndex: "recorded_at",
-      width: 120,
-      render: (value: string) => formatTokenSourceTime(value)
+      render: (value: string | undefined) =>
+        value ? (
+          <span className="tokens-session-summary" title={value}>
+            {value}
+          </span>
+        ) : (
+          "-"
+        )
     },
     {
       title: "Token",
-      dataIndex: "token",
-      width: 90,
+      dataIndex: "total_tokens",
+      width: 100,
       align: "right" as const,
-      render: (value: number) => formatTokens(value)
+      render: (value: number) => <span className="tokens-total-cell">{formatTokens(value)}</span>
+    },
+    {
+      title: "日期范围",
+      dataIndex: "activity_start_at",
+      width: 170,
+      render: (_, source) => <span className="tokens-activity-range">{formatSessionActivityRange(source)}</span>
     }
   ];
 
@@ -1395,53 +1514,78 @@ function TokenSourcePicker({
       width={780}
       onCancel={() => {
         setSelected([]);
-        setKeyword("");
-        setTool(undefined);
+        setSelectedRows({});
+        setDateRange(undefined);
+        setPage(1);
+        setPageSize(10);
         onCancel();
       }}
-      okText={selected.length ? `关联 ${selected.length} 条记录` : "关联记录"}
-      okButtonProps={{ disabled: !selected.length, loading: confirmLoading }}
+      okText={selectedSessionIds.length ? `关联 ${selectedSessionIds.length} 条记录` : "关联记录"}
+      okButtonProps={{ disabled: !selectedSessionIds.length, loading: confirmLoading }}
       cancelText="取消"
       onOk={async () => {
-        await onConfirm(selected);
+        await onConfirm(selectedSessionIds);
         setSelected([]);
+        setSelectedRows({});
       }}
       destroyOnHidden
     >
       <div className="requirements-session-modal__toolbar">
-        <Input.Search
+        <DatePicker.RangePicker
           allowClear
-          value={keyword}
-          placeholder="搜索摘要、上传人或工具"
-          onChange={(event) => setKeyword(event.target.value)}
-        />
-        <Select
-          allowClear
-          value={tool}
-          placeholder="全部工具"
-          options={toolOptions}
-          onChange={setTool}
+          value={dateRange ? [dayjs(dateRange[0]), dayjs(dateRange[1])] : null}
+          format="YYYY-MM-DD"
+          placeholder={["开始日期", "结束日期"]}
+          onChange={(_, values) => {
+            const nextRange =
+              values[0] && values[1] ? ([values[0], values[1]] as [string, string]) : undefined;
+            setDateRange(nextRange);
+            setSelected([]);
+            setSelectedRows({});
+            setPage(1);
+          }}
         />
       </div>
-      <Table<MockTokenSource>
-        rowKey="id"
+      <div className="requirements-session-modal__table tokens-table-card">
+        <Table<SessionTokens>
+        rowKey={sessionRowKey}
         size="small"
         columns={columns}
-        dataSource={filteredAvailable}
-        pagination={false}
-        scroll={{ y: 360 }}
+        dataSource={available}
+        loading={sessionsQuery.isLoading}
+        pagination={{
+          current: sessionsQuery.data?.page ?? page,
+          pageSize: sessionsQuery.data?.page_size ?? pageSize,
+          total: sessionsQuery.data?.total ?? 0,
+          showSizeChanger: true,
+          showTotal: (value) => `共 ${value} 条工作记录`,
+          onChange: (nextPage, nextPageSize) => {
+            setPage(nextPage);
+            setPageSize(nextPageSize);
+          }
+        }}
+          scroll={{ y: 360 }}
         rowSelection={{
+          preserveSelectedRowKeys: true,
           selectedRowKeys: selected,
-          onChange: (keys) => setSelected(keys as string[])
+          onChange: (keys, rows) => {
+            const nextRows = { ...selectedRows };
+            rows.forEach((row) => {
+              nextRows[sessionRowKey(row)] = row;
+            });
+            setSelected(keys as string[]);
+            setSelectedRows(nextRows);
+          }
         }}
         locale={{ emptyText: "暂无可关联 session" }}
-      />
+        />
+      </div>
       <div className="requirements-session-modal__summary">
         <span>
-          可选 {filteredAvailable.length} 条
-          {available.length !== filteredAvailable.length ? ` / 共 ${available.length} 条` : ""}
+          本页可选 {available.length} 条
+          {dateRange ? ` · ${dateRange[0]} 至 ${dateRange[1]}` : ""}
         </span>
-        <strong>已选 {selected.length} 条 · {formatTokens(selectedTokenTotal)} Token</strong>
+        <strong>已选 {selectedSessionIds.length} 条 · {formatTokens(selectedTokenTotal)} Token</strong>
       </div>
     </Modal>
   );
@@ -1640,7 +1784,7 @@ function RequirementDrawer({
 
   return (
     <Drawer
-      className="requirements-drawer"
+      className="requirements-drawer requirements-drawer--requirement"
       size={720}
       open={Boolean(requirement)}
       onClose={onClose}
@@ -1665,7 +1809,7 @@ function RequirementDrawer({
       }
     >
       {requirement ? (
-        <Space orientation="vertical" size={16} style={{ width: "100%" }}>
+        <div className="requirements-drawer__content">
           <section className="requirements-drawer__summary">
             <div className="requirements-drawer__summary-head">
               <div className="requirements-drawer__summary-tags">
@@ -1732,6 +1876,14 @@ function RequirementDrawer({
                 <span>截止日期</span>
                 <strong>{formatDate(requirement.deadline)}</strong>
               </div>
+              <div>
+                <span>负责人</span>
+                <strong>{getRequirementOwnerLabel(requirement)}</strong>
+              </div>
+              <div>
+                <span>参与团队</span>
+                <strong>{getRequirementTeamLabel(requirement)}</strong>
+              </div>
             </div>
           </section>
 
@@ -1748,7 +1900,7 @@ function RequirementDrawer({
                   </span>
                 ),
                 children: (
-                  <section className="requirements-drawer__section">
+                  <section className="requirements-drawer__section requirements-drawer__task-section">
                     <div className="requirements-drawer__section-head">
                       <h3>任务拆解</h3>
                       <div className="requirements-drawer__section-actions">
@@ -1926,7 +2078,6 @@ function RequirementDrawer({
 
           <TokenSourcePicker
             open={pickerOpen}
-            sources={tokenSources}
             excludeIds={requirement.token_source_ids}
             confirmLoading={linkMutation.isPending}
             onCancel={() => setPickerOpen(false)}
@@ -1944,7 +2095,7 @@ function RequirementDrawer({
               setEditOpen(false);
             }}
           />
-        </Space>
+        </div>
       ) : null}
     </Drawer>
   );
@@ -1968,9 +2119,21 @@ function RequirementEditModal({
     description: string;
     priority: RequirementPriority;
     deadline?: dayjs.Dayjs;
+    owner_id?: string;
+    team_ids?: string[];
     feishu_doc_url?: string;
     acceptance_criteria: string[];
   }>();
+  const teamsQuery = useQuery({
+    queryKey: ["requirements-board", "teams"],
+    queryFn: () => requirementsBoardApi.listTeams(),
+    staleTime: 5 * 60_000
+  });
+  const assigneesQuery = useQuery({
+    queryKey: ["requirements-board", "assignees"],
+    queryFn: () => requirementsBoardApi.listAssignees(),
+    staleTime: 5 * 60_000
+  });
 
   const initialValues = useMemo(
     () => ({
@@ -1978,6 +2141,8 @@ function RequirementEditModal({
       description: requirement.description,
       priority: requirement.priority,
       deadline: requirement.deadline ? dayjs(requirement.deadline) : undefined,
+      owner_id: requirement.owner_id,
+      team_ids: requirement.team_ids,
       feishu_doc_url: requirement.feishu_doc_url ?? "",
       acceptance_criteria: requirement.acceptance_criteria.length
         ? requirement.acceptance_criteria
@@ -2000,6 +2165,8 @@ function RequirementEditModal({
       description: string;
       priority: RequirementPriority;
       deadline?: dayjs.Dayjs;
+      owner_id?: string;
+      team_ids?: string[];
       feishu_doc_url?: string;
       acceptance_criteria: string[];
     }) =>
@@ -2008,6 +2175,9 @@ function RequirementEditModal({
         description: normalizeRequiredText(values.description),
         priority: values.priority,
         deadline: values.deadline ? values.deadline.format("YYYY-MM-DD") : undefined,
+        owner_id: values.owner_id,
+        clear_owner: !values.owner_id,
+        team_ids: values.team_ids ?? [],
         feishu_doc_url: normalizeOptionalText(values.feishu_doc_url),
         acceptance_criteria: normalizeCriteria(values.acceptance_criteria),
         base_version: requirement.version
@@ -2022,12 +2192,47 @@ function RequirementEditModal({
       message.error(error instanceof Error ? error.message : "需求更新失败");
     }
   });
+  const assigneeOptions = useMemo(() => {
+    const options = (assigneesQuery.data ?? []).map((assignee) => ({
+      value: assignee.id,
+      label: assignee.name
+    }));
+    if (requirement.owner_id && !options.some((item) => item.value === requirement.owner_id)) {
+      options.push({
+        value: requirement.owner_id,
+        label: requirement.owner_name ?? requirement.owner_id
+      });
+    }
+    return options;
+  }, [assigneesQuery.data, requirement.owner_id, requirement.owner_name]);
+  const handleOwnerChange = (ownerId?: string) => {
+    if (!ownerId) return;
+    const owner = assigneesQuery.data?.find((item) => item.id === ownerId);
+    if (!owner?.team_id) return;
+    const currentTeamIds = form.getFieldValue("team_ids") ?? [];
+    if (!currentTeamIds.includes(owner.team_id)) {
+      form.setFieldValue("team_ids", [...currentTeamIds, owner.team_id]);
+    }
+  };
 
   return (
     <Modal
-      title={`编辑需求 · ${requirement.title}`}
+      className="requirements-edit-modal"
+      title={
+        <div className="requirements-edit-modal__title">
+          <strong>编辑需求</strong>
+        </div>
+      }
       open={open}
-      width={600}
+      width={820}
+      style={{ top: 36 }}
+      styles={{
+        body: {
+          maxHeight: "calc(100vh - 190px)",
+          overflowY: "auto",
+          padding: "16px 24px 6px"
+        }
+      }}
       destroyOnHidden
       onCancel={() => {
         if (updateMutation.isPending) return;
@@ -2041,47 +2246,77 @@ function RequirementEditModal({
       <Form
         form={form}
         layout="vertical"
+        className="requirements-edit-modal__form"
         initialValues={initialValues}
         onFinish={(values) => updateMutation.mutate(values)}
       >
-        <Form.Item
-          label="需求标题"
-          name="title"
-          rules={titleRules("需求标题")}
-        >
-          <Input placeholder="需求标题" />
-        </Form.Item>
-        <Form.Item label="需求描述" name="description" rules={descriptionRules("需求描述")}>
-          <Input.TextArea rows={3} placeholder="补充背景与目标" />
-        </Form.Item>
-        <Form.Item
-          label="优先级"
-          name="priority"
-          rules={requiredSelectRules("优先级")}
-        >
-          <Select
-            options={[
-              { value: "low", label: "低" },
-              { value: "medium", label: "中" },
-              { value: "high", label: "高" },
-              { value: "urgent", label: "紧急" }
-            ]}
-          />
-        </Form.Item>
-        <Form.Item label="截止日期" name="deadline">
-          <DatePicker style={{ width: "100%" }} />
-        </Form.Item>
-        <Form.Item label="飞书文档链接" name="feishu_doc_url" rules={optionalUrlRules("飞书文档链接")}>
-          <Input placeholder="https://..." />
-        </Form.Item>
-        <Form.Item
-          label="标准列表"
-          name="acceptance_criteria"
-          rules={acceptanceCriteriaRules()}
-          extra="留空可清空需求验收标准"
-        >
-          <AcceptanceCriteriaEditor placeholder="输入一条可验证的需求验收标准" />
-        </Form.Item>
+        <section className="requirements-edit-modal__field-grid">
+          <Form.Item
+            className="requirements-edit-modal__full"
+            label="需求标题"
+            name="title"
+            rules={titleRules("需求标题")}
+          >
+            <Input placeholder="需求标题" />
+          </Form.Item>
+          <Form.Item label="优先级" name="priority" rules={requiredSelectRules("优先级")}>
+            <Select
+              options={[
+                { value: "low", label: "低" },
+                { value: "medium", label: "中" },
+                { value: "high", label: "高" },
+                { value: "urgent", label: "紧急" }
+              ]}
+            />
+          </Form.Item>
+          <Form.Item label="截止日期" name="deadline">
+            <DatePicker style={{ width: "100%" }} />
+          </Form.Item>
+          <Form.Item label="负责人" name="owner_id">
+            <Select
+              allowClear
+              showSearch
+              loading={assigneesQuery.isLoading}
+              placeholder={assigneesQuery.isError ? "负责人加载失败" : "可稍后指定"}
+              optionFilterProp="label"
+              onChange={handleOwnerChange}
+              options={assigneeOptions}
+            />
+          </Form.Item>
+          <Form.Item
+            label="飞书文档链接"
+            name="feishu_doc_url"
+            rules={optionalUrlRules("飞书文档链接")}
+          >
+            <Input placeholder="https://..." />
+          </Form.Item>
+          <Form.Item className="requirements-edit-modal__full" label="参与团队" name="team_ids">
+            <Select
+              mode="multiple"
+              loading={teamsQuery.isLoading}
+              disabled={teamsQuery.isLoading || teamsQuery.isError}
+              placeholder={teamsQuery.isError ? "团队加载失败" : "可稍后指定"}
+              options={(teamsQuery.data ?? []).map((team) => ({
+                value: team.id,
+                label: team.name
+              }))}
+            />
+          </Form.Item>
+        </section>
+
+        <section className="requirements-edit-modal__detail-grid">
+          <Form.Item label="需求描述" name="description" rules={descriptionRules("需求描述")}>
+            <Input.TextArea rows={2} placeholder="补充背景与目标" />
+          </Form.Item>
+          <Form.Item
+            label="标准列表"
+            name="acceptance_criteria"
+            rules={acceptanceCriteriaRules()}
+            extra="留空可清空需求验收标准"
+          >
+            <AcceptanceCriteriaEditor placeholder="输入一条可验证的需求验收标准" />
+          </Form.Item>
+        </section>
       </Form>
     </Modal>
   );
@@ -2778,7 +3013,6 @@ function TaskDrawerContent({
 
       <TokenSourcePicker
         open={pickerOpen}
-        sources={tokenSources}
         excludeIds={task.token_source_ids}
         confirmLoading={linkMutation.isPending}
         onCancel={() => setPickerOpen(false)}
