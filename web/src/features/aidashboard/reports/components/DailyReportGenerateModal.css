@@ -1,7 +1,15 @@
 .console-report-workflow-modal.ant-modal {
+  display: flex;
+  max-height: calc(100dvh - clamp(24px, 6vh, 48px));
+  flex-direction: column;
+  overflow: hidden;
   top: clamp(12px, 3vh, 24px);
-  max-width: min(980px, calc(100vw - 32px));
-  padding-bottom: clamp(12px, 3vh, 24px);
+  max-width: min(1180px, calc(100vw - 32px));
+  padding: 0;
+  border: 1px solid #e5edf6;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 20px 48px rgba(15, 23, 42, 0.13);
 }
 
 .console-report-workflow-modal .ant-modal-content {
@@ -14,6 +22,15 @@
   border-radius: 12px;
   background: #ffffff;
   box-shadow: 0 20px 48px rgba(15, 23, 42, 0.13);
+}
+
+.console-report-workflow-modal .ant-modal-container {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: 100%;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .console-report-workflow-modal .ant-modal-header {
@@ -32,13 +49,13 @@
 }
 
 .console-report-workflow-modal .ant-modal-body {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-height: 0;
-  overflow-y: auto;
+  max-height: calc(100dvh - 180px);
+  overflow: hidden;
   padding: 16px 20px 18px;
   background: #ffffff;
   scrollbar-color: #cbd5e1 transparent;
-  scrollbar-gutter: stable;
   scrollbar-width: thin;
 }
 
@@ -63,7 +80,9 @@
 
 .console-report-modal {
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 14px;
+  max-height: 100%;
   min-height: 0;
 }
 
@@ -181,18 +200,44 @@
   font-weight: 650;
 }
 
+.console-report-management__content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+  max-height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.console-report-management__content.has-settings {
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 420px);
+  align-items: stretch;
+}
+
+.console-report-management__main {
+  min-width: 0;
+  min-height: 0;
+}
+
 .console-report-editor-layout {
   display: grid;
   gap: 14px;
+  max-height: 100%;
+  min-width: 0;
+  min-height: 0;
 }
 
 .console-report-editor-layout__main {
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 10px;
+  min-width: 0;
+  min-height: 0;
 }
 
 .console-report-editor-layout textarea.ant-input {
-  min-height: 360px;
+  height: clamp(260px, calc(100dvh - 430px), 360px);
+  min-height: 220px;
   padding: 12px;
   border: 1px solid #e6edf5;
   border-radius: 8px;
@@ -201,6 +246,12 @@
   font-size: 13px;
   line-height: 1.6;
   resize: vertical;
+}
+
+@media (max-width: 760px) {
+  .console-report-management__content.has-settings {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .console-department-source {

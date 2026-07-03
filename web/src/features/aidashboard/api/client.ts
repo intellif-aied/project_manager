@@ -650,8 +650,8 @@ export const fetchTokens = (params?: {
 };
 
 export const fetchSessionTokens = (params: {
-  from: string;
-  to: string;
+  from?: string;
+  to?: string;
   scope?: "mine" | "team";
   page?: string;
   page_size?: string;

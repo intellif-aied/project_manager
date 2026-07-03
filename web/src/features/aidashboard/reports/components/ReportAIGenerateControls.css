@@ -17,62 +17,159 @@
   border-end-end-radius: 0;
 }
 
-.report-ai-settings-modal.ant-modal {
-  top: clamp(12px, 3vh, 24px);
-  max-width: min(920px, calc(100vw - 32px));
-  padding-bottom: clamp(12px, 3vh, 24px);
+.report-ai-generate-controls .ant-btn.is-active {
+  border-color: #2563eb;
+  color: #1d4ed8;
+  background: #eff6ff;
+  z-index: 1;
 }
 
-.report-ai-settings-modal .ant-modal-container,
-.report-ai-settings-modal .ant-modal-content {
-  display: flex;
-  max-height: calc(100dvh - clamp(24px, 6vh, 48px));
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.report-ai-settings-modal .ant-modal-body {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  scrollbar-color: #cbd5e1 transparent;
-  scrollbar-gutter: stable;
-  scrollbar-width: thin;
-}
-
-.report-ai-settings-modal .ant-modal-footer {
-  flex: 0 0 auto;
-}
-
-.report-ai-settings {
+.report-ai-settings-panel {
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 12px;
+  min-width: 0;
+  min-height: 0;
+  max-width: 100%;
+  max-height: calc(100dvh - 230px);
+  overflow: hidden;
+  padding: 12px;
+  border: 1px solid #dfe8f3;
+  border-radius: 10px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+  box-shadow: 0 12px 26px rgba(15, 23, 42, 0.06);
 }
 
-.report-ai-settings__summary {
+.report-ai-settings-panel__head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
-  padding: 10px 12px;
-  border: 1px solid #e6edf5;
-  border-radius: 8px;
-  background: #f8fbff;
+  gap: 10px;
 }
 
-.report-ai-settings__summary strong {
+.report-ai-settings-panel__head > span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.report-ai-settings-panel__head strong {
   color: #172033;
   font-size: 14px;
+  font-weight: 720;
 }
 
-.report-ai-settings__summary span,
-.report-ai-settings > span {
+.report-ai-settings-panel__head em {
   color: #64748b;
   font-size: 13px;
+  font-style: normal;
+  line-height: 1.45;
+}
+
+.report-ai-settings-panel__head .ant-btn {
+  flex: 0 0 auto;
+  height: 26px;
+  padding: 0 8px;
+  color: #526173;
+  font-size: 12px;
+  font-weight: 650;
 }
 
 .report-ai-session-id {
+  display: inline-block;
+  max-width: 100%;
   color: #172033;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   font-size: 12px;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
+.report-ai-session-cell {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.report-ai-session-summary {
+  display: -webkit-box;
+  overflow: hidden;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.report-ai-settings-panel .ant-table-wrapper,
+.report-ai-settings-panel .ant-spin-nested-loading,
+.report-ai-settings-panel .ant-spin-container,
+.report-ai-settings-panel .ant-table,
+.report-ai-settings-panel .ant-table-container,
+.report-ai-settings-panel .ant-table-content {
+  max-width: 100%;
+  overflow: hidden !important;
+}
+
+.report-ai-settings-panel .ant-table-wrapper,
+.report-ai-settings-panel .ant-spin-nested-loading,
+.report-ai-settings-panel .ant-spin-container {
+  min-height: 0;
+}
+
+.report-ai-settings-panel .ant-table {
+  table-layout: fixed;
+  border: 1px solid #e6edf5;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.report-ai-settings-panel .ant-table-body {
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  scrollbar-color: #cbd5e1 transparent;
+  scrollbar-width: thin;
+}
+
+.report-ai-settings-panel .ant-table-thead > tr > th {
+  padding: 8px;
+  background: #f8fafc !important;
+  color: #526173;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.report-ai-settings-panel .ant-table-tbody > tr > td {
+  padding: 8px;
+  color: #172033;
+  font-size: 12px;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.report-ai-settings-panel .ant-table-selection-column {
+  width: 34px;
+  min-width: 34px;
+  padding-inline: 8px !important;
+}
+
+.report-ai-settings-panel .ant-table-placeholder .ant-table-cell {
+  border-bottom: 0;
+}
+
+.report-ai-settings-panel .ant-table-pagination {
+  flex-wrap: wrap;
+  row-gap: 6px;
+  margin: 10px 0 0 !important;
+}
+
+.report-ai-settings-panel .ant-pagination-options {
+  margin-inline-start: 4px;
+}
+
+@media (max-width: 760px) {
+  .report-ai-settings-panel {
+    order: -1;
+  }
 }

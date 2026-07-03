@@ -961,9 +961,26 @@
 }
 
 .console-report-workflow-modal.ant-modal {
+  display: flex;
+  max-height: calc(100dvh - clamp(24px, 6vh, 48px));
+  flex-direction: column;
+  overflow: hidden;
   top: clamp(12px, 3vh, 24px);
-  max-width: min(980px, calc(100vw - 32px));
-  padding-bottom: clamp(12px, 3vh, 24px);
+  max-width: min(1180px, calc(100vw - 32px));
+  padding: 0;
+  border: 1px solid #e5edf6;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 20px 48px rgba(15, 23, 42, 0.13);
+}
+
+.console-report-workflow-modal .ant-modal-container {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: 100%;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .console-report-workflow-modal .ant-modal-header {
@@ -987,12 +1004,12 @@
 }
 
 .console-report-workflow-modal .ant-modal-body {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-height: 0;
+  max-height: calc(100dvh - 180px);
   padding: 16px 20px 18px;
-  overflow-y: auto;
+  overflow: hidden;
   scrollbar-color: #cbd5e1 transparent;
-  scrollbar-gutter: stable;
   scrollbar-width: thin;
   background: #ffffff;
 }

@@ -60,24 +60,22 @@ function formatActivityRange(session: SessionTokens) {
 
 export function TokensPage() {
   const { user } = useAuth();
-  const today = dayjs();
-  const firstOfMonth = today.startOf("month");
-  const [range, setRange] = useState<[dayjs.Dayjs, dayjs.Dayjs]>([firstOfMonth, today]);
+  const [range, setRange] = useState<[dayjs.Dayjs, dayjs.Dayjs] | null>(null);
   const canViewTeam = Boolean(user && user.role !== "employee");
   const [scope, setScope] = useState<"mine" | "team">("mine");
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
+  const [pageSize, setPageSize] = useState(10);
   const effectiveScope = canViewTeam ? scope : "mine";
 
-  const from = range[0].format("YYYY-MM-DD");
-  const to = range[1].format("YYYY-MM-DD");
+  const from = range?.[0].format("YYYY-MM-DD");
+  const to = range?.[1].format("YYYY-MM-DD");
+  const hasDateRange = Boolean(from && to);
 
   const tokensQuery = useQuery({
     queryKey: ["session-tokens", from, to, effectiveScope, page, pageSize],
     queryFn: () =>
       fetchSessionTokens({
-        from,
-        to,
+        ...(hasDateRange ? { from, to } : {}),
         scope: effectiveScope,
         page: String(page),
         page_size: String(pageSize)
@@ -89,9 +87,8 @@ export function TokensPage() {
     queryKey: ["token-aggregation", from, to, effectiveScope],
     queryFn: () =>
       fetchTokens({
-        period: "range",
-        from,
-        to,
+        period: hasDateRange ? "range" : "month",
+        ...(hasDateRange ? { from, to } : {}),
         group_by: "model",
         scope: effectiveScope
       }),
@@ -99,20 +96,6 @@ export function TokensPage() {
   });
   const sessions = useMemo(() => tokensQuery.data?.items ?? [], [tokensQuery.data]);
   const total = tokensQuery.data?.total ?? 0;
-
-  const pageTotals = useMemo(() => {
-    return sessions.reduce(
-      (acc, s) => {
-        acc.input += s.input_tokens;
-        acc.output += s.output_tokens;
-        acc.cacheCreate += s.cache_creation_tokens || 0;
-        acc.cacheRead += s.cache_read_tokens || 0;
-        acc.total += s.total_tokens;
-        return acc;
-      },
-      { input: 0, output: 0, cacheCreate: 0, cacheRead: 0, total: 0 }
-    );
-  }, [sessions]);
 
   const totals = {
     input: aggregationQuery.data?.input_sum ?? 0,
@@ -129,7 +112,7 @@ export function TokensPage() {
 
   const teamLabel = user?.role === "director" || user?.role === "admin" ? "全团队" : "团队";
   const scopeLabel = effectiveScope === "mine" ? "我的 Token 明细" : `${teamLabel} Token 明细`;
-  const dateLabel = `${from} ~ ${to}`;
+  const dateLabel = hasDateRange ? `${from} ~ ${to}` : "默认本月";
 
   return (
     <PagePanel
@@ -164,7 +147,11 @@ export function TokensPage() {
           <DatePicker.RangePicker
             value={range}
             onChange={(v) => {
-              if (!v || !v[0] || !v[1]) return;
+              if (!v || !v[0] || !v[1]) {
+                setRange(null);
+                setPage(1);
+                return;
+              }
               setRange([v[0], v[1]]);
               setPage(1);
             }}
@@ -336,19 +323,6 @@ export function TokensPage() {
               />
             )
           }}
-          summary={() => (
-            <Table.Summary fixed>
-              <Table.Summary.Row>
-                <Table.Summary.Cell index={0} colSpan={effectiveScope === "team" ? 4 : 3}>
-                  本页小计（{sessions.length}）
-                </Table.Summary.Cell>
-                <Table.Summary.Cell index={effectiveScope === "team" ? 4 : 3} align="right">
-                  <span className="tokens-total-cell">{formatTokens(pageTotals.total)}</span>
-                </Table.Summary.Cell>
-                <Table.Summary.Cell index={effectiveScope === "team" ? 5 : 4} />
-              </Table.Summary.Row>
-            </Table.Summary>
-          )}
         />
       </div>
       <Space />

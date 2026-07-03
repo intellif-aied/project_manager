@@ -92,6 +92,15 @@ const WEEKDAY_OPTIONS = [
   { label: "周日", value: 7 }
 ];
 
+function aiAssetsTablePagination(total: number): TableProps<object>["pagination"] {
+  return {
+    pageSize: 10,
+    showSizeChanger: true,
+    showTotal: (value) => `共 ${value} 条记录`,
+    total
+  };
+}
+
 function unixTime(value?: number) {
   return formatDateTime(value);
 }
@@ -1483,6 +1492,7 @@ export function AIAssetsPage() {
                     columns={agentColumns}
                     dataSource={agents}
                     loading={agentsQuery.isLoading}
+                    pagination={aiAssetsTablePagination(agents.length)}
                     locale={{ emptyText: agentEmptyState }}
                   />
                 </div>
@@ -1503,6 +1513,7 @@ export function AIAssetsPage() {
                     columns={skillColumns}
                     dataSource={visibleSkills}
                     loading={skillsQuery.isLoading}
+                    pagination={aiAssetsTablePagination(visibleSkills.length)}
                     locale={{ emptyText: skillEmptyState }}
                   />
                 </div>
@@ -1523,6 +1534,7 @@ export function AIAssetsPage() {
                     columns={mcpColumns}
                     dataSource={visibleMCPEntries}
                     loading={mcpQuery.isLoading}
+                    pagination={aiAssetsTablePagination(visibleMCPEntries.length)}
                     locale={{ emptyText: mcpEmptyState }}
                   />
                 </div>
@@ -1541,6 +1553,7 @@ export function AIAssetsPage() {
                     columns={scheduleColumns}
                     dataSource={schedules}
                     loading={schedulesQuery.isLoading}
+                    pagination={aiAssetsTablePagination(schedules.length)}
                     locale={{ emptyText: scheduleEmptyState }}
                   />
                 </div>
@@ -1569,7 +1582,7 @@ export function AIAssetsPage() {
                     columns={runColumns}
                     dataSource={runs}
                     loading={runsQuery.isLoading}
-                    pagination={{ pageSize: 8 }}
+                    pagination={aiAssetsTablePagination(runs.length)}
                     locale={{
                       emptyText: (
                         <AssetEmptyState icon={<PlayCircleOutlined />} title="暂无运行记录" />

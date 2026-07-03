@@ -24,7 +24,10 @@ import type {
   ReportType,
   TeamReport
 } from "../../api/types";
-import { ReportAIGenerateControls } from "./ReportAIGenerateControls";
+import {
+  ReportAIGenerateControls,
+  ReportAISettingsPanel
+} from "./ReportAIGenerateControls";
 
 import "./DailyReportGenerateModal.css";
 
@@ -101,6 +104,8 @@ export function DailyReportGenerateModal({
   const [content, setContent] = useState("");
   const [contentTouched, setContentTouched] = useState(false);
   const [manualMode, setManualMode] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [selectedSessionSliceKeys, setSelectedSessionSliceKeys] = useState<string[]>([]);
 
   const existingPersonalListQuery = useQuery({
     queryKey: ["reports", "daily", "manage-modal", "personal-existing", date],
@@ -158,6 +163,8 @@ export function DailyReportGenerateModal({
   const editorContent = contentTouched ? content : currentReport?.content ?? "";
   const personalReport = scope === "personal" ? personalReportQuery.data ?? null : null;
   const hasUnsavedContentChange = contentTouched && editorContent !== (currentReport?.content ?? "");
+  const allowSessionSettings = scope === "personal";
+  const showSessionSettings = allowSessionSettings && settingsOpen;
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -167,6 +174,8 @@ export function DailyReportGenerateModal({
       setManualMode(false);
       setContent("");
       setContentTouched(false);
+      setSettingsOpen(false);
+      setSelectedSessionSliceKeys([]);
     }, 0);
     return () => window.clearTimeout(timer);
   }, [date, open, reportId, scope]);
@@ -249,7 +258,7 @@ export function DailyReportGenerateModal({
       className="console-report-workflow-modal"
       title={title ?? `${scopeName(scope)}内容管理`}
       open={open}
-      width={860}
+      width={showSessionSettings ? 1180 : 860}
       onCancel={handleClose}
       footer={
         <Space>
@@ -257,8 +266,10 @@ export function DailyReportGenerateModal({
             reportType={dailyReportType(scope)}
             period={{ date }}
             target={dailyReportTarget(scope)}
-            allowSessionSelection={scope === "personal"}
-            sessionRange={{ from: date, to: date }}
+            allowSessionSelection={allowSessionSettings}
+            settingsOpen={showSessionSettings}
+            selectedSessionSliceKeys={selectedSessionSliceKeys}
+            onToggleSettings={() => setSettingsOpen((value) => !value)}
             disabled={loading || saveMutation.isPending}
             onBeforeGenerate={confirmBeforeAIGenerate}
             onGenerated={handleAIGenerated}
@@ -302,32 +313,46 @@ export function DailyReportGenerateModal({
           </span>
           {reportStatus(currentReport)}
         </div>
-        {loading ? (
-          <div className="console-session-empty">正在加载报告内容...</div>
-        ) : showEditor ? (
-          <div className="console-report-editor-layout">
-            <div className="console-report-editor-layout__main">
-              <div className="console-session-modal__section">
-                <strong>报告正文</strong>
-                <span>可编辑保存当前报告内容。</span>
+        <div className={`console-report-management__content${showSessionSettings ? " has-settings" : ""}`}>
+          <div className="console-report-management__main">
+            {loading ? (
+              <div className="console-session-empty">正在加载报告内容...</div>
+            ) : showEditor ? (
+              <div className="console-report-editor-layout">
+                <div className="console-report-editor-layout__main">
+                  <div className="console-session-modal__section">
+                    <strong>报告正文</strong>
+                    <span>可编辑保存当前报告内容。</span>
+                  </div>
+                  <TextArea
+                    rows={18}
+                    value={editorContent}
+                    onChange={(event) => {
+                      setContent(event.target.value);
+                      setContentTouched(true);
+                    }}
+                    placeholder="请输入报告内容"
+                  />
+                </div>
               </div>
-              <TextArea
-                rows={18}
-                value={editorContent}
-                onChange={(event) => {
-                  setContent(event.target.value);
-                  setContentTouched(true);
-                }}
-                placeholder="请输入报告内容"
+            ) : (
+              <Empty
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description="暂无日报，可直接填写。"
               />
-            </div>
+            )}
           </div>
-        ) : (
-          <Empty
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description="暂无日报，可直接填写。"
-          />
-        )}
+          {allowSessionSettings ? (
+            <ReportAISettingsPanel
+              open={settingsOpen}
+              from={date}
+              to={date}
+              selectedKeys={selectedSessionSliceKeys}
+              onSelectedKeysChange={setSelectedSessionSliceKeys}
+              onClose={() => setSettingsOpen(false)}
+            />
+          ) : null}
+        </div>
       </div>
     </Modal>
   );

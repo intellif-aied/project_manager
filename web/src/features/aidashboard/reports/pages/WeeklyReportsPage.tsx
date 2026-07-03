@@ -41,7 +41,10 @@ import type {
   ReportType,
   TeamWeeklyReport
 } from "../../api/types";
-import { ReportAIGenerateControls } from "../components/ReportAIGenerateControls";
+import {
+  ReportAIGenerateControls,
+  ReportAISettingsPanel
+} from "../components/ReportAIGenerateControls";
 import {
   RequirementMetricCard,
   RequirementMetricGrid
@@ -50,6 +53,7 @@ import { useAuth } from "@/shared/auth/authContext";
 import { MarkdownViewer } from "@/shared/components/MarkdownViewer/MarkdownViewer";
 import { PagePanel } from "@/shared/components/PagePanel/PagePanel";
 
+import "../components/DailyReportGenerateModal.css";
 import "./ReportsPage.css";
 
 const { TextArea } = Input;
@@ -413,6 +417,8 @@ function WeeklyReportEditorModal({
   const { message } = App.useApp();
   const [content, setContent] = useState("");
   const [contentTouched, setContentTouched] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [selectedSessionSliceKeys, setSelectedSessionSliceKeys] = useState<string[]>([]);
   const title = weeklyReportModalTitle(scope);
 
   const reportQuery = useQuery<WeeklyReportData | null>({
@@ -429,12 +435,16 @@ function WeeklyReportEditorModal({
   const report = reportQuery.data ?? null;
   const editorContent = contentTouched ? content : weeklyReportContent(report);
   const hasUnsavedContentChange = contentTouched && editorContent !== weeklyReportContent(report);
+  const allowSessionSettings = scope === "personal";
+  const showSessionSettings = allowSessionSettings && settingsOpen;
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
       if (!open) return;
       setContent("");
       setContentTouched(false);
+      setSettingsOpen(false);
+      setSelectedSessionSliceKeys([]);
     }, 0);
     return () => window.clearTimeout(timer);
   }, [open, scope, weekStart]);
@@ -508,7 +518,7 @@ function WeeklyReportEditorModal({
       className="console-report-workflow-modal"
       title={`${title}内容管理`}
       open={open}
-      width={980}
+      width={showSessionSettings ? 1180 : 980}
       onCancel={handleClose}
       destroyOnHidden
       footer={
@@ -517,8 +527,10 @@ function WeeklyReportEditorModal({
             reportType={weeklyReportType(scope)}
             period={{ week_start: weekStart, week_end: weekEnd }}
             target={weeklyReportTarget(scope)}
-            allowSessionSelection={scope === "personal"}
-            sessionRange={{ from: weekStart, to: weekEnd }}
+            allowSessionSelection={allowSessionSettings}
+            settingsOpen={showSessionSettings}
+            selectedSessionSliceKeys={selectedSessionSliceKeys}
+            onToggleSettings={() => setSettingsOpen((value) => !value)}
             disabled={reportQuery.isLoading || saveMutation.isPending}
             onBeforeGenerate={confirmBeforeAIGenerate}
             onGenerated={handleAIGenerated}
@@ -548,27 +560,41 @@ function WeeklyReportEditorModal({
           </span>
           {weeklyReportStatusTag(scope, report)}
         </div>
-        {reportQuery.isLoading ? (
-          <div className="console-session-empty">正在加载报告内容...</div>
-        ) : (
-          <div className="console-report-editor-layout">
-            <div className="console-report-editor-layout__main">
-              <div className="console-session-modal__section">
-                <strong>报告正文</strong>
-                <span>暂无报告，可直接填写。</span>
+        <div className={`console-report-management__content${showSessionSettings ? " has-settings" : ""}`}>
+          <div className="console-report-management__main">
+            {reportQuery.isLoading ? (
+              <div className="console-session-empty">正在加载报告内容...</div>
+            ) : (
+              <div className="console-report-editor-layout">
+                <div className="console-report-editor-layout__main">
+                  <div className="console-session-modal__section">
+                    <strong>报告正文</strong>
+                    <span>暂无报告，可直接填写。</span>
+                  </div>
+                  <TextArea
+                    rows={18}
+                    value={editorContent}
+                    onChange={(event) => {
+                      setContent(event.target.value);
+                      setContentTouched(true);
+                    }}
+                    placeholder="暂无报告，可直接填写。"
+                  />
+                </div>
               </div>
-              <TextArea
-                rows={18}
-                value={editorContent}
-                onChange={(event) => {
-                  setContent(event.target.value);
-                  setContentTouched(true);
-                }}
-                placeholder="暂无报告，可直接填写。"
-              />
-            </div>
+            )}
           </div>
-        )}
+          {allowSessionSettings ? (
+            <ReportAISettingsPanel
+              open={settingsOpen}
+              from={weekStart}
+              to={weekEnd}
+              selectedKeys={selectedSessionSliceKeys}
+              onSelectedKeysChange={setSelectedSessionSliceKeys}
+              onClose={() => setSettingsOpen(false)}
+            />
+          ) : null}
+        </div>
       </div>
     </Modal>
   );

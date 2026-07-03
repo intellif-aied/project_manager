@@ -96,10 +96,10 @@
 
 .ai-assets-table-card {
   overflow: hidden;
-  background: #fff;
-  border: 1px solid #e1e9f3;
-  border-radius: 8px;
-  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.04);
+  background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
+  border: 1px solid #e5edf6;
+  border-radius: 12px;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.045);
 }
 
 .ai-assets-table-card .ant-table {
@@ -108,29 +108,17 @@
 
 .ai-assets-table-card .ant-table-thead > tr > th {
   height: 44px;
-  padding-inline: 14px;
-  color: #526173;
-  font-size: 12px;
-  font-weight: 700;
   background: #f8fafc;
-  border-bottom-color: #e5edf6;
-}
-
-.ai-assets-table-card .ant-table-thead > tr > th::before {
-  background-color: #e1e8f1 !important;
+  color: #526173;
+  font-weight: 700;
+  font-size: 12px;
+  border-bottom-color: #e6edf5;
 }
 
 .ai-assets-table-card .ant-table-tbody > tr > td {
-  height: 54px;
-  padding-inline: 14px;
+  height: 50px;
   color: #2f3a4d;
-  font-size: 13px;
   border-bottom-color: #edf2f7;
-}
-
-.ai-assets-table-card .ant-table-thead > tr > th:first-child,
-.ai-assets-table-card .ant-table-tbody > tr > td:first-child {
-  padding-left: 28px !important;
 }
 
 .ai-assets-table-card .ant-table-tbody > tr:last-child > td {
@@ -141,8 +129,36 @@
   background: #f8fbff;
 }
 
-.ai-assets-table-card .ant-table-pagination {
-  margin: 14px 16px 16px !important;
+.ai-assets-table-card .ant-pagination.ant-table-pagination {
+  margin: 0 !important;
+  padding: 14px 16px 16px;
+  background: #f8fafc;
+  border-top: 1px solid #dfe8f2;
+}
+
+.ai-assets-table-card .ant-pagination.ant-table-pagination.ant-table-pagination-end {
+  justify-content: flex-end;
+}
+
+.ai-assets-table-card .ant-pagination.ant-table-pagination .ant-pagination-total-text {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.ai-assets-table-card .ant-pagination.ant-table-pagination .ant-select-selector,
+.ai-assets-table-card .ant-pagination.ant-table-pagination .ant-pagination-item,
+.ai-assets-table-card .ant-pagination.ant-table-pagination .ant-pagination-prev,
+.ai-assets-table-card .ant-pagination.ant-table-pagination .ant-pagination-next {
+  border-radius: 8px !important;
+}
+
+.ai-assets-table-card .ant-pagination.ant-table-pagination .ant-pagination-item-active {
+  border-color: #2563eb;
+}
+
+.ai-assets-table-card .ant-pagination.ant-table-pagination .ant-pagination-item-active a {
+  color: #2563eb;
+  font-weight: 700;
 }
 
 .ai-assets-table-card .ant-tag {

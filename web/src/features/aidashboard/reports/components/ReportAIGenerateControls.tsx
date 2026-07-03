@@ -4,7 +4,6 @@ import { App, Button, Modal, Space, Table } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import dayjs from "dayjs";
 
 import {
   fetchManagedAgentRun,
@@ -34,16 +33,20 @@ interface ReportAIGenerateControlsProps {
   target: ReportTargetPayload;
   disabled?: boolean;
   allowSessionSelection?: boolean;
-  sessionRange?: {
-    from: string;
-    to: string;
-  };
+  settingsOpen?: boolean;
+  selectedSessionSliceKeys?: string[];
+  onToggleSettings?: () => void;
   onBeforeGenerate?: () => boolean | Promise<boolean>;
   onGenerated?: (run: AIRun) => void;
 }
 
-function formatDateTime(value?: string) {
-  return value ? dayjs(value).format("YYYY-MM-DD HH:mm") : "-";
+interface ReportAISettingsPanelProps {
+  open: boolean;
+  from: string;
+  to: string;
+  selectedKeys: string[];
+  onSelectedKeysChange: (keys: string[]) => void;
+  onClose: () => void;
 }
 
 function formatNumber(value?: number) {
@@ -103,7 +106,9 @@ export function ReportAIGenerateControls({
   target,
   disabled,
   allowSessionSelection = false,
-  sessionRange,
+  settingsOpen = false,
+  selectedSessionSliceKeys = [],
+  onToggleSettings,
   onBeforeGenerate,
   onGenerated
 }: ReportAIGenerateControlsProps) {
@@ -111,15 +116,9 @@ export function ReportAIGenerateControls({
   const { user } = useAuth();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
-  const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
   const [activeRunId, setActiveRunId] = useState<string>();
   const [handledRunId, setHandledRunId] = useState<string>();
 
-  const from = sessionRange?.from ?? "";
-  const to = sessionRange?.to ?? "";
   const currentUserId = user?.id ?? "anonymous";
   const storageKey = useMemo(
     () => reportRunStorageKey(currentUserId, reportType, period, target),
@@ -127,28 +126,9 @@ export function ReportAIGenerateControls({
   );
 
   useEffect(() => {
-    setSelectedKeys([]);
-    setPage(1);
-  }, [from, to]);
-
-  useEffect(() => {
     setActiveRunId(readStoredRunId(storageKey));
     setHandledRunId(undefined);
   }, [storageKey]);
-
-  const sessionsQuery = useQuery({
-    queryKey: ["report-ai-session-slices", from, to, page, pageSize],
-    queryFn: () =>
-      fetchSessionTokens({
-        from,
-        to,
-        scope: "mine",
-        page: String(page),
-        page_size: String(pageSize)
-      }),
-    enabled: settingsOpen && allowSessionSelection && Boolean(from && to),
-    staleTime: 15_000
-  });
 
   const activeRunQuery = useQuery<AIRun>({
     queryKey: ["managed-agent-run", activeRunId],
@@ -175,37 +155,6 @@ export function ReportAIGenerateControls({
     setHandledRunId(undefined);
   }, [activeRunId, activeRunQuery.error, storageKey]);
 
-  const columns = useMemo<ColumnsType<SessionTokens>>(
-    () => [
-      {
-        title: "Session ID",
-        dataIndex: "session_id",
-        width: 260,
-        render: (value: string) => <span className="report-ai-session-id">{value}</span>
-      },
-      {
-        title: "活动时间",
-        key: "activity",
-        width: 260,
-        render: (_, record) =>
-          `${formatDateTime(record.activity_start_at)} ~ ${formatDateTime(record.activity_end_at)}`
-      },
-      {
-        title: "摘要",
-        dataIndex: "summary",
-        render: (value?: string) => value || "-"
-      },
-      {
-        title: "Total",
-        dataIndex: "total_tokens",
-        width: 120,
-        align: "right",
-        render: formatNumber
-      }
-    ],
-    []
-  );
-
   const runMutation = useMutation({
     mutationFn: async () => {
       if (onBeforeGenerate) {
@@ -219,7 +168,9 @@ export function ReportAIGenerateControls({
         period,
         target,
         selected_session_slice_keys:
-          allowSessionSelection && selectedKeys.length > 0 ? selectedKeys : undefined
+          allowSessionSelection && selectedSessionSliceKeys.length > 0
+            ? selectedSessionSliceKeys
+            : undefined
       }, { skipErrorHandler: true });
     },
     onSuccess: (run) => {
@@ -297,58 +248,109 @@ export function ReportAIGenerateControls({
         {allowSessionSelection ? (
           <Button
             icon={<SettingOutlined />}
+            className={settingsOpen ? "is-active" : undefined}
             disabled={disabled || generating}
             title="生成设置"
-            onClick={() => setSettingsOpen(true)}
+            onClick={onToggleSettings}
           />
         ) : null}
       </Space.Compact>
-      {allowSessionSelection ? (
-        <Modal
-          className="report-ai-settings-modal"
-          title="生成设置"
-          open={settingsOpen}
-          width={920}
-          onCancel={() => setSettingsOpen(false)}
-          onOk={() => setSettingsOpen(false)}
-          okText="确定"
-          cancelText="取消"
-          destroyOnHidden
-        >
-          <div className="report-ai-settings">
-            <div className="report-ai-settings__summary">
-              <strong>Session 片段</strong>
-              <span>
-                {from} 至 {to} · 已选择 {selectedKeys.length} 个
-              </span>
-            </div>
-            <Table<SessionTokens>
-              rowKey={sessionSliceKey}
-              size="small"
-              columns={columns}
-              dataSource={sessionsQuery.data?.items ?? []}
-              loading={sessionsQuery.isLoading}
-              rowSelection={{
-                preserveSelectedRowKeys: true,
-                selectedRowKeys: selectedKeys,
-                onChange: (keys) => {
-                  setSelectedKeys(keys.map(String));
-                }
-              }}
-              pagination={{
-                current: page,
-                pageSize,
-                total: sessionsQuery.data?.total ?? 0,
-                showSizeChanger: true,
-                onChange: (nextPage, nextPageSize) => {
-                  setPage(nextPage);
-                  setPageSize(nextPageSize);
-                }
-              }}
-            />
-          </div>
-        </Modal>
-      ) : null}
     </>
+  );
+}
+
+export function ReportAISettingsPanel({
+  open,
+  from,
+  to,
+  selectedKeys,
+  onSelectedKeysChange,
+  onClose
+}: ReportAISettingsPanelProps) {
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+
+  useEffect(() => {
+    if (open) setPage(1);
+  }, [from, open, to]);
+
+  const sessionsQuery = useQuery({
+    queryKey: ["report-ai-session-slices", from, to, page, pageSize],
+    queryFn: () =>
+      fetchSessionTokens({
+        from,
+        to,
+        scope: "mine",
+        page: String(page),
+        page_size: String(pageSize)
+      }),
+    enabled: open && Boolean(from && to),
+    staleTime: 15_000
+  });
+
+  const columns = useMemo<ColumnsType<SessionTokens>>(
+    () => [
+      {
+        title: "Session / 摘要",
+        key: "session",
+        render: (_, record) => (
+          <span className="report-ai-session-cell">
+            <span className="report-ai-session-id">{record.session_id}</span>
+            <span className="report-ai-session-summary">{record.summary || "暂无摘要"}</span>
+          </span>
+        )
+      },
+      {
+        title: "Token",
+        dataIndex: "total_tokens",
+        width: 88,
+        align: "right",
+        render: formatNumber
+      }
+    ],
+    []
+  );
+
+  if (!open) return null;
+
+  return (
+    <aside className="report-ai-settings-panel">
+      <div className="report-ai-settings-panel__head">
+        <span>
+          <strong>生成上下文</strong>
+          <em>
+            {from} 至 {to} · 已选择 {selectedKeys.length} 个
+          </em>
+        </span>
+        <Button size="small" type="text" onClick={onClose}>
+          收起
+        </Button>
+      </div>
+      <Table<SessionTokens>
+        rowKey={sessionSliceKey}
+        size="small"
+        columns={columns}
+        dataSource={sessionsQuery.data?.items ?? []}
+        loading={sessionsQuery.isLoading}
+        rowSelection={{
+          preserveSelectedRowKeys: true,
+          selectedRowKeys: selectedKeys,
+          onChange: (keys) => {
+            onSelectedKeysChange(keys.map(String));
+          }
+        }}
+        pagination={{
+          current: page,
+          pageSize,
+          total: sessionsQuery.data?.total ?? 0,
+          showSizeChanger: true,
+          onChange: (nextPage, nextPageSize) => {
+            setPage(nextPage);
+            setPageSize(nextPageSize);
+          }
+        }}
+        scroll={{ y: "min(41vh, 370px)" }}
+      />
+    </aside>
   );
 }
