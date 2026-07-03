@@ -893,21 +893,98 @@
   grid-template-columns: 1.2fr 0.75fr 0.9fr;
   gap: 8px;
 }
-.requirements-drawer__summary-strip > div {
+.requirements-drawer__assignment-strip {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  margin-top: 8px;
+  min-width: 0;
+}
+.requirements-drawer__summary-card {
   display: grid;
   gap: 6px;
   padding: 10px;
   background: #f8fafc;
   border: 1px solid #edf1f6;
   border-radius: 8px;
+  min-width: 0;
 }
-.requirements-drawer__summary-strip span {
+.requirements-drawer__summary-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.requirements-drawer__summary-card-action.ant-btn {
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  padding: 0;
+  color: #9aa7ba;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  box-shadow: none;
+}
+.requirements-drawer__summary-card-action.ant-btn:hover {
+  color: #2563eb;
+  background: #eef5ff;
+}
+.requirements-drawer__summary-card--owner {
+  flex: 0 0 auto;
+  min-width: 120px;
+  max-width: 100%;
+}
+.requirements-drawer__summary-card--teams {
+  flex: 1 1 auto;
+}
+.requirements-drawer__summary-card--owner strong {
+  white-space: nowrap;
+}
+.requirements-drawer__summary-card--teams strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.requirements-drawer__summary-card > span,
+.requirements-drawer__summary-card-head > span {
+  min-width: 0;
+  overflow: hidden;
   color: #7a879a;
   font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.requirements-drawer__summary-strip strong {
+.requirements-drawer__summary-card > strong {
+  min-width: 0;
+  overflow: hidden;
   color: #253047;
   font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.requirements-quick-edit {
+  display: grid;
+  gap: 12px;
+  width: 260px;
+}
+.requirements-quick-edit--wide {
+  width: 340px;
+}
+.requirements-quick-edit .ant-picker,
+.requirements-quick-edit .ant-select {
+  width: 100%;
+}
+.requirements-quick-edit__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.requirements-quick-edit__actions .ant-btn {
+  height: 30px;
+  border-radius: 8px;
+  box-shadow: none;
 }
 .requirements-drawer__summary p {
   margin: 10px 0;
@@ -1033,7 +1110,9 @@
 }
 .requirements-drawer__task-list {
   display: grid;
+  align-content: start;
   flex: 1 1 auto;
+  grid-auto-rows: max-content;
   min-height: 0;
   max-height: none;
   overflow-x: hidden;
@@ -1457,6 +1536,14 @@
     align-items: flex-start;
     flex-direction: column;
     gap: 4px;
+  }
+  .requirements-drawer__summary-card--owner,
+  .requirements-drawer__summary-card--teams {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .requirements-drawer__assignment-strip {
+    flex-direction: column;
   }
 }
 .requirements-drawer__token-source {

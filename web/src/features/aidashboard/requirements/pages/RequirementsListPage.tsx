@@ -37,6 +37,7 @@ import {
   Input,
   InputNumber,
   Modal,
+  Popover,
   Progress,
   Select,
   Segmented,
@@ -97,6 +98,7 @@ import "./RequirementsBoard.css";
 
 type BoardView = "board" | "tree";
 type RiskFilter = "blocked";
+type RequirementQuickEditField = "deadline" | "owner" | "teams";
 
 const EDIT_CONFLICT_MESSAGE = "内容已被其他人更新，请刷新后再操作";
 
@@ -340,6 +342,10 @@ function formatSessionActivityRange(session: SessionTokens) {
 function formatEvidenceCount(value: number) {
   if (!value) return "暂无关联 session";
   return `关联 session ${formatTokens(value)} Token`;
+}
+
+function getQuickEditPopupContainer(triggerNode: HTMLElement) {
+  return triggerNode.parentElement ?? document.body;
 }
 
 function RequirementProgress({ value }: { value: number }) {
@@ -1626,9 +1632,67 @@ function RequirementDrawer({
   const queryClient = useQueryClient();
   const [pickerOpen, setPickerOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
+  const [quickEditor, setQuickEditor] = useState<RequirementQuickEditField>();
+  const [draftDeadline, setDraftDeadline] = useState<dayjs.Dayjs>();
+  const [draftOwnerId, setDraftOwnerId] = useState<string>();
+  const [draftTeamIds, setDraftTeamIds] = useState<string[]>([]);
 
   const invalidateBoard = (requirementId = requirement?.id) =>
     invalidateRequirementTaskWorkspace(queryClient, { requirementId });
+
+  const assigneesQuery = useQuery({
+    queryKey: ["requirements-board", "assignees"],
+    queryFn: () => requirementsBoardApi.listAssignees(),
+    enabled: Boolean(requirement?.can_update),
+    staleTime: 5 * 60_000
+  });
+  const teamsQuery = useQuery({
+    queryKey: ["requirements-board", "teams"],
+    queryFn: () => requirementsBoardApi.listTeams(),
+    enabled: Boolean(requirement?.can_update),
+    staleTime: 5 * 60_000
+  });
+
+  const quickAssigneeOptions = useMemo(() => {
+    const options = (assigneesQuery.data ?? []).map((assignee) => ({
+      value: assignee.id,
+      label: assignee.name
+    }));
+    if (requirement?.owner_id && !options.some((item) => item.value === requirement.owner_id)) {
+      options.push({
+        value: requirement.owner_id,
+        label: requirement.owner_name ?? requirement.owner_id
+      });
+    }
+    return options;
+  }, [assigneesQuery.data, requirement?.owner_id, requirement?.owner_name]);
+  const quickTeamOptions = useMemo(() => {
+    const options = (teamsQuery.data ?? []).map((team) => ({
+      value: team.id,
+      label: team.name
+    }));
+    requirement?.team_ids.forEach((teamId, index) => {
+      if (!options.some((item) => item.value === teamId)) {
+        options.push({
+          value: teamId,
+          label: requirement.team_names[index] ?? teamId
+        });
+      }
+    });
+    return options;
+  }, [requirement?.team_ids, requirement?.team_names, teamsQuery.data]);
+
+  const resetQuickDraft = (target = requirement) => {
+    if (!target) return;
+    setDraftDeadline(target.deadline ? dayjs(target.deadline) : undefined);
+    setDraftOwnerId(target.owner_id);
+    setDraftTeamIds(target.team_ids);
+  };
+
+  const openQuickEditor = (field: RequirementQuickEditField) => {
+    resetQuickDraft();
+    setQuickEditor(field);
+  };
 
   const cancelMutation = useMutation({
     mutationFn: (target: MockRequirement) =>
@@ -1722,6 +1786,56 @@ function RequirementDrawer({
   const totalTokens = requirementTokens + taskTokens;
   const completedCount = tasks.filter((task) => task.status === "done").length;
   const blockedCount = tasks.filter((task) => task.status === "blocked").length;
+  const canQuickEditRequirement = Boolean(requirement?.can_update);
+
+  const quickUpdateMutation = useMutation({
+    mutationFn: ({
+      field,
+      data
+    }: {
+      field: RequirementQuickEditField;
+      data: {
+        deadline?: string;
+        owner_id?: string;
+        clear_owner?: boolean;
+        team_ids?: string[];
+      };
+    }) =>
+      requirementsBoardApi.updateRequirement(requirement!.id, {
+        ...data,
+        base_version: requirement!.version
+      }),
+    onSuccess: (updated) => {
+      message.success("已保存");
+      onSaved(updated);
+      resetQuickDraft(updated);
+      setQuickEditor(undefined);
+      void invalidateBoard(updated.id);
+    },
+    onError: (error) => {
+      if (handleEditConflict(error, message, queryClient)) return;
+      message.error(error instanceof Error ? error.message : "保存失败");
+    }
+  });
+
+  const closeQuickEditor = () => {
+    if (quickUpdateMutation.isPending) return;
+    setQuickEditor(undefined);
+  };
+
+  const saveQuickOwner = () => {
+    quickUpdateMutation.mutate({
+      field: "owner",
+      data: draftOwnerId ? { owner_id: draftOwnerId } : { clear_owner: true }
+    });
+  };
+
+  const saveQuickTeams = () => {
+    quickUpdateMutation.mutate({
+      field: "teams",
+      data: { team_ids: draftTeamIds }
+    });
+  };
 
   const linkMutation = useMutation({
     mutationFn: (sourceIds: string[]) =>
@@ -1781,6 +1895,81 @@ function RequirementDrawer({
             : [])
         ]
     : [];
+  const deadlineQuickEditor = (
+    <div className="requirements-quick-edit">
+      <DatePicker
+        value={draftDeadline}
+        format="YYYY-MM-DD"
+        getPopupContainer={getQuickEditPopupContainer}
+        disabled={quickUpdateMutation.isPending && quickUpdateMutation.variables?.field === "deadline"}
+        onChange={(value) => {
+          setDraftDeadline(value ?? undefined);
+          if (!value) return;
+          quickUpdateMutation.mutate({
+            field: "deadline",
+            data: { deadline: value.format("YYYY-MM-DD") }
+          });
+        }}
+        style={{ width: "100%" }}
+      />
+    </div>
+  );
+  const ownerQuickEditor = (
+    <div className="requirements-quick-edit">
+      <Select
+        allowClear
+        showSearch
+        value={draftOwnerId}
+        loading={assigneesQuery.isLoading}
+        placeholder={assigneesQuery.isError ? "负责人加载失败" : "选择负责人"}
+        optionFilterProp="label"
+        options={quickAssigneeOptions}
+        getPopupContainer={getQuickEditPopupContainer}
+        onChange={setDraftOwnerId}
+      />
+      <div className="requirements-quick-edit__actions">
+        <Button size="small" onClick={closeQuickEditor}>
+          取消
+        </Button>
+        <Button
+          size="small"
+          type="primary"
+          loading={quickUpdateMutation.isPending && quickUpdateMutation.variables?.field === "owner"}
+          onClick={saveQuickOwner}
+        >
+          保存
+        </Button>
+      </div>
+    </div>
+  );
+  const teamsQuickEditor = (
+    <div className="requirements-quick-edit requirements-quick-edit--wide">
+      <Select
+        mode="multiple"
+        value={draftTeamIds}
+        loading={teamsQuery.isLoading}
+        disabled={teamsQuery.isLoading || teamsQuery.isError}
+        placeholder={teamsQuery.isError ? "团队加载失败" : "选择参与团队"}
+        options={quickTeamOptions}
+        maxTagCount="responsive"
+        getPopupContainer={getQuickEditPopupContainer}
+        onChange={setDraftTeamIds}
+      />
+      <div className="requirements-quick-edit__actions">
+        <Button size="small" onClick={closeQuickEditor}>
+          取消
+        </Button>
+        <Button
+          size="small"
+          type="primary"
+          loading={quickUpdateMutation.isPending && quickUpdateMutation.variables?.field === "teams"}
+          onClick={saveQuickTeams}
+        >
+          保存
+        </Button>
+      </div>
+    </div>
+  );
 
   return (
     <Drawer
@@ -1860,7 +2049,7 @@ function RequirementDrawer({
             </div>
             <p>{requirement.description || "暂无需求描述"}</p>
             <div className="requirements-drawer__summary-strip">
-              <div>
+              <div className="requirements-drawer__summary-card">
                 <span>推进进度</span>
                 {tasks.length ? (
                   <RequirementProgress value={requirement.progress} />
@@ -1868,20 +2057,91 @@ function RequirementDrawer({
                   <strong>待拆解</strong>
                 )}
               </div>
-              <div>
+              <div className="requirements-drawer__summary-card">
                 <span>任务完成</span>
                 <strong>{tasks.length ? `${completedCount}/${tasks.length}` : "0/0"}</strong>
               </div>
-              <div>
-                <span>截止日期</span>
+              <div className="requirements-drawer__summary-card">
+                <div className="requirements-drawer__summary-card-head">
+                  <span>截止日期</span>
+                  {canQuickEditRequirement ? (
+                    <Popover
+                      open={quickEditor === "deadline"}
+                      trigger="click"
+                      placement="bottomRight"
+                      destroyOnHidden
+                      content={deadlineQuickEditor}
+                      onOpenChange={(nextOpen) =>
+                        nextOpen ? openQuickEditor("deadline") : closeQuickEditor()
+                      }
+                    >
+                      <Button
+                        className="requirements-drawer__summary-card-action"
+                        type="text"
+                        size="small"
+                        icon={<EditOutlined />}
+                        aria-label="设置截止日期"
+                        onClick={(event) => event.stopPropagation()}
+                      />
+                    </Popover>
+                  ) : null}
+                </div>
                 <strong>{formatDate(requirement.deadline)}</strong>
               </div>
-              <div>
-                <span>负责人</span>
+            </div>
+            <div className="requirements-drawer__assignment-strip">
+              <div className="requirements-drawer__summary-card requirements-drawer__summary-card--owner">
+                <div className="requirements-drawer__summary-card-head">
+                  <span>负责人</span>
+                  {canQuickEditRequirement ? (
+                    <Popover
+                      open={quickEditor === "owner"}
+                      trigger="click"
+                      placement="bottomRight"
+                      destroyOnHidden
+                      content={ownerQuickEditor}
+                      onOpenChange={(nextOpen) =>
+                        nextOpen ? openQuickEditor("owner") : closeQuickEditor()
+                      }
+                    >
+                      <Button
+                        className="requirements-drawer__summary-card-action"
+                        type="text"
+                        size="small"
+                        icon={<EditOutlined />}
+                        aria-label="设置负责人"
+                        onClick={(event) => event.stopPropagation()}
+                      />
+                    </Popover>
+                  ) : null}
+                </div>
                 <strong>{getRequirementOwnerLabel(requirement)}</strong>
               </div>
-              <div>
-                <span>参与团队</span>
+              <div className="requirements-drawer__summary-card requirements-drawer__summary-card--teams">
+                <div className="requirements-drawer__summary-card-head">
+                  <span>参与团队</span>
+                  {canQuickEditRequirement ? (
+                    <Popover
+                      open={quickEditor === "teams"}
+                      trigger="click"
+                      placement="bottomRight"
+                      destroyOnHidden
+                      content={teamsQuickEditor}
+                      onOpenChange={(nextOpen) =>
+                        nextOpen ? openQuickEditor("teams") : closeQuickEditor()
+                      }
+                    >
+                      <Button
+                        className="requirements-drawer__summary-card-action"
+                        type="text"
+                        size="small"
+                        icon={<EditOutlined />}
+                        aria-label="设置参与团队"
+                        onClick={(event) => event.stopPropagation()}
+                      />
+                    </Popover>
+                  ) : null}
+                </div>
                 <strong>{getRequirementTeamLabel(requirement)}</strong>
               </div>
             </div>
@@ -1996,7 +2256,7 @@ function RequirementDrawer({
               },
               {
                 key: "records",
-                label: "记录",
+                label: "关联session",
                 children: (
                   <section className="requirements-drawer__section">
                     <div className="requirements-drawer__section-head">
