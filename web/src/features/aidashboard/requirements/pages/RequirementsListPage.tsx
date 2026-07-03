@@ -2566,7 +2566,7 @@ function RequirementEditModal({
 
         <section className="requirements-edit-modal__detail-grid">
           <Form.Item label="需求描述" name="description" rules={descriptionRules("需求描述")}>
-            <Input.TextArea rows={2} placeholder="补充背景与目标" />
+            <Input.TextArea rows={4} placeholder="补充背景与目标" />
           </Form.Item>
           <Form.Item
             label="标准列表"
