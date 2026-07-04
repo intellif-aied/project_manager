@@ -14,6 +14,8 @@ func TestDeriveTaskRisks(t *testing.T) {
 	overdueFromDatabase := "2026-06-23T00:00:00Z"
 	today := "2026-06-24"
 	notDueSoon := "2026-06-26"
+	dependencyDueSameDay := "2026-06-26"
+	dependencyDueAfterTask := "2026-06-28"
 
 	tests := []struct {
 		name string
@@ -38,6 +40,30 @@ func TestDeriveTaskRisks(t *testing.T) {
 			name: "future deadline does not create risk",
 			task: model.Task{Status: "todo", DueDate: &notDueSoon},
 			want: []string{},
+		},
+		{
+			name: "future task with same-day unfinished dependency creates schedule conflict",
+			task: model.Task{
+				Status:  "todo",
+				DueDate: &notDueSoon,
+				Dependencies: []model.TaskDep{{
+					Status:  "todo",
+					DueDate: &dependencyDueSameDay,
+				}},
+			},
+			want: []string{TaskRiskDependencyConflict},
+		},
+		{
+			name: "future task with dependency due after task creates schedule conflict",
+			task: model.Task{
+				Status:  "todo",
+				DueDate: &notDueSoon,
+				Dependencies: []model.TaskDep{{
+					Status:  "todo",
+					DueDate: &dependencyDueAfterTask,
+				}},
+			},
+			want: []string{TaskRiskDependencyConflict},
 		},
 		{
 			name: "deadline today does not create overdue risk",
@@ -66,6 +92,23 @@ func TestDeriveTaskRisks(t *testing.T) {
 				t.Fatalf("DeriveTaskRisks() = %#v, want %#v", got, test.want)
 			}
 		})
+	}
+}
+
+func TestSummarizeRequirementIncludesOwnDeadline(t *testing.T) {
+	now := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
+	deadline := "2026-06-23"
+	taskDue := "2026-06-23"
+	req := model.Requirement{Status: "active", Deadline: &deadline}
+	tasks := []model.Task{{Status: "todo", DueDate: &taskDue}}
+	tasks[0].RiskTypes = DeriveTaskRisks(tasks[0], now)
+
+	_, riskSummary := SummarizeRequirement(req, tasks, now)
+	if riskSummary.RequirementOverdue != 1 {
+		t.Fatalf("RequirementOverdue = %d, want 1", riskSummary.RequirementOverdue)
+	}
+	if riskSummary.Overdue != 1 {
+		t.Fatalf("Overdue = %d, want 1", riskSummary.Overdue)
 	}
 }
 

@@ -52,6 +52,24 @@ export interface RequirementTaskSummaryDTO {
 export interface RequirementRiskSummaryDTO {
   blocked: number;
   overdue: number;
+  requirement_overdue?: number;
+  dependency_conflict?: number;
+}
+
+export type AttentionLevel = "normal" | "notable" | "important" | "high";
+
+export interface RequirementOwnerDTO {
+  id: string;
+  name: string;
+  role: string;
+  team_id?: string;
+  team_name?: string;
+}
+
+export interface RequirementFollowSummaryDTO {
+  count: number;
+  score: number;
+  level: AttentionLevel;
 }
 
 export interface Requirement {
@@ -63,6 +81,8 @@ export interface Requirement {
   creator_id: string;
   creator_name: string;
   creator_role: string;
+  owner_ids?: string[];
+  owners?: RequirementOwnerDTO[];
   owner_id?: string;
   owner_name?: string;
   owner_team_id?: string;
@@ -76,6 +96,7 @@ export interface Requirement {
   token_source_ids: string[];
   task_summary: RequirementTaskSummaryDTO;
   risk_summary: RequirementRiskSummaryDTO;
+  follow_summary?: RequirementFollowSummaryDTO;
   is_followed: boolean;
   can_update?: boolean;
   can_change_status?: boolean;
@@ -101,6 +122,7 @@ export interface TaskDep {
   task_id: string;
   task_title: string;
   status: TaskStatus;
+  due_date?: string;
 }
 
 export interface Task {
@@ -119,8 +141,9 @@ export interface Task {
   due_date?: string;
   dependencies?: TaskDep[];
   blocking?: TaskDep[];
-  risk_types: Array<"blocked" | "overdue">;
+  risk_types: Array<"blocked" | "overdue" | "dependency_conflict">;
   token_source_ids: string[];
+  follow_summary?: RequirementFollowSummaryDTO;
   is_followed: boolean;
   can_update_meta?: boolean;
   can_reassign?: boolean;
@@ -154,8 +177,6 @@ export interface DashboardNavigationTargetDTO {
   url: string;
 }
 
-export type AttentionLevel = "normal" | "notable" | "important" | "high";
-
 export interface DashboardFollowFollowerDTO {
   id: string;
   name: string;
@@ -178,6 +199,9 @@ export interface DashboardFollowItemDTO {
   risk: string;
   dependency?: string;
   activity?: string;
+  followedByMe: boolean;
+  createdByMe: boolean;
+  assignedToMe: boolean;
   attentionScore: number;
   attentionLevel: AttentionLevel;
   followerCount: number;
@@ -185,7 +209,11 @@ export interface DashboardFollowItemDTO {
   navigation: DashboardNavigationTargetDTO;
 }
 
-export type DashboardRiskType = "requirement_overdue" | "deadline" | "dependency_blocker";
+export type DashboardRiskType =
+  | "requirement_overdue"
+  | "deadline"
+  | "dependency_blocker"
+  | "dependency_conflict";
 
 export interface DashboardRiskTaskSummaryDTO {
   taskId: string;
@@ -204,6 +232,7 @@ export interface DashboardRiskGroupDTO {
   requirementOverdue: boolean;
   deadlineTaskCount: number;
   dependencyBlockerCount: number;
+  dependencyConflictCount: number;
   representativeTask?: DashboardRiskTaskSummaryDTO;
   summary: string;
   deadline: string;

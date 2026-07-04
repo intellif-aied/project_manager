@@ -4,6 +4,8 @@ import type {
   FollowTargetType,
   Requirement,
   RequirementPriority as ApiRequirementPriority,
+  RequirementFollowSummaryDTO,
+  RequirementOwnerDTO,
   RequirementRiskSummaryDTO,
   RequirementStatus,
   Task,
@@ -44,6 +46,8 @@ export interface BoardRequirement {
   creator_id: string;
   creator_name: string;
   creator_role: string;
+  owner_ids: string[];
+  owners: RequirementOwnerDTO[];
   owner_id?: string;
   owner_name?: string;
   owner_team_id?: string;
@@ -55,6 +59,7 @@ export interface BoardRequirement {
   team_ids: string[];
   team_names: string[];
   token_source_ids: string[];
+  follow_summary: RequirementFollowSummaryDTO;
   risk_summary?: RequirementRiskSummaryDTO;
   can_update?: boolean;
   can_change_status?: boolean;
@@ -73,6 +78,7 @@ export interface BoardTask {
   requirement_id: string;
   requirement_title: string;
   title: string;
+  creator_tl_id: string;
   acceptance_criteria: string[];
   assignee_id?: string;
   assignee_name?: string;
@@ -83,7 +89,8 @@ export interface BoardTask {
   dependencies: BoardTaskDependency[];
   blocking: BoardTaskDependency[];
   token_source_ids: string[];
-  risk_types?: Array<"blocked" | "overdue">;
+  follow_summary: RequirementFollowSummaryDTO;
+  risk_types?: Array<"blocked" | "overdue" | "dependency_conflict">;
   can_update_meta?: boolean;
   can_reassign?: boolean;
   can_update_status?: boolean;
@@ -100,6 +107,7 @@ export interface CreateBoardRequirementInput {
   description: string;
   priority: RequirementPriority;
   deadline?: string;
+  owner_ids?: string[];
   owner_id?: string;
   team_ids?: string[];
   feishu_doc_url?: string;
@@ -113,6 +121,7 @@ export interface UpdateBoardRequirementInput {
   status?: RequirementStage;
   deadline?: string;
   feishu_doc_url?: string;
+  owner_ids?: string[];
   owner_id?: string;
   clear_owner?: boolean;
   team_ids?: string[];

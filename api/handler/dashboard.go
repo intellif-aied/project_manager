@@ -49,12 +49,130 @@ func (h *DashboardHandler) Follows(w http.ResponseWriter, r *http.Request) {
 		if target.targetType == "requirement" {
 			item, ok := h.requirementFollowItem(target.targetID, u.ID)
 			if ok {
+				item.FollowedByMe = true
 				items = append(items, item)
 			}
 			continue
 		}
 		item, ok := h.taskFollowItem(target.targetID, u.ID)
 		if ok {
+			item.FollowedByMe = true
+			items = append(items, item)
+		}
+	}
+	sortDashboardFollowItems(items)
+	writeJSON(w, http.StatusOK, items)
+}
+
+func (h *DashboardHandler) MyItems(w http.ResponseWriter, r *http.Request) {
+	u := getUser(r)
+	itemsByKey := map[string]model.DashboardFollowItem{}
+
+	requirementRows, err := h.db.Query(`
+		SELECT DISTINCT r.id,
+			EXISTS (
+				SELECT 1 FROM user_follows f
+				WHERE f.user_id = $1 AND f.target_type = 'requirement' AND f.target_id = r.id
+			) AS followed_by_me,
+			(r.creator_id = $1) AS created_by_me,
+			(
+				COALESCE(r.owner_id = $1, false)
+				OR EXISTS (
+					SELECT 1 FROM requirement_owners ro
+					WHERE ro.requirement_id = r.id AND ro.user_id = $1
+				)
+			) AS assigned_to_me
+		FROM requirements r
+		WHERE r.status NOT IN ('completed', 'cancelled')
+			AND (
+				r.creator_id = $1
+				OR r.owner_id = $1
+				OR EXISTS (
+					SELECT 1 FROM requirement_owners ro
+					WHERE ro.requirement_id = r.id AND ro.user_id = $1
+				)
+				OR EXISTS (
+					SELECT 1 FROM user_follows f
+					WHERE f.user_id = $1 AND f.target_type = 'requirement' AND f.target_id = r.id
+				)
+			)`, u.ID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	defer requirementRows.Close()
+
+	for requirementRows.Next() {
+		var id string
+		var followedByMe, createdByMe, assignedToMe bool
+		if err := requirementRows.Scan(&id, &followedByMe, &createdByMe, &assignedToMe); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		item, ok := h.requirementFollowItem(id, u.ID)
+		if !ok {
+			continue
+		}
+		item.FollowedByMe = followedByMe
+		item.CreatedByMe = createdByMe
+		item.AssignedToMe = assignedToMe
+		itemsByKey[item.Key] = item
+	}
+	if err := requirementRows.Err(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	taskRows, err := h.db.Query(`
+		SELECT DISTINCT t.id,
+			EXISTS (
+				SELECT 1 FROM user_follows f
+				WHERE f.user_id = $1 AND f.target_type = 'task' AND f.target_id = t.id
+			) AS followed_by_me,
+			(t.creator_tl_id = $1) AS created_by_me,
+			COALESCE(t.assignee_id = $1, false) AS assigned_to_me
+		FROM tasks t
+		JOIN requirements r ON r.id = t.requirement_id
+		WHERE t.status <> 'done'
+			AND r.status NOT IN ('completed', 'cancelled')
+			AND (
+				t.creator_tl_id = $1
+				OR t.assignee_id = $1
+				OR EXISTS (
+					SELECT 1 FROM user_follows f
+					WHERE f.user_id = $1 AND f.target_type = 'task' AND f.target_id = t.id
+				)
+			)`, u.ID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	defer taskRows.Close()
+
+	for taskRows.Next() {
+		var id string
+		var followedByMe, createdByMe, assignedToMe bool
+		if err := taskRows.Scan(&id, &followedByMe, &createdByMe, &assignedToMe); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		item, ok := h.taskFollowItem(id, u.ID)
+		if !ok {
+			continue
+		}
+		item.FollowedByMe = followedByMe
+		item.CreatedByMe = createdByMe
+		item.AssignedToMe = assignedToMe
+		itemsByKey[item.Key] = item
+	}
+	if err := taskRows.Err(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	items := make([]model.DashboardFollowItem, 0, len(itemsByKey))
+	for _, item := range itemsByKey {
+		if item.FollowedByMe || item.CreatedByMe || item.AssignedToMe {
 			items = append(items, item)
 		}
 	}
@@ -212,6 +330,7 @@ const (
 	dashboardRiskTypeRequirementOverdue = "requirement_overdue"
 	dashboardRiskTypeDeadline           = "deadline"
 	dashboardRiskTypeDependencyBlocker  = "dependency_blocker"
+	dashboardRiskTypeDependencyConflict = "dependency_conflict"
 
 	dashboardRiskDisplayRequirementGroup = "requirement_group"
 	dashboardRiskDisplaySingleTask       = "single_task"
@@ -349,6 +468,8 @@ func (h *DashboardHandler) dashboardRiskGroups(requirementFacts []dashboardRequi
 				builder.group.SortEarliestOverdueDate = earliestOptionalDate(builder.group.SortEarliestOverdueDate, taskSummary.SortDueDate)
 			case dashboardRiskTypeDependencyBlocker:
 				builder.group.DependencyBlockerCount++
+			case dashboardRiskTypeDependencyConflict:
+				builder.group.DependencyConflictCount++
 			}
 		}
 		if betterRepresentativeTask(taskSummary, builder.group.RepresentativeTask) {
@@ -369,8 +490,7 @@ func (h *DashboardHandler) dashboardRiskGroups(requirementFacts []dashboardRequi
 			group.DisplayType = dashboardRiskDisplaySingleTask
 		}
 		group.Summary = dashboardRiskGroupSummary(group)
-		group.Level = "高"
-		group.Tone = "red"
+		group.Level, group.Tone = dashboardRiskGroupSeverity(group)
 		group.Deadline = dashboardRiskGroupDeadline(group)
 		group.TargetURL = fmt.Sprintf("/requirements?requirementId=%s", group.RequirementID)
 		group.ActionText = "查看需求"
@@ -385,6 +505,11 @@ func (h *DashboardHandler) dashboardRiskGroups(requirementFacts []dashboardRequi
 			if containsRiskType(group.RepresentativeTask.RiskTypes, dashboardRiskTypeDependencyBlocker) &&
 				!containsRiskType(group.RepresentativeTask.RiskTypes, dashboardRiskTypeDeadline) {
 				group.ActionText = "处理依赖"
+			}
+			if containsRiskType(group.RepresentativeTask.RiskTypes, dashboardRiskTypeDependencyConflict) &&
+				!containsRiskType(group.RepresentativeTask.RiskTypes, dashboardRiskTypeDependencyBlocker) &&
+				!containsRiskType(group.RepresentativeTask.RiskTypes, dashboardRiskTypeDeadline) {
+				group.ActionText = "检查排期"
 			}
 			group.Navigation = model.DashboardNavigationTarget{
 				RequirementID: group.RequirementID,
@@ -455,6 +580,11 @@ func dashboardTaskRiskTypes(risks []string) []string {
 	for _, risk := range risks {
 		if risk == service.TaskRiskBlocked {
 			result = appendRiskType(result, dashboardRiskTypeDependencyBlocker)
+		}
+	}
+	for _, risk := range risks {
+		if risk == service.TaskRiskDependencyConflict {
+			result = appendRiskType(result, dashboardRiskTypeDependencyConflict)
 		}
 	}
 	return result
@@ -543,6 +673,7 @@ func betterRepresentativeTask(candidate, current *model.DashboardRiskTaskSummary
 func representativeTaskPriority(riskTypes []string) int {
 	hasDeadline := containsRiskType(riskTypes, dashboardRiskTypeDeadline)
 	hasBlocker := containsRiskType(riskTypes, dashboardRiskTypeDependencyBlocker)
+	hasConflict := containsRiskType(riskTypes, dashboardRiskTypeDependencyConflict)
 	if hasDeadline && hasBlocker {
 		return 3
 	}
@@ -552,19 +683,25 @@ func representativeTaskPriority(riskTypes []string) int {
 	if hasBlocker {
 		return 1
 	}
+	if hasConflict {
+		return 1
+	}
 	return 0
 }
 
 func dashboardRiskGroupSummary(group model.DashboardRiskGroup) string {
 	parts := []string{}
 	if group.RequirementOverdue {
-		parts = append(parts, "需求超期")
+		parts = append(parts, "需求逾期")
 	}
 	if group.DeadlineTaskCount > 0 {
-		parts = append(parts, fmt.Sprintf("%d 个任务超期", group.DeadlineTaskCount))
+		parts = append(parts, fmt.Sprintf("%d 个任务逾期", group.DeadlineTaskCount))
 	}
 	if group.DependencyBlockerCount > 0 {
 		parts = append(parts, fmt.Sprintf("%d 个依赖阻塞", group.DependencyBlockerCount))
+	}
+	if group.DependencyConflictCount > 0 {
+		parts = append(parts, fmt.Sprintf("%d 个依赖冲突", group.DependencyConflictCount))
 	}
 	if len(parts) == 0 {
 		return "暂无风险"
@@ -574,6 +711,16 @@ func dashboardRiskGroupSummary(group model.DashboardRiskGroup) string {
 		summary += "；重点任务：" + group.RepresentativeTask.Title
 	}
 	return summary
+}
+
+func dashboardRiskGroupSeverity(group model.DashboardRiskGroup) (string, string) {
+	if group.RequirementOverdue || group.DeadlineTaskCount > 0 || group.DependencyBlockerCount > 0 {
+		return "高", "red"
+	}
+	if group.DependencyConflictCount > 0 {
+		return "中", "orange"
+	}
+	return "低", "blue"
 }
 
 func dashboardRiskGroupDeadline(group model.DashboardRiskGroup) string {
@@ -609,8 +756,12 @@ type followAttention struct {
 }
 
 func (h *DashboardHandler) followAttention(targetType, targetID string) followAttention {
+	return loadFollowAttention(h.db, targetType, targetID)
+}
+
+func loadFollowAttention(db *sql.DB, targetType, targetID string) followAttention {
 	var attention followAttention
-	if err := h.db.QueryRow(`
+	if err := db.QueryRow(`
 		SELECT
 			COALESCE(SUM(CASE u.app_role
 				WHEN 'director' THEN 100
@@ -629,21 +780,7 @@ func (h *DashboardHandler) followAttention(targetType, targetID string) followAt
 }
 
 func (h *DashboardHandler) attentionScore(targetType, targetID string) int {
-	var score int
-	if err := h.db.QueryRow(`
-		SELECT COALESCE(SUM(CASE u.app_role
-			WHEN 'director' THEN 100
-			WHEN 'team_leader' THEN 50
-			WHEN 'pm' THEN 40
-			WHEN 'employee' THEN 10
-			ELSE 0
-		END), 0)
-		FROM user_follows f
-		JOIN users u ON u.id = f.user_id
-		WHERE f.target_type = $1 AND f.target_id = $2`, targetType, targetID).Scan(&score); err != nil {
-		return 0
-	}
-	return score
+	return loadFollowAttention(h.db, targetType, targetID).score
 }
 
 func attentionLevel(score int) string {
@@ -660,11 +797,17 @@ func attentionLevel(score int) string {
 }
 
 func requirementRiskPriority(risk model.RequirementRiskSummary) int {
+	if risk.RequirementOverdue > 0 {
+		return 110
+	}
 	if risk.Overdue > 0 {
 		return 100
 	}
 	if risk.Blocked > 0 {
 		return 90
+	}
+	if risk.DependencyConflict > 0 {
+		return 70
 	}
 	return 0
 }
@@ -678,6 +821,11 @@ func taskRiskPriority(risks []string) int {
 	for _, risk := range risks {
 		if risk == service.TaskRiskBlocked {
 			return 90
+		}
+	}
+	for _, risk := range risks {
+		if risk == service.TaskRiskDependencyConflict {
+			return 70
 		}
 	}
 	return 0
@@ -732,11 +880,17 @@ func unfinishedDependencyNames(task model.Task) string {
 }
 
 func requirementRiskLabel(risk model.RequirementRiskSummary) string {
+	if risk.RequirementOverdue > 0 {
+		return "需求已逾期"
+	}
 	if risk.Overdue > 0 {
-		return fmt.Sprintf("%d 个任务已超期", risk.Overdue)
+		return fmt.Sprintf("%d 个任务已逾期", risk.Overdue)
 	}
 	if risk.Blocked > 0 {
 		return fmt.Sprintf("%d 个依赖阻塞", risk.Blocked)
+	}
+	if risk.DependencyConflict > 0 {
+		return fmt.Sprintf("%d 个依赖冲突", risk.DependencyConflict)
 	}
 	return "正常推进"
 }
@@ -744,12 +898,17 @@ func requirementRiskLabel(risk model.RequirementRiskSummary) string {
 func taskRiskLabel(risks []string) string {
 	for _, risk := range risks {
 		if risk == service.TaskRiskOverdue {
-			return "已超期"
+			return "已逾期"
 		}
 	}
 	for _, risk := range risks {
 		if risk == service.TaskRiskBlocked {
 			return "依赖阻塞"
+		}
+	}
+	for _, risk := range risks {
+		if risk == service.TaskRiskDependencyConflict {
+			return "依赖冲突"
 		}
 	}
 	return "正常推进"

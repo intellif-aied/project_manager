@@ -41,6 +41,24 @@ import type {
 } from "../types";
 
 function normalizeRequirement(requirement: Requirement): MockRequirement {
+  const owners =
+    requirement.owners && requirement.owners.length
+      ? requirement.owners
+      : requirement.owner_id
+        ? [
+            {
+              id: requirement.owner_id,
+              name: requirement.owner_name ?? requirement.owner_id,
+              role: "",
+              team_id: requirement.owner_team_id,
+              team_name: requirement.owner_team_name
+            }
+          ]
+        : [];
+  const ownerIds =
+    requirement.owner_ids && requirement.owner_ids.length
+      ? requirement.owner_ids
+      : owners.map((owner) => owner.id);
   return {
     id: requirement.id,
     title: requirement.title,
@@ -50,6 +68,8 @@ function normalizeRequirement(requirement: Requirement): MockRequirement {
     creator_id: requirement.creator_id,
     creator_name: requirement.creator_name,
     creator_role: requirement.creator_role,
+    owner_ids: ownerIds,
+    owners,
     owner_id: requirement.owner_id,
     owner_name: requirement.owner_name,
     owner_team_id: requirement.owner_team_id,
@@ -61,7 +81,17 @@ function normalizeRequirement(requirement: Requirement): MockRequirement {
     team_ids: requirement.team_ids ?? [],
     team_names: requirement.team_names ?? [],
     token_source_ids: requirement.token_source_ids ?? [],
-    risk_summary: requirement.risk_summary ?? { blocked: 0, overdue: 0 },
+    follow_summary: requirement.follow_summary ?? {
+      count: 0,
+      score: 0,
+      level: "normal"
+    },
+    risk_summary: requirement.risk_summary ?? {
+      blocked: 0,
+      overdue: 0,
+      requirement_overdue: 0,
+      dependency_conflict: 0
+    },
     can_update: requirement.can_update,
     can_change_status: requirement.can_change_status,
     can_cancel: requirement.can_cancel,
@@ -81,6 +111,7 @@ function normalizeTask(task: Task): MockTask {
     requirement_id: task.requirement_id,
     requirement_title: task.requirement_title ?? "",
     title: task.title,
+    creator_tl_id: task.creator_tl_id,
     acceptance_criteria: task.acceptance_criteria ?? [],
     assignee_id: task.assignee_id,
     assignee_name: task.assignee_name,
@@ -92,6 +123,11 @@ function normalizeTask(task: Task): MockTask {
     blocking: task.blocking ?? [],
     risk_types: task.risk_types ?? [],
     token_source_ids: task.token_source_ids ?? [],
+    follow_summary: task.follow_summary ?? {
+      count: 0,
+      score: 0,
+      level: "normal"
+    },
     can_update_meta: task.can_update_meta,
     can_reassign: task.can_reassign,
     can_update_status: task.can_update_status,

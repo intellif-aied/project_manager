@@ -240,9 +240,6 @@ func (h *TaskHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	h.updateRequirementProgress(taskID)
 
-	autoFollow(h.db, u.ID, "task", taskID)
-	autoFollow(h.db, *req.AssigneeID, "task", taskID)
-
 	writeJSON(w, http.StatusCreated, map[string]string{"id": taskID, "status": "created"})
 }
 
@@ -367,11 +364,6 @@ func (h *TaskHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if rows, _ := res.RowsAffected(); rows == 0 {
 		writeTaskNotFoundOrConflict(w, h.db, id)
 		return
-	}
-
-	if req.AssigneeID != nil && *req.AssigneeID != "" &&
-		(!task.AssigneeID.Valid || task.AssigneeID.String != *req.AssigneeID) {
-		autoFollow(h.db, *req.AssigneeID, "task", id)
 	}
 
 	h.updateRequirementProgress(id)
@@ -771,7 +763,7 @@ func (h *TaskHandler) Delete(w http.ResponseWriter, r *http.Request) {
 
 func (h *TaskHandler) loadDeps(t *model.Task) {
 	rows, _ := h.db.Query(`
-		SELECT td.depends_on_id, t.title, t.status
+		SELECT td.depends_on_id, t.title, t.status, t.due_date
 		FROM task_dependencies td
 		JOIN tasks t ON t.id = td.depends_on_id
 		WHERE td.task_id = $1`, t.ID)
@@ -779,13 +771,15 @@ func (h *TaskHandler) loadDeps(t *model.Task) {
 		defer rows.Close()
 		for rows.Next() {
 			var d model.TaskDep
-			rows.Scan(&d.TaskID, &d.TaskTitle, &d.Status)
+			var dueDate sql.NullString
+			rows.Scan(&d.TaskID, &d.TaskTitle, &d.Status, &dueDate)
+			d.DueDate = nullStringPtr(dueDate)
 			t.Dependencies = append(t.Dependencies, d)
 		}
 	}
 
 	rows, _ = h.db.Query(`
-		SELECT td.task_id, t.title, t.status
+		SELECT td.task_id, t.title, t.status, t.due_date
 		FROM task_dependencies td
 		JOIN tasks t ON t.id = td.task_id
 		WHERE td.depends_on_id = $1`, t.ID)
@@ -793,7 +787,9 @@ func (h *TaskHandler) loadDeps(t *model.Task) {
 		defer rows.Close()
 		for rows.Next() {
 			var d model.TaskDep
-			rows.Scan(&d.TaskID, &d.TaskTitle, &d.Status)
+			var dueDate sql.NullString
+			rows.Scan(&d.TaskID, &d.TaskTitle, &d.Status, &dueDate)
+			d.DueDate = nullStringPtr(dueDate)
 			t.Blocking = append(t.Blocking, d)
 		}
 	}
@@ -830,6 +826,12 @@ func (h *TaskHandler) enrichTask(t *model.Task, u *model.User) {
 			SELECT 1 FROM user_follows
 			WHERE user_id = $1 AND target_type = 'task' AND target_id = $2
 		)`, userID, t.ID).Scan(&t.IsFollowed)
+	attention := loadFollowAttention(h.db, "task", t.ID)
+	t.FollowSummary = model.RequirementFollowSummary{
+		Count: attention.count,
+		Score: attention.score,
+		Level: attentionLevel(attention.score),
+	}
 	h.applyTaskPermissions(t, u)
 }
 

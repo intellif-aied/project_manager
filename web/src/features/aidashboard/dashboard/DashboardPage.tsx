@@ -50,8 +50,8 @@ import {
   fetchAllSessionTokens,
   fetchDepartmentReportSources,
   fetchDepartmentReportTodayOrNull,
+  fetchDashboardMyItems,
   fetchPersonalWeeklyReportCurrentOrNull,
-  fetchDashboardFollows,
   fetchFollowFollowers,
   fetchDashboardRisks,
   fetchTask,
@@ -123,12 +123,12 @@ type ReportKind =
 type ReportScope = "personal" | "team" | "department";
 type RiskTone = "red" | "orange" | "gold" | "blue";
 type FollowType = "需求" | "任务";
-type RiskType = "requirement_overdue" | "deadline" | "dependency_blocker";
+type RiskType = "requirement_overdue" | "deadline" | "dependency_blocker" | "dependency_conflict";
 type RiskRelatedObjectType = "requirement" | "task";
 type TokenRange = DashboardTokenRange;
 type DashboardDrawer = "follows" | "risks";
-type FollowDrawerFilter = "all" | "blocked" | "overdue" | "risk";
-type RiskDrawerFilter = "all" | "blocker" | "deadline" | "requirement";
+type FollowDrawerFilter = "all" | "followed" | "assigned" | "created" | "blocked" | "overdue" | "risk";
+type RiskDrawerFilter = "all" | "blocker" | "conflict" | "deadline" | "requirement";
 type ReportSkillOption = {
   label: string;
   value: string;
@@ -158,6 +158,9 @@ interface FollowItem {
   risk: string;
   dependency?: string;
   activity?: string;
+  followedByMe?: boolean;
+  createdByMe?: boolean;
+  assignedToMe?: boolean;
   attentionScore?: number;
   attentionLevel?: AttentionLevel;
   followerCount?: number;
@@ -179,6 +182,7 @@ interface RiskItem {
   requirementOverdue?: boolean;
   deadlineTaskCount?: number;
   dependencyBlockerCount?: number;
+  dependencyConflictCount?: number;
   representativeTask?: {
     taskId: string;
     title: string;
@@ -250,6 +254,9 @@ const DASHBOARD_PREVIEW_LIMIT = 5;
 
 const FOLLOW_DRAWER_FILTER_OPTIONS: { label: string; value: FollowDrawerFilter }[] = [
   { label: "全部", value: "all" },
+  { label: "我关注", value: "followed" },
+  { label: "我负责", value: "assigned" },
+  { label: "我创建", value: "created" },
   { label: "阻塞", value: "blocked" },
   { label: "超期", value: "overdue" },
   { label: "有风险", value: "risk" }
@@ -258,8 +265,9 @@ const FOLLOW_DRAWER_FILTER_OPTIONS: { label: string; value: FollowDrawerFilter }
 const RISK_DRAWER_FILTER_OPTIONS: { label: string; value: RiskDrawerFilter }[] = [
   { label: "全部", value: "all" },
   { label: "依赖阻塞", value: "blocker" },
-  { label: "任务超期", value: "deadline" },
-  { label: "需求超期", value: "requirement" }
+  { label: "依赖冲突", value: "conflict" },
+  { label: "任务逾期", value: "deadline" },
+  { label: "需求逾期", value: "requirement" }
 ];
 
 interface TaskProgressSuggestion {
@@ -943,8 +951,8 @@ export function DashboardPage() {
   const weekEnd = dayjs(weekStart).add(6, "day").format("YYYY-MM-DD");
   const currentUserId = user?.id ?? "";
   const followsQuery = useQuery({
-    queryKey: ["dashboard", currentUserId, "follows"],
-    queryFn: fetchDashboardFollows,
+    queryKey: ["dashboard", currentUserId, "my-items"],
+    queryFn: fetchDashboardMyItems,
     staleTime: 30_000
   });
   const risksQuery = useQuery({
@@ -1630,14 +1638,14 @@ export function DashboardPage() {
       className="console-dashboard-page"
       bodyClassName="console-dashboard-page__body"
       title="控制台"
-      description="查看报告状态、关注对象和需要处理的风险。"
+      description="查看报告状态、我的事项和需要处理的风险。"
       showNav={false}
     >
       <section className="console-dashboard">
         <div className="console-panel console-panel--follow">
           <PanelHeader
-            icon={<StarOutlined />}
-            title="我关注的事项"
+            icon={<UnorderedListOutlined />}
+            title="我的事项"
             extra={<SummaryChips items={followSummaryChips} />}
           />
           <div className="console-follow-list">
@@ -1656,8 +1664,8 @@ export function DashboardPage() {
                     hiddenCount={followItems.length - previewFollowItems.length}
                     previewCount={previewFollowItems.length}
                     totalCount={followItems.length}
-                    title="还有关注事项未展示"
-                    label="查看全部关注"
+                    title="还有我的事项未展示"
+                    label="查看全部事项"
                     tone="follow"
                     onClick={() => openDashboardDrawer("follows")}
                   />
@@ -1665,9 +1673,9 @@ export function DashboardPage() {
               </>
             ) : (
               <div className="console-report-status-card">
-                <p>{followsQuery.isError ? "关注事项加载失败" : "暂无关注事项"}</p>
+                <p>{followsQuery.isError ? "我的事项加载失败" : "暂无我的事项"}</p>
                 <Button type="link" onClick={() => navigate("/requirements")}>
-                  前往需求看板关注
+                  前往需求看板查看
                 </Button>
               </div>
             )}
@@ -1952,8 +1960,8 @@ function FollowItemsDrawer({
       onClose={onClose}
       title={
         <span className="console-dashboard-drawer__title">
-          <StarOutlined />
-          全部关注事项
+          <UnorderedListOutlined />
+          全部我的事项
         </span>
       }
       extra={
@@ -1972,7 +1980,7 @@ function FollowItemsDrawer({
           />
         </div>
         <div className="console-dashboard-drawer__meta">
-          当前显示 {items.length} / {totalCount} 项，按阻塞、超期、高关注优先排序。
+          当前显示 {items.length} / {totalCount} 项，按阻塞、超期、关注度优先排序。
         </div>
         <div className="console-dashboard-drawer__list console-follow-list">
           {items.length > 0 ? (
@@ -1986,7 +1994,7 @@ function FollowItemsDrawer({
             ))
           ) : (
             <div className="console-report-status-card">
-              <p>当前筛选下暂无关注事项</p>
+              <p>当前筛选下暂无我的事项</p>
             </div>
           )}
         </div>
@@ -3808,9 +3816,12 @@ function FollowCard({
         <Tag color={isTask ? "geekblue" : "green"}>{item.type}</Tag>
         <Badge status={item.status === "阻塞" ? "error" : "processing"} text={item.status} />
       </div>
-      <strong className="console-follow-card__title" title={item.title}>
-        {item.title}
-      </strong>
+      <div className="console-follow-card__content">
+        <strong className="console-follow-card__title" title={item.title}>
+          {item.title}
+        </strong>
+        <WorkRelationTags item={item} />
+      </div>
       <div className="console-follow-card__risk">
         {riskHint ? <Tag color={riskHint.color}>{riskHint.label}</Tag> : null}
       </div>
@@ -3836,6 +3847,28 @@ function FollowCard({
   );
 }
 
+function WorkRelationTags({ item }: { item: FollowItem }) {
+  const relations = getWorkRelationTags(item);
+  if (!relations.length) return null;
+  return (
+    <div className="console-follow-card__relations" aria-label="事项关系">
+      {relations.map((relation) => (
+        <span className={`console-follow-card__relation is-${relation.key}`} key={relation.key}>
+          {relation.label}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function getWorkRelationTags(item: FollowItem) {
+  const tags: Array<{ key: "followed" | "assigned" | "created"; label: string }> = [];
+  if (item.followedByMe) tags.push({ key: "followed", label: "关注" });
+  if (item.assignedToMe) tags.push({ key: "assigned", label: "负责" });
+  if (item.createdByMe) tags.push({ key: "created", label: "创建" });
+  return tags;
+}
+
 type FollowRiskHint = { label: string; color: string; tone: "red" | "orange" | "blue" };
 
 function getDashboardDrawer(value: string | null): DashboardDrawer | null {
@@ -3844,11 +3877,17 @@ function getDashboardDrawer(value: string | null): DashboardDrawer | null {
 }
 
 function getFollowSummaryChips(items: FollowItem[]): SummaryChipItem[] {
+  const followed = items.filter((item) => item.followedByMe).length;
+  const assigned = items.filter((item) => item.assignedToMe).length;
+  const created = items.filter((item) => item.createdByMe).length;
   const blocked = items.filter(isFollowBlocked).length;
   const overdue = items.filter(isFollowOverdue).length;
   const risky = items.filter(isFollowRisky).length;
   const chips: SummaryChipItem[] = [
     { label: "全部", value: items.length, tone: "default" },
+    { label: "关注", value: followed, tone: "orange" },
+    { label: "负责", value: assigned, tone: "blue" },
+    { label: "创建", value: created, tone: "muted" },
     { label: "阻塞", value: blocked, tone: "red" },
     { label: "超期", value: overdue, tone: "red" },
     { label: "有风险", value: risky, tone: "orange" }
@@ -3858,6 +3897,7 @@ function getFollowSummaryChips(items: FollowItem[]): SummaryChipItem[] {
 
 function getRiskSummaryChips(items: RiskItem[]): SummaryChipItem[] {
   const blockers = items.filter(isRiskBlocker).length;
+  const conflicts = items.filter(isRiskConflict).length;
   const overdue = items.filter(
     (item) => isRiskDeadline(item) || isRiskRequirementOverdue(item)
   ).length;
@@ -3865,13 +3905,17 @@ function getRiskSummaryChips(items: RiskItem[]): SummaryChipItem[] {
   const chips: SummaryChipItem[] = [
     { label: "全部", value: items.length, tone: "default" },
     { label: "阻塞", value: blockers, tone: "red" },
-    { label: "超期", value: overdue, tone: "red" },
+    { label: "逾期", value: overdue, tone: "red" },
+    { label: "冲突", value: conflicts, tone: "orange" },
     { label: "高关注", value: highAttention, tone: "orange" }
   ];
   return chips.filter((item) => item.label === "全部" || item.value > 0);
 }
 
 function matchesFollowFilter(item: FollowItem, filter: FollowDrawerFilter) {
+  if (filter === "followed") return Boolean(item.followedByMe);
+  if (filter === "assigned") return Boolean(item.assignedToMe);
+  if (filter === "created") return Boolean(item.createdByMe);
   if (filter === "blocked") return isFollowBlocked(item);
   if (filter === "overdue") return isFollowOverdue(item);
   if (filter === "risk") return isFollowRisky(item);
@@ -3880,6 +3924,7 @@ function matchesFollowFilter(item: FollowItem, filter: FollowDrawerFilter) {
 
 function matchesRiskFilter(item: RiskItem, filter: RiskDrawerFilter) {
   if (filter === "blocker") return isRiskBlocker(item);
+  if (filter === "conflict") return isRiskConflict(item);
   if (filter === "deadline") return isRiskDeadline(item);
   if (filter === "requirement") return isRiskRequirementOverdue(item);
   return true;
@@ -3917,6 +3962,7 @@ function getRiskPriorityScore(item: RiskItem) {
   if (isRiskBlocker(item)) score += 220;
   if (isRiskRequirementOverdue(item)) score += 190;
   if (isRiskDeadline(item)) score += 150;
+  if (isRiskConflict(item)) score += 120;
   const deadlineRank = getDeadlineRank(getRiskDeadline(item));
   if (deadlineRank <= 2) score += 60 - Math.max(deadlineRank, 0) * 10;
   return score;
@@ -3953,7 +3999,15 @@ function isRiskDeadline(item: RiskItem) {
   return (
     (item.deadlineTaskCount ?? 0) > 0 ||
     hasRiskType(item, "deadline") ||
-    getRiskTagLabels(item).some((label) => label.includes("任务超期"))
+    getRiskTagLabels(item).some((label) => label.includes("任务逾期") || label.includes("任务超期"))
+  );
+}
+
+function isRiskConflict(item: RiskItem) {
+  return (
+    (item.dependencyConflictCount ?? 0) > 0 ||
+    hasRiskType(item, "dependency_conflict") ||
+    getRiskTagLabels(item).some((label) => label.includes("冲突"))
   );
 }
 
@@ -3991,7 +4045,7 @@ function getFollowRiskHint(item: FollowItem): FollowRiskHint | null {
 
 function FollowFollowersPopover({ item }: { item: FollowItem }) {
   const [open, setOpen] = useState(false);
-  if ((item.followerCount ?? 0) <= 1) return null;
+  if ((item.followerCount ?? 0) <= 0) return null;
 
   return (
     <Popover
@@ -4009,7 +4063,11 @@ function FollowFollowersPopover({ item }: { item: FollowItem }) {
 }
 
 function FollowCountTag({ count, level }: { count: number; level: AttentionLevel }) {
-  return <Tag color={followCountTagColor(level)}>{count}人关注</Tag>;
+  return (
+    <Tag color={followCountTagColor(level)} title="悬停查看关注人">
+      {attentionLabel(level, count)}
+    </Tag>
+  );
 }
 
 function followCountTagColor(level: AttentionLevel) {
@@ -4036,21 +4094,29 @@ function FollowFollowersContent({ item, enabled }: { item: FollowItem; enabled: 
     return <span className="console-follow-followers__state">关注人加载失败</span>;
 
   const groups = groupFollowersByRole(followersQuery.data ?? []);
+  const totalCount = followersQuery.data?.length ?? item.followerCount ?? 0;
+  const followers = groups.flatMap((group) =>
+    group.followers.map((follower) => ({
+      ...follower,
+      roleLabel: group.shortLabel
+    }))
+  );
   return (
     <div className="console-follow-followers">
-      {groups.map((group) => (
-        <div key={group.role} className="console-follow-followers__group">
-          <strong>{group.label}</strong>
-          <div className="console-follow-followers__users">
-            {group.followers.map((follower) => (
-              <span key={follower.id}>
-                {follower.name}
-                {follower.teamName ? ` · ${follower.teamName}` : ""}
-              </span>
-            ))}
-          </div>
+      <div className="console-follow-followers__header">
+        <div>
+          <strong>关注人员</strong>
+          <span>{attentionLabel(item.attentionLevel ?? "normal", totalCount)} · {totalCount} 人</span>
         </div>
-      ))}
+      </div>
+      <div className="console-follow-followers__users">
+        {followers.map((follower) => (
+          <span key={follower.id}>
+            <strong>{follower.name}</strong>
+            {follower.roleLabel ? <em>{follower.roleLabel}</em> : null}
+          </span>
+        ))}
+      </div>
     </div>
   );
 }
@@ -4064,10 +4130,18 @@ function groupFollowersByRole(followers: DashboardFollowFollowerDTO[]) {
     employee: "员工",
     admin: "管理员"
   };
+  const roleShortLabels: Record<string, string> = {
+    director: "总监",
+    team_leader: "TL",
+    pm: "PM",
+    employee: "",
+    admin: "管理员"
+  };
   return roleOrder
     .map((role) => ({
       role,
       label: roleLabels[role] ?? role,
+      shortLabel: roleShortLabels[role] ?? role,
       followers: followers.filter((follower) => follower.role === role)
     }))
     .filter((group) => group.followers.length > 0);
@@ -4076,7 +4150,7 @@ function groupFollowersByRole(followers: DashboardFollowFollowerDTO[]) {
 function RiskAttentionPill({ level }: { level: AttentionLevel }) {
   const config = {
     normal: null,
-    notable: { label: "关注", tone: "blue" },
+    notable: { label: "一般关注", tone: "blue" },
     important: { label: "重点关注", tone: "orange" },
     high: { label: "高关注", tone: "red" }
   }[level];
@@ -4085,6 +4159,14 @@ function RiskAttentionPill({ level }: { level: AttentionLevel }) {
       {config.label}
     </span>
   ) : null;
+}
+
+function attentionLabel(level: AttentionLevel, count: number) {
+  if (count <= 0) return "暂无关注";
+  if (level === "high") return "高关注";
+  if (level === "important") return "重点关注";
+  if (level === "notable") return "一般关注";
+  return "普通关注";
 }
 
 function RiskCard({ item, onAction }: { item: RiskItem; onAction: (item: RiskItem) => void }) {
@@ -4134,10 +4216,12 @@ function getRiskTagLabels(item: RiskItem) {
     return [item.source ?? "风险"];
   }
   const labels: string[] = [];
-  if (item.requirementOverdue) labels.push("需求超期");
-  if ((item.deadlineTaskCount ?? 0) > 0) labels.push(`${item.deadlineTaskCount} 个任务超期`);
+  if (item.requirementOverdue) labels.push("需求逾期");
+  if ((item.deadlineTaskCount ?? 0) > 0) labels.push(`${item.deadlineTaskCount} 个任务逾期`);
   if ((item.dependencyBlockerCount ?? 0) > 0)
     labels.push(`${item.dependencyBlockerCount} 个依赖阻塞`);
+  if ((item.dependencyConflictCount ?? 0) > 0)
+    labels.push(`${item.dependencyConflictCount} 个依赖冲突`);
   if (labels.length === 0 && item.representativeTask) {
     item.representativeTask.riskTypes.forEach((riskType) => labels.push(riskTypeLabel(riskType)));
   }
@@ -4174,9 +4258,10 @@ function getRiskDeadline(item: RiskItem) {
 }
 
 function riskTypeLabel(riskType: RiskType) {
-  if (riskType === "requirement_overdue") return "需求超期";
+  if (riskType === "requirement_overdue") return "需求逾期";
   if (riskType === "dependency_blocker") return "依赖阻塞";
-  return "任务超期";
+  if (riskType === "dependency_conflict") return "依赖冲突";
+  return "任务逾期";
 }
 
 function getRiskActionLabel(item: RiskItem) {
@@ -4184,6 +4269,9 @@ function getRiskActionLabel(item: RiskItem) {
   const riskTypes = item.representativeTask?.riskTypes ?? (item.riskType ? [item.riskType] : []);
   if (riskTypes.includes("dependency_blocker") && !riskTypes.includes("deadline")) {
     return item.actionText ?? "处理依赖";
+  }
+  if (riskTypes.includes("dependency_conflict") && !riskTypes.includes("deadline")) {
+    return item.actionText ?? "检查排期";
   }
   if (item.displayType === "single_task" || riskTypes.includes("deadline")) {
     return item.actionText ?? "查看任务";

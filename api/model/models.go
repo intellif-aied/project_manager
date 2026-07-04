@@ -31,76 +31,81 @@ type User struct {
 }
 
 type Requirement struct {
-	ID                 string                 `json:"id"`
-	Title              string                 `json:"title"`
-	Description        string                 `json:"description"`
-	FeishuDocURL       *string                `json:"feishu_doc_url,omitempty"`
-	AcceptanceCriteria []string               `json:"acceptance_criteria"`
-	CreatorID          string                 `json:"creator_id"`
-	CreatorName        string                 `json:"creator_name"`
-	CreatorRole        string                 `json:"creator_role"`
-	OwnerID            *string                `json:"owner_id,omitempty"`
-	OwnerName          *string                `json:"owner_name,omitempty"`
-	OwnerTeamID        *string                `json:"owner_team_id,omitempty"`
-	OwnerTeamName      *string                `json:"owner_team_name,omitempty"`
-	Status             string                 `json:"status"`
-	Priority           string                 `json:"priority"`
-	Progress           int                    `json:"progress"`
-	Deadline           *string                `json:"deadline,omitempty"`
-	TeamIDs            []string               `json:"team_ids"`
-	TeamNames          []string               `json:"team_names"`
-	TokenSourceIDs     []string               `json:"token_source_ids"`
-	TaskSummary        RequirementTaskSummary `json:"task_summary"`
-	RiskSummary        RequirementRiskSummary `json:"risk_summary"`
-	IsFollowed         bool                   `json:"is_followed"`
-	CanUpdate          bool                   `json:"can_update"`
-	CanChangeStatus    bool                   `json:"can_change_status"`
-	CanCancel          bool                   `json:"can_cancel"`
-	CanRestore         bool                   `json:"can_restore"`
-	CanDelete          bool                   `json:"can_delete"`
-	CanManageAC        bool                   `json:"can_manage_ac"`
-	CanCreateTask      bool                   `json:"can_create_task"`
-	CompletedAt        *time.Time             `json:"completed_at,omitempty"`
-	CreatedAt          time.Time              `json:"created_at"`
-	UpdatedAt          time.Time              `json:"updated_at"`
-	Version            int64                  `json:"version"`
+	ID                 string                   `json:"id"`
+	Title              string                   `json:"title"`
+	Description        string                   `json:"description"`
+	FeishuDocURL       *string                  `json:"feishu_doc_url,omitempty"`
+	AcceptanceCriteria []string                 `json:"acceptance_criteria"`
+	CreatorID          string                   `json:"creator_id"`
+	CreatorName        string                   `json:"creator_name"`
+	CreatorRole        string                   `json:"creator_role"`
+	OwnerIDs           []string                 `json:"owner_ids"`
+	Owners             []RequirementOwner       `json:"owners"`
+	OwnerID            *string                  `json:"owner_id,omitempty"`
+	OwnerName          *string                  `json:"owner_name,omitempty"`
+	OwnerTeamID        *string                  `json:"owner_team_id,omitempty"`
+	OwnerTeamName      *string                  `json:"owner_team_name,omitempty"`
+	Status             string                   `json:"status"`
+	Priority           string                   `json:"priority"`
+	Progress           int                      `json:"progress"`
+	Deadline           *string                  `json:"deadline,omitempty"`
+	TeamIDs            []string                 `json:"team_ids"`
+	TeamNames          []string                 `json:"team_names"`
+	TokenSourceIDs     []string                 `json:"token_source_ids"`
+	TaskSummary        RequirementTaskSummary   `json:"task_summary"`
+	RiskSummary        RequirementRiskSummary   `json:"risk_summary"`
+	FollowSummary      RequirementFollowSummary `json:"follow_summary"`
+	IsFollowed         bool                     `json:"is_followed"`
+	CanUpdate          bool                     `json:"can_update"`
+	CanChangeStatus    bool                     `json:"can_change_status"`
+	CanCancel          bool                     `json:"can_cancel"`
+	CanRestore         bool                     `json:"can_restore"`
+	CanDelete          bool                     `json:"can_delete"`
+	CanManageAC        bool                     `json:"can_manage_ac"`
+	CanCreateTask      bool                     `json:"can_create_task"`
+	CompletedAt        *time.Time               `json:"completed_at,omitempty"`
+	CreatedAt          time.Time                `json:"created_at"`
+	UpdatedAt          time.Time                `json:"updated_at"`
+	Version            int64                    `json:"version"`
 }
 
 type Task struct {
-	ID                    string     `json:"id"`
-	RequirementID         string     `json:"requirement_id"`
-	RequirementTitle      string     `json:"requirement_title,omitempty"`
-	Title                 string     `json:"title"`
-	AcceptanceCriteria    []string   `json:"acceptance_criteria"`
-	AssigneeID            *string    `json:"assignee_id,omitempty"`
-	AssigneeName          *string    `json:"assignee_name,omitempty"`
-	CreatorTLID           string     `json:"creator_tl_id"`
-	Status                string     `json:"status"`
-	DisplayStatus         string     `json:"display_status"`
-	Priority              string     `json:"priority"`
-	Progress              int        `json:"progress"`
-	DueDate               *string    `json:"due_date,omitempty"`
-	Dependencies          []TaskDep  `json:"dependencies,omitempty"`
-	Blocking              []TaskDep  `json:"blocking,omitempty"`
-	RiskTypes             []string   `json:"risk_types"`
-	TokenSourceIDs        []string   `json:"token_source_ids"`
-	IsFollowed            bool       `json:"is_followed"`
-	CanUpdateMeta         bool       `json:"can_update_meta"`
-	CanReassign           bool       `json:"can_reassign"`
-	CanUpdateStatus       bool       `json:"can_update_status"`
-	CanUpdateProgress     bool       `json:"can_update_progress"`
-	CanManageDependencies bool       `json:"can_manage_dependencies"`
-	CanDelete             bool       `json:"can_delete"`
-	CompletedAt           *time.Time `json:"completed_at,omitempty"`
-	CreatedAt             time.Time  `json:"created_at"`
-	UpdatedAt             time.Time  `json:"updated_at"`
-	Version               int64      `json:"version"`
+	ID                    string                   `json:"id"`
+	RequirementID         string                   `json:"requirement_id"`
+	RequirementTitle      string                   `json:"requirement_title,omitempty"`
+	Title                 string                   `json:"title"`
+	AcceptanceCriteria    []string                 `json:"acceptance_criteria"`
+	AssigneeID            *string                  `json:"assignee_id,omitempty"`
+	AssigneeName          *string                  `json:"assignee_name,omitempty"`
+	CreatorTLID           string                   `json:"creator_tl_id"`
+	Status                string                   `json:"status"`
+	DisplayStatus         string                   `json:"display_status"`
+	Priority              string                   `json:"priority"`
+	Progress              int                      `json:"progress"`
+	DueDate               *string                  `json:"due_date,omitempty"`
+	Dependencies          []TaskDep                `json:"dependencies,omitempty"`
+	Blocking              []TaskDep                `json:"blocking,omitempty"`
+	RiskTypes             []string                 `json:"risk_types"`
+	TokenSourceIDs        []string                 `json:"token_source_ids"`
+	FollowSummary         RequirementFollowSummary `json:"follow_summary"`
+	IsFollowed            bool                     `json:"is_followed"`
+	CanUpdateMeta         bool                     `json:"can_update_meta"`
+	CanReassign           bool                     `json:"can_reassign"`
+	CanUpdateStatus       bool                     `json:"can_update_status"`
+	CanUpdateProgress     bool                     `json:"can_update_progress"`
+	CanManageDependencies bool                     `json:"can_manage_dependencies"`
+	CanDelete             bool                     `json:"can_delete"`
+	CompletedAt           *time.Time               `json:"completed_at,omitempty"`
+	CreatedAt             time.Time                `json:"created_at"`
+	UpdatedAt             time.Time                `json:"updated_at"`
+	Version               int64                    `json:"version"`
 }
 
 type TaskDep struct {
-	TaskID    string `json:"task_id"`
-	TaskTitle string `json:"task_title"`
-	Status    string `json:"status"`
+	TaskID    string  `json:"task_id"`
+	TaskTitle string  `json:"task_title"`
+	Status    string  `json:"status"`
+	DueDate   *string `json:"due_date,omitempty"`
 }
 
 type RequirementTaskSummary struct {
@@ -110,8 +115,24 @@ type RequirementTaskSummary struct {
 }
 
 type RequirementRiskSummary struct {
-	Blocked int `json:"blocked"`
-	Overdue int `json:"overdue"`
+	Blocked            int `json:"blocked"`
+	Overdue            int `json:"overdue"`
+	RequirementOverdue int `json:"requirement_overdue"`
+	DependencyConflict int `json:"dependency_conflict"`
+}
+
+type RequirementOwner struct {
+	ID       string  `json:"id"`
+	Name     string  `json:"name"`
+	Role     string  `json:"role"`
+	TeamID   *string `json:"team_id,omitempty"`
+	TeamName *string `json:"team_name,omitempty"`
+}
+
+type RequirementFollowSummary struct {
+	Count int    `json:"count"`
+	Score int    `json:"score"`
+	Level string `json:"level"`
 }
 
 type RequirementFollowState struct {
@@ -168,6 +189,9 @@ type DashboardFollowItem struct {
 	Risk           string                    `json:"risk"`
 	Dependency     string                    `json:"dependency,omitempty"`
 	Activity       string                    `json:"activity,omitempty"`
+	FollowedByMe   bool                      `json:"followedByMe"`
+	CreatedByMe    bool                      `json:"createdByMe"`
+	AssignedToMe   bool                      `json:"assignedToMe"`
 	AttentionScore int                       `json:"attentionScore"`
 	AttentionLevel string                    `json:"attentionLevel"`
 	FollowerCount  int                       `json:"followerCount"`
@@ -196,6 +220,7 @@ type DashboardRiskGroup struct {
 	RequirementOverdue      bool                      `json:"requirementOverdue"`
 	DeadlineTaskCount       int                       `json:"deadlineTaskCount"`
 	DependencyBlockerCount  int                       `json:"dependencyBlockerCount"`
+	DependencyConflictCount int                       `json:"dependencyConflictCount"`
 	RepresentativeTask      *DashboardRiskTaskSummary `json:"representativeTask,omitempty"`
 	Summary                 string                    `json:"summary"`
 	Deadline                string                    `json:"deadline"`
@@ -373,6 +398,7 @@ type CreateRequirementRequest struct {
 	FeishuDocURL       *string  `json:"feishu_doc_url,omitempty"`
 	Priority           string   `json:"priority"`
 	Deadline           *string  `json:"deadline,omitempty"`
+	OwnerIDs           []string `json:"owner_ids,omitempty"`
 	OwnerID            *string  `json:"owner_id,omitempty"`
 	TeamIDs            []string `json:"team_ids"`
 	AcceptanceCriteria []string `json:"acceptance_criteria,omitempty"`
@@ -385,6 +411,7 @@ type UpdateRequirementRequest struct {
 	Priority           *string   `json:"priority,omitempty"`
 	Status             *string   `json:"status,omitempty"`
 	Deadline           *string   `json:"deadline,omitempty"`
+	OwnerIDs           *[]string `json:"owner_ids,omitempty"`
 	OwnerID            *string   `json:"owner_id,omitempty"`
 	ClearOwner         bool      `json:"clear_owner,omitempty"`
 	TeamIDs            *[]string `json:"team_ids,omitempty"`

@@ -6,6 +6,7 @@ import {
   DeleteOutlined,
   EditOutlined,
   FileTextOutlined,
+  InfoCircleOutlined,
   LinkOutlined,
   MoreOutlined,
   PlusOutlined,
@@ -60,8 +61,8 @@ import { PagePanel } from "@/shared/components/PagePanel/PagePanel";
 import { isEditConflict } from "@/shared/request/apiError";
 import { appendSearch } from "@/shared/utils/urlQuery";
 
-import { fetchSessionTokens } from "../../api/client";
-import type { SessionTokens } from "../../api/types";
+import { fetchFollowFollowers, fetchSessionTokens } from "../../api/client";
+import type { AttentionLevel, DashboardFollowFollowerDTO, FollowTargetType, SessionTokens } from "../../api/types";
 import { TaskStatusTag } from "../../dashboard/shared";
 import { AcceptanceCriteriaEditor } from "../components/AcceptanceCriteriaEditor";
 import {
@@ -97,7 +98,20 @@ import type {
 import "./RequirementsBoard.css";
 
 type BoardView = "board" | "tree";
-type RiskFilter = "blocked";
+type WorkScope = "all" | "mine" | "followed" | "assigned" | "created";
+type RiskFilter = "requirement_overdue" | "task_overdue" | "blocked" | "dependency_conflict";
+type RequirementRiskTone = "danger" | "warning";
+type RequirementRiskBadge = {
+  value: RiskFilter;
+  label: string;
+  count: number;
+  tone: RequirementRiskTone;
+};
+type TaskRiskBadge = {
+  key: string;
+  label: string;
+  tone: RequirementRiskTone;
+};
 type RequirementQuickEditField = "deadline" | "owner" | "teams";
 
 const EDIT_CONFLICT_MESSAGE = "内容已被其他人更新，请刷新后再操作";
@@ -174,13 +188,43 @@ const PRIORITY_OPTIONS: Array<{ value: RequirementPriority; label: string }> = [
 ];
 
 const RISK_OPTIONS: Array<{ value: RiskFilter; label: string }> = [
-  { value: "blocked", label: "上游阻塞" }
+  { value: "requirement_overdue", label: "需求逾期" },
+  { value: "task_overdue", label: "任务逾期" },
+  { value: "blocked", label: "依赖阻塞" },
+  { value: "dependency_conflict", label: "依赖冲突" }
+];
+
+const WORK_SCOPE_OPTIONS: Array<{ value: WorkScope; label: string }> = [
+  { value: "mine", label: "我的事项" },
+  { value: "followed", label: "关注" },
+  { value: "assigned", label: "负责" },
+  { value: "created", label: "创建" },
+  { value: "all", label: "全部" }
 ];
 
 const EMPTY_REQUIREMENTS: MockRequirement[] = [];
 const EMPTY_TASKS: MockTask[] = [];
 const EMPTY_TOKEN_SOURCES: MockTokenSource[] = [];
 const EMPTY_FAVORITES: MockFavorite[] = [];
+
+function isRiskFilter(value: string | null): value is RiskFilter {
+  return (
+    value === "requirement_overdue" ||
+    value === "task_overdue" ||
+    value === "blocked" ||
+    value === "dependency_conflict"
+  );
+}
+
+function isWorkScope(value: string | null): value is WorkScope {
+  return (
+    value === "all" ||
+    value === "mine" ||
+    value === "followed" ||
+    value === "assigned" ||
+    value === "created"
+  );
+}
 
 function canManageTaskForUser(user: User | null, task?: MockTask) {
   if (!user || !task) return false;
@@ -251,22 +295,6 @@ function PriorityPill({ priority }: { priority: RequirementPriority | MockTaskPr
   );
 }
 
-function RequirementTeamCell({ requirement }: { requirement: MockRequirement }) {
-  const teams = requirement.team_names.length ? requirement.team_names : ["未指定参与团队"];
-  const visibleTeams = teams.slice(0, 2);
-  const restCount = Math.max(0, teams.length - visibleTeams.length);
-  const title = teams.join("、");
-
-  return (
-    <span className="requirements-tree__team" title={title}>
-      {visibleTeams.map((team) => (
-        <span key={team}>{team}</span>
-      ))}
-      {restCount ? <em>+{restCount}</em> : null}
-    </span>
-  );
-}
-
 function RequirementPriorityTag({ priority }: { priority: RequirementPriority }) {
   const meta = PRIORITY_META[priority];
   return <Tag color={meta.color}>{meta.label}</Tag>;
@@ -276,24 +304,285 @@ function formatDateTime(value?: string) {
   return value ? dayjs(value).format("YYYY-MM-DD HH:mm") : "-";
 }
 
-function formatRecentUpdate(value?: string) {
-  if (!value) return "未更新";
-  const days = dayjs().startOf("day").diff(dayjs(value).startOf("day"), "day");
-  if (days <= 0) return "今天更新";
-  if (days === 1) return "昨天更新";
-  return `${days} 天前更新`;
-}
-
 function formatDate(value?: string) {
   return value ? dayjs(value).format("YYYY-MM-DD") : "未设置";
 }
 
+function isBeforeToday(value?: string) {
+  if (!value) return false;
+  const parsed = dayjs(value);
+  return parsed.isValid() && parsed.startOf("day").isBefore(dayjs().startOf("day"));
+}
+
+function getRequirementRiskBadges(
+  requirement: MockRequirement,
+  requirementTasks: MockTask[]
+): RequirementRiskBadge[] {
+  const summary = requirement.risk_summary;
+  const requirementOverdue =
+    (summary?.requirement_overdue ?? 0) > 0 ||
+    (requirement.status !== "completed" &&
+      requirement.status !== "cancelled" &&
+      isBeforeToday(requirement.deadline));
+  const taskOverdue =
+    summary?.overdue ??
+    requirementTasks.filter((task) => task.risk_types?.includes("overdue") || isBeforeToday(task.due_date))
+      .length;
+  const blocked =
+    summary?.blocked ??
+    requirementTasks.filter((task) => task.risk_types?.includes("blocked") || task.status === "blocked")
+      .length;
+  const dependencyConflict =
+    summary?.dependency_conflict ??
+    requirementTasks.filter((task) => task.risk_types?.includes("dependency_conflict")).length;
+
+  const badges: RequirementRiskBadge[] = [];
+  if (requirementOverdue) {
+    badges.push({ value: "requirement_overdue", label: "需求已逾期", count: 1, tone: "danger" });
+  }
+  if (taskOverdue > 0) {
+    badges.push({ value: "task_overdue", label: `${taskOverdue} 个任务逾期`, count: taskOverdue, tone: "danger" });
+  }
+  if (blocked > 0) {
+    badges.push({ value: "blocked", label: `${blocked} 个依赖阻塞`, count: blocked, tone: "danger" });
+  }
+  if (dependencyConflict > 0) {
+    badges.push({
+      value: "dependency_conflict",
+      label: `${dependencyConflict} 个依赖冲突`,
+      count: dependencyConflict,
+      tone: "warning"
+    });
+  }
+  return badges;
+}
+
+function getTaskRiskBadges(task: MockTask): TaskRiskBadge[] {
+  if (task.status === "done") return [];
+  const riskTypes = task.risk_types ?? [];
+  const badges: TaskRiskBadge[] = [];
+  if (riskTypes.includes("overdue") || isBeforeToday(task.due_date)) {
+    badges.push({ key: "overdue", label: "逾期", tone: "danger" });
+  }
+  if (riskTypes.includes("blocked") || task.status === "blocked") {
+    badges.push({ key: "blocked", label: "依赖阻塞", tone: "danger" });
+  }
+  if (riskTypes.includes("dependency_conflict")) {
+    badges.push({ key: "dependency_conflict", label: "依赖冲突", tone: "warning" });
+  }
+  return badges;
+}
+
 function getRequirementOwnerLabel(requirement: MockRequirement) {
-  return requirement.owner_name || "未指定负责人";
+  const ownerNames = requirement.owners.map((owner) => owner.name || owner.id).filter(Boolean);
+  if (ownerNames.length === 0) {
+    return "未指定负责人";
+  }
+  const visibleOwners = ownerNames.slice(0, 2);
+  const restCount = ownerNames.length - visibleOwners.length;
+  return restCount > 0 ? `${visibleOwners.join("、")} +${restCount}` : visibleOwners.join("、");
+}
+
+function getRequirementOwnerTitle(requirement: MockRequirement) {
+  const ownerNames = requirement.owners.map((owner) => owner.name || owner.id).filter(Boolean);
+  return ownerNames.length ? ownerNames.join("、") : "未指定负责人";
 }
 
 function getRequirementTeamLabel(requirement: MockRequirement) {
   return requirement.team_names.length ? requirement.team_names.join("、") : "未指定参与团队";
+}
+
+function RequirementAttentionPill({ requirement }: { requirement: MockRequirement }) {
+  return (
+    <AttentionPill
+      targetType="requirement"
+      targetId={requirement.id}
+      summary={requirement.follow_summary}
+    />
+  );
+}
+
+function TaskAttentionPill({ task }: { task: MockTask }) {
+  return (
+    <AttentionPill
+      targetType="task"
+      targetId={task.id}
+      summary={task.follow_summary}
+    />
+  );
+}
+
+function AttentionPill({
+  targetType,
+  targetId,
+  summary
+}: {
+  targetType: FollowTargetType;
+  targetId: string;
+  summary: { count: number; score: number; level: AttentionLevel };
+}) {
+  const [open, setOpen] = useState(false);
+  const label = attentionLabel(summary.level, summary.count);
+  const pill = (
+    <span
+      className={`requirements-attention-pill is-${summary.level}`}
+      title={`关注权重 ${summary.score}`}
+    >
+      {label}
+    </span>
+  );
+  if (summary.count <= 0) {
+    return pill;
+  }
+  return (
+    <Popover
+      trigger={["hover", "click"]}
+      placement="leftTop"
+      open={open}
+      onOpenChange={setOpen}
+      content={
+        <AttentionFollowers
+          targetType={targetType}
+          targetId={targetId}
+          enabled={open}
+          fallbackCount={summary.count}
+          level={summary.level}
+        />
+      }
+    >
+      <span onClick={(event) => event.stopPropagation()}>{pill}</span>
+    </Popover>
+  );
+}
+
+function attentionLabel(level: AttentionLevel, count: number) {
+  if (count <= 0) return "暂无关注";
+  if (level === "high") return "高关注";
+  if (level === "important") return "重点关注";
+  if (level === "notable") return "一般关注";
+  return "普通关注";
+}
+
+function AttentionFollowers({
+  targetType,
+  targetId,
+  enabled,
+  fallbackCount,
+  level
+}: {
+  targetType: FollowTargetType;
+  targetId: string;
+  enabled: boolean;
+  fallbackCount: number;
+  level: AttentionLevel;
+}) {
+  const followersQuery = useQuery({
+    queryKey: ["follows", "followers", targetType, targetId],
+    queryFn: () => fetchFollowFollowers(targetType, targetId),
+    enabled,
+    staleTime: 30_000
+  });
+
+  if (!enabled) return <span className="requirements-attention-followers__state">悬停查看关注人</span>;
+  if (followersQuery.isLoading)
+    return <span className="requirements-attention-followers__state">加载中...</span>;
+  if (followersQuery.isError)
+    return <span className="requirements-attention-followers__state">关注人加载失败</span>;
+
+  const groups = groupFollowersByRole(followersQuery.data ?? []);
+  const totalCount = followersQuery.data?.length ?? fallbackCount;
+  const followers = groups.flatMap((group) =>
+    group.followers.map((follower) => ({
+      ...follower,
+      roleLabel: group.shortLabel
+    }))
+  );
+  if (!groups.length) {
+    return <span className="requirements-attention-followers__state">暂无关注人</span>;
+  }
+  return (
+    <div className="requirements-attention-followers">
+      <div className="requirements-attention-followers__header">
+        <div>
+          <strong>关注人员</strong>
+          <span>{attentionLabel(level, totalCount)} · {totalCount} 人</span>
+        </div>
+      </div>
+      <div className="requirements-attention-followers__users">
+        {followers.map((follower) => (
+          <span key={follower.id}>
+            <strong>{follower.name}</strong>
+            {follower.roleLabel ? <em>{follower.roleLabel}</em> : null}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AttentionScoreHelp() {
+  return (
+    <div className="requirements-attention-help">
+      <strong>关注度评分</strong>
+      <p>按关注人的角色权重累加，用来判断需求是否需要优先跟进。</p>
+      <div className="requirements-attention-help__grid">
+        <span>总监</span>
+        <strong>100</strong>
+        <span>TL</span>
+        <strong>50</strong>
+        <span>PM</span>
+        <strong>40</strong>
+        <span>员工</span>
+        <strong>10</strong>
+      </div>
+      <div className="requirements-attention-help__levels">
+        <span>高关注：150+</span>
+        <span>重点关注：80-149</span>
+        <span>一般关注：40-79</span>
+        <span>普通关注：1-39</span>
+      </div>
+    </div>
+  );
+}
+
+function AttentionColumnTitle() {
+  return (
+    <span className="requirements-attention-title">
+      关注度
+      <Popover trigger={["hover", "click"]} placement="leftTop" content={<AttentionScoreHelp />}>
+        <InfoCircleOutlined
+          className="requirements-attention-title__icon"
+          onClick={(event) => event.stopPropagation()}
+        />
+      </Popover>
+    </span>
+  );
+}
+
+function groupFollowersByRole(followers: DashboardFollowFollowerDTO[]) {
+  const roleOrder = ["director", "team_leader", "pm", "employee", "admin"];
+  const roleLabels: Record<string, string> = {
+    director: "总监",
+    team_leader: "TL",
+    pm: "PM",
+    employee: "员工",
+    admin: "管理员"
+  };
+  const roleShortLabels: Record<string, string> = {
+    director: "总监",
+    team_leader: "TL",
+    pm: "PM",
+    employee: "",
+    admin: "管理员"
+  };
+  return roleOrder
+    .map((role) => ({
+      role,
+      label: roleLabels[role] ?? role,
+      shortLabel: roleShortLabels[role] ?? role,
+      followers: followers.filter((follower) => follower.role === role)
+    }))
+    .filter((group) => group.followers.length > 0);
 }
 
 function formatTokens(value: number) {
@@ -372,13 +661,27 @@ export function RequirementsListPage() {
   const [creatorOpen, setCreatorOpen] = useState(false);
 
   const viewParam = searchParams.get("view");
-  const view: BoardView = viewParam === "tree" || viewParam === "list" ? "tree" : "board";
+  const defaultView: BoardView = user?.role === "pm" ? "tree" : "board";
+  const view: BoardView =
+    viewParam === "tree" || viewParam === "list"
+      ? "tree"
+      : viewParam === "board"
+        ? "board"
+        : defaultView;
+  const favoriteParam = searchParams.get("favorite");
+  const scopeParam = searchParams.get("scope");
   const keyword = searchParams.get("keyword") ?? "";
   const priority = (searchParams.get("priority") as RequirementPriority | null) ?? undefined;
   const status = (searchParams.get("status") as RequirementStage | null) ?? undefined;
   const riskParam = searchParams.get("risk");
-  const risk: RiskFilter | undefined = riskParam === "blocked" ? "blocked" : undefined;
-  const onlyFavorite = searchParams.get("favorite") === "1";
+  const risk: RiskFilter | undefined = isRiskFilter(riskParam) ? riskParam : undefined;
+  const workScope: WorkScope = isWorkScope(scopeParam)
+    ? scopeParam
+    : favoriteParam === "1"
+      ? "followed"
+      : user?.role === "pm"
+        ? "mine"
+        : "all";
 
   const updateParam = (key: string, value?: string) => {
     setSearchParams(
@@ -391,6 +694,34 @@ export function RequirementsListPage() {
       { replace: true }
     );
   };
+
+  const updateWorkScope = (nextScope: WorkScope) => {
+    setSearchParams(
+      (previous) => {
+        const next = new URLSearchParams(previous);
+        next.delete("favorite");
+        if (nextScope === "all" && user?.role !== "pm") {
+          next.delete("scope");
+        } else {
+          next.set("scope", nextScope);
+        }
+        return next;
+      },
+      { replace: true }
+    );
+  };
+
+  useEffect(() => {
+    if (user?.role !== "pm" || searchParams.has("scope") || searchParams.has("favorite")) return;
+    setSearchParams(
+      (previous) => {
+        const next = new URLSearchParams(previous);
+        next.set("scope", "mine");
+        return next;
+      },
+      { replace: true }
+    );
+  }, [searchParams, setSearchParams, user?.role]);
 
   const requirementsQuery = useQuery({
     queryKey: ["requirements-board", "requirements"],
@@ -483,7 +814,7 @@ export function RequirementsListPage() {
       message.error(error instanceof Error ? error.message : "需求阶段更新失败");
     },
     onSuccess: (updated, variables) => {
-      const shouldPromptOwner = Boolean(variables.promptOwnerAfterSave && !updated.owner_id);
+      const shouldPromptOwner = Boolean(variables.promptOwnerAfterSave && updated.owner_ids.length === 0);
       if (!shouldPromptOwner) {
         message.success("需求阶段已更新");
       }
@@ -539,46 +870,64 @@ export function RequirementsListPage() {
 
   const filteredRequirements = useMemo(() => {
     const normalizedKeyword = keyword.trim().toLowerCase();
+    const currentUserId = user?.id ?? "";
     return requirements.filter((requirement) => {
       const requirementTasks = tasksByRequirement.get(requirement.id) ?? [];
+      const requirementFollowed = favoriteRequirementIds.has(requirement.id);
+      const requirementAssigned =
+        Boolean(currentUserId) &&
+        (requirement.owner_id === currentUserId ||
+          requirement.owners.some((owner) => owner.id === currentUserId));
+      const requirementCreated = Boolean(currentUserId) && requirement.creator_id === currentUserId;
+      const taskFollowed = requirementTasks.some((task) => favoriteTaskIds.has(task.id));
+      const taskAssigned =
+        Boolean(currentUserId) && requirementTasks.some((task) => task.assignee_id === currentUserId);
+      const taskCreated =
+        Boolean(currentUserId) && requirementTasks.some((task) => task.creator_tl_id === currentUserId);
+      const followedMatched = requirementFollowed || taskFollowed;
+      const assignedMatched = requirementAssigned || taskAssigned;
+      const createdMatched = requirementCreated || taskCreated;
+      const scopeMatched =
+        workScope === "all" ||
+        (workScope === "mine" && (followedMatched || assignedMatched || createdMatched)) ||
+        (workScope === "followed" && followedMatched) ||
+        (workScope === "assigned" && assignedMatched) ||
+        (workScope === "created" && createdMatched);
       const searchContent = [
         requirement.title,
         requirement.description,
         requirement.creator_name,
-        requirement.owner_name ?? "",
+        ...requirement.owners.map((owner) => owner.name || owner.id),
         ...requirement.team_names,
         ...requirement.acceptance_criteria,
         ...requirementTasks.flatMap((task) => [task.title, task.assignee_name ?? ""])
       ]
         .join(" ")
         .toLowerCase();
-      const blocked = requirementTasks.some((task) => task.status === "blocked");
-      const riskMatched = !risk || (risk === "blocked" && blocked);
+      const riskMatched =
+        !risk || getRequirementRiskBadges(requirement, requirementTasks).some((item) => item.value === risk);
       const statusMatched = status
         ? requirement.status === status
         : requirement.status !== "cancelled";
-      const favoriteMatched =
-        !onlyFavorite ||
-        favoriteRequirementIds.has(requirement.id) ||
-        requirementTasks.some((task) => favoriteTaskIds.has(task.id));
       return (
         (!normalizedKeyword || searchContent.includes(normalizedKeyword)) &&
         (!priority || requirement.priority === priority) &&
         statusMatched &&
         riskMatched &&
-        favoriteMatched
+        scopeMatched
       );
     });
   }, [
     favoriteRequirementIds,
     favoriteTaskIds,
     keyword,
-    onlyFavorite,
     priority,
     requirements,
     risk,
     status,
-    tasksByRequirement
+    tasksByRequirement,
+    user?.id,
+    workScope
   ]);
 
   const metrics = useMemo<
@@ -617,20 +966,21 @@ export function RequirementsListPage() {
         icon: <ClockCircleOutlined />
       },
       {
-        key: "blocked",
-        title: "阻塞任务",
-        value: tasks.filter((item) => item.status === "blocked").length,
-        description: "上游未完成，需处理",
+        key: "risk",
+        title: "风险需求",
+        value: requirements.filter((item) => getRequirementRiskBadges(item, tasksByRequirement.get(item.id) ?? []).length > 0)
+          .length,
+        description: "逾期或依赖异常",
         tone: "danger",
         icon: <WarningOutlined />
       }
     ],
-    [requirements, tasks]
+    [requirements, tasksByRequirement]
   );
 
   const visibleColumns = status === "cancelled" ? [CANCELLED_COLUMN] : STATUS_COLUMNS;
   const shouldPromptOwnerAfterStatus = (requirement: MockRequirement, nextStatus: RequirementStage) =>
-    !requirement.owner_id && ["review", "active", "completed"].includes(nextStatus);
+    requirement.owner_ids.length === 0 && ["review", "active", "completed"].includes(nextStatus);
 
   const mutateRequirementStatus = (requirement: MockRequirement, nextStatus: RequirementStage) => {
     statusMutation.mutate({
@@ -678,17 +1028,23 @@ export function RequirementsListPage() {
     ]);
   const allExpanded =
     filteredRequirements.length > 0 && filteredRequirements.every((item) => expanded.has(item.id));
-  const hasActiveFilters = Boolean(keyword || searchDraft || priority || status || risk || onlyFavorite);
+  const defaultWorkScope: WorkScope = user?.role === "pm" ? "mine" : "all";
+  const hasActiveFilters = Boolean(
+    keyword || searchDraft || priority || status || risk || workScope !== defaultWorkScope
+  );
   const resetFilters = () => {
     setSearchDraft("");
-    setSearchParams(view === "board" ? {} : { view }, { replace: true });
+    const next: Record<string, string> = {};
+    if (view !== "board") next.view = view;
+    if (defaultWorkScope !== "all") next.scope = defaultWorkScope;
+    setSearchParams(next, { replace: true });
   };
 
   return (
     <PagePanel
       title="需求推进"
       className="requirements-board-page"
-      description="跟踪需求阶段、任务拆解、阻塞与关联 session"
+      description="跟踪需求阶段、任务拆解与风险推进"
       breadcrumbs={[{ title: "业务" }, { title: "需求推进" }]}
       showNav={false}
     >
@@ -706,17 +1062,16 @@ export function RequirementsListPage() {
 
       <section className="requirements-board__workspace">
         <div className="requirements-board__workspace-head">
-          <div className="requirements-board__workspace-title">
-            <div>
-              <h2>{view === "board" ? "阶段看板" : "需求列表"}</h2>
-              <p>
-                {view === "board"
-                  ? "按阶段推进需求，快速识别阻塞、截止和拆解状态。"
-                  : "按需求查看阶段、任务进度、风险和截止时间。"}
-              </p>
-            </div>
-            <div className="requirements-board__workspace-actions">
+          <div className="requirements-board__toolbar">
+            <Segmented
+              className="requirements-board__scope-filter"
+              value={workScope}
+              onChange={(next) => updateWorkScope(next as WorkScope)}
+              options={WORK_SCOPE_OPTIONS}
+            />
+            <div className="requirements-board__toolbar-actions">
               <Segmented
+                className="requirements-board__view-switch"
                 value={view}
                 onChange={(next) => updateParam("view", String(next))}
                 options={[
@@ -737,15 +1092,16 @@ export function RequirementsListPage() {
             </div>
           </div>
 
-          <div className="requirements-board__toolbar">
+          <div className="requirements-board__filter-row">
+            <Input.Search
+              className="requirements-board__search"
+              allowClear
+              value={searchDraft}
+              placeholder="搜索需求、任务或负责人"
+              onChange={(event) => setSearchDraft(event.target.value)}
+              onSearch={(value) => updateParam("keyword", value.trim() || undefined)}
+            />
             <div className="requirements-board__filter-controls">
-              <Input.Search
-                allowClear
-                value={searchDraft}
-                placeholder="搜索需求、任务或负责人"
-                onChange={(event) => setSearchDraft(event.target.value)}
-                onSearch={(value) => updateParam("keyword", value.trim() || undefined)}
-              />
               <Select
                 allowClear
                 placeholder="全部阶段"
@@ -768,39 +1124,15 @@ export function RequirementsListPage() {
                 options={RISK_OPTIONS}
               />
               <Button
-                className={`requirements-board__filter-chip${onlyFavorite ? " is-active" : ""}`}
-                icon={onlyFavorite ? <StarFilled /> : <StarOutlined />}
-                onClick={() => updateParam("favorite", onlyFavorite ? undefined : "1")}
+                className="requirements-board__reset-action"
+                disabled={!hasActiveFilters}
+                onClick={resetFilters}
               >
-                关注
+                <span className="requirements-board__reset-label">
+                  <span>重</span>
+                  <span>置</span>
+                </span>
               </Button>
-            </div>
-            <div className="requirements-board__toolbar-utilities">
-              {view === "tree" ? (
-                <Button
-                  className="requirements-board__utility-action"
-                  type="text"
-                  onClick={() =>
-                    setExpanded(
-                      allExpanded ? new Set() : new Set(filteredRequirements.map((item) => item.id))
-                    )
-                  }
-                >
-                  {allExpanded ? "收起全部" : "展开全部"}
-                </Button>
-              ) : null}
-              {hasActiveFilters ? (
-                <Button className="requirements-board__utility-action" type="text" onClick={resetFilters}>
-                  清除筛选
-                </Button>
-              ) : null}
-              <Button
-                className="requirements-board__refresh-action"
-                aria-label="刷新"
-                icon={<ReloadOutlined />}
-                loading={requirementsQuery.isFetching || tasksQuery.isFetching}
-                onClick={refreshAll}
-              />
             </div>
           </div>
         </div>
@@ -815,6 +1147,35 @@ export function RequirementsListPage() {
             action={<Button onClick={refreshAll}>重试</Button>}
           />
         ) : null}
+
+        <div className="requirements-board__table-toolbar">
+          <span className="requirements-board__table-count">
+            共 {filteredRequirements.length} 条需求
+          </span>
+          <div className="requirements-board__table-tools">
+            {view === "tree" ? (
+              <Button
+                className="requirements-board__utility-action"
+                type="text"
+                onClick={() =>
+                  setExpanded(
+                    allExpanded ? new Set() : new Set(filteredRequirements.map((item) => item.id))
+                  )
+                }
+              >
+                {allExpanded ? "收起全部" : "展开全部"}
+              </Button>
+            ) : null}
+            <Button
+              className="requirements-board__refresh-action"
+              type="text"
+              aria-label="刷新"
+              icon={<ReloadOutlined />}
+              loading={requirementsQuery.isFetching || tasksQuery.isFetching}
+              onClick={refreshAll}
+            />
+          </div>
+        </div>
 
         <div className="requirements-board__content">
           {requirementsQuery.isLoading ? (
@@ -900,7 +1261,6 @@ export function RequirementsListPage() {
                                 key={requirement.id}
                                 requirement={requirement}
                                 tasks={tasksByRequirement.get(requirement.id) ?? []}
-                                tokenSourceMap={tokenSourceMap}
                                 index={index}
                                 draggable={canMoveRequirement && column.value !== "cancelled"}
                                 isCompletedColumn={column.value === "completed"}
@@ -928,15 +1288,11 @@ export function RequirementsListPage() {
               requirements={filteredRequirements}
               expanded={expanded}
               tasksByRequirement={tasksByRequirement}
-              tokenSourceMap={tokenSourceMap}
               favoriteRequirementIds={favoriteRequirementIds}
               favoriteTaskIds={favoriteTaskIds}
               onToggle={toggleRequirement}
               onOpenRequirement={setSelectedRequirement}
               onOpenTask={(task) => setSelectedTask(task)}
-              onAddTask={addTask}
-              canUpdateRequirementStatus={canMoveRequirement}
-              onUpdateRequirementStatus={updateRequirementStatus}
               onToggleRequirementFavorite={toggleRequirementFavorite}
               onToggleTaskFavorite={toggleTaskFavorite}
             />
@@ -1051,7 +1407,6 @@ export function RequirementsListPage() {
 function RequirementCard({
   requirement,
   tasks,
-  tokenSourceMap,
   index,
   draggable,
   isCompletedColumn,
@@ -1061,7 +1416,6 @@ function RequirementCard({
 }: {
   requirement: MockRequirement;
   tasks: MockTask[];
-  tokenSourceMap: Map<string, MockTokenSource>;
   index: number;
   draggable: boolean;
   isCompletedColumn: boolean;
@@ -1069,27 +1423,25 @@ function RequirementCard({
   onToggleFavorite: () => void;
   onOpen: () => void;
 }) {
-  const blockedTasks = tasks.filter((task) => task.status === "blocked").length;
+  const riskBadges = getRequirementRiskBadges(requirement, tasks);
+  const primaryRisk = riskBadges[0];
   const completedTasks = tasks.filter((task) => task.status === "done").length;
-  const tokenTotal = aggregateRequirementTokens(requirement, tasks, tokenSourceMap);
   const ownerLine = getRequirementOwnerLabel(requirement);
   const teamLine = getRequirementTeamLabel(requirement);
   const taskProgressLabel = tasks.length
     ? `${completedTasks}/${tasks.length} 个任务完成`
     : "待拆解";
-  const evidenceLabel = tokenTotal > 0 ? `${formatTokens(tokenTotal)} Token` : "无关联 session";
-  const showRiskRow = !isCompletedColumn && blockedTasks > 0;
   const dateLabel = isCompletedColumn
     ? `完成 ${formatDate(requirement.updated_at)}`
     : formatDate(requirement.deadline);
-  const primaryRisk = blockedTasks ? `${blockedTasks} 个任务被上游阻塞` : undefined;
+  const showRiskRow = !isCompletedColumn && Boolean(primaryRisk);
 
   return (
     <Draggable draggableId={requirement.id} index={index} isDragDisabled={!draggable}>
       {(provided, snapshot) => (
         <article
           className={`requirements-board__card${snapshot.isDragging ? " is-dragging" : ""}${
-            blockedTasks ? " has-blocked" : ""
+            primaryRisk ? " has-risk" : ""
           }`}
           ref={provided.innerRef}
           {...provided.draggableProps}
@@ -1118,10 +1470,8 @@ function RequirementCard({
 
           {showRiskRow ? (
             <div className="requirements-board__card-risks">
-              {primaryRisk ? <strong>{primaryRisk}</strong> : null}
-              {blockedTasks && primaryRisk !== `${blockedTasks} 个任务被上游阻塞` ? (
-                <Tag color="error">{blockedTasks} 个上游阻塞</Tag>
-              ) : null}
+              <strong>{primaryRisk?.label}</strong>
+              {riskBadges.length > 1 ? <Tag color="warning">+{riskBadges.length - 1}</Tag> : null}
             </div>
           ) : null}
 
@@ -1140,9 +1490,6 @@ function RequirementCard({
             <span title={dateLabel}>
               <CalendarOutlined /> {dateLabel}
             </span>
-            <span title={formatEvidenceCount(tokenTotal)}>
-              <FileTextOutlined /> {evidenceLabel}
-            </span>
           </footer>
         </article>
       )}
@@ -1154,30 +1501,22 @@ function RequirementTree({
   requirements,
   expanded,
   tasksByRequirement,
-  tokenSourceMap,
   favoriteRequirementIds,
   favoriteTaskIds,
   onToggle,
   onOpenRequirement,
   onOpenTask,
-  onAddTask,
-  canUpdateRequirementStatus,
-  onUpdateRequirementStatus,
   onToggleRequirementFavorite,
   onToggleTaskFavorite
 }: {
   requirements: MockRequirement[];
   expanded: Set<string>;
   tasksByRequirement: Map<string, MockTask[]>;
-  tokenSourceMap: Map<string, MockTokenSource>;
   favoriteRequirementIds: Set<string>;
   favoriteTaskIds: Set<string>;
   onToggle: (id: string) => void;
   onOpenRequirement: (requirement: MockRequirement) => void;
   onOpenTask: (task: MockTask) => void;
-  onAddTask: (requirementId: string) => void;
-  canUpdateRequirementStatus: boolean;
-  onUpdateRequirementStatus: (requirement: MockRequirement, nextStatus: RequirementStage) => void;
   onToggleRequirementFavorite: (requirementId: string) => void;
   onToggleTaskFavorite: (taskId: string) => void;
 }) {
@@ -1185,12 +1524,27 @@ function RequirementTree({
     {
       title: "需求",
       key: "title",
-      width: 300,
+      width: 320,
       ellipsis: true,
       render: (_, requirement) => (
-        <strong className="requirements-tree__title" title={requirement.title}>
-          {requirement.title}
-        </strong>
+        <div className="requirements-tree__title-cell">
+          <button
+            type="button"
+            className={`requirements-tree__favorite${
+              favoriteRequirementIds.has(requirement.id) ? " is-active" : ""
+            }`}
+            aria-label={favoriteRequirementIds.has(requirement.id) ? "取消关注" : "关注需求"}
+            onClick={(event) => {
+              event.stopPropagation();
+              onToggleRequirementFavorite(requirement.id);
+            }}
+          >
+            {favoriteRequirementIds.has(requirement.id) ? <StarFilled /> : <StarOutlined />}
+          </button>
+          <strong className="requirements-tree__title" title={requirement.title}>
+            {requirement.title}
+          </strong>
+        </div>
       )
     },
     {
@@ -1199,17 +1553,10 @@ function RequirementTree({
       width: 120,
       ellipsis: true,
       render: (_, requirement) => (
-        <span className="requirements-tree__text" title={getRequirementOwnerLabel(requirement)}>
+        <span className="requirements-tree__text" title={getRequirementOwnerTitle(requirement)}>
           {getRequirementOwnerLabel(requirement)}
         </span>
       )
-    },
-    {
-      title: "参与团队",
-      key: "teams",
-      width: 150,
-      ellipsis: true,
-      render: (_, requirement) => <RequirementTeamCell requirement={requirement} />
     },
     {
       title: "阶段",
@@ -1242,13 +1589,25 @@ function RequirementTree({
     {
       title: "风险",
       key: "risk",
-      width: 112,
+      width: 132,
       render: (_, requirement) => {
         const requirementTasks = tasksByRequirement.get(requirement.id) ?? [];
-        const blockedTasks = requirementTasks.filter((task) => task.status === "blocked").length;
-        if (!blockedTasks) return <span className="requirements-tree__risk">正常</span>;
-        return <span className="requirements-tree__risk is-danger">阻塞 {blockedTasks} 个</span>;
+        const riskBadges = getRequirementRiskBadges(requirement, requirementTasks);
+        const primaryRisk = riskBadges[0];
+        if (!primaryRisk) return <span className="requirements-tree__risk">正常</span>;
+        return (
+          <span className={`requirements-tree__risk is-${primaryRisk.tone}`}>
+            {primaryRisk.label}
+            {riskBadges.length > 1 ? <em>+{riskBadges.length - 1}</em> : null}
+          </span>
+        );
       }
+    },
+    {
+      title: <AttentionColumnTitle />,
+      key: "attention",
+      width: 96,
+      render: (_, requirement) => <RequirementAttentionPill requirement={requirement} />
     },
     {
       title: "截止",
@@ -1257,77 +1616,6 @@ function RequirementTree({
       render: (_, requirement) => (
         <span className="requirements-tree__text">{formatDate(requirement.deadline)}</span>
       )
-    },
-    {
-      title: "更新",
-      key: "updated",
-      width: 96,
-      render: (_, requirement) => (
-        <span className="requirements-tree__text">{formatRecentUpdate(requirement.updated_at)}</span>
-      )
-    },
-    {
-      title: "操作",
-      key: "actions",
-      width: 128,
-      align: "right",
-      render: (_, requirement) => {
-        const requirementTasks = tasksByRequirement.get(requirement.id) ?? [];
-        return (
-          <Space size={2} className="requirements-tree__actions">
-            {!requirementTasks.length && requirement.can_create_task ? (
-              <Button
-                className="requirements-tree__action-primary"
-                size="small"
-                type="link"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onAddTask(requirement.id);
-                }}
-              >
-                添加任务
-              </Button>
-            ) : null}
-            <Button
-              className={`requirements-tree__action-follow${
-                favoriteRequirementIds.has(requirement.id) ? " is-active" : ""
-              }`}
-              size="small"
-              type="link"
-              onClick={(event) => {
-                event.stopPropagation();
-                onToggleRequirementFavorite(requirement.id);
-              }}
-            >
-              {favoriteRequirementIds.has(requirement.id) ? "已关注" : "关注"}
-            </Button>
-            {canUpdateRequirementStatus && requirement.status !== "cancelled" ? (
-              <Dropdown
-                menu={{
-                  items: STATUS_COLUMNS.map((item) => ({
-                    key: item.value,
-                    label: item.label,
-                    disabled: item.value === requirement.status,
-                    onClick: ({ domEvent }) => {
-                      domEvent.stopPropagation();
-                      onUpdateRequirementStatus(requirement, item.value);
-                    }
-                  }))
-                }}
-                trigger={["click"]}
-              >
-                <Button
-                  size="small"
-                  type="link"
-                  onClick={(event) => event.stopPropagation()}
-                >
-                  修改进度
-                </Button>
-              </Dropdown>
-            ) : null}
-          </Space>
-        );
-      }
     }
   ];
 
@@ -1339,15 +1627,13 @@ function RequirementTree({
       pagination={false}
       rowKey="id"
       size="middle"
-      scroll={{ x: 1080 }}
+      scroll={{ x: 960 }}
       onRow={(requirement) => ({
         onClick: () => onOpenRequirement(requirement)
       })}
       rowClassName={(requirement) => {
-        const blockedTasks = (tasksByRequirement.get(requirement.id) ?? []).some(
-          (task) => task.status === "blocked"
-        );
-        return blockedTasks ? "requirements-tree__table-row has-blocked" : "requirements-tree__table-row";
+        const hasRisk = getRequirementRiskBadges(requirement, tasksByRequirement.get(requirement.id) ?? []).length > 0;
+        return hasRisk ? "requirements-tree__table-row has-risk" : "requirements-tree__table-row";
       }}
       expandable={{
         columnWidth: 42,
@@ -1358,58 +1644,72 @@ function RequirementTree({
           const requirementTasks = tasksByRequirement.get(requirement.id) ?? [];
           return (
             <div className="requirements-tree__task-panel">
+              <div className="requirements-tree__task-header" aria-hidden="true">
+                <span>任务</span>
+                <span>负责人</span>
+                <span>状态</span>
+                <span>进度</span>
+                <span>截止</span>
+                <span>关注度</span>
+                <span>关注</span>
+              </div>
               {[...requirementTasks]
                 .sort((a, b) => Number(b.status === "blocked") - Number(a.status === "blocked"))
                 .map((task) => {
-                  const taskTokens = sumTokensFromSources(task.token_source_ids, tokenSourceMap);
+                  const taskRiskBadges = getTaskRiskBadges(task);
                   return (
                     <div
                       className={`requirements-tree__task-item${
-                        task.status === "blocked" ? " has-blocked" : ""
+                        taskRiskBadges.length ? " has-risk" : ""
                       }`}
                       key={task.id}
                       onClick={() => onOpenTask(task)}
                     >
                       <div className="requirements-tree__task-main">
                         <strong title={task.title}>{task.title}</strong>
+                        {taskRiskBadges.length ? (
+                          <div className="requirements-tree__task-risks">
+                            {taskRiskBadges.map((risk) => (
+                              <span
+                                className={`requirements-tree__task-risk is-${risk.tone}`}
+                                key={risk.key}
+                              >
+                                {risk.label}
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
                       </div>
-                      <div className="requirements-tree__task-meta">
+                      <span
+                        className="requirements-tree__task-owner"
+                        title={task.assignee_name || "未分配"}
+                      >
+                        {task.assignee_name || "未分配"}
+                      </span>
+                      <div className="requirements-tree__task-status">
                         <TaskStatusPill status={task.status} />
                         <PriorityPill priority={task.priority} />
                       </div>
                       <div className="requirements-tree__task-progress">
                         <RequirementProgress value={task.progress} />
                       </div>
-                      <div className="requirements-tree__task-detail">
-                        <span>截止：{formatDate(task.due_date)}</span>
-                        <span>{taskTokens > 0 ? formatEvidenceCount(taskTokens) : "暂无关联 session"}</span>
+                      <span className="requirements-tree__task-date">{formatDate(task.due_date)}</span>
+                      <div className="requirements-tree__task-attention">
+                        <TaskAttentionPill task={task} />
                       </div>
-                      <Space size={2} className="requirements-tree__task-actions">
-                        <Button
-                          className="requirements-tree__action-secondary"
-                          size="small"
-                          type="link"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            onOpenTask(task);
-                          }}
-                        >
-                          详情
-                        </Button>
-                        <Button
-                          className={`requirements-tree__action-follow${
-                            favoriteTaskIds.has(task.id) ? " is-active" : ""
-                          }`}
-                          size="small"
-                          type="link"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            onToggleTaskFavorite(task.id);
-                          }}
-                        >
-                          {favoriteTaskIds.has(task.id) ? "已关注" : "关注"}
-                        </Button>
-                      </Space>
+                      <button
+                        type="button"
+                        className={`requirements-tree__favorite requirements-tree__task-favorite${
+                          favoriteTaskIds.has(task.id) ? " is-active" : ""
+                        }`}
+                        aria-label={favoriteTaskIds.has(task.id) ? "取消关注任务" : "关注任务"}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onToggleTaskFavorite(task.id);
+                        }}
+                      >
+                        {favoriteTaskIds.has(task.id) ? <StarFilled /> : <StarOutlined />}
+                      </button>
                     </div>
                   );
                 })}
@@ -1634,8 +1934,14 @@ function RequirementDrawer({
   const [editOpen, setEditOpen] = useState(false);
   const [quickEditor, setQuickEditor] = useState<RequirementQuickEditField>();
   const [draftDeadline, setDraftDeadline] = useState<dayjs.Dayjs>();
-  const [draftOwnerId, setDraftOwnerId] = useState<string>();
+  const [draftOwnerIds, setDraftOwnerIds] = useState<string[]>([]);
   const [draftTeamIds, setDraftTeamIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    setEditOpen(false);
+    setPickerOpen(false);
+    setQuickEditor(undefined);
+  }, [requirement?.id]);
 
   const invalidateBoard = (requirementId = requirement?.id) =>
     invalidateRequirementTaskWorkspace(queryClient, { requirementId });
@@ -1658,14 +1964,16 @@ function RequirementDrawer({
       value: assignee.id,
       label: assignee.name
     }));
-    if (requirement?.owner_id && !options.some((item) => item.value === requirement.owner_id)) {
-      options.push({
-        value: requirement.owner_id,
-        label: requirement.owner_name ?? requirement.owner_id
-      });
-    }
+    requirement?.owners.forEach((owner) => {
+      if (!options.some((item) => item.value === owner.id)) {
+        options.push({
+          value: owner.id,
+          label: owner.name || owner.id
+        });
+      }
+    });
     return options;
-  }, [assigneesQuery.data, requirement?.owner_id, requirement?.owner_name]);
+  }, [assigneesQuery.data, requirement?.owners]);
   const quickTeamOptions = useMemo(() => {
     const options = (teamsQuery.data ?? []).map((team) => ({
       value: team.id,
@@ -1685,7 +1993,7 @@ function RequirementDrawer({
   const resetQuickDraft = (target = requirement) => {
     if (!target) return;
     setDraftDeadline(target.deadline ? dayjs(target.deadline) : undefined);
-    setDraftOwnerId(target.owner_id);
+    setDraftOwnerIds(target.owner_ids);
     setDraftTeamIds(target.team_ids);
   };
 
@@ -1796,8 +2104,7 @@ function RequirementDrawer({
       field: RequirementQuickEditField;
       data: {
         deadline?: string;
-        owner_id?: string;
-        clear_owner?: boolean;
+        owner_ids?: string[];
         team_ids?: string[];
       };
     }) =>
@@ -1826,7 +2133,7 @@ function RequirementDrawer({
   const saveQuickOwner = () => {
     quickUpdateMutation.mutate({
       field: "owner",
-      data: draftOwnerId ? { owner_id: draftOwnerId } : { clear_owner: true }
+      data: { owner_ids: draftOwnerIds }
     });
   };
 
@@ -1918,14 +2225,16 @@ function RequirementDrawer({
     <div className="requirements-quick-edit">
       <Select
         allowClear
+        mode="multiple"
         showSearch
-        value={draftOwnerId}
+        value={draftOwnerIds}
         loading={assigneesQuery.isLoading}
         placeholder={assigneesQuery.isError ? "负责人加载失败" : "选择负责人"}
         optionFilterProp="label"
+        maxTagCount="responsive"
         options={quickAssigneeOptions}
         getPopupContainer={getQuickEditPopupContainer}
-        onChange={setDraftOwnerId}
+        onChange={setDraftOwnerIds}
       />
       <div className="requirements-quick-edit__actions">
         <Button size="small" onClick={closeQuickEditor}>
@@ -1974,7 +2283,7 @@ function RequirementDrawer({
   return (
     <Drawer
       className="requirements-drawer requirements-drawer--requirement"
-      size={720}
+      width={980}
       open={Boolean(requirement)}
       onClose={onClose}
       title={
@@ -1999,6 +2308,19 @@ function RequirementDrawer({
     >
       {requirement ? (
         <div className="requirements-drawer__content">
+          {editOpen ? (
+            <RequirementEditModal
+              embedded
+              open={editOpen}
+              requirement={requirement}
+              onCancel={() => setEditOpen(false)}
+              onSaved={(updated) => {
+                onSaved(updated);
+                setEditOpen(false);
+              }}
+            />
+          ) : (
+            <>
           <section className="requirements-drawer__summary">
             <div className="requirements-drawer__summary-head">
               <div className="requirements-drawer__summary-tags">
@@ -2020,7 +2342,15 @@ function RequirementDrawer({
                       </Button>
                     ) : null
                   ) : requirement.can_update ? (
-                    <Button type="primary" icon={<EditOutlined />} onClick={() => setEditOpen(true)}>
+                    <Button
+                      type="primary"
+                      icon={<EditOutlined />}
+                      onClick={() => {
+                        onCreatorOpenChange(false);
+                        setPickerOpen(false);
+                        setEditOpen(true);
+                      }}
+                    >
                       编辑
                     </Button>
                   ) : null}
@@ -2160,7 +2490,11 @@ function RequirementDrawer({
                   </span>
                 ),
                 children: (
-                  <section className="requirements-drawer__section requirements-drawer__task-section">
+                  <section
+                    className={`requirements-drawer__section requirements-drawer__task-section${
+                      creatorOpen ? " is-creating" : ""
+                    }`}
+                  >
                     <div className="requirements-drawer__section-head">
                       <h3>任务拆解</h3>
                       <div className="requirements-drawer__section-actions">
@@ -2172,18 +2506,33 @@ function RequirementDrawer({
                           <Button
                             size="small"
                             icon={<PlusOutlined />}
-                            onClick={() => onCreatorOpenChange(true)}
+                            disabled={creatorOpen}
+                            onClick={() => {
+                              setQuickEditor(undefined);
+                              onCreatorOpenChange(true);
+                            }}
                           >
                             添加任务
                           </Button>
                         ) : null}
                       </div>
                     </div>
-                    {!tasks.length ? (
+                    {creatorOpen ? (
+                      <TaskCreateModal
+                        embedded
+                        open={creatorOpen}
+                        requirementId={requirement.id}
+                        requirementTitle={requirement.title}
+                        existingTasks={tasks}
+                        onCancel={() => onCreatorOpenChange(false)}
+                        onCreated={() => onCreatorOpenChange(false)}
+                      />
+                    ) : null}
+                    {!tasks.length && !creatorOpen ? (
                       <div className="requirements-drawer__execution-empty">
                         <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未拆解任务" />
                       </div>
-                    ) : (
+                    ) : tasks.length ? (
                       <div className="requirements-drawer__task-list">
                         {[...tasks]
                           .sort(
@@ -2222,7 +2571,7 @@ function RequirementDrawer({
                             );
                           })}
                       </div>
-                    )}
+                    ) : null}
                   </section>
                 )
               },
@@ -2327,15 +2676,6 @@ function RequirementDrawer({
             ]}
           />
 
-          <TaskCreateModal
-            open={creatorOpen}
-            requirementId={requirement.id}
-            requirementTitle={requirement.title}
-            existingTasks={tasks}
-            onCancel={() => onCreatorOpenChange(false)}
-            onCreated={() => onCreatorOpenChange(false)}
-          />
-
           <TokenSourcePicker
             open={pickerOpen}
             excludeIds={requirement.token_source_ids}
@@ -2346,15 +2686,8 @@ function RequirementDrawer({
             }}
           />
 
-          <RequirementEditModal
-            open={editOpen}
-            requirement={requirement}
-            onCancel={() => setEditOpen(false)}
-            onSaved={(updated) => {
-              onSaved(updated);
-              setEditOpen(false);
-            }}
-          />
+            </>
+          )}
         </div>
       ) : null}
     </Drawer>
@@ -2362,11 +2695,13 @@ function RequirementDrawer({
 }
 
 function RequirementEditModal({
+  embedded = false,
   open,
   requirement,
   onCancel,
   onSaved
 }: {
+  embedded?: boolean;
   open: boolean;
   requirement: MockRequirement;
   onCancel: () => void;
@@ -2379,7 +2714,7 @@ function RequirementEditModal({
     description: string;
     priority: RequirementPriority;
     deadline?: dayjs.Dayjs;
-    owner_id?: string;
+    owner_ids?: string[];
     team_ids?: string[];
     feishu_doc_url?: string;
     acceptance_criteria: string[];
@@ -2401,7 +2736,7 @@ function RequirementEditModal({
       description: requirement.description,
       priority: requirement.priority,
       deadline: requirement.deadline ? dayjs(requirement.deadline) : undefined,
-      owner_id: requirement.owner_id,
+      owner_ids: requirement.owner_ids,
       team_ids: requirement.team_ids,
       feishu_doc_url: requirement.feishu_doc_url ?? "",
       acceptance_criteria: requirement.acceptance_criteria.length
@@ -2425,7 +2760,7 @@ function RequirementEditModal({
       description: string;
       priority: RequirementPriority;
       deadline?: dayjs.Dayjs;
-      owner_id?: string;
+      owner_ids?: string[];
       team_ids?: string[];
       feishu_doc_url?: string;
       acceptance_criteria: string[];
@@ -2435,8 +2770,7 @@ function RequirementEditModal({
         description: normalizeRequiredText(values.description),
         priority: values.priority,
         deadline: values.deadline ? values.deadline.format("YYYY-MM-DD") : undefined,
-        owner_id: values.owner_id,
-        clear_owner: !values.owner_id,
+        owner_ids: values.owner_ids ?? [],
         team_ids: values.team_ids ?? [],
         feishu_doc_url: normalizeOptionalText(values.feishu_doc_url),
         acceptance_criteria: normalizeCriteria(values.acceptance_criteria),
@@ -2457,52 +2791,23 @@ function RequirementEditModal({
       value: assignee.id,
       label: assignee.name
     }));
-    if (requirement.owner_id && !options.some((item) => item.value === requirement.owner_id)) {
-      options.push({
-        value: requirement.owner_id,
-        label: requirement.owner_name ?? requirement.owner_id
-      });
-    }
+    requirement.owners.forEach((owner) => {
+      if (!options.some((item) => item.value === owner.id)) {
+        options.push({
+          value: owner.id,
+          label: owner.name || owner.id
+        });
+      }
+    });
     return options;
-  }, [assigneesQuery.data, requirement.owner_id, requirement.owner_name]);
-  const handleOwnerChange = (ownerId?: string) => {
-    if (!ownerId) return;
-    const owner = assigneesQuery.data?.find((item) => item.id === ownerId);
-    if (!owner?.team_id) return;
-    const currentTeamIds = form.getFieldValue("team_ids") ?? [];
-    if (!currentTeamIds.includes(owner.team_id)) {
-      form.setFieldValue("team_ids", [...currentTeamIds, owner.team_id]);
-    }
+  }, [assigneesQuery.data, requirement.owners]);
+
+  const handleCancel = () => {
+    if (updateMutation.isPending) return;
+    onCancel();
   };
 
-  return (
-    <Modal
-      className="requirements-edit-modal"
-      title={
-        <div className="requirements-edit-modal__title">
-          <strong>编辑需求</strong>
-        </div>
-      }
-      open={open}
-      width={820}
-      style={{ top: 36 }}
-      styles={{
-        body: {
-          maxHeight: "calc(100vh - 190px)",
-          overflowY: "auto",
-          padding: "16px 24px 6px"
-        }
-      }}
-      destroyOnHidden
-      onCancel={() => {
-        if (updateMutation.isPending) return;
-        onCancel();
-      }}
-      onOk={() => form.submit()}
-      okText="保存"
-      cancelText="取消"
-      confirmLoading={updateMutation.isPending}
-    >
+  const formContent = (
       <Form
         form={form}
         layout="vertical"
@@ -2532,14 +2837,15 @@ function RequirementEditModal({
           <Form.Item label="截止日期" name="deadline">
             <DatePicker style={{ width: "100%" }} />
           </Form.Item>
-          <Form.Item label="负责人" name="owner_id">
+          <Form.Item label="负责人" name="owner_ids">
             <Select
               allowClear
+              mode="multiple"
               showSearch
               loading={assigneesQuery.isLoading}
               placeholder={assigneesQuery.isError ? "负责人加载失败" : "可稍后指定"}
               optionFilterProp="label"
-              onChange={handleOwnerChange}
+              maxTagCount="responsive"
               options={assigneeOptions}
             />
           </Form.Item>
@@ -2578,11 +2884,65 @@ function RequirementEditModal({
           </Form.Item>
         </section>
       </Form>
+  );
+
+  if (embedded) {
+    return (
+      <section className="requirements-edit-panel">
+        <div className="requirements-edit-panel__head">
+          <div className="requirements-edit-modal__title">
+            <strong>编辑需求</strong>
+            <span>保存后会同步刷新需求详情和看板状态</span>
+          </div>
+          <Button onClick={handleCancel}>返回详情</Button>
+        </div>
+        <div className="requirements-edit-panel__body">{formContent}</div>
+        <div className="requirements-edit-panel__footer">
+          <Button onClick={handleCancel}>取消</Button>
+          <Button
+            type="primary"
+            loading={updateMutation.isPending}
+            onClick={() => form.submit()}
+          >
+            保存
+          </Button>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <Modal
+      className="requirements-edit-modal"
+      title={
+        <div className="requirements-edit-modal__title">
+          <strong>编辑需求</strong>
+        </div>
+      }
+      open={open}
+      width={820}
+      style={{ top: 36 }}
+      styles={{
+        body: {
+          maxHeight: "calc(100vh - 190px)",
+          overflowY: "auto",
+          padding: "16px 24px 6px"
+        }
+      }}
+      destroyOnHidden
+      onCancel={handleCancel}
+      onOk={() => form.submit()}
+      okText="保存"
+      cancelText="取消"
+      confirmLoading={updateMutation.isPending}
+    >
+      {formContent}
     </Modal>
   );
 }
 
 function TaskCreateModal({
+  embedded = false,
   open,
   requirementId,
   requirementTitle,
@@ -2590,6 +2950,7 @@ function TaskCreateModal({
   onCancel,
   onCreated
 }: {
+  embedded?: boolean;
   open: boolean;
   requirementId: string;
   requirementTitle: string;
@@ -2655,24 +3016,7 @@ function TaskCreateModal({
     onCancel();
   };
 
-  return (
-    <Modal
-      className="requirements-task-modal"
-      title={
-        <div className="requirements-modal-title">
-          <strong>添加任务</strong>
-          <span>所属需求：{requirementTitle}</span>
-        </div>
-      }
-      open={open}
-      width={640}
-      destroyOnHidden
-      onCancel={handleCancel}
-      onOk={() => form.submit()}
-      okText="创建任务"
-      cancelText="取消"
-      confirmLoading={createMutation.isPending}
-    >
+  const formContent = (
       <Form
         className="requirements-task-modal__form"
         form={form}
@@ -2745,6 +3089,53 @@ function TaskCreateModal({
           </Form.Item>
         </section>
       </Form>
+  );
+
+  if (embedded) {
+    if (!open) return null;
+    return (
+      <section className="requirements-task-inline-form">
+        <div className="requirements-task-inline-form__head">
+          <div className="requirements-modal-title">
+            <strong>添加任务</strong>
+            <span>所属需求：{requirementTitle}</span>
+          </div>
+          <Button onClick={handleCancel}>收起</Button>
+        </div>
+        {formContent}
+        <div className="requirements-task-inline-form__footer">
+          <Button onClick={handleCancel}>取消</Button>
+          <Button
+            type="primary"
+            loading={createMutation.isPending}
+            onClick={() => form.submit()}
+          >
+            创建任务
+          </Button>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <Modal
+      className="requirements-task-modal"
+      title={
+        <div className="requirements-modal-title">
+          <strong>添加任务</strong>
+          <span>所属需求：{requirementTitle}</span>
+        </div>
+      }
+      open={open}
+      width={640}
+      destroyOnHidden
+      onCancel={handleCancel}
+      onOk={() => form.submit()}
+      okText="创建任务"
+      cancelText="取消"
+      confirmLoading={createMutation.isPending}
+    >
+      {formContent}
     </Modal>
   );
 }

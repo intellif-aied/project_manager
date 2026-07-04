@@ -350,19 +350,19 @@ func expectDashboardTaskRiskCandidateQuery(mock sqlmock.Sqlmock, userID string) 
 }
 
 func expectTaskDependencies(mock sqlmock.Sqlmock, taskID string, unfinishedCount int) {
-	depRows := sqlmock.NewRows([]string{"task_id", "title", "status"})
+	depRows := sqlmock.NewRows([]string{"task_id", "title", "status", "due_date"})
 	for i := 0; i < unfinishedCount; i++ {
-		depRows.AddRow("dependency-"+taskID, "上游任务", "todo")
+		depRows.AddRow("dependency-"+taskID, "上游任务", "todo", nil)
 	}
-	mock.ExpectQuery(`SELECT td\.depends_on_id, t\.title, t\.status`).
+	mock.ExpectQuery(`SELECT td\.depends_on_id, t\.title, t\.status, t\.due_date`).
 		WithArgs(taskID).
 		WillReturnRows(depRows)
 }
 
 func expectAttentionScore(mock sqlmock.Sqlmock, targetType, targetID string, score int) {
-	mock.ExpectQuery(`SELECT COALESCE\(SUM\(CASE u\.app_role`).
+	mock.ExpectQuery(`SELECT\s+COALESCE\(SUM\(CASE u\.app_role`).
 		WithArgs(targetType, targetID).
-		WillReturnRows(sqlmock.NewRows([]string{"score"}).AddRow(score))
+		WillReturnRows(sqlmock.NewRows([]string{"score", "count"}).AddRow(score, 1))
 }
 
 func assertRiskTypes(t *testing.T, got []string, want []string) {

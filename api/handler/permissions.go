@@ -39,7 +39,10 @@ func (h *RequirementHandler) canViewRequirement(u *model.User, requirementID str
 		SELECT EXISTS(
 			SELECT 1 FROM requirements r
 			WHERE r.id = $1
-			  AND (r.creator_id = $2 OR r.owner_id = $2`
+			  AND (r.creator_id = CAST($2 AS bigint) OR r.owner_id = CAST($2 AS bigint) OR EXISTS (
+				SELECT 1 FROM requirement_owners ro
+				WHERE ro.requirement_id = r.id AND ro.user_id = CAST($2 AS bigint)
+			  )`
 	args := []any{requirementID, u.ID}
 	if hasTeam(u) {
 		query += ` OR EXISTS (
@@ -74,7 +77,10 @@ func (h *RequirementHandler) canManageRequirement(u *model.User, requirementID s
 		SELECT EXISTS(
 			SELECT 1 FROM requirements r
 			WHERE r.id = $1
-			  AND (r.creator_id = $2 OR r.owner_id = $2`
+			  AND (r.creator_id = CAST($2 AS bigint) OR r.owner_id = CAST($2 AS bigint) OR EXISTS (
+				SELECT 1 FROM requirement_owners ro
+				WHERE ro.requirement_id = r.id AND ro.user_id = CAST($2 AS bigint)
+			  )`
 	args := []any{requirementID, u.ID}
 	if u.Role == "team_leader" && hasTeam(u) {
 		query += ` OR EXISTS (
@@ -132,7 +138,10 @@ func (h *TaskHandler) canViewTaskRecord(u *model.User, task taskAccessRecord) (b
 		err := h.db.QueryRow(`
 			SELECT EXISTS(
 				SELECT 1 FROM requirements r
-				WHERE r.id = $1 AND (r.owner_id = $2 OR r.creator_id = $2)
+				WHERE r.id = $1 AND (r.owner_id = CAST($2 AS bigint) OR EXISTS (
+					SELECT 1 FROM requirement_owners ro
+					WHERE ro.requirement_id = r.id AND ro.user_id = CAST($2 AS bigint)
+				) OR r.creator_id = CAST($2 AS bigint))
 			)`, task.RequirementID, u.ID).Scan(&allowed)
 		return allowed, err
 	}
@@ -146,19 +155,25 @@ func (h *TaskHandler) canViewTaskRecord(u *model.User, task taskAccessRecord) (b
 			)
 			OR EXISTS (
 				SELECT 1 FROM users assignee
-				WHERE assignee.id = $3 AND assignee.team_id = $2
+				WHERE assignee.id = CAST($3 AS bigint) AND assignee.team_id = $2
 			)`
 	if u.Role == "team_leader" {
 		query += ` OR EXISTS (
 				SELECT 1 FROM requirements r
-				WHERE r.id = $1 AND (r.owner_id = $5 OR r.creator_id = $5)
-			) OR $4 = $5`
+				WHERE r.id = $1 AND (r.owner_id = CAST($5 AS bigint) OR EXISTS (
+					SELECT 1 FROM requirement_owners ro
+					WHERE ro.requirement_id = r.id AND ro.user_id = CAST($5 AS bigint)
+				) OR r.creator_id = CAST($5 AS bigint))
+			) OR CAST($4 AS bigint) = CAST($5 AS bigint)`
 		err := h.db.QueryRow(query+`)`, task.RequirementID, *u.TeamID, task.AssigneeID, task.CreatorTLID, u.ID).Scan(&allowed)
 		return allowed, err
 	}
 	query += ` OR EXISTS (
 			SELECT 1 FROM requirements r
-			WHERE r.id = $1 AND (r.owner_id = $4 OR r.creator_id = $4)
+			WHERE r.id = $1 AND (r.owner_id = CAST($4 AS bigint) OR EXISTS (
+				SELECT 1 FROM requirement_owners ro
+				WHERE ro.requirement_id = r.id AND ro.user_id = CAST($4 AS bigint)
+			) OR r.creator_id = CAST($4 AS bigint))
 		)`
 	err := h.db.QueryRow(query+`)`, task.RequirementID, *u.TeamID, task.AssigneeID, u.ID).Scan(&allowed)
 	return allowed, err
@@ -189,7 +204,7 @@ func (h *TaskHandler) canCreateTask(u *model.User, requirementID string, assigne
 		err := h.db.QueryRow(`
 			SELECT EXISTS(
 				SELECT 1 FROM users
-				WHERE id = $1
+				WHERE id = CAST($1 AS bigint)
 				  AND local_enabled = true
 				  AND team_id IS NOT NULL
 				  AND app_role IN ('employee', 'team_leader', 'pm')
@@ -212,7 +227,10 @@ func (h *TaskHandler) canCreateTask(u *model.User, requirementID string, assigne
 				)
 				OR EXISTS (
 					SELECT 1 FROM requirements
-					WHERE id = $1 AND (owner_id = $3 OR creator_id = $3)
+					WHERE id = $1 AND (owner_id = CAST($3 AS bigint) OR EXISTS (
+						SELECT 1 FROM requirement_owners ro
+						WHERE ro.requirement_id = requirements.id AND ro.user_id = CAST($3 AS bigint)
+					) OR creator_id = CAST($3 AS bigint))
 				)
 			)`, requirementID, *u.TeamID, u.ID).Scan(&ok)
 		if err != nil || !ok {
@@ -221,7 +239,7 @@ func (h *TaskHandler) canCreateTask(u *model.User, requirementID string, assigne
 		err = h.db.QueryRow(`
 			SELECT EXISTS(
 				SELECT 1 FROM users
-				WHERE id = $1
+				WHERE id = CAST($1 AS bigint)
 				  AND local_enabled = true
 				  AND app_role IN ('employee', 'team_leader', 'pm')
 				  AND team_id = $2
@@ -246,14 +264,20 @@ func (h *TaskHandler) canCreateTask(u *model.User, requirementID string, assigne
 					)
 					OR EXISTS (
 						SELECT 1 FROM requirements
-						WHERE id = $1 AND (owner_id = $3 OR creator_id = $3)
+						WHERE id = $1 AND (owner_id = CAST($3 AS bigint) OR EXISTS (
+							SELECT 1 FROM requirement_owners ro
+							WHERE ro.requirement_id = requirements.id AND ro.user_id = CAST($3 AS bigint)
+						) OR creator_id = CAST($3 AS bigint))
 					)
 				)`, requirementID, *u.TeamID, u.ID).Scan(&ok)
 		} else {
 			err = h.db.QueryRow(`
 				SELECT EXISTS(
 					SELECT 1 FROM requirements
-					WHERE id = $1 AND (owner_id = $2 OR creator_id = $2)
+					WHERE id = $1 AND (owner_id = CAST($2 AS bigint) OR EXISTS (
+						SELECT 1 FROM requirement_owners ro
+						WHERE ro.requirement_id = requirements.id AND ro.user_id = CAST($2 AS bigint)
+					) OR creator_id = CAST($2 AS bigint))
 				)`, requirementID, u.ID).Scan(&ok)
 		}
 		if err != nil || !ok {
@@ -280,7 +304,10 @@ func (h *TaskHandler) canManageTask(u *model.User, task taskAccessRecord) (bool,
 		err := h.db.QueryRow(`
 			SELECT EXISTS(
 				SELECT 1 FROM requirements
-				WHERE id = $1 AND (owner_id = $2 OR creator_id = $2)
+				WHERE id = $1 AND (owner_id = CAST($2 AS bigint) OR EXISTS (
+					SELECT 1 FROM requirement_owners ro
+					WHERE ro.requirement_id = requirements.id AND ro.user_id = CAST($2 AS bigint)
+				) OR creator_id = CAST($2 AS bigint))
 			)`, task.RequirementID, u.ID).Scan(&allowed)
 		return allowed, err
 	}
@@ -292,7 +319,10 @@ func (h *TaskHandler) canManageTask(u *model.User, task taskAccessRecord) (bool,
 		err := h.db.QueryRow(`
 			SELECT EXISTS(
 				SELECT 1 FROM requirements
-				WHERE id = $1 AND (owner_id = $2 OR creator_id = $2)
+				WHERE id = $1 AND (owner_id = CAST($2 AS bigint) OR EXISTS (
+					SELECT 1 FROM requirement_owners ro
+					WHERE ro.requirement_id = requirements.id AND ro.user_id = CAST($2 AS bigint)
+				) OR creator_id = CAST($2 AS bigint))
 			)`, task.RequirementID, u.ID).Scan(&allowed)
 		return allowed, err
 	}
@@ -300,10 +330,10 @@ func (h *TaskHandler) canManageTask(u *model.User, task taskAccessRecord) (bool,
 	err := h.db.QueryRow(`
 		SELECT EXISTS(
 			SELECT 1
-			WHERE $1 = $2
+			WHERE CAST($1 AS bigint) = CAST($2 AS bigint)
 			   OR EXISTS(
 					SELECT 1 FROM users assignee
-					WHERE assignee.id = $3 AND assignee.team_id = $4
+					WHERE assignee.id = CAST($3 AS bigint) AND assignee.team_id = $4
 			   )
 			   OR EXISTS(
 					SELECT 1 FROM requirement_teams rt
@@ -311,7 +341,10 @@ func (h *TaskHandler) canManageTask(u *model.User, task taskAccessRecord) (bool,
 			   )
 			   OR EXISTS(
 					SELECT 1 FROM requirements r
-					WHERE r.id = $5 AND (r.owner_id = $2 OR r.creator_id = $2)
+					WHERE r.id = $5 AND (r.owner_id = CAST($2 AS bigint) OR EXISTS (
+						SELECT 1 FROM requirement_owners ro
+						WHERE ro.requirement_id = r.id AND ro.user_id = CAST($2 AS bigint)
+					) OR r.creator_id = CAST($2 AS bigint))
 			   )
 		)`, task.CreatorTLID, u.ID, task.AssigneeID, *u.TeamID, task.RequirementID).Scan(&allowed)
 	return allowed, err
@@ -333,7 +366,7 @@ func (h *TaskHandler) canReassignTask(u *model.User, assigneeID *string) (bool, 
 		err = h.db.QueryRow(`
 			SELECT EXISTS(
 				SELECT 1 FROM users
-				WHERE id = $1
+				WHERE id = CAST($1 AS bigint)
 				  AND local_enabled = true
 				  AND team_id IS NOT NULL
 				  AND app_role IN ('employee', 'team_leader', 'pm')
@@ -342,7 +375,7 @@ func (h *TaskHandler) canReassignTask(u *model.User, assigneeID *string) (bool, 
 		err = h.db.QueryRow(`
 			SELECT EXISTS(
 				SELECT 1 FROM users
-				WHERE id = $1
+				WHERE id = CAST($1 AS bigint)
 				  AND local_enabled = true
 				  AND app_role IN ('employee', 'team_leader', 'pm')
 				  AND team_id = $2
@@ -363,7 +396,7 @@ func (h *RequirementHandler) applyRequirementPermissions(req *model.Requirement,
 	manageable, _ := h.canManageRequirement(u, req.ID)
 	canCreate := false
 	if req.Status != "cancelled" {
-		isOwner := req.OwnerID != nil && *req.OwnerID == u.ID
+		isOwner := containsString(req.OwnerIDs, u.ID) || (req.OwnerID != nil && *req.OwnerID == u.ID)
 		isCreator := req.CreatorID == u.ID
 		if isGlobalTaskManager(u.Role) {
 			canCreate = true

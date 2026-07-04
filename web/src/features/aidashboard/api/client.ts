@@ -122,6 +122,7 @@ export const createRequirement = (data: {
   description: string;
   priority: string;
   deadline?: string;
+  owner_ids?: string[];
   owner_id?: string;
   team_ids?: string[];
   feishu_doc_url?: string;
@@ -215,6 +216,8 @@ export const fetchFollowFollowers = (targetType: "requirement" | "task", targetI
   );
 export const fetchDashboardFollows = () =>
   unwrap(api.get<DashboardFollowItemDTO[]>("/dashboard/follows"));
+export const fetchDashboardMyItems = () =>
+  unwrap(api.get<DashboardFollowItemDTO[]>("/dashboard/my-items"));
 export const fetchDashboardRisks = () =>
   unwrap(api.get<DashboardRiskGroupDTO[]>("/dashboard/risks"));
 

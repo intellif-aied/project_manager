@@ -32,7 +32,7 @@ interface CreateFormValues {
   description: string;
   priority: RequirementPriority;
   deadline?: dayjs.Dayjs;
-  owner_id?: string;
+  owner_ids?: string[];
   team_ids?: string[];
   feishu_doc_url?: string;
   acceptance_criteria: string[];
@@ -65,7 +65,7 @@ export function RequirementCreatePage() {
         description: normalizeRequiredText(values.description),
         priority: values.priority,
         deadline: values.deadline?.format("YYYY-MM-DD"),
-        owner_id: values.owner_id,
+        owner_ids: values.owner_ids ?? [],
         team_ids: values.team_ids ?? [],
         feishu_doc_url: normalizeOptionalText(values.feishu_doc_url),
         acceptance_criteria: normalizeCriteria(values.acceptance_criteria)
@@ -90,16 +90,6 @@ export function RequirementCreatePage() {
       setCreatedRequirement(created);
     } catch (error) {
       setFormError(error instanceof Error ? error.message : "创建需求失败，请稍后重试");
-    }
-  };
-
-  const handleOwnerChange = (ownerId?: string) => {
-    if (!ownerId) return;
-    const owner = assigneesQuery.data?.find((item) => item.id === ownerId);
-    if (!owner?.team_id) return;
-    const currentTeamIds = form.getFieldValue("team_ids") ?? [];
-    if (!currentTeamIds.includes(owner.team_id)) {
-      form.setFieldValue("team_ids", [...currentTeamIds, owner.team_id]);
     }
   };
 
@@ -239,14 +229,15 @@ export function RequirementCreatePage() {
                 <Form.Item label="截止日期" name="deadline">
                   <DatePicker />
                 </Form.Item>
-                <Form.Item label="负责人" name="owner_id">
+                <Form.Item label="负责人" name="owner_ids">
                   <Select
                     allowClear
+                    mode="multiple"
                     showSearch
                     loading={assigneesQuery.isLoading}
                     placeholder={assigneesQuery.isError ? "负责人加载失败" : "可稍后指定"}
                     optionFilterProp="label"
-                    onChange={handleOwnerChange}
+                    maxTagCount="responsive"
                     options={(assigneesQuery.data ?? []).map((assignee) => ({
                       value: assignee.id,
                       label: assignee.name

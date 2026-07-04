@@ -2,7 +2,6 @@ package handler
 
 import (
 	"database/sql"
-	"log"
 	"net/http"
 
 	"github.com/aidashboard/api/model"
@@ -155,17 +154,4 @@ func (h *FollowHandler) targetVisible(u *model.User, targetType, targetID string
 
 func isFollowTargetType(targetType string) bool {
 	return targetType == "requirement" || targetType == "task"
-}
-
-// autoFollow only runs when a user gains a target relationship.
-func autoFollow(db *sql.DB, userID, targetType, targetID string) {
-	if userID == "" || targetID == "" {
-		return
-	}
-	if _, err := db.Exec(`
-		INSERT INTO user_follows (user_id, target_type, target_id)
-		VALUES ($1, $2, $3)
-		ON CONFLICT DO NOTHING`, userID, targetType, targetID); err != nil {
-		log.Printf("warn: autoFollow failed user_id=%s target_type=%s target_id=%s error=%v", userID, targetType, targetID, err)
-	}
 }

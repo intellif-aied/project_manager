@@ -139,6 +139,7 @@ func main() {
 		r.Post("/follows", followH.Follow)
 		r.Delete("/follows/{target_type}/{target_id}", followH.Unfollow)
 		r.Get("/dashboard/follows", dashboardH.Follows)
+		r.Get("/dashboard/my-items", dashboardH.MyItems)
 		r.Get("/dashboard/risks", dashboardH.Risks)
 
 		r.Post("/sessions/batch", sessionH.BatchUpload)

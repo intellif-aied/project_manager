@@ -2015,9 +2015,9 @@
 
 .console-follow-followers {
   display: grid;
-  gap: 10px;
-  min-width: 180px;
-  max-width: 260px;
+  gap: 8px;
+  width: 268px;
+  color: #172033;
 }
 
 .console-follow-followers__state {
@@ -2025,27 +2025,65 @@
   font-size: 12px;
 }
 
-.console-follow-followers__group {
+.console-follow-followers__header {
   display: grid;
-  gap: 4px;
+  gap: 2px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #e6edf5;
 }
 
-.console-follow-followers__group strong {
+.console-follow-followers__header strong {
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.console-follow-followers__header span {
   color: #64748b;
   font-size: 12px;
-  font-weight: 650;
 }
 
 .console-follow-followers__users {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 8px;
+  gap: 6px;
 }
 
 .console-follow-followers__users span {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
   color: #172033;
   font-size: 12px;
-  line-height: 1.45;
+  line-height: 1.2;
+  background: #fff;
+  border: 1px solid #dbe5f0;
+  border-radius: 999px;
+}
+
+.console-follow-followers__users strong {
+  max-width: 88px;
+  overflow: hidden;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.console-follow-followers__users em {
+  max-width: 78px;
+  overflow: hidden;
+  color: #64748b;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.console-follow-card__content {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
 }
 
 .console-follow-card__title {
@@ -2057,6 +2095,45 @@
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.console-follow-card__relations {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.console-follow-card__relation {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  border: 1px solid #dbe5f0;
+  border-radius: 999px;
+  color: #526173;
+  background: #f8fafc;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 18px;
+}
+
+.console-follow-card__relation.is-followed {
+  color: #b45309;
+  background: #fff8eb;
+  border-color: #ffe3b8;
+}
+
+.console-follow-card__relation.is-assigned {
+  color: #0958d9;
+  background: #f0f7ff;
+  border-color: #cfe5ff;
+}
+
+.console-follow-card__relation.is-created {
+  color: #475569;
+  background: #f8fafc;
+  border-color: #dbe5f0;
 }
 
 .console-follow-card__meta {
