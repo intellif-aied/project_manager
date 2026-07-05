@@ -2887,6 +2887,264 @@
   font-size: 12px;
   line-height: 1.55;
 }
+.requirements-dependency-picker-trigger {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  width: 100%;
+  min-height: 56px;
+  padding: 10px 12px;
+  color: #253047;
+  text-align: left;
+  background: #fbfcfe;
+  border: 1px solid #dfe7f2;
+  border-radius: 10px;
+  cursor: pointer;
+  transition:
+    background 0.16s ease,
+    border-color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+.requirements-dependency-picker-trigger:hover {
+  background: #f8fbff;
+  border-color: #bfd6f7;
+  box-shadow: 0 8px 20px rgba(15, 48, 88, 0.06);
+}
+.requirements-dependency-picker-trigger.is-disabled,
+.requirements-dependency-picker-trigger:disabled {
+  cursor: not-allowed;
+  opacity: 0.68;
+  box-shadow: none;
+}
+.requirements-dependency-picker-trigger > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.requirements-dependency-picker-trigger > div > span {
+  color: #64748b;
+  font-size: 12px;
+}
+.requirements-dependency-picker-trigger > div > strong {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  color: #172033;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.requirements-dependency-picker-trigger > div > strong em {
+  overflow: hidden;
+  color: #64748b;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.requirements-dependency-picker-trigger > span:last-child {
+  display: inline-flex;
+  height: 28px;
+  align-items: center;
+  padding: 0 11px;
+  color: #175cd3;
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+  background: #eef5ff;
+  border: 1px solid #cfe0f8;
+  border-radius: 8px;
+}
+.requirements-dependency-picker-modal .ant-modal-body {
+  padding: 16px 20px 12px;
+  overflow-x: hidden;
+}
+.requirements-dependency-picker {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.requirements-dependency-picker > .ant-input-search {
+  width: 100%;
+}
+.requirements-dependency-picker__body {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.9fr) minmax(0, 1.6fr);
+  gap: 12px;
+  min-height: 420px;
+  max-height: min(58vh, 520px);
+  min-width: 0;
+}
+.requirements-dependency-picker__requirements,
+.requirements-dependency-picker__tasks {
+  min-width: 0;
+  background: #f8fafc;
+  border: 1px solid #e4ebf5;
+  border-radius: 10px;
+}
+.requirements-dependency-picker__requirements {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  padding: 8px;
+  overflow-y: auto;
+}
+.requirements-dependency-picker__requirements button {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
+  padding: 10px;
+  color: #253047;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.requirements-dependency-picker__requirements button:hover,
+.requirements-dependency-picker__requirements button.is-active {
+  background: #ffffff;
+  border-color: #cfe0f8;
+  box-shadow: 0 6px 18px rgba(15, 48, 88, 0.05);
+}
+.requirements-dependency-picker__requirements strong,
+.requirements-dependency-picker__requirements span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.requirements-dependency-picker__requirements strong {
+  color: #172033;
+  font-size: 13px;
+}
+.requirements-dependency-picker__requirements span {
+  color: #64748b;
+  font-size: 12px;
+}
+.requirements-dependency-picker__tasks {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+  background: #ffffff;
+}
+.requirements-dependency-picker__tasks-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border-bottom: 1px solid #edf2f7;
+}
+.requirements-dependency-picker__tasks-head > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.requirements-dependency-picker__tasks-head strong,
+.requirements-dependency-picker__tasks-head span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.requirements-dependency-picker__tasks-head strong {
+  color: #172033;
+  font-size: 14px;
+}
+.requirements-dependency-picker__tasks-head span {
+  color: #64748b;
+  font-size: 12px;
+}
+.requirements-dependency-picker__task-list {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-height: 0;
+  padding: 10px;
+  overflow-y: auto;
+}
+.requirements-dependency-picker__task {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  padding: 10px;
+  background: #fbfcfe;
+  border: 1px solid #e7edf5;
+  border-radius: 9px;
+  cursor: pointer;
+  transition:
+    background 0.16s ease,
+    border-color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+.requirements-dependency-picker__task:hover,
+.requirements-dependency-picker__task.is-selected {
+  background: #f8fbff;
+  border-color: #bfd6f7;
+  box-shadow: 0 6px 18px rgba(15, 48, 88, 0.05);
+}
+.requirements-dependency-picker__task > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.requirements-dependency-picker__task strong,
+.requirements-dependency-picker__task span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.requirements-dependency-picker__task strong {
+  color: #172033;
+  font-size: 13px;
+}
+.requirements-dependency-picker__task span {
+  color: #64748b;
+  font-size: 12px;
+}
+.requirements-dependency-picker__task .ant-tag {
+  margin: 0;
+}
+.requirements-dependency-picker__selected {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  min-width: 0;
+  padding: 10px 12px;
+  background: #f8fafc;
+  border: 1px solid #e4ebf5;
+  border-radius: 10px;
+}
+.requirements-dependency-picker__selected > span {
+  color: #475569;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 24px;
+  white-space: nowrap;
+}
+.requirements-dependency-picker__selected > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+.requirements-dependency-picker__selected .ant-tag {
+  max-width: 210px;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.requirements-dependency-picker__selected em {
+  color: #64748b;
+  font-size: 12px;
+  font-style: normal;
+  line-height: 22px;
+}
 
 @media (max-width: 1280px) {
   .requirements-board__filter-controls {
@@ -2929,6 +3187,16 @@
   }
   .requirements-board__content {
     overflow-x: auto;
+  }
+  .requirements-dependency-picker__body {
+    grid-template-columns: 1fr;
+    max-height: none;
+  }
+  .requirements-dependency-picker__requirements {
+    max-height: 180px;
+  }
+  .requirements-dependency-picker__selected {
+    grid-template-columns: 1fr;
   }
   .requirements-drawer__summary-head {
     align-items: stretch;

@@ -30,6 +30,7 @@ import {
   Badge,
   Button,
   DatePicker,
+  Checkbox,
   Descriptions,
   Drawer,
   Dropdown,
@@ -205,6 +206,7 @@ const WORK_SCOPE_OPTIONS: Array<{ value: WorkScope; label: string }> = [
 
 const EMPTY_REQUIREMENTS: MockRequirement[] = [];
 const EMPTY_TASKS: MockTask[] = [];
+const EMPTY_DEPENDENCIES: MockTaskDependency[] = [];
 const EMPTY_TOKEN_SOURCES: MockTokenSource[] = [];
 const EMPTY_FAVORITES: MockFavorite[] = [];
 
@@ -3235,11 +3237,6 @@ function TaskCreateModal({
     staleTime: 5 * 60_000
   });
 
-  const dependencyOptions = existingTasks.map((task) => ({
-    value: task.id,
-    label: task.requirement_title ? `${task.title} · ${task.requirement_title}` : task.title
-  }));
-
   const createMutation = useMutation({
     mutationFn: (values: {
       title: string;
@@ -3329,18 +3326,9 @@ function TaskCreateModal({
         </section>
         <section className="requirements-task-modal__section">
           <h4>依赖关系</h4>
-          {dependencyOptions.length ? (
-            <Form.Item label="上游依赖" name="dependency_task_ids" rules={dependencyArrayRules()}>
-              <Select
-                mode="multiple"
-                placeholder="搜索并选择上游任务"
-                options={dependencyOptions}
-                allowClear
-              />
-            </Form.Item>
-          ) : (
-            <p className="requirements-task-modal__hint">暂无可选上游任务。</p>
-          )}
+          <Form.Item label="上游依赖任务" name="dependency_task_ids" rules={dependencyArrayRules()}>
+            <DependencyTaskPicker tasks={existingTasks} />
+          </Form.Item>
         </section>
         <section className="requirements-task-modal__section">
           <h4>验收标准</h4>
@@ -3632,6 +3620,302 @@ function TaskDependencyList({
         );
       })}
     </div>
+  );
+}
+
+type DependencyPickerTask = {
+  id: string;
+  title: string;
+  requirementId: string;
+  requirementTitle: string;
+  status?: string;
+  assigneeName?: string;
+  dueDate?: string;
+  priority?: MockTaskPriority;
+};
+
+function normalizeKeyword(value: string) {
+  return value.trim().toLowerCase();
+}
+
+function DependencyTaskPicker({
+  value,
+  onChange,
+  tasks,
+  currentTaskId,
+  dependencyFallbacks = EMPTY_DEPENDENCIES
+}: {
+  value?: string[];
+  onChange?: (next: string[]) => void;
+  tasks: MockTask[];
+  currentTaskId?: string;
+  dependencyFallbacks?: MockTaskDependency[];
+}) {
+  const [open, setOpen] = useState(false);
+  const [keyword, setKeyword] = useState("");
+  const [draftSelected, setDraftSelected] = useState<string[]>([]);
+  const [activeRequirementId, setActiveRequirementId] = useState<string>();
+  const selectedValues = useMemo(() => value ?? [], [value]);
+  const pickerTasks = useMemo(() => {
+    const result = new Map<string, DependencyPickerTask>();
+    tasks
+      .filter((task) => task.id !== currentTaskId)
+      .forEach((task) => {
+        result.set(task.id, {
+          id: task.id,
+          title: task.title,
+          requirementId: task.requirement_id || "unknown",
+          requirementTitle: task.requirement_title || "未命名需求",
+          status: task.status,
+          assigneeName: task.assignee_name,
+          dueDate: task.due_date,
+          priority: task.priority
+        });
+      });
+
+    dependencyFallbacks
+      .filter((dependency) => getDependencyType(dependency) === "task")
+      .forEach((dependency) => {
+        const dependencyId = getDependencyId(dependency);
+        if (!dependencyId || dependencyId === currentTaskId || result.has(dependencyId)) return;
+        result.set(dependencyId, {
+          id: dependencyId,
+          title: getDependencyTitle(dependency),
+          requirementId: dependency.requirement_id || "unknown",
+          requirementTitle: dependency.requirement_title || "所属需求未加载",
+          status: dependency.status,
+          dueDate: dependency.due_date
+        });
+      });
+
+    return Array.from(result.values()).sort((left, right) => {
+      const requirementCompare = left.requirementTitle.localeCompare(right.requirementTitle, "zh-Hans-CN");
+      if (requirementCompare !== 0) return requirementCompare;
+      return left.title.localeCompare(right.title, "zh-Hans-CN");
+    });
+  }, [currentTaskId, dependencyFallbacks, tasks]);
+
+  const taskMap = useMemo(
+    () => new Map(pickerTasks.map((task) => [task.id, task])),
+    [pickerTasks]
+  );
+  const groups = useMemo(() => {
+    const result = new Map<string, { id: string; title: string; tasks: DependencyPickerTask[] }>();
+    pickerTasks.forEach((task) => {
+      const group = result.get(task.requirementId) ?? {
+        id: task.requirementId,
+        title: task.requirementTitle,
+        tasks: []
+      };
+      group.tasks.push(task);
+      result.set(task.requirementId, group);
+    });
+    return Array.from(result.values());
+  }, [pickerTasks]);
+  const selectedTasks = selectedValues
+    .map((taskId) => taskMap.get(taskId))
+    .filter((task): task is DependencyPickerTask => Boolean(task));
+  const draftSelectedTasks = draftSelected
+    .map((taskId) => taskMap.get(taskId))
+    .filter((task): task is DependencyPickerTask => Boolean(task));
+  const normalizedKeyword = normalizeKeyword(keyword);
+  const filteredGroups = useMemo(() => {
+    if (!normalizedKeyword) return groups;
+    return groups
+      .map((group) => {
+        const groupMatched = group.title.toLowerCase().includes(normalizedKeyword);
+        const filteredTasks = groupMatched
+          ? group.tasks
+          : group.tasks.filter((task) =>
+              [task.title, task.requirementTitle, task.assigneeName ?? "", task.dueDate ?? ""]
+                .join(" ")
+                .toLowerCase()
+                .includes(normalizedKeyword)
+            );
+        return { ...group, tasks: filteredTasks };
+      })
+      .filter((group) => group.tasks.length > 0);
+  }, [groups, normalizedKeyword]);
+  const activeGroup =
+    filteredGroups.find((group) => group.id === activeRequirementId) ?? filteredGroups[0];
+  const hasOptions = pickerTasks.length > 0;
+
+  useEffect(() => {
+    if (!open) return;
+    setDraftSelected(selectedValues);
+    setKeyword("");
+    const firstSelected = selectedValues.map((taskId) => taskMap.get(taskId)).find(Boolean);
+    setActiveRequirementId(firstSelected?.requirementId ?? groups[0]?.id);
+  }, [groups, open, selectedValues, taskMap]);
+
+  const toggleTask = (taskId: string) => {
+    setDraftSelected((current) =>
+      current.includes(taskId)
+        ? current.filter((item) => item !== taskId)
+        : [...current, taskId]
+    );
+  };
+  const removeDraftTask = (taskId: string) => {
+    setDraftSelected((current) => current.filter((item) => item !== taskId));
+  };
+  const confirmSelection = () => {
+    onChange?.(draftSelected);
+    setOpen(false);
+  };
+
+  return (
+    <>
+      <button
+        type="button"
+        className={`requirements-dependency-picker-trigger${hasOptions ? "" : " is-disabled"}`}
+        disabled={!hasOptions}
+        onClick={() => {
+          if (hasOptions) setOpen(true);
+        }}
+      >
+        <div>
+          <span>按需求分组</span>
+          {selectedTasks.length ? (
+            <strong>
+              已选择 {selectedTasks.length} 个任务
+              <em>
+                {selectedTasks.slice(0, 2).map((task) => task.title).join("，")}
+                {selectedTasks.length > 2 ? ` 等 ${selectedTasks.length} 个任务` : ""}
+              </em>
+            </strong>
+          ) : (
+            <strong>选择需要先完成的任务</strong>
+          )}
+        </div>
+        <span>{hasOptions ? "选择" : "暂无可选"}</span>
+      </button>
+
+      <Modal
+        className="requirements-dependency-picker-modal"
+        title="选择上游依赖任务"
+        open={open}
+        width={900}
+        zIndex={1700}
+        destroyOnHidden
+        onCancel={() => setOpen(false)}
+        footer={[
+          <Button key="cancel" onClick={() => setOpen(false)}>
+            取消
+          </Button>,
+          <Button key="confirm" type="primary" onClick={confirmSelection}>
+            确定
+          </Button>
+        ]}
+      >
+        <div className="requirements-dependency-picker">
+          <Input.Search
+            allowClear
+            value={keyword}
+            placeholder="搜索需求、任务、负责人或截止日期"
+            onChange={(event) => setKeyword(event.target.value)}
+            onSearch={setKeyword}
+          />
+          <div className="requirements-dependency-picker__body">
+            <aside className="requirements-dependency-picker__requirements">
+              {filteredGroups.length ? (
+                filteredGroups.map((group) => {
+                  const selectedCount = group.tasks.filter((task) => draftSelected.includes(task.id)).length;
+                  return (
+                    <button
+                      type="button"
+                      key={group.id}
+                      className={group.id === activeGroup?.id ? "is-active" : ""}
+                      onClick={() => setActiveRequirementId(group.id)}
+                    >
+                      <strong title={group.title}>{group.title}</strong>
+                      <span>
+                        {group.tasks.length} 个任务{selectedCount ? ` · 已选 ${selectedCount}` : ""}
+                      </span>
+                    </button>
+                  );
+                })
+              ) : (
+                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有匹配的需求" />
+              )}
+            </aside>
+            <section className="requirements-dependency-picker__tasks">
+              {activeGroup ? (
+                <>
+                  <div className="requirements-dependency-picker__tasks-head">
+                    <div>
+                      <strong title={activeGroup.title}>{activeGroup.title}</strong>
+                      <span>{activeGroup.tasks.length} 个可选任务</span>
+                    </div>
+                    <Button
+                      size="small"
+                      disabled={!draftSelected.length}
+                      onClick={() => setDraftSelected([])}
+                    >
+                      清空选择
+                    </Button>
+                  </div>
+                  <div className="requirements-dependency-picker__task-list">
+                    {activeGroup.tasks.map((task) => {
+                      const checked = draftSelected.includes(task.id);
+                      return (
+                        <div
+                          className={`requirements-dependency-picker__task${checked ? " is-selected" : ""}`}
+                          key={task.id}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => toggleTask(task.id)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault();
+                              toggleTask(task.id);
+                            }
+                          }}
+                        >
+                          <Checkbox
+                            checked={checked}
+                            onClick={(event) => event.stopPropagation()}
+                            onChange={() => toggleTask(task.id)}
+                          />
+                          <div>
+                            <strong title={task.title}>{task.title}</strong>
+                            <span>
+                              {task.assigneeName || "未分配"} · 截止 {formatDate(task.dueDate)}
+                            </span>
+                          </div>
+                          <Tag color={dependencyTone({ item_type: "task", item_id: task.id, title: task.title, status: task.status ?? "todo" })}>
+                            {TASK_STATUS_META[task.status as MockTaskStatus]?.label ?? task.status ?? "-"}
+                          </Tag>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              ) : (
+                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="请选择左侧需求" />
+              )}
+            </section>
+          </div>
+          <div className="requirements-dependency-picker__selected">
+            <span>已选择 {draftSelectedTasks.length} 个任务</span>
+            <div>
+              {draftSelectedTasks.slice(0, 6).map((task) => (
+                <Tag
+                  key={task.id}
+                  closable
+                  onClose={(event) => {
+                    event.preventDefault();
+                    removeDraftTask(task.id);
+                  }}
+                >
+                  {task.title}
+                </Tag>
+              ))}
+              {draftSelectedTasks.length > 6 ? <em>+{draftSelectedTasks.length - 6}</em> : null}
+            </div>
+          </div>
+        </div>
+      </Modal>
+    </>
   );
 }
 
@@ -4115,26 +4399,6 @@ function TaskEditModal({
         .filter((dependencyId) => dependencyId !== task.id),
     [task.dependencies, task.id]
   );
-  const dependencyOptions = useMemo(() => {
-    const options = existingTasks
-      .filter((item) => item.id !== task.id)
-      .map((item) => ({
-        value: item.id,
-        label: item.requirement_title ? `${item.title} · ${item.requirement_title}` : item.title
-      }));
-
-    task.dependencies
-      .filter((dependency) => getDependencyType(dependency) === "task")
-      .forEach((dependency) => {
-        const dependencyId = getDependencyId(dependency);
-        if (dependencyId && dependencyId !== task.id && !options.some((item) => item.value === dependencyId)) {
-          options.push({ value: dependencyId, label: getDependencyLabel(dependency) });
-        }
-      });
-
-    return options;
-  }, [existingTasks, task.dependencies, task.id]);
-
   const initialValues = useMemo(
     () => ({
       title: task.title,
@@ -4270,15 +4534,11 @@ function TaskEditModal({
           />
         </Form.Item>
       </div>
-      <Form.Item label="上游依赖" name="dependency_task_ids" rules={dependencyArrayRules()}>
-        <Select
-          mode="multiple"
-          placeholder={dependencyOptions.length ? "选择上游任务" : "暂无可选上游任务"}
-          disabled={!dependencyOptions.length}
-          options={dependencyOptions}
-          allowClear
-          getPopupContainer={getTaskModalPopupContainer}
-          classNames={{ popup: { root: "requirements-task-detail-popup" } }}
+      <Form.Item label="上游依赖任务" name="dependency_task_ids" rules={dependencyArrayRules()}>
+        <DependencyTaskPicker
+          tasks={existingTasks}
+          currentTaskId={task.id}
+          dependencyFallbacks={task.dependencies}
         />
       </Form.Item>
       <Form.Item label="标准列表" name="acceptance_criteria" rules={acceptanceCriteriaRules()}>
