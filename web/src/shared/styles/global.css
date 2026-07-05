@@ -74,6 +74,10 @@ a {
   min-height: 100vh;
 }
 
+body .ant-modal .ant-modal-container {
+  padding: 0 !important;
+}
+
 .ant-table-wrapper .ant-table {
   color: var(--aihub-color-text-primary);
 }
