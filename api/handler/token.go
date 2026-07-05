@@ -227,13 +227,13 @@ func (h *TokenHandler) ListSessionTokens(w http.ResponseWriter, r *http.Request)
 }
 
 // buildTokenScope returns the role-scoped WHERE fragment for the current user.
-// team_leader / pm see their team; employee sees only themselves; director sees everything.
+// team_leader sees their team; employee and pm see only themselves; director/admin see everything.
 func buildTokenScope(u *model.User, requestedScope string) (string, []any, int) {
-	if requestedScope == "mine" || u.Role == "employee" {
+	if requestedScope == "mine" || u.Role == "employee" || u.Role == "pm" {
 		return "tu.user_id = $1", []any{u.ID}, 2
 	}
 	switch u.Role {
-	case "team_leader", "pm":
+	case "team_leader":
 		if u.TeamID == nil {
 			return "tu.user_id = $1", []any{u.ID}, 2
 		}
@@ -244,11 +244,11 @@ func buildTokenScope(u *model.User, requestedScope string) (string, []any, int) 
 }
 
 func buildTokenScopeForSessionTokens(u *model.User, requestedScope string) (string, []any, int) {
-	if requestedScope == "mine" || u.Role == "employee" {
+	if requestedScope == "mine" || u.Role == "employee" || u.Role == "pm" {
 		return "s.user_id = $1", []any{u.ID}, 2
 	}
 	switch u.Role {
-	case "team_leader", "pm":
+	case "team_leader":
 		if u.TeamID == nil {
 			return "s.user_id = $1", []any{u.ID}, 2
 		}
@@ -259,11 +259,11 @@ func buildTokenScopeForSessionTokens(u *model.User, requestedScope string) (stri
 }
 
 func buildActivityScope(u *model.User, requestedScope string) (string, []any, int) {
-	if requestedScope == "mine" || u.Role == "employee" {
+	if requestedScope == "mine" || u.Role == "employee" || u.Role == "pm" {
 		return "sas.user_id = $1", []any{u.ID}, 2
 	}
 	switch u.Role {
-	case "team_leader", "pm":
+	case "team_leader":
 		if u.TeamID == nil {
 			return "sas.user_id = $1", []any{u.ID}, 2
 		}

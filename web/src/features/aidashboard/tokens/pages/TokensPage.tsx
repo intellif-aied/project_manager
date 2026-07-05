@@ -61,7 +61,7 @@ function formatActivityRange(session: SessionTokens) {
 export function TokensPage() {
   const { user } = useAuth();
   const [range, setRange] = useState<[dayjs.Dayjs, dayjs.Dayjs] | null>(null);
-  const canViewTeam = Boolean(user && user.role !== "employee");
+  const canViewTeam = Boolean(user && (user.role === "team_leader" || user.role === "director" || user.role === "admin"));
   const [scope, setScope] = useState<"mine" | "team">("mine");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);

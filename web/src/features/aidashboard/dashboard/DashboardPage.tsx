@@ -6,7 +6,6 @@ import {
   FileTextOutlined,
   LinkOutlined,
   RightOutlined,
-  StarOutlined,
   UnorderedListOutlined,
   WarningOutlined,
   UploadOutlined
@@ -18,7 +17,6 @@ import {
   Button,
   Checkbox,
   Col,
-  Drawer,
   Empty,
   Input,
   Modal,
@@ -37,7 +35,7 @@ import * as echarts from "echarts";
 import type { ECharts, EChartsOption } from "echarts";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import dayjs from "dayjs";
 
 import { PagePanel } from "@/shared/components/PagePanel/PagePanel";
@@ -90,6 +88,18 @@ import {
   type DashboardTokenReport
 } from "./dashboardTokenStats";
 import { invalidateRequirementTaskWorkspace } from "../requirements/queryInvalidation";
+import { requirementsBoardApi } from "../requirements/api/requirementsBoardApi";
+import {
+  RequirementDrawer,
+  TaskDetailModal
+} from "../requirements/pages/RequirementsListPage";
+import type {
+  FavoriteTargetType,
+  MockRequirement,
+  MockTask,
+  MockTokenSource,
+  RequirementStage
+} from "../requirements/types";
 import {
   DailyReportGenerateModal,
   type DailyGenerateScope
@@ -126,9 +136,6 @@ type FollowType = "需求" | "任务";
 type RiskType = "requirement_overdue" | "deadline" | "dependency_blocker" | "dependency_conflict";
 type RiskRelatedObjectType = "requirement" | "task";
 type TokenRange = DashboardTokenRange;
-type DashboardDrawer = "follows" | "risks";
-type FollowDrawerFilter = "all" | "followed" | "assigned" | "created" | "blocked" | "overdue" | "risk";
-type RiskDrawerFilter = "all" | "blocker" | "conflict" | "deadline" | "requirement";
 type ReportSkillOption = {
   label: string;
   value: string;
@@ -251,24 +258,6 @@ interface ConsoleRoleData {
 type TokenReport = DashboardTokenReport;
 
 const DASHBOARD_PREVIEW_LIMIT = 5;
-
-const FOLLOW_DRAWER_FILTER_OPTIONS: { label: string; value: FollowDrawerFilter }[] = [
-  { label: "全部", value: "all" },
-  { label: "我关注", value: "followed" },
-  { label: "我负责", value: "assigned" },
-  { label: "我创建", value: "created" },
-  { label: "阻塞", value: "blocked" },
-  { label: "超期", value: "overdue" },
-  { label: "有风险", value: "risk" }
-];
-
-const RISK_DRAWER_FILTER_OPTIONS: { label: string; value: RiskDrawerFilter }[] = [
-  { label: "全部", value: "all" },
-  { label: "依赖阻塞", value: "blocker" },
-  { label: "依赖冲突", value: "conflict" },
-  { label: "任务逾期", value: "deadline" },
-  { label: "需求逾期", value: "requirement" }
-];
 
 interface TaskProgressSuggestion {
   key: string;
@@ -941,7 +930,6 @@ const ROLE_DATA: Record<DashboardRole, ConsoleRoleData> = {
 
 export function DashboardPage() {
   const navigate = useNavigate();
-  const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const { user } = useAuth();
   const { message } = App.useApp();
@@ -959,6 +947,26 @@ export function DashboardPage() {
     queryKey: ["dashboard", currentUserId, "risks"],
     queryFn: fetchDashboardRisks,
     staleTime: 30_000
+  });
+  const boardRequirementsQuery = useQuery({
+    queryKey: ["requirements-board", "requirements"],
+    queryFn: requirementsBoardApi.listRequirements,
+    staleTime: 30_000
+  });
+  const boardTasksQuery = useQuery({
+    queryKey: ["requirements-board", "tasks"],
+    queryFn: () => requirementsBoardApi.listTasks(),
+    staleTime: 30_000
+  });
+  const boardFavoritesQuery = useQuery({
+    queryKey: ["requirements-board", "favorites"],
+    queryFn: () => requirementsBoardApi.listFavorites(),
+    staleTime: 60_000
+  });
+  const boardTokenSourcesQuery = useQuery({
+    queryKey: ["requirements-board", "token-sources"],
+    queryFn: () => requirementsBoardApi.listTokenSources(),
+    staleTime: 60_000
   });
   const todayReportsQuery = useQuery({
     queryKey: ["reports", "dashboard-today", currentUserId, reportDate],
@@ -991,6 +999,12 @@ export function DashboardPage() {
   const [weeklyMineOpen, setWeeklyMineOpen] = useState(false);
   const [teamWeeklyOpen, setTeamWeeklyOpen] = useState(false);
   const [departmentWeeklyOpen, setDepartmentWeeklyOpen] = useState(false);
+  const [followExpanded, setFollowExpanded] = useState(false);
+  const [riskExpanded, setRiskExpanded] = useState(false);
+  const [dashboardRequirement, setDashboardRequirement] = useState<MockRequirement>();
+  const [dashboardTask, setDashboardTask] = useState<MockTask>();
+  const [dashboardTaskHistory, setDashboardTaskHistory] = useState<MockTask[]>([]);
+  const [dashboardCreatorOpen, setDashboardCreatorOpen] = useState(false);
   const dashboardRole = getDashboardRole(user?.role);
   const data = useMemo(() => ROLE_DATA[dashboardRole], [dashboardRole]);
   const personalWeeklyQuery = useQuery({
@@ -1086,8 +1100,8 @@ export function DashboardPage() {
     ? (allVisibleReports.find((reportItem) => reportItem.id === activeReportId) ?? dailyReport)
     : dailyReport;
   const tokenDateRange = useMemo(() => getDashboardTokenDateRange(tokenRange), [tokenRange]);
-  const tokenScope = dashboardRole === "employee" ? "mine" : "team";
-  const shouldLoadMineTokens = dashboardRole !== "employee";
+  const tokenScope = dashboardRole === "team_leader" || dashboardRole === "director" ? "team" : "mine";
+  const shouldLoadMineTokens = dashboardRole === "team_leader" || dashboardRole === "director";
   const shouldLoadTeamTokenGroups = dashboardRole === "director";
   const tokenSessionsQuery = useQuery({
     queryKey: [
@@ -1148,7 +1162,7 @@ export function DashboardPage() {
       aggregateDashboardTokenReport(tokenSessionsQuery.data ?? [], tokenDateRange, {
         mineSessions: shouldLoadMineTokens ? (mineTokenSessionsQuery.data ?? []) : undefined,
         teamAggregation: shouldLoadTeamTokenGroups ? (teamTokenGroupsQuery.data ?? null) : null,
-        showUploaders: dashboardRole !== "employee"
+        showUploaders: dashboardRole === "team_leader" || dashboardRole === "director"
       }),
     [
       dashboardRole,
@@ -1170,9 +1184,49 @@ export function DashboardPage() {
     (shouldLoadTeamTokenGroups && teamTokenGroupsQuery.isError);
   const followItems = useMemo<FollowItem[]>(() => followsQuery.data ?? [], [followsQuery.data]);
   const riskItems = useMemo<RiskItem[]>(() => risksQuery.data ?? [], [risksQuery.data]);
-  const activeDashboardDrawer = getDashboardDrawer(searchParams.get("drawer"));
-  const [followDrawerFilter, setFollowDrawerFilter] = useState<FollowDrawerFilter>("all");
-  const [riskDrawerFilter, setRiskDrawerFilter] = useState<RiskDrawerFilter>("all");
+  const boardRequirements = useMemo(
+    () => boardRequirementsQuery.data ?? [],
+    [boardRequirementsQuery.data]
+  );
+  const boardTasks = useMemo(() => boardTasksQuery.data ?? [], [boardTasksQuery.data]);
+  const boardTokenSources = useMemo(
+    () => boardTokenSourcesQuery.data ?? [],
+    [boardTokenSourcesQuery.data]
+  );
+  const boardTokenSourceMap = useMemo(
+    () => new Map<string, MockTokenSource>(boardTokenSources.map((source) => [source.id, source])),
+    [boardTokenSources]
+  );
+  const boardFavorites = useMemo(() => boardFavoritesQuery.data ?? [], [boardFavoritesQuery.data]);
+  const favoriteRequirementIds = useMemo(
+    () =>
+      new Set(
+        boardFavorites.filter((item) => item.target_type === "requirement").map((item) => item.target_id)
+      ),
+    [boardFavorites]
+  );
+  const favoriteTaskIds = useMemo(
+    () =>
+      new Set(
+        boardFavorites.filter((item) => item.target_type === "task").map((item) => item.target_id)
+      ),
+    [boardFavorites]
+  );
+  const tasksByRequirement = useMemo(() => {
+    const result = new Map<string, MockTask[]>();
+    boardTasks.forEach((task) => {
+      const list = result.get(task.requirement_id) ?? [];
+      list.push(task);
+      result.set(task.requirement_id, list);
+    });
+    return result;
+  }, [boardTasks]);
+  const activeDashboardRequirement = dashboardRequirement
+    ? (boardRequirements.find((item) => item.id === dashboardRequirement.id) ?? dashboardRequirement)
+    : undefined;
+  const activeDashboardTask = dashboardTask
+    ? (boardTasks.find((item) => item.id === dashboardTask.id) ?? dashboardTask)
+    : undefined;
   const prioritizedFollowItems = useMemo(
     () => [...followItems].sort(compareFollowItems),
     [followItems]
@@ -1180,16 +1234,10 @@ export function DashboardPage() {
   const prioritizedRiskItems = useMemo(() => [...riskItems].sort(compareRiskItems), [riskItems]);
   const previewFollowItems = prioritizedFollowItems.slice(0, DASHBOARD_PREVIEW_LIMIT);
   const previewRiskItems = prioritizedRiskItems.slice(0, DASHBOARD_PREVIEW_LIMIT);
+  const visibleFollowItems = followExpanded ? prioritizedFollowItems : previewFollowItems;
+  const visibleRiskItems = riskExpanded ? prioritizedRiskItems : previewRiskItems;
   const followSummaryChips = useMemo(() => getFollowSummaryChips(followItems), [followItems]);
   const riskSummaryChips = useMemo(() => getRiskSummaryChips(riskItems), [riskItems]);
-  const filteredFollowDrawerItems = useMemo(
-    () => prioritizedFollowItems.filter((item) => matchesFollowFilter(item, followDrawerFilter)),
-    [followDrawerFilter, prioritizedFollowItems]
-  );
-  const filteredRiskDrawerItems = useMemo(
-    () => prioritizedRiskItems.filter((item) => matchesRiskFilter(item, riskDrawerFilter)),
-    [prioritizedRiskItems, riskDrawerFilter]
-  );
   const modifiedTaskCount = taskSuggestions.filter((task) => task.syncState === "待同步").length;
   const reportSessionsQuery = useQuery({
     queryKey: ["dashboard", currentUserId, "daily-report-sessions", reportDate],
@@ -1607,30 +1655,98 @@ export function DashboardPage() {
     applyTaskSuggestionMutation.mutate(editingTaskDraft);
   };
 
-  const openDashboardDrawer = (drawer: DashboardDrawer) => {
-    const nextParams = new URLSearchParams(searchParams);
-    nextParams.set("drawer", drawer);
-    setSearchParams(nextParams);
-  };
+  const dashboardFavoriteMutation = useMutation({
+    mutationFn: ({ targetType, targetId }: { targetType: FavoriteTargetType; targetId: string }) =>
+      requirementsBoardApi.toggleFavorite(targetType, targetId),
+    onSuccess: (result) => {
+      message.success(result.favorited ? "已加入关注" : "已取消关注");
+      void invalidateRequirementTaskWorkspace(queryClient);
+    },
+    onError: (error) => message.error(error instanceof Error ? error.message : "关注操作失败")
+  });
+  const dashboardRequirementStageMutation = useMutation({
+    mutationFn: ({
+      requirement,
+      nextStatus
+    }: {
+      requirement: MockRequirement;
+      nextStatus: RequirementStage;
+    }) => requirementsBoardApi.updateRequirementStage(requirement.id, nextStatus, requirement.version),
+    onSuccess: (updated) => {
+      setDashboardRequirement(updated);
+      message.success("需求阶段已更新");
+      void invalidateRequirementTaskWorkspace(queryClient, { requirementId: updated.id });
+    },
+    onError: (error) => message.error(error instanceof Error ? error.message : "需求阶段更新失败")
+  });
 
-  const closeDashboardDrawer = () => {
-    const nextParams = new URLSearchParams(searchParams);
-    nextParams.delete("drawer");
-    setSearchParams(nextParams, { replace: true });
-  };
-
-  const handleRiskAction = (risk: RiskItem) => {
-    if (risk.targetUrl) {
-      navigate(risk.targetUrl);
+  const openDashboardRequirementDetail = async (requirementId?: string) => {
+    if (!requirementId) {
+      message.warning("未找到关联需求");
+      return false;
     }
+    try {
+      const requirement =
+        boardRequirements.find((item) => item.id === requirementId) ??
+        (await requirementsBoardApi.getRequirement(requirementId));
+      setDashboardRequirement(requirement);
+      setDashboardCreatorOpen(false);
+      return true;
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : "需求详情加载失败");
+      return false;
+    }
+  };
+  const openDashboardTaskDetail = async (taskId?: string, requirementId?: string, keepHistory = false) => {
+    if (!taskId) {
+      return openDashboardRequirementDetail(requirementId);
+    }
+    try {
+      const task = boardTasks.find((item) => item.id === taskId) ?? (await requirementsBoardApi.getTask(taskId));
+      if (keepHistory && activeDashboardTask && activeDashboardTask.id !== task.id) {
+        setDashboardTaskHistory((current) => [...current, activeDashboardTask].slice(-12));
+      } else if (!keepHistory) {
+        setDashboardTaskHistory([]);
+      }
+      setDashboardTask(task);
+      return true;
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : "任务详情加载失败");
+      return false;
+    }
+  };
+  const returnPreviousDashboardTask = () => {
+    const previousTask = dashboardTaskHistory[dashboardTaskHistory.length - 1];
+    if (!previousTask) return;
+    const latestTask = boardTasks.find((item) => item.id === previousTask.id) ?? previousTask;
+    setDashboardTaskHistory((current) => current.slice(0, -1));
+    setDashboardTask(latestTask);
+  };
+  const handleRiskAction = (risk: RiskItem) => {
+    void (async () => {
+      if (risk.displayType === "requirement_group") {
+        if (risk.requirementId && (await openDashboardRequirementDetail(risk.requirementId))) return;
+        const fallbackTaskId = risk.taskId ?? risk.representativeTask?.taskId;
+        if (fallbackTaskId && (await openDashboardTaskDetail(fallbackTaskId, risk.requirementId))) return;
+      } else {
+        const taskId = risk.taskId ?? risk.representativeTask?.taskId;
+        if (taskId && (await openDashboardTaskDetail(taskId, risk.requirementId))) return;
+        if (risk.requirementId && (await openDashboardRequirementDetail(risk.requirementId))) return;
+      }
+      if (risk.targetUrl) {
+        navigate(risk.targetUrl);
+      }
+    })();
   };
 
   const handleFollowAction = (item: FollowItem) => {
-    const targetUrl =
-      item.type === "任务" && item.taskId
-        ? `/requirements?requirementId=${item.requirementId}&taskId=${item.taskId}`
-        : `/requirements?requirementId=${item.requirementId}`;
-    navigate(targetUrl);
+    void (async () => {
+      if (item.type === "任务" && item.taskId) {
+        await openDashboardTaskDetail(item.taskId, item.requirementId);
+        return;
+      }
+      await openDashboardRequirementDetail(item.requirementId);
+    })();
   };
 
   return (
@@ -1648,10 +1764,10 @@ export function DashboardPage() {
             title="我的事项"
             extra={<SummaryChips items={followSummaryChips} />}
           />
-          <div className="console-follow-list">
-            {followItems.length > 0 ? (
-              <>
-                {previewFollowItems.map((item) => (
+          {followItems.length > 0 ? (
+            <>
+              <div className={`console-follow-list console-dashboard-inline-list${followExpanded ? " is-expanded" : ""}`}>
+                {visibleFollowItems.map((item) => (
                   <FollowCard
                     key={item.key}
                     item={item}
@@ -1659,27 +1775,28 @@ export function DashboardPage() {
                     onView={handleFollowAction}
                   />
                 ))}
-                {followItems.length > DASHBOARD_PREVIEW_LIMIT ? (
-                  <ListMoreAction
-                    hiddenCount={followItems.length - previewFollowItems.length}
-                    previewCount={previewFollowItems.length}
-                    totalCount={followItems.length}
-                    title="还有我的事项未展示"
-                    label="查看全部事项"
-                    tone="follow"
-                    onClick={() => openDashboardDrawer("follows")}
-                  />
-                ) : null}
-              </>
-            ) : (
-              <div className="console-report-status-card">
-                <p>{followsQuery.isError ? "我的事项加载失败" : "暂无我的事项"}</p>
-                <Button type="link" onClick={() => navigate("/requirements")}>
-                  前往需求看板查看
-                </Button>
               </div>
-            )}
-          </div>
+              {followItems.length > DASHBOARD_PREVIEW_LIMIT ? (
+                <ListMoreAction
+                  expanded={followExpanded}
+                  hiddenCount={followExpanded ? 0 : followItems.length - previewFollowItems.length}
+                  previewCount={followExpanded ? followItems.length : previewFollowItems.length}
+                  totalCount={followItems.length}
+                  title={followExpanded ? "已展开全部我的事项" : "还有我的事项未展示"}
+                  label={followExpanded ? "收起" : "展开全部"}
+                  tone="follow"
+                  onClick={() => setFollowExpanded((current) => !current)}
+                />
+              ) : null}
+            </>
+          ) : (
+            <div className="console-report-status-card">
+              <p>{followsQuery.isError ? "我的事项加载失败" : "暂无我的事项"}</p>
+              <Button type="link" onClick={() => navigate("/requirements")}>
+                前往需求看板查看
+              </Button>
+            </div>
+          )}
         </div>
 
         <div className="console-panel console-panel--risk">
@@ -1688,33 +1805,34 @@ export function DashboardPage() {
             title="我的风险提示"
             extra={<SummaryChips items={riskSummaryChips} />}
           />
-          <div className="console-risk-list">
-            {riskItems.length > 0 ? (
-              <>
-                {previewRiskItems.map((item) => (
+          {riskItems.length > 0 ? (
+            <>
+              <div className={`console-risk-list console-dashboard-inline-list${riskExpanded ? " is-expanded" : ""}`}>
+                {visibleRiskItems.map((item) => (
                   <RiskCard key={item.key} item={item} onAction={handleRiskAction} />
                 ))}
-                {riskItems.length > DASHBOARD_PREVIEW_LIMIT ? (
-                  <ListMoreAction
-                    hiddenCount={riskItems.length - previewRiskItems.length}
-                    previewCount={previewRiskItems.length}
-                    totalCount={riskItems.length}
-                    title="还有风险需要查看"
-                    label="查看全部风险"
-                    tone="risk"
-                    onClick={() => openDashboardDrawer("risks")}
-                  />
-                ) : null}
-              </>
-            ) : (
-              <div className="console-report-status-card">
-                <p>{risksQuery.isError ? "风险数据加载失败" : "暂无需要处理的风险"}</p>
-                <Button type="link" onClick={() => navigate("/requirements")}>
-                  查看需求看板
-                </Button>
               </div>
-            )}
-          </div>
+              {riskItems.length > DASHBOARD_PREVIEW_LIMIT ? (
+                <ListMoreAction
+                  expanded={riskExpanded}
+                  hiddenCount={riskExpanded ? 0 : riskItems.length - previewRiskItems.length}
+                  previewCount={riskExpanded ? riskItems.length : previewRiskItems.length}
+                  totalCount={riskItems.length}
+                  title={riskExpanded ? "已展开全部风险提示" : "还有风险需要查看"}
+                  label={riskExpanded ? "收起" : "展开全部"}
+                  tone="risk"
+                  onClick={() => setRiskExpanded((current) => !current)}
+                />
+              ) : null}
+            </>
+          ) : (
+            <div className="console-report-status-card">
+              <p>{risksQuery.isError ? "风险数据加载失败" : "暂无需要处理的风险"}</p>
+              <Button type="link" onClick={() => navigate("/requirements")}>
+                查看需求看板
+              </Button>
+            </div>
+          )}
         </div>
 
         <Row className="console-dashboard-hero-row" gutter={[14, 14]} align="stretch">
@@ -1744,31 +1862,6 @@ export function DashboardPage() {
           </Col>
         </Row>
       </section>
-
-      <FollowItemsDrawer
-        open={activeDashboardDrawer === "follows"}
-        filter={followDrawerFilter}
-        items={filteredFollowDrawerItems}
-        totalCount={followItems.length}
-        summaryItems={followSummaryChips}
-        showAttention={dashboardRole !== "director"}
-        onClose={closeDashboardDrawer}
-        onFilterChange={setFollowDrawerFilter}
-        onView={handleFollowAction}
-        onViewBoard={() => navigate("/requirements")}
-      />
-
-      <RiskItemsDrawer
-        open={activeDashboardDrawer === "risks"}
-        filter={riskDrawerFilter}
-        items={filteredRiskDrawerItems}
-        totalCount={riskItems.length}
-        summaryItems={riskSummaryChips}
-        onClose={closeDashboardDrawer}
-        onFilterChange={setRiskDrawerFilter}
-        onAction={handleRiskAction}
-        onViewBoard={() => navigate("/requirements?view=risks")}
-      />
 
       {dailyGenerateTarget ? (
         <DailyReportGenerateModal
@@ -1829,6 +1922,80 @@ export function DashboardPage() {
           }}
         />
       ) : null}
+
+      <RequirementDrawer
+        requirement={activeDashboardRequirement}
+        tasks={activeDashboardRequirement ? (tasksByRequirement.get(activeDashboardRequirement.id) ?? []) : []}
+        dependencyTasks={boardTasks}
+        tokenSourceMap={boardTokenSourceMap}
+        creatorOpen={dashboardCreatorOpen}
+        isFavorite={activeDashboardRequirement ? favoriteRequirementIds.has(activeDashboardRequirement.id) : false}
+        canManage={Boolean(
+          activeDashboardRequirement?.can_update ||
+            activeDashboardRequirement?.can_cancel ||
+            activeDashboardRequirement?.can_restore ||
+            activeDashboardRequirement?.can_delete
+        )}
+        canUpdateStatus={Boolean(activeDashboardRequirement?.can_change_status)}
+        onUpdateStatus={(requirement, nextStatus) =>
+          dashboardRequirementStageMutation.mutate({ requirement, nextStatus })
+        }
+        onToggleFavorite={
+          activeDashboardRequirement
+            ? () =>
+                dashboardFavoriteMutation.mutate({
+                  targetType: "requirement",
+                  targetId: activeDashboardRequirement.id
+                })
+            : undefined
+        }
+        onCreatorOpenChange={setDashboardCreatorOpen}
+        onClose={() => {
+          setDashboardRequirement(undefined);
+          setDashboardCreatorOpen(false);
+        }}
+        onSaved={(updated) => setDashboardRequirement(updated)}
+        onOpenTask={(task) => {
+          void openDashboardTaskDetail(task.id);
+        }}
+      />
+      <TaskDetailModal
+        task={activeDashboardTask}
+        dependencyTasks={boardTasks}
+        tokenSourceMap={boardTokenSourceMap}
+        isFavorite={activeDashboardTask ? favoriteTaskIds.has(activeDashboardTask.id) : false}
+        canManage={Boolean(
+          activeDashboardTask?.can_update_meta ||
+            activeDashboardTask?.can_update_status ||
+            activeDashboardTask?.can_update_progress ||
+            activeDashboardTask?.can_manage_dependencies ||
+            activeDashboardTask?.can_delete
+        )}
+        onToggleFavorite={
+          activeDashboardTask
+            ? () =>
+                dashboardFavoriteMutation.mutate({
+                  targetType: "task",
+                  targetId: activeDashboardTask.id
+                })
+            : undefined
+        }
+        canGoBack={dashboardTaskHistory.length > 0}
+        onBackTask={returnPreviousDashboardTask}
+        onOpenTask={(task) => {
+          void openDashboardTaskDetail(task.id, task.requirement_id, true);
+        }}
+        onClose={() => {
+          setDashboardTask(undefined);
+          setDashboardTaskHistory([]);
+        }}
+        onSaved={(updated) => setDashboardTask(updated)}
+        onDeleted={() => {
+          setDashboardTask(undefined);
+          setDashboardTaskHistory([]);
+          void invalidateRequirementTaskWorkspace(queryClient);
+        }}
+      />
 
       <TaskProgressEditModal
         task={editingTaskDraft}
@@ -1899,6 +2066,7 @@ function ListMoreAction({
   title,
   label,
   tone,
+  expanded = false,
   onClick
 }: {
   hiddenCount: number;
@@ -1907,6 +2075,7 @@ function ListMoreAction({
   title: string;
   label: string;
   tone: "follow" | "risk";
+  expanded?: boolean;
   onClick: () => void;
 }) {
   return (
@@ -1914,7 +2083,9 @@ function ListMoreAction({
       <div className="console-list-more__copy">
         <strong>{title}</strong>
         <span>
-          已展示 {previewCount} / {totalCount} 项，另有 {hiddenCount} 项在完整列表中
+          {expanded
+            ? `已展开 ${totalCount} 项，列表内可滚动查看`
+            : `已展示 ${previewCount} / ${totalCount} 项，另有 ${hiddenCount} 项可展开`}
         </span>
       </div>
       <Button
@@ -1923,148 +2094,9 @@ function ListMoreAction({
         onClick={onClick}
       >
         {label}
-        <span>{totalCount}</span>
+        <span>{expanded ? previewCount : totalCount}</span>
       </Button>
     </div>
-  );
-}
-
-function FollowItemsDrawer({
-  open,
-  filter,
-  items,
-  totalCount,
-  summaryItems,
-  showAttention,
-  onClose,
-  onFilterChange,
-  onView,
-  onViewBoard
-}: {
-  open: boolean;
-  filter: FollowDrawerFilter;
-  items: FollowItem[];
-  totalCount: number;
-  summaryItems: SummaryChipItem[];
-  showAttention: boolean;
-  onClose: () => void;
-  onFilterChange: (filter: FollowDrawerFilter) => void;
-  onView: (item: FollowItem) => void;
-  onViewBoard: () => void;
-}) {
-  return (
-    <Drawer
-      className="console-dashboard-drawer"
-      width={720}
-      open={open}
-      onClose={onClose}
-      title={
-        <span className="console-dashboard-drawer__title">
-          <UnorderedListOutlined />
-          全部我的事项
-        </span>
-      }
-      extra={
-        <Button type="link" icon={<LinkOutlined />} onClick={onViewBoard}>
-          打开需求看板
-        </Button>
-      }
-    >
-      <div className="console-dashboard-drawer__body">
-        <div className="console-dashboard-drawer__toolbar">
-          <SummaryChips items={summaryItems} />
-          <Segmented
-            options={FOLLOW_DRAWER_FILTER_OPTIONS}
-            value={filter}
-            onChange={(value) => onFilterChange(value as FollowDrawerFilter)}
-          />
-        </div>
-        <div className="console-dashboard-drawer__meta">
-          当前显示 {items.length} / {totalCount} 项，按阻塞、超期、关注度优先排序。
-        </div>
-        <div className="console-dashboard-drawer__list console-follow-list">
-          {items.length > 0 ? (
-            items.map((item) => (
-              <FollowCard
-                key={item.key}
-                item={item}
-                showAttention={showAttention}
-                onView={onView}
-              />
-            ))
-          ) : (
-            <div className="console-report-status-card">
-              <p>当前筛选下暂无我的事项</p>
-            </div>
-          )}
-        </div>
-      </div>
-    </Drawer>
-  );
-}
-
-function RiskItemsDrawer({
-  open,
-  filter,
-  items,
-  totalCount,
-  summaryItems,
-  onClose,
-  onFilterChange,
-  onAction,
-  onViewBoard
-}: {
-  open: boolean;
-  filter: RiskDrawerFilter;
-  items: RiskItem[];
-  totalCount: number;
-  summaryItems: SummaryChipItem[];
-  onClose: () => void;
-  onFilterChange: (filter: RiskDrawerFilter) => void;
-  onAction: (item: RiskItem) => void;
-  onViewBoard: () => void;
-}) {
-  return (
-    <Drawer
-      className="console-dashboard-drawer"
-      width={760}
-      open={open}
-      onClose={onClose}
-      title={
-        <span className="console-dashboard-drawer__title">
-          <WarningOutlined />
-          全部风险提示
-        </span>
-      }
-      extra={
-        <Button type="link" icon={<LinkOutlined />} onClick={onViewBoard}>
-          打开风险看板
-        </Button>
-      }
-    >
-      <div className="console-dashboard-drawer__body">
-        <div className="console-dashboard-drawer__toolbar">
-          <SummaryChips items={summaryItems} />
-          <Segmented
-            options={RISK_DRAWER_FILTER_OPTIONS}
-            value={filter}
-            onChange={(value) => onFilterChange(value as RiskDrawerFilter)}
-          />
-        </div>
-        <div className="console-dashboard-drawer__meta">
-          当前显示 {items.length} / {totalCount} 项，按严重度、风险类型和截止时间优先排序。
-        </div>
-        <div className="console-dashboard-drawer__list console-risk-list">
-          {items.length > 0 ? (
-            items.map((item) => <RiskCard key={item.key} item={item} onAction={onAction} />)
-          ) : (
-            <div className="console-report-status-card">
-              <p>当前筛选下暂无风险提示</p>
-            </div>
-          )}
-        </div>
-      </div>
-    </Drawer>
   );
 }
 
@@ -2552,7 +2584,7 @@ function renderSessionUploadSummary(role: DashboardRole, range: TokenRange, repo
   }
 
   return (
-    <div className="console-token-overview">
+    <div className={`console-token-overview${report.bars.length >= 7 ? " is-compact" : ""}`}>
       <div className="console-token-total">
         <span>{getTokenRangeLabel(range)}</span>
         <strong>{report.total}</strong>
@@ -2618,11 +2650,16 @@ function TokenMiniBars({ bars }: { bars: TokenReport["bars"] }) {
   const maxValue = Math.max(...activeBars.map((bar) => bar.value), 1);
   const hiddenEmptyDays = Math.max(0, bars.length - activeBars.length);
 
+  const compact = bars.length >= 7;
+
   return (
-    <div className="console-token-chart" aria-label="每日解析 Token 趋势">
+    <div
+      className={`console-token-chart${compact ? " is-compact" : ""}`}
+      aria-label="每日解析 Token 趋势"
+    >
       <span className="console-token-chart__caption">每日解析 Token</span>
       {activeBars.length ? (
-        <div className="console-token-day-bars">
+        <div className={`console-token-day-bars${compact ? " is-compact" : ""}`}>
           {activeBars.slice(-4).map((bar) => (
             <div key={bar.label} className="console-token-day-bars__item">
               <span>{bar.label}</span>
@@ -3871,11 +3908,6 @@ function getWorkRelationTags(item: FollowItem) {
 
 type FollowRiskHint = { label: string; color: string; tone: "red" | "orange" | "blue" };
 
-function getDashboardDrawer(value: string | null): DashboardDrawer | null {
-  if (value === "follows" || value === "risks") return value;
-  return null;
-}
-
 function getFollowSummaryChips(items: FollowItem[]): SummaryChipItem[] {
   const followed = items.filter((item) => item.followedByMe).length;
   const assigned = items.filter((item) => item.assignedToMe).length;
@@ -3910,24 +3942,6 @@ function getRiskSummaryChips(items: RiskItem[]): SummaryChipItem[] {
     { label: "高关注", value: highAttention, tone: "orange" }
   ];
   return chips.filter((item) => item.label === "全部" || item.value > 0);
-}
-
-function matchesFollowFilter(item: FollowItem, filter: FollowDrawerFilter) {
-  if (filter === "followed") return Boolean(item.followedByMe);
-  if (filter === "assigned") return Boolean(item.assignedToMe);
-  if (filter === "created") return Boolean(item.createdByMe);
-  if (filter === "blocked") return isFollowBlocked(item);
-  if (filter === "overdue") return isFollowOverdue(item);
-  if (filter === "risk") return isFollowRisky(item);
-  return true;
-}
-
-function matchesRiskFilter(item: RiskItem, filter: RiskDrawerFilter) {
-  if (filter === "blocker") return isRiskBlocker(item);
-  if (filter === "conflict") return isRiskConflict(item);
-  if (filter === "deadline") return isRiskDeadline(item);
-  if (filter === "requirement") return isRiskRequirementOverdue(item);
-  return true;
 }
 
 function compareFollowItems(a: FollowItem, b: FollowItem) {

@@ -2132,7 +2132,7 @@ function TokenSourcePicker({
   );
 }
 
-function RequirementDrawer({
+export function RequirementDrawer({
   requirement,
   tasks,
   dependencyTasks,
@@ -3987,7 +3987,7 @@ function DependencyTaskPicker({
   );
 }
 
-function TaskDetailModal({
+export function TaskDetailModal({
   task,
   dependencyTasks,
   tokenSourceMap,
