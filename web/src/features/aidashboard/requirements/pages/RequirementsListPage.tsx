@@ -335,6 +335,31 @@ function isDependencyDone(dependency: MockTaskDependency) {
     : dependency.status === "done";
 }
 
+function getBlockingDependencies(task: MockTask) {
+  return task.dependencies.filter((dependency) => !isDependencyDone(dependency));
+}
+
+function getLoadedDependencyTask(dependency: MockTaskDependency, tasks: MockTask[]) {
+  if (getDependencyType(dependency) !== "task") return undefined;
+  const dependencyId = getDependencyId(dependency);
+  return tasks.find((item) => item.id === dependencyId);
+}
+
+function dependencyStatusText(dependency: MockTaskDependency, task?: MockTask) {
+  if (task) return TASK_STATUS_META[task.status]?.label ?? task.status;
+  if (getDependencyType(dependency) === "requirement") {
+    return STAGE_META[dependency.status as RequirementStage]?.label ?? (dependency.status || "-");
+  }
+  return TASK_STATUS_META[dependency.status as MockTaskStatus]?.label ?? (dependency.status || "-");
+}
+
+function dependencyTone(dependency: MockTaskDependency, task?: MockTask) {
+  const status = task?.status ?? dependency.status;
+  if (status === "done" || status === "completed") return "success";
+  if (status === "in_progress" || status === "active" || status === "review") return "processing";
+  return "error";
+}
+
 function isBeforeToday(value?: string) {
   if (!value) return false;
   const parsed = dayjs(value);
@@ -696,6 +721,7 @@ export function RequirementsListPage() {
   const [statusEditRequirement, setStatusEditRequirement] = useState<MockRequirement>();
   const [ownerPromptRequirement, setOwnerPromptRequirement] = useState<MockRequirement>();
   const [selectedTask, setSelectedTask] = useState<MockTask>();
+  const [taskHistory, setTaskHistory] = useState<MockTask[]>([]);
   const [creatorOpen, setCreatorOpen] = useState(false);
 
   const viewParam = searchParams.get("view");
@@ -827,6 +853,7 @@ export function RequirementsListPage() {
       });
       if (selectedTask?.id === task.id) {
         setSelectedTask(undefined);
+        setTaskHistory([]);
       }
     },
     onError: (error) => {
@@ -955,11 +982,42 @@ export function RequirementsListPage() {
     );
   };
   const openTaskDetail = (task: MockTask) => {
+    setTaskHistory([]);
     setSelectedTask(task);
     setSearchParams(
       (previous) => {
         const next = new URLSearchParams(previous);
         next.set("taskId", task.id);
+        return next;
+      },
+      { replace: false }
+    );
+  };
+  const openRelatedTaskDetail = (task: MockTask) => {
+    if (activeTask?.id === task.id) return;
+    if (activeTask) {
+      setTaskHistory((current) => [...current, activeTask].slice(-12));
+    }
+    setSelectedTask(task);
+    setSearchParams(
+      (previous) => {
+        const next = new URLSearchParams(previous);
+        next.set("taskId", task.id);
+        return next;
+      },
+      { replace: false }
+    );
+  };
+  const returnPreviousTask = () => {
+    const previousTask = taskHistory[taskHistory.length - 1];
+    if (!previousTask) return;
+    const latestTask = tasks.find((item) => item.id === previousTask.id) ?? previousTask;
+    setTaskHistory((current) => current.slice(0, -1));
+    setSelectedTask(latestTask);
+    setSearchParams(
+      (previous) => {
+        const next = new URLSearchParams(previous);
+        next.set("taskId", latestTask.id);
         return next;
       },
       { replace: false }
@@ -1434,13 +1492,18 @@ export function RequirementsListPage() {
         isFavorite={activeTask ? favoriteTaskIds.has(activeTask.id) : false}
         canManage={canManageTaskForUser(user, activeTask)}
         onToggleFavorite={activeTask ? () => toggleTaskFavorite(activeTask.id) : undefined}
+        canGoBack={taskHistory.length > 0}
+        onBackTask={returnPreviousTask}
+        onOpenTask={openRelatedTaskDetail}
         onClose={() => {
           setSelectedTask(undefined);
+          setTaskHistory([]);
           clearTaskTarget();
         }}
         onSaved={(updated) => setSelectedTask(updated)}
         onDeleted={() => {
           setSelectedTask(undefined);
+          setTaskHistory([]);
           clearTaskTarget();
         }}
       />
@@ -3417,6 +3480,161 @@ function TokenSourceList({
   );
 }
 
+function BlockingDependencyTrace({
+  task,
+  dependencyTasks,
+  onOpenTask,
+  compact = false
+}: {
+  task: MockTask;
+  dependencyTasks: MockTask[];
+  onOpenTask?: (task: MockTask) => void;
+  compact?: boolean;
+}) {
+  const blockingDependencies = getBlockingDependencies(task);
+  if (!blockingDependencies.length) return null;
+
+  const content = (
+    <div className="requirements-blocker-popover">
+      <div className="requirements-blocker-popover__head">
+        <strong>阻塞来源</strong>
+        <span>{blockingDependencies.length} 项未完成</span>
+      </div>
+      <div className="requirements-blocker-popover__list">
+        {blockingDependencies.map((dependency) => {
+          const dependencyId = getDependencyId(dependency);
+          const dependencyType = getDependencyType(dependency);
+          const targetTask = getLoadedDependencyTask(dependency, dependencyTasks);
+          const canOpen = Boolean(targetTask && onOpenTask);
+          return (
+            <button
+              type="button"
+              className={`requirements-blocker-popover__item${canOpen ? "" : " is-disabled"}`}
+              key={`${dependencyType}:${dependencyId}`}
+              disabled={!canOpen}
+              title={canOpen ? "打开依赖任务" : "依赖对象未加载，暂不能打开"}
+              onClick={() => {
+                if (targetTask && onOpenTask) onOpenTask(targetTask);
+              }}
+            >
+              <div>
+                <strong title={getDependencyTitle(dependency)}>{getDependencyTitle(dependency)}</strong>
+                <span title={dependency.requirement_title || "需求依赖"}>
+                  {dependency.requirement_title || (dependencyType === "requirement" ? "需求依赖" : "所属需求未加载")}
+                </span>
+                <div className="requirements-blocker-popover__meta">
+                  <Tag color={dependencyTone(dependency, targetTask)}>
+                    {dependencyStatusText(dependency, targetTask)}
+                  </Tag>
+                  <em>截止 {formatDate(targetTask?.due_date ?? dependency.due_date ?? undefined)}</em>
+                  {targetTask?.assignee_name ? <em>{targetTask.assignee_name}</em> : null}
+                </div>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+
+  if (compact) {
+    return (
+      <Popover placement="bottomLeft" content={content} trigger={["hover", "click"]} zIndex={1500}>
+        <button type="button" className="requirements-blocker-trigger">
+          <WarningOutlined />
+          上游阻塞 · {blockingDependencies.length}
+        </button>
+      </Popover>
+    );
+  }
+
+  return (
+    <div className="requirements-task-detail__blocker-card">
+      <WarningOutlined />
+      <div className="requirements-task-detail__blocker-card-body">
+        <div className="requirements-task-detail__blocker-card-head">
+          <strong>依赖阻塞</strong>
+          <span>{blockingDependencies.length} 项未完成</span>
+        </div>
+        <div className="requirements-task-detail__blocker-list">
+          {blockingDependencies.map((dependency) => {
+            const dependencyId = getDependencyId(dependency);
+            const dependencyType = getDependencyType(dependency);
+            const targetTask = getLoadedDependencyTask(dependency, dependencyTasks);
+            const canOpen = Boolean(targetTask && onOpenTask);
+            return (
+              <button
+                type="button"
+                className={`requirements-task-detail__blocker-item${canOpen ? "" : " is-disabled"}`}
+                key={`${dependencyType}:${dependencyId}`}
+                disabled={!canOpen}
+                title={canOpen ? "打开依赖任务" : "依赖对象未加载，暂不能打开"}
+                onClick={() => {
+                  if (targetTask && onOpenTask) onOpenTask(targetTask);
+                }}
+              >
+                <div>
+                  <strong title={getDependencyTitle(dependency)}>{getDependencyTitle(dependency)}</strong>
+                  <span>{dependency.requirement_title || "所属需求未加载"}</span>
+                </div>
+                <Tag color={dependencyTone(dependency, targetTask)}>
+                  {dependencyStatusText(dependency, targetTask)}
+                </Tag>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TaskDependencyList({
+  task,
+  dependencyTasks,
+  onOpenTask
+}: {
+  task: MockTask;
+  dependencyTasks: MockTask[];
+  onOpenTask: (task: MockTask) => void;
+}) {
+  if (!task.dependencies.length) return <strong>无上游依赖</strong>;
+
+  return (
+    <div className="requirements-task-detail__dependency-list">
+      {task.dependencies.map((dependency) => {
+        const dependencyId = getDependencyId(dependency);
+        const dependencyType = getDependencyType(dependency);
+        const targetTask = getLoadedDependencyTask(dependency, dependencyTasks);
+        const canOpen = Boolean(targetTask);
+        const done = isDependencyDone(dependency);
+        return (
+          <button
+            type="button"
+            key={`${dependencyType}:${dependencyId}`}
+            className={`requirements-task-detail__dependency-item${done ? " is-done" : " is-blocked"}${
+              canOpen ? "" : " is-disabled"
+            }`}
+            disabled={!canOpen}
+            title={canOpen ? "打开依赖任务" : "依赖对象未加载，暂不能打开"}
+            onClick={() => {
+              if (targetTask) onOpenTask(targetTask);
+            }}
+          >
+            <div>
+              <strong title={getDependencyTitle(dependency)}>{getDependencyTitle(dependency)}</strong>
+              <span>{dependency.requirement_title || (dependencyType === "requirement" ? "需求依赖" : "所属需求未加载")}</span>
+            </div>
+            <Tag color={dependencyTone(dependency, targetTask)}>
+              {dependencyStatusText(dependency, targetTask)}
+            </Tag>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function TaskDetailModal({
   task,
   dependencyTasks,
@@ -3424,9 +3642,12 @@ function TaskDetailModal({
   isFavorite,
   canManage,
   onToggleFavorite,
+  canGoBack,
+  onBackTask,
   onClose,
   onSaved,
-  onDeleted
+  onDeleted,
+  onOpenTask
 }: {
   task?: MockTask;
   dependencyTasks: MockTask[];
@@ -3434,9 +3655,12 @@ function TaskDetailModal({
   isFavorite: boolean;
   canManage: boolean;
   onToggleFavorite?: () => void;
+  canGoBack: boolean;
+  onBackTask: () => void;
   onClose: () => void;
   onSaved: (task: MockTask) => void;
   onDeleted: () => void;
+  onOpenTask: (task: MockTask) => void;
 }) {
   return (
     <Modal
@@ -3459,6 +3683,17 @@ function TaskDetailModal({
       title={
         task ? (
           <div className="requirements-task-detail-modal__title">
+            {canGoBack ? (
+              <button
+                type="button"
+                className="requirements-task-detail-modal__back"
+                aria-label="返回上一个任务"
+                onClick={onBackTask}
+              >
+                <RollbackOutlined />
+                <span>返回</span>
+              </button>
+            ) : null}
             {onToggleFavorite ? (
               <button
                 type="button"
@@ -3485,6 +3720,7 @@ function TaskDetailModal({
           canManage={canManage}
           onSaved={onSaved}
           onDeleted={onDeleted}
+          onOpenTask={onOpenTask}
         />
       ) : null}
     </Modal>
@@ -3497,7 +3733,8 @@ function TaskDrawerContent({
   tokenSourceMap,
   canManage,
   onSaved,
-  onDeleted
+  onDeleted,
+  onOpenTask
 }: {
   task: MockTask;
   dependencyTasks: MockTask[];
@@ -3505,6 +3742,7 @@ function TaskDrawerContent({
   canManage: boolean;
   onSaved: (task: MockTask) => void;
   onDeleted: () => void;
+  onOpenTask: (task: MockTask) => void;
 }) {
   const { message, modal } = App.useApp();
   const queryClient = useQueryClient();
@@ -3609,6 +3847,9 @@ function TaskDrawerContent({
       description: "依赖关系存在异常，请检查上游工作项是否重复、失效或互相冲突。"
     };
   });
+  const visibleRiskItems = dependencyBlocked
+    ? taskRiskItems.filter((risk) => risk.key !== "blocked")
+    : taskRiskItems;
   const progressDirty = progress !== task.progress;
   const statusSegmentOptions = [
     { label: "未开始", value: "todo" },
@@ -3638,7 +3879,14 @@ function TaskDrawerContent({
           <div className="requirements-task-detail__status">
             <TaskStatusPill status={task.status} />
             <PriorityPill priority={task.priority} />
-            {dependencyBlocked ? <Tag color="error">上游阻塞</Tag> : null}
+            {dependencyBlocked ? (
+              <BlockingDependencyTrace
+                task={task}
+                dependencyTasks={dependencyTasks}
+                onOpenTask={onOpenTask}
+                compact
+              />
+            ) : null}
           </div>
           {(task.can_update_meta || task.can_delete) ? (
             <div className="requirements-drawer__actions">
@@ -3759,7 +4007,14 @@ function TaskDrawerContent({
           </div>
           {taskRiskItems.length ? (
             <div className="requirements-task-detail__risk-list">
-              {taskRiskItems.map((risk) => (
+              {dependencyBlocked ? (
+                <BlockingDependencyTrace
+                  task={task}
+                  dependencyTasks={dependencyTasks}
+                  onOpenTask={onOpenTask}
+                />
+              ) : null}
+              {visibleRiskItems.map((risk) => (
                 <div className={`is-${risk.tone}`} key={risk.key}>
                   <WarningOutlined />
                   <div>
@@ -3786,20 +4041,11 @@ function TaskDrawerContent({
           </div>
           <div className="requirements-task-detail__info-row">
             <span>上游依赖</span>
-            {task.dependencies.length ? (
-              <div className="requirements-task-detail__dependency-list">
-                {task.dependencies.map((dependency) => (
-                  <Tag
-                    key={`${getDependencyType(dependency)}:${getDependencyId(dependency)}`}
-                    color={isDependencyDone(dependency) ? "success" : "error"}
-                  >
-                    {getDependencyLabel(dependency)}
-                  </Tag>
-                ))}
-              </div>
-            ) : (
-              <strong>无上游依赖</strong>
-            )}
+            <TaskDependencyList
+              task={task}
+              dependencyTasks={dependencyTasks}
+              onOpenTask={onOpenTask}
+            />
           </div>
           {task.acceptance_criteria.length ? (
             <ol className="requirements-drawer__ac-list requirements-task-detail__criteria-list">
