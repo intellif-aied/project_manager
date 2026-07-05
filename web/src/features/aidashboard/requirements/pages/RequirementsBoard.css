@@ -504,6 +504,736 @@
   white-space: nowrap;
 }
 
+
+/* Board page visual polish: keep the existing grid background while reducing visual noise. */
+.requirements-board__workspace-head {
+  gap: 10px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.92);
+  border-color: #e8eef6;
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.035);
+}
+
+.requirements-board__toolbar {
+  min-height: 32px;
+}
+
+.requirements-board__toolbar-actions {
+  gap: 8px;
+}
+
+.requirements-board__view-switch.ant-segmented,
+.requirements-board__scope-filter.ant-segmented {
+  background: rgba(248, 251, 255, 0.92);
+  border-color: #e5ecf5;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.82);
+}
+
+.requirements-board__view-switch.ant-segmented {
+  padding: 3px;
+}
+
+.requirements-board__scope-filter.ant-segmented {
+  padding: 2px;
+}
+
+.requirements-board__scope-filter .ant-segmented-item,
+.requirements-board__view-switch .ant-segmented-item {
+  min-height: 28px;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.requirements-board__scope-filter .ant-segmented-item-selected,
+.requirements-board__view-switch .ant-segmented-item-selected {
+  color: #1d4ed8;
+  box-shadow: 0 1px 5px rgba(15, 23, 42, 0.06);
+}
+
+.requirements-board__primary-action.ant-btn {
+  height: 34px;
+  padding-inline: 13px;
+  box-shadow: 0 6px 14px rgba(37, 99, 235, 0.13);
+}
+
+.requirements-board__filter-row {
+  gap: 10px;
+}
+
+.requirements-board__filter-controls {
+  gap: 7px;
+}
+
+.requirements-board__filter-row .ant-input-search .ant-input,
+.requirements-board__filter-row .ant-input-search .ant-input-search-button,
+.requirements-board__filter-row .ant-select-single,
+.requirements-board__reset-action.ant-btn {
+  height: 34px;
+}
+
+.requirements-board__filter-row .ant-select-single .ant-select-selector {
+  min-height: 34px;
+  border-color: #e2eaf5;
+}
+
+.requirements-board__filter-row .ant-input-search .ant-input,
+.requirements-board__filter-row .ant-input-search .ant-input-search-button {
+  border-color: #e2eaf5;
+}
+
+.requirements-board__table-toolbar {
+  min-height: 32px;
+  padding: 8px 2px 0;
+}
+
+.requirements-board__table-count {
+  color: #708197;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.requirements-board__content {
+  padding-top: 6px;
+}
+
+.requirements-board__columns {
+  gap: 10px;
+}
+
+.requirements-board__column {
+  min-height: 456px;
+  padding: 0 4px 10px;
+}
+
+.requirements-board__column.is-dragging-over {
+  background: rgba(239, 246, 255, 0.72);
+  border-color: #c8dcf7;
+}
+
+.requirements-board__column > header {
+  min-height: 32px;
+  padding: 0 2px 7px;
+}
+
+.requirements-board__column-head-left {
+  min-width: 0;
+}
+
+.requirements-board__column-head-left strong {
+  color: #243047;
+  font-size: 12.5px;
+  font-weight: 720;
+}
+
+.requirements-board__column-head-left .ant-tag {
+  height: 18px;
+  min-width: 22px;
+  padding: 0 6px;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 18px;
+  text-align: center;
+  background: rgba(241, 245, 249, 0.92);
+  border: 1px solid #e2e8f0;
+}
+
+.requirements-board__status-dot {
+  width: 7px;
+  height: 7px;
+  opacity: 0.78;
+}
+
+.requirements-board__card-list {
+  min-height: 390px;
+}
+
+.requirements-board__card {
+  position: relative;
+  gap: 8px;
+  padding: 11px 12px 10px;
+  margin-bottom: 8px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.96);
+  border-color: #e6edf6;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  transition:
+    border-color 0.16s ease,
+    box-shadow 0.16s ease,
+    transform 0.16s ease;
+}
+
+.requirements-board__card:hover {
+  border-color: #cad9ef;
+  box-shadow: 0 7px 18px rgba(15, 23, 42, 0.075);
+  transform: translateY(-1px);
+}
+
+.requirements-board__card.has-risk,
+.requirements-board__card.has-blocked {
+  border-color: #e6edf6;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.requirements-board__card.has-risk::before,
+.requirements-board__card.has-blocked::before {
+  position: absolute;
+  top: 11px;
+  bottom: 11px;
+  left: 0;
+  width: 3px;
+  content: "";
+  background: #f59e0b;
+  border-radius: 0 999px 999px 0;
+}
+
+.requirements-board__card.has-danger::before,
+.requirements-board__card.has-blocked::before {
+  background: #ef4444;
+}
+
+.requirements-board__card.has-risk:hover,
+.requirements-board__card.has-blocked:hover {
+  border-color: #d7e2f0;
+  box-shadow: 0 7px 18px rgba(15, 23, 42, 0.075);
+}
+
+.requirements-board__card-top {
+  align-items: center;
+  gap: 8px;
+}
+
+.requirements-board__card-title {
+  flex: 1 1 auto;
+}
+
+.requirements-board__card-title h3 {
+  color: #172033;
+  font-size: 13.5px;
+  font-weight: 720;
+  line-height: 1.34;
+}
+
+.requirements-board__card-actions {
+  gap: 3px;
+  max-width: 104px;
+}
+
+.requirements-board__card-actions .ant-tag {
+  height: 20px;
+  max-width: 56px;
+  padding: 0 6px;
+  overflow: hidden;
+  color: #64748b !important;
+  font-size: 10.5px;
+  font-weight: 650;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: #f8fafc !important;
+  border-color: #e2e8f0 !important;
+  border-radius: 999px;
+}
+
+.requirements-board__favorite {
+  width: 24px;
+  height: 24px;
+  color: #a8b3c4;
+  font-size: 13px;
+  opacity: 0.74;
+}
+
+.requirements-board__favorite:hover {
+  color: #d97706;
+  background: #f8fafc;
+  opacity: 1;
+}
+
+.requirements-board__favorite.is-active {
+  color: #d97706;
+  background: transparent;
+  opacity: 0.86;
+}
+
+.requirements-board__card-risks {
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 5px 7px 5px 8px;
+  background: rgba(255, 251, 235, 0.72);
+  border-color: #fdecc8;
+  border-radius: 7px;
+}
+
+.requirements-board__card-risks.is-danger {
+  background: rgba(255, 247, 247, 0.78);
+  border-color: #f8d4d4;
+}
+
+.requirements-board__card-risks strong {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: #a16207;
+  font-size: 12px;
+  font-weight: 680;
+  line-height: 18px;
+}
+
+.requirements-board__card-risks.is-danger strong {
+  color: #b42318;
+}
+
+.requirements-board__card-risks .ant-tag,
+.requirements-board__card-risk-more.ant-tag {
+  flex: 0 0 auto;
+  max-width: 92px;
+  height: 18px;
+  padding: 0 6px;
+  overflow: hidden;
+  color: #a16207;
+  font-size: 10.5px;
+  line-height: 17px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(245, 158, 11, 0.22);
+  border-radius: 999px;
+}
+
+.requirements-board__card-risks.is-danger .ant-tag {
+  color: #b42318;
+  border-color: rgba(239, 68, 68, 0.2);
+}
+
+.requirements-board__card-progress-block {
+  gap: 5px;
+  min-height: 28px;
+  padding-top: 0;
+}
+
+.requirements-board__card-progress-block > div {
+  gap: 8px;
+}
+
+.requirements-board__card-progress-block span {
+  color: #8b98aa;
+  font-size: 11px;
+}
+
+.requirements-board__card-progress-block strong {
+  color: #253047;
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.requirements-board__card .requirements-board__progress {
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  gap: 0;
+}
+
+.requirements-board__card .requirements-board__progress strong {
+  display: none;
+}
+
+.requirements-board__card .requirements-board__progress .ant-progress {
+  height: 5px;
+}
+
+.requirements-board__card .requirements-board__progress .ant-progress-inner {
+  background: #edf2f7;
+}
+
+.requirements-board__card .requirements-board__progress .ant-progress-bg {
+  height: 4px !important;
+  background: linear-gradient(90deg, #9db8e6 0%, #7fb7ae 100%) !important;
+}
+
+.requirements-board__card-meta {
+  grid-template-columns: minmax(0, 1fr) max-content;
+  gap: 5px 8px;
+  padding-top: 1px;
+  color: #8b98aa;
+  line-height: 1.35;
+}
+
+.requirements-board__card-meta span:first-child {
+  max-width: 100%;
+}
+
+.requirements-board__card-meta span:last-child {
+  flex: 0 0 auto;
+  color: #64748b;
+}
+
+.requirements-board__card-meta .anticon {
+  color: #aeb8c8;
+}
+
+.requirements-board__column-empty {
+  padding: 22px 10px;
+  color: #a0abba;
+  background: rgba(255, 255, 255, 0.42);
+  border: 1px dashed rgba(203, 213, 225, 0.65);
+  border-radius: 8px;
+}
+
+
+.requirements-board__card.has-risk::before,
+.requirements-board__card.has-blocked::before {
+  width: 2px;
+  background: #f6b84b;
+}
+
+.requirements-board__card.has-danger::before,
+.requirements-board__card.has-blocked::before {
+  background: #f87171;
+}
+
+.requirements-board__card-risks.is-danger {
+  background: rgba(255, 250, 250, 0.82);
+  border-color: #f1dddd;
+}
+
+.requirements-board__card-risks.is-danger strong {
+  color: #a83b36;
+}
+
+.requirements-board__card-risks.is-danger .ant-tag {
+  color: #a83b36;
+  border-color: rgba(168, 59, 54, 0.16);
+}
+
+.requirements-board__card .requirements-board__progress .ant-progress-rail {
+  height: 4px !important;
+  background: #edf2f7 !important;
+}
+
+.requirements-board__card .requirements-board__progress .ant-progress-track {
+  height: 4px !important;
+  background: linear-gradient(90deg, #7da3d8 0%, #69aaa2 100%) !important;
+}
+
+
+/* Requirement card structure rewrite: compact progress card with inline risk chips. */
+.requirements-board__card {
+  gap: 7px;
+  padding: 10px 12px 9px;
+  min-height: 112px;
+}
+
+.requirements-board__card.has-risk,
+.requirements-board__card.has-blocked {
+  border-color: #e6edf6;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.requirements-board__card.has-risk::before,
+.requirements-board__card.has-blocked::before {
+  top: 10px;
+  bottom: 10px;
+  width: 3px;
+  background: #f2b955;
+}
+
+.requirements-board__card.has-danger::before,
+.requirements-board__card.has-blocked::before {
+  background: #ee7777;
+}
+
+.requirements-board__card-top {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.requirements-board__card-title {
+  min-width: 0;
+}
+
+.requirements-board__card-title h3 {
+  font-size: 13.5px;
+  line-height: 1.32;
+}
+
+.requirements-board__card-actions {
+  align-self: center;
+  max-width: 100px;
+}
+
+.requirements-board__card-risk-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 24px;
+  overflow: hidden;
+}
+
+.requirements-board__card-risk-chip {
+  display: inline-flex;
+  flex: 0 1 auto;
+  max-width: 132px;
+  height: 22px;
+  align-items: center;
+  padding: 0 8px;
+  overflow: hidden;
+  color: #9a5b08;
+  font-size: 11.5px;
+  font-weight: 700;
+  line-height: 22px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: rgba(255, 251, 235, 0.68);
+  border: 1px solid rgba(245, 158, 11, 0.2);
+  border-radius: 999px;
+}
+
+.requirements-board__card-risk-line.is-danger .requirements-board__card-risk-chip {
+  color: #a83b36;
+  background: rgba(255, 247, 247, 0.62);
+  border-color: rgba(238, 119, 119, 0.2);
+}
+
+.requirements-board__card-risk-more {
+  display: inline-flex;
+  flex: 0 1 auto;
+  max-width: 96px;
+  overflow: hidden;
+  color: #8b98aa;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 22px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.requirements-board__card-status-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  height: 22px;
+  color: #64748b;
+  font-size: 11.5px;
+  line-height: 22px;
+}
+
+.requirements-board__card-status-row strong,
+.requirements-board__card-status-row span,
+.requirements-board__card-status-row em {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.requirements-board__card-status-row strong {
+  color: #1f2a44;
+  font-size: 12px;
+  font-weight: 780;
+}
+
+.requirements-board__card-status-row span {
+  color: #a83b36;
+  font-weight: 700;
+}
+
+.requirements-board__card-status-row em {
+  flex: 0 0 auto;
+  color: #64748b;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+.requirements-board__card-progress-line {
+  height: 4px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.requirements-board__card-progress-line .requirements-board__progress {
+  display: block;
+  min-width: 0;
+}
+
+.requirements-board__card-progress-line .requirements-board__progress strong {
+  display: none;
+}
+
+.requirements-board__card-progress-line .ant-progress,
+.requirements-board__card-progress-line .ant-progress-body,
+.requirements-board__card-progress-line .ant-progress-rail,
+.requirements-board__card-progress-line .ant-progress-track {
+  height: 3px !important;
+  line-height: 1;
+}
+
+.requirements-board__card-progress-line .ant-progress-rail {
+  background: #edf2f7 !important;
+}
+
+.requirements-board__card-progress-line .ant-progress-track {
+  background: #89a9cf !important;
+}
+
+.requirements-board__card-meta {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.9fr);
+  gap: 6px;
+  height: 18px;
+  padding-top: 0;
+  color: #8a96a8;
+  font-size: 11px;
+}
+
+.requirements-board__card-meta span {
+  min-width: 0;
+}
+
+.requirements-board__card-meta span:last-child {
+  justify-content: flex-end;
+  color: #8a96a8;
+}
+
+
+.requirements-board__card-progress-line {
+  display: block;
+  height: 3px;
+  background: #edf2f7;
+  border-radius: 999px;
+}
+
+.requirements-board__card-progress-line > span {
+  display: block;
+  height: 100%;
+  max-width: 100%;
+  background: #86a7cc;
+  border-radius: inherit;
+}
+
+.requirements-board__card-meta span:last-child {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.requirements-board__card {
+  gap: 5px;
+}
+
+.requirements-board__card-risk-line {
+  gap: 8px;
+  height: 23px;
+}
+
+.requirements-board__card-risk-chip {
+  height: 21px;
+  max-width: 126px;
+  line-height: 21px;
+}
+
+.requirements-board__card-risk-more {
+  max-width: 100px;
+  line-height: 21px;
+}
+
+.requirements-board__card-status-row {
+  grid-template-columns: minmax(0, 1fr) auto max-content;
+  gap: 8px;
+}
+
+.requirements-board__card-status-row em {
+  color: #64748b;
+}
+
+.requirements-board__card-meta {
+  grid-template-columns: minmax(0, 1fr) minmax(72px, 0.82fr);
+}
+
+
+/* Toolbar-integrated count/refresh: no standalone board meta row. */
+.requirements-board__filter-controls {
+  display: flex;
+  align-items: center;
+}
+
+.requirements-board__filter-controls .ant-select {
+  flex: 0 0 auto;
+}
+
+.requirements-board__filter-controls .ant-select:nth-of-type(1) {
+  width: 132px;
+}
+
+.requirements-board__filter-controls .ant-select:nth-of-type(2) {
+  width: 132px;
+}
+
+.requirements-board__filter-controls .ant-select:nth-of-type(3) {
+  width: 156px;
+}
+
+.requirements-board__filter-count {
+  flex: 0 0 auto;
+  color: #7b8798;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 28px;
+  white-space: nowrap;
+}
+
+.requirements-board__filter-controls .requirements-board__refresh-action.ant-btn {
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  color: #718096;
+  border-color: transparent;
+}
+
+.requirements-board__filter-controls .requirements-board__refresh-action.ant-btn:hover {
+  color: #2563eb;
+  background: rgba(239, 246, 255, 0.86);
+  border-color: #dbe7f6;
+}
+
+.requirements-board__column-head-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.requirements-board__column-head-actions .requirements-board__column-head-meta {
+  max-width: 72px;
+  overflow: hidden;
+  color: #9aa6b6;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.requirements-board__content {
+  padding-top: 4px;
+}
+
+.requirements-board__columns {
+  margin-top: 0;
+}
+
+.requirements-board__column > header {
+  min-height: 30px;
+  padding-bottom: 6px;
+}
+
+
 .requirements-tree {
   min-width: 1040px;
 }
@@ -3643,4 +4373,651 @@
   .requirements-drawer__actions {
     justify-content: flex-start;
   }
+}
+
+
+/* Requirement board visual depth: restrained status color and hover polish. */
+.requirements-board__column {
+  position: relative;
+  border-radius: 10px;
+}
+
+.requirements-board__column.is-gray {
+  background: linear-gradient(180deg, rgba(148, 163, 184, 0.075), rgba(248, 250, 252, 0.02) 34%, transparent 70%);
+}
+
+.requirements-board__column.is-purple {
+  background: linear-gradient(180deg, rgba(124, 58, 237, 0.06), rgba(248, 250, 252, 0.02) 34%, transparent 70%);
+}
+
+.requirements-board__column.is-blue {
+  background: linear-gradient(180deg, rgba(37, 99, 235, 0.06), rgba(248, 250, 252, 0.02) 34%, transparent 70%);
+}
+
+.requirements-board__column.is-green {
+  background: linear-gradient(180deg, rgba(16, 185, 129, 0.06), rgba(248, 250, 252, 0.02) 34%, transparent 70%);
+}
+
+.requirements-board__column > header {
+  position: relative;
+  padding-top: 8px;
+}
+
+.requirements-board__column > header::before {
+  position: absolute;
+  top: 0;
+  right: 2px;
+  left: 2px;
+  height: 2px;
+  content: "";
+  background: rgba(148, 163, 184, 0.34);
+  border-radius: 999px;
+}
+
+.requirements-board__column.is-purple > header::before {
+  background: rgba(124, 58, 237, 0.28);
+}
+
+.requirements-board__column.is-blue > header::before {
+  background: rgba(37, 99, 235, 0.30);
+}
+
+.requirements-board__column.is-green > header::before {
+  background: rgba(16, 185, 129, 0.30);
+}
+
+.requirements-board__column-head-left strong {
+  color: #1f2937;
+  font-weight: 760;
+}
+
+.requirements-board__column-head-left .ant-tag {
+  background: rgba(255, 255, 255, 0.68);
+  border-color: rgba(203, 213, 225, 0.82);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.035);
+}
+
+.requirements-board__card {
+  background: rgba(255, 255, 255, 0.985);
+  border-color: rgba(214, 224, 238, 0.96);
+}
+
+.requirements-board__card:hover {
+  border-color: #b9d0f4;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.09);
+  transform: translateY(-2px);
+}
+
+.requirements-board__card::before {
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  left: 0;
+  width: 3px;
+  content: "";
+  background: #b8c4d4;
+  border-radius: 0 999px 999px 0;
+}
+
+.requirements-board__card.is-status-review::before {
+  background: #b8a4e8;
+}
+
+.requirements-board__card.is-status-active::before {
+  background: #7fa8df;
+}
+
+.requirements-board__card.is-status-completed::before {
+  background: #7fbd9b;
+}
+
+.requirements-board__card.has-warning::before {
+  background: #e7b765;
+}
+
+.requirements-board__card.has-danger::before,
+.requirements-board__card.has-blocked::before {
+  background: #e98080;
+}
+
+.requirements-board__card-progress-line {
+  background: rgba(226, 232, 240, 0.9);
+}
+
+.requirements-board__card-progress-line > span {
+  background: #7fa8df;
+}
+
+.requirements-board__card.is-status-completed .requirements-board__card-progress-line > span {
+  background: #7fbd9b;
+}
+
+.requirements-board__card.has-danger .requirements-board__card-progress-line > span {
+  background: #c99691;
+}
+
+.requirements-board__card-risk-chip {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75);
+}
+
+.requirements-board__favorite:hover {
+  color: #d97706;
+  background: #fff7ed;
+}
+
+.requirements-board__view-switch.ant-segmented {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 1px 2px rgba(15, 23, 42, 0.035);
+}
+
+
+/* Requirement board favorite icon: keep focus lower until hover. */
+.requirements-board__favorite.is-active {
+  color: #e6a23c;
+  opacity: 0.72;
+}
+
+.requirements-board__card:hover .requirements-board__favorite.is-active {
+  opacity: 0.96;
+}
+
+
+/* Requirement board finishing pass: cleaner structure over extra color. */
+.requirements-board__column.is-gray {
+  background: linear-gradient(180deg, rgba(148, 163, 184, 0.04), rgba(248, 250, 252, 0.012) 96px, transparent 210px);
+}
+
+.requirements-board__column.is-purple {
+  background: linear-gradient(180deg, rgba(124, 58, 237, 0.034), rgba(248, 250, 252, 0.012) 96px, transparent 210px);
+}
+
+.requirements-board__column.is-blue {
+  background: linear-gradient(180deg, rgba(37, 99, 235, 0.035), rgba(248, 250, 252, 0.012) 96px, transparent 210px);
+}
+
+.requirements-board__column.is-green {
+  background: linear-gradient(180deg, rgba(16, 185, 129, 0.035), rgba(248, 250, 252, 0.012) 96px, transparent 210px);
+}
+
+.requirements-board__column > header {
+  min-height: 34px;
+  padding-top: 9px;
+  padding-bottom: 7px;
+}
+
+.requirements-board__column > header::before {
+  right: 0;
+  left: 0;
+  height: 2px;
+  opacity: 0.86;
+}
+
+.requirements-board__column-head-left {
+  gap: 7px;
+}
+
+.requirements-board__column-head-left strong {
+  color: #202b3f;
+  font-size: 12.8px;
+  letter-spacing: 0;
+}
+
+.requirements-board__column-head-left .ant-tag {
+  height: 18px;
+  min-width: 23px;
+  padding: 0 7px;
+  color: #526173;
+  background: rgba(255, 255, 255, 0.78);
+  border-color: rgba(203, 213, 225, 0.76);
+  border-radius: 999px;
+}
+
+.requirements-board__column-head-meta {
+  color: #9aa6b5;
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.requirements-board__card {
+  gap: 7px;
+  padding: 12px 13px 11px;
+  background: rgba(255, 255, 255, 0.99);
+  border-color: rgba(217, 226, 238, 0.98);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.035), 0 6px 18px rgba(15, 23, 42, 0.025);
+}
+
+.requirements-board__card:hover {
+  border-color: #b8cef0;
+  box-shadow: 0 12px 26px rgba(15, 23, 42, 0.095);
+  transform: translateY(-1px);
+}
+
+.requirements-board__card::before {
+  top: 12px;
+  bottom: 12px;
+  width: 3px;
+  opacity: 0.88;
+}
+
+.requirements-board__card.has-danger::before,
+.requirements-board__card.has-blocked::before {
+  background: #e7786c;
+}
+
+.requirements-board__card.has-warning::before {
+  background: #dfad5a;
+}
+
+.requirements-board__card-top {
+  min-width: 0;
+  gap: 9px;
+}
+
+.requirements-board__card-title {
+  min-width: 0;
+}
+
+.requirements-board__card-title h3 {
+  color: #1d2738;
+  font-size: 13.5px;
+  font-weight: 730;
+  line-height: 1.36;
+}
+
+.requirements-board__card-actions {
+  flex: 0 0 auto;
+  gap: 2px;
+  max-width: none;
+}
+
+.requirements-board__card-actions .ant-tag {
+  max-width: 48px;
+  height: 19px;
+  padding: 0 6px;
+  color: #617084 !important;
+  font-size: 10.5px;
+  line-height: 18px;
+  background: rgba(248, 250, 252, 0.96) !important;
+  border-color: rgba(203, 213, 225, 0.88) !important;
+}
+
+.requirements-board__favorite {
+  width: 22px;
+  height: 22px;
+  color: #aab6c7;
+  opacity: 0.68;
+}
+
+.requirements-board__favorite:hover {
+  color: #d49128;
+  background: #fffaf0;
+  opacity: 1;
+}
+
+.requirements-board__favorite.is-active {
+  color: #d99a36;
+  opacity: 0.66;
+}
+
+.requirements-board__card:hover .requirements-board__favorite.is-active {
+  opacity: 0.94;
+}
+
+.requirements-board__card-risk-line {
+  gap: 7px;
+  height: 22px;
+  min-width: 0;
+}
+
+.requirements-board__card-risk-chip {
+  max-width: 126px;
+  height: 21px;
+  padding: 0 7px;
+  color: #8f5608;
+  font-size: 11px;
+  font-weight: 720;
+  line-height: 20px;
+  background: rgba(255, 248, 235, 0.72);
+  border-color: rgba(217, 119, 6, 0.18);
+}
+
+.requirements-board__card-risk-line.is-danger .requirements-board__card-risk-chip {
+  color: #9f3f37;
+  background: rgba(255, 246, 244, 0.7);
+  border-color: rgba(220, 92, 84, 0.18);
+}
+
+.requirements-board__card-risk-more {
+  max-width: 88px;
+  color: #94a0af;
+  font-size: 10.8px;
+  font-weight: 620;
+  line-height: 21px;
+}
+
+.requirements-board__card-status-row {
+  grid-template-columns: minmax(0, 1fr) max-content max-content;
+  gap: 8px;
+  height: 22px;
+  color: #69788b;
+  font-size: 11.5px;
+}
+
+.requirements-board__card-status-row strong {
+  color: #1e2a3f;
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.requirements-board__card-status-row span,
+.requirements-board__card-status-row em {
+  position: relative;
+  padding-left: 9px;
+}
+
+.requirements-board__card-status-row span::before,
+.requirements-board__card-status-row em::before {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 3px;
+  height: 3px;
+  content: "";
+  background: #c4cedb;
+  border-radius: 50%;
+  transform: translateY(-50%);
+}
+
+.requirements-board__card-status-row span {
+  color: #a14b42;
+  font-weight: 700;
+}
+
+.requirements-board__card-status-row em {
+  color: #617084;
+  font-weight: 620;
+}
+
+.requirements-board__card-progress-line {
+  height: 3px;
+  margin-top: 1px;
+  background: rgba(232, 237, 244, 0.92);
+}
+
+.requirements-board__card-progress-line > span {
+  background: #83a7d8;
+}
+
+.requirements-board__card.is-status-completed .requirements-board__card-progress-line > span {
+  background: #83bd9b;
+}
+
+.requirements-board__card.has-danger .requirements-board__card-progress-line > span {
+  background: #b89a92;
+}
+
+.requirements-board__card-meta {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.82fr);
+  gap: 8px;
+  height: 18px;
+  padding-top: 1px;
+  color: #8d99aa;
+  font-size: 11px;
+}
+
+.requirements-board__card-meta span:first-child {
+  color: #7f8da0;
+}
+
+.requirements-board__card-meta span:last-child {
+  color: #8794a6;
+  text-align: right;
+}
+
+.requirements-board__card-meta .anticon {
+  color: #b6c0ce;
+}
+
+.requirements-board__view-switch.ant-segmented,
+.requirements-board__scope-filter.ant-segmented {
+  border-color: rgba(214, 224, 238, 0.88);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 1px 2px rgba(15, 23, 42, 0.025);
+}
+
+
+/* Requirement board final density repair: keep the refined skeleton compact. */
+.requirements-board__card {
+  gap: 6px;
+  padding: 11px 12px 10px;
+}
+
+.requirements-board__card-title h3 {
+  line-height: 1.34;
+}
+
+.requirements-board__card-risk-line {
+  height: 21px;
+}
+
+.requirements-board__card-risk-chip {
+  height: 20px;
+  line-height: 19px;
+}
+
+.requirements-board__card-risk-more {
+  line-height: 20px;
+}
+
+.requirements-board__card-status-row {
+  height: 20px;
+  line-height: 20px;
+}
+
+.requirements-board__card-status-row strong {
+  flex: 0 0 auto;
+}
+
+.requirements-board__card-meta {
+  height: 17px;
+  line-height: 17px;
+}
+
+
+/* Requirement board restraint pass: reduce repeated status color on cards. */
+.requirements-board__column.is-gray {
+  background: linear-gradient(180deg, rgba(148, 163, 184, 0.026), rgba(255, 255, 255, 0) 118px);
+}
+
+.requirements-board__column.is-purple {
+  background: linear-gradient(180deg, rgba(124, 58, 237, 0.024), rgba(255, 255, 255, 0) 118px);
+}
+
+.requirements-board__column.is-blue {
+  background: linear-gradient(180deg, rgba(37, 99, 235, 0.024), rgba(255, 255, 255, 0) 118px);
+}
+
+.requirements-board__column.is-green {
+  background: linear-gradient(180deg, rgba(16, 185, 129, 0.024), rgba(255, 255, 255, 0) 118px);
+}
+
+.requirements-board__column > header::before {
+  opacity: 0.62;
+}
+
+.requirements-board__column-head-left .ant-tag {
+  color: #5f6f84;
+  background: rgba(255, 255, 255, 0.72);
+  border-color: rgba(207, 218, 231, 0.74);
+  box-shadow: none;
+}
+
+.requirements-board__card {
+  padding-left: 13px;
+  background: rgba(255, 255, 255, 0.992);
+  border-color: rgba(219, 228, 239, 0.98);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03), 0 6px 16px rgba(15, 23, 42, 0.022);
+}
+
+.requirements-board__card::before,
+.requirements-board__card.has-risk::before,
+.requirements-board__card.has-blocked::before,
+.requirements-board__card.has-danger::before,
+.requirements-board__card.has-warning::before,
+.requirements-board__card.is-status-review::before,
+.requirements-board__card.is-status-active::before,
+.requirements-board__card.is-status-completed::before {
+  display: none;
+  content: none;
+}
+
+.requirements-board__card.has-risk,
+.requirements-board__card.has-blocked,
+.requirements-board__card.has-danger,
+.requirements-board__card.has-warning {
+  border-color: rgba(219, 228, 239, 0.98);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03), 0 6px 16px rgba(15, 23, 42, 0.022);
+}
+
+.requirements-board__card:hover,
+.requirements-board__card.has-risk:hover,
+.requirements-board__card.has-blocked:hover {
+  border-color: #b7cbe8;
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.085);
+  transform: translateY(-1px);
+}
+
+.requirements-board__card-title h3 {
+  color: #1c2637;
+  font-weight: 720;
+}
+
+.requirements-board__card-actions .ant-tag {
+  color: #637184 !important;
+  background: rgba(249, 251, 253, 0.98) !important;
+  border-color: rgba(209, 219, 232, 0.82) !important;
+}
+
+.requirements-board__favorite {
+  color: #b4bfcd;
+  opacity: 0.6;
+}
+
+.requirements-board__favorite.is-active {
+  color: #d79a38;
+  opacity: 0.62;
+}
+
+.requirements-board__card-risk-line {
+  gap: 8px;
+}
+
+.requirements-board__card-risk-chip {
+  color: #8c5a12;
+  background: rgba(255, 249, 238, 0.82);
+  border-color: rgba(213, 136, 43, 0.16);
+  box-shadow: none;
+}
+
+.requirements-board__card-risk-line.is-danger .requirements-board__card-risk-chip {
+  color: #9b4a42;
+  background: rgba(255, 248, 246, 0.82);
+  border-color: rgba(214, 96, 86, 0.16);
+}
+
+.requirements-board__card-risk-more {
+  color: #9aa6b5;
+}
+
+.requirements-board__card-status-row {
+  color: #6b788a;
+}
+
+.requirements-board__card-status-row strong {
+  color: #202b3f;
+}
+
+.requirements-board__card-status-row span {
+  color: #9b4b43;
+}
+
+.requirements-board__card-status-row span::before,
+.requirements-board__card-status-row em::before {
+  background: #c8d1de;
+}
+
+.requirements-board__card-progress-line {
+  background: rgba(233, 238, 245, 0.92);
+}
+
+.requirements-board__card-progress-line > span,
+.requirements-board__card.has-danger .requirements-board__card-progress-line > span,
+.requirements-board__card.has-warning .requirements-board__card-progress-line > span {
+  background: #86a8d3;
+}
+
+.requirements-board__card.is-status-completed .requirements-board__card-progress-line > span {
+  background: #88bb9d;
+}
+
+.requirements-board__card-meta,
+.requirements-board__card-meta span:first-child,
+.requirements-board__card-meta span:last-child {
+  color: #8d9aaa;
+}
+
+.requirements-board__card-meta .anticon {
+  color: #bac4d0;
+}
+
+
+/* Requirement board post-screenshot refinement: quieter progress and favorite state. */
+.requirements-board__favorite.is-active .anticon,
+.requirements-board__favorite.is-active svg {
+  color: inherit;
+}
+
+.requirements-board__card-progress-line > span,
+.requirements-board__card.has-danger .requirements-board__card-progress-line > span,
+.requirements-board__card.has-warning .requirements-board__card-progress-line > span {
+  background: #9bb3cf;
+}
+
+.requirements-board__card.is-status-completed .requirements-board__card-progress-line > span {
+  background: #9ec2ac;
+}
+
+
+/* Requirement board main polish: lighter column headers and steadier card affordance. */
+.requirements-board__column > header::before {
+  height: 1px;
+  opacity: 0.45;
+}
+
+.requirements-board__column-head-left .ant-tag {
+  background: rgba(255, 255, 255, 0.66);
+  border-color: rgba(213, 222, 234, 0.72);
+}
+
+.requirements-board__card {
+  border-color: rgba(219, 228, 239, 0.92);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.026), 0 5px 14px rgba(15, 23, 42, 0.018);
+}
+
+.requirements-board__card:hover,
+.requirements-board__card.has-risk:hover,
+.requirements-board__card.has-blocked:hover {
+  border-color: #b9cce8;
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.075);
+  transform: translateY(-1px);
+}
+
+.requirements-board__workspace-head {
+  box-shadow: 0 7px 20px rgba(15, 23, 42, 0.03);
+}
+
+.requirements-board__filter-row .ant-input-search .ant-input,
+.requirements-board__filter-row .ant-input-search .ant-input-search-button,
+.requirements-board__filter-row .ant-select-single .ant-select-selector,
+.requirements-board__reset-action.ant-btn,
+.requirements-board__refresh-action.ant-btn {
+  border-color: rgba(214, 224, 238, 0.92);
 }

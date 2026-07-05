@@ -142,3 +142,202 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* Requirement board metric cards: lighter, consistent, and less dominant. */
+.requirements-metric-grid {
+  gap: 10px;
+}
+
+.requirements-metric-card {
+  min-height: 76px;
+  padding: 11px 13px;
+  background: rgba(255, 255, 255, 0.94);
+  border-color: #e7edf5;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.035);
+}
+
+.requirements-metric-card__header {
+  gap: 10px;
+}
+
+.requirements-metric-card__title {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.requirements-metric-card__icon {
+  width: 22px;
+  height: 22px;
+  flex-basis: 22px;
+  font-size: 12px;
+  opacity: 0.82;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.requirements-metric-card__value {
+  margin-top: 7px;
+  color: #172033;
+  font-size: 21px;
+  font-weight: 760;
+}
+
+.requirements-metric-card__description {
+  margin-top: 6px;
+  color: #8491a3;
+  font-size: 11.5px;
+}
+
+
+/* Requirement metric card depth: subtle status tint, not a marketing block. */
+.requirements-metric-card {
+  background:
+    radial-gradient(circle at 96% 12%, var(--metric-glow), transparent 34%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(251, 253, 255, 0.96));
+  border-color: rgba(213, 224, 238, 0.95);
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.045);
+}
+
+.requirements-metric-card::before {
+  position: absolute;
+  top: 14px;
+  bottom: 14px;
+  left: 0;
+  width: 2px;
+  content: "";
+  background: var(--metric-accent);
+  border-radius: 0 999px 999px 0;
+  opacity: 0.28;
+}
+
+.requirements-metric-card__icon {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85);
+}
+
+
+/* Requirement metric card finishing pass: clean tint and tighter affordance. */
+.requirements-metric-card {
+  background:
+    radial-gradient(circle at 99% 5%, var(--metric-glow), transparent 24%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.992), rgba(252, 254, 255, 0.975));
+  border-color: rgba(215, 225, 237, 0.95);
+  box-shadow: 0 3px 12px rgba(15, 23, 42, 0.04);
+}
+
+.requirements-metric-card::before {
+  top: 13px;
+  bottom: 13px;
+  opacity: 0.24;
+}
+
+.requirements-metric-card__icon {
+  width: 21px;
+  height: 21px;
+  flex-basis: 21px;
+  border-color: rgba(148, 163, 184, 0.12);
+  opacity: 0.78;
+}
+
+.requirements-metric-card__value {
+  font-weight: 780;
+}
+
+
+/* Requirement metric card restraint pass: cleaner white cards, less scattered glow. */
+.requirements-metric-card {
+  --metric-glow: rgba(37, 99, 235, 0.026);
+  background:
+    radial-gradient(circle at 98% 6%, var(--metric-glow), transparent 18%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.997), rgba(252, 254, 255, 0.985));
+  border-color: rgba(216, 226, 238, 0.96);
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.035);
+}
+
+.requirements-metric-card--tone-success {
+  --metric-glow: rgba(5, 150, 105, 0.028);
+}
+
+.requirements-metric-card--tone-warning {
+  --metric-glow: rgba(217, 119, 6, 0.028);
+}
+
+.requirements-metric-card--tone-danger {
+  --metric-glow: rgba(225, 29, 72, 0.026);
+}
+
+.requirements-metric-card--tone-info {
+  --metric-glow: rgba(124, 58, 237, 0.028);
+}
+
+.requirements-metric-card::before {
+  top: 12px;
+  bottom: 12px;
+  width: 2px;
+  opacity: 0.18;
+}
+
+.requirements-metric-card__icon {
+  background: rgba(248, 250, 252, 0.9);
+  border-color: rgba(210, 220, 232, 0.78);
+  opacity: 0.82;
+}
+
+.requirements-metric-card__title,
+.requirements-metric-card__description {
+  color: #748298;
+}
+
+
+/* Requirement metric card hero polish: no side accent, clean low-saturation surfaces. */
+.requirements-metric-card {
+  --metric-surface: rgba(239, 246, 255, 0.52);
+  --metric-glow: rgba(59, 130, 246, 0.052);
+  background:
+    radial-gradient(circle at 92% 4%, var(--metric-glow), transparent 34%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.998) 0%, rgba(255, 255, 255, 0.985) 52%, var(--metric-surface) 100%);
+  border-color: rgba(217, 226, 238, 0.92);
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.03);
+}
+
+.requirements-metric-card--tone-warning {
+  --metric-surface: rgba(255, 247, 237, 0.58);
+  --metric-glow: rgba(217, 119, 6, 0.045);
+}
+
+.requirements-metric-card--tone-info {
+  --metric-surface: rgba(245, 243, 255, 0.58);
+  --metric-glow: rgba(124, 58, 237, 0.044);
+}
+
+.requirements-metric-card--tone-danger {
+  --metric-surface: rgba(255, 241, 242, 0.56);
+  --metric-glow: rgba(225, 29, 72, 0.04);
+}
+
+.requirements-metric-card--tone-success {
+  --metric-surface: rgba(236, 253, 245, 0.5);
+  --metric-glow: rgba(5, 150, 105, 0.04);
+}
+
+.requirements-metric-card::before {
+  display: none;
+  content: none;
+}
+
+.requirements-metric-card:hover {
+  border-color: rgba(190, 205, 224, 0.95);
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.045);
+  transform: translateY(-1px);
+}
+
+.requirements-metric-card__icon {
+  background: rgba(255, 255, 255, 0.58);
+  border-color: rgba(203, 213, 225, 0.62);
+  opacity: 0.78;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.025);
+}
+
+.requirements-metric-card__value {
+  color: #172033;
+  letter-spacing: 0;
+}

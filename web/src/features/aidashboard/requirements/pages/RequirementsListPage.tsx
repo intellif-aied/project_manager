@@ -1,6 +1,5 @@
 import {
   AppstoreOutlined,
-  CalendarOutlined,
   CloseOutlined,
   ClockCircleOutlined,
   DeleteOutlined,
@@ -446,10 +445,6 @@ function getRequirementOwnerLabel(requirement: MockRequirement) {
 function getRequirementOwnerTitle(requirement: MockRequirement) {
   const ownerNames = requirement.owners.map((owner) => owner.name || owner.id).filter(Boolean);
   return ownerNames.length ? ownerNames.join("、") : "未指定负责人";
-}
-
-function getRequirementTeamLabel(requirement: MockRequirement) {
-  return requirement.team_names.length ? requirement.team_names.join("、") : "未指定参与团队";
 }
 
 function getRequirementTeamCompactLabel(requirement: MockRequirement, limit = 2) {
@@ -1291,6 +1286,30 @@ export function RequirementsListPage() {
                   <span>置</span>
                 </span>
               </Button>
+              {view === "tree" ? (
+                <Button
+                  className="requirements-board__utility-action"
+                  type="text"
+                  onClick={() =>
+                    setExpanded(
+                      allExpanded ? new Set() : new Set(filteredRequirements.map((item) => item.id))
+                    )
+                  }
+                >
+                  {allExpanded ? "收起全部" : "展开全部"}
+                </Button>
+              ) : null}
+              <span className="requirements-board__filter-count">
+                共 {filteredRequirements.length} 条
+              </span>
+              <Button
+                className="requirements-board__refresh-action"
+                type="text"
+                aria-label="刷新"
+                icon={<ReloadOutlined />}
+                loading={requirementsQuery.isFetching || tasksQuery.isFetching}
+                onClick={refreshAll}
+              />
             </div>
           </div>
         </div>
@@ -1305,35 +1324,6 @@ export function RequirementsListPage() {
             action={<Button onClick={refreshAll}>重试</Button>}
           />
         ) : null}
-
-        <div className="requirements-board__table-toolbar">
-          <span className="requirements-board__table-count">
-            共 {filteredRequirements.length} 条需求
-          </span>
-          <div className="requirements-board__table-tools">
-            {view === "tree" ? (
-              <Button
-                className="requirements-board__utility-action"
-                type="text"
-                onClick={() =>
-                  setExpanded(
-                    allExpanded ? new Set() : new Set(filteredRequirements.map((item) => item.id))
-                  )
-                }
-              >
-                {allExpanded ? "收起全部" : "展开全部"}
-              </Button>
-            ) : null}
-            <Button
-              className="requirements-board__refresh-action"
-              type="text"
-              aria-label="刷新"
-              icon={<ReloadOutlined />}
-              loading={requirementsQuery.isFetching || tasksQuery.isFetching}
-              onClick={refreshAll}
-            />
-          </div>
-        </div>
 
         <div className="requirements-board__content">
           {requirementsQuery.isLoading ? (
@@ -1370,7 +1360,6 @@ export function RequirementsListPage() {
                   const headerCountBadge = isCompletedColumn
                     ? allColumnRequirements.length
                     : columnRequirements.length;
-                  const completedShownCount = columnRequirements.length;
                   return (
                     <Droppable droppableId={column.value} key={column.value}>
                       {(provided, snapshot) => (
@@ -1388,29 +1377,30 @@ export function RequirementsListPage() {
                               <Tag variant="filled">{headerCountBadge}</Tag>
                             </div>
                             {isCompletedColumn ? (
-                              hiddenCompletedCount > 0 ? (
-                                <button
-                                  type="button"
-                                  className="requirements-board__column-head-link"
-                                  onClick={() =>
-                                    setSearchParams(
-                                      (previous) => {
-                                        const nextParams = new URLSearchParams(previous);
-                                        nextParams.set("status", "completed");
-                                        nextParams.set("view", "tree");
-                                        return nextParams;
-                                      },
-                                      { replace: true }
-                                    )
-                                  }
-                                >
-                                  查看全部
-                                </button>
-                              ) : (
+                              <div className="requirements-board__column-head-actions">
                                 <span className="requirements-board__column-head-meta">
-                                  最近 {completedShownCount} 个
+                                  最近 {columnRequirements.length} 个
                                 </span>
-                              )
+                                {hiddenCompletedCount > 0 ? (
+                                  <button
+                                    type="button"
+                                    className="requirements-board__column-head-link"
+                                    onClick={() =>
+                                      setSearchParams(
+                                        (previous) => {
+                                          const nextParams = new URLSearchParams(previous);
+                                          nextParams.set("status", "completed");
+                                          nextParams.set("view", "tree");
+                                          return nextParams;
+                                        },
+                                        { replace: true }
+                                      )
+                                    }
+                                  >
+                                    查看全部
+                                  </button>
+                                ) : null}
+                              </div>
                             ) : null}
                           </header>
                           <div className="requirements-board__card-list">
@@ -1586,23 +1576,27 @@ function RequirementCard({
 }) {
   const riskBadges = getRequirementRiskBadges(requirement, tasks);
   const primaryRisk = riskBadges[0];
+  const blockedRisk = riskBadges.find((item) => item.value === "blocked");
   const completedTasks = tasks.filter((task) => task.status === "done").length;
   const ownerLine = getRequirementOwnerLabel(requirement);
-  const teamLine = getRequirementTeamLabel(requirement);
+  const ownerTitle = getRequirementOwnerTitle(requirement);
+  const teamLine = getRequirementTeamCompactLabel(requirement);
+  const teamTitle = getRequirementTeamTitle(requirement);
   const taskProgressLabel = tasks.length
-    ? `${completedTasks}/${tasks.length} 个任务完成`
+    ? `${completedTasks}/${tasks.length} 完成`
     : "待拆解";
   const dateLabel = isCompletedColumn
     ? `完成 ${formatDate(requirement.updated_at)}`
-    : formatDate(requirement.deadline);
+    : `截止 ${formatDate(requirement.deadline)}`;
+  const riskTitle = riskBadges.map((item) => item.label).join("；");
   const showRiskRow = !isCompletedColumn && Boolean(primaryRisk);
 
   return (
     <Draggable draggableId={requirement.id} index={index} isDragDisabled={!draggable}>
       {(provided, snapshot) => (
         <article
-          className={`requirements-board__card${snapshot.isDragging ? " is-dragging" : ""}${
-            primaryRisk ? " has-risk" : ""
+          className={`requirements-board__card is-status-${requirement.status}${snapshot.isDragging ? " is-dragging" : ""}${
+            primaryRisk ? ` has-risk has-${primaryRisk.tone}` : ""
           }`}
           ref={provided.innerRef}
           {...provided.draggableProps}
@@ -1624,35 +1618,44 @@ function RequirementCard({
                   onToggleFavorite();
                 }}
               >
-                {isFavorite ? <StarFilled style={{ color: "#f59e0b" }} /> : <StarOutlined />}
+                {isFavorite ? <StarFilled /> : <StarOutlined />}
               </button>
             </div>
           </div>
 
           {showRiskRow ? (
-            <div className="requirements-board__card-risks">
-              <strong>{primaryRisk?.label}</strong>
+            <div
+              className={`requirements-board__card-risk-line is-${primaryRisk?.tone ?? "warning"}`}
+              title={riskTitle}
+            >
+              <span className="requirements-board__card-risk-chip" title={primaryRisk?.label}>
+                {primaryRisk?.label}
+              </span>
               {riskBadges.length > 1 ? (
-                <Tag color="warning">{formatRiskOverflow(riskBadges.length - 1)}</Tag>
+                <span className="requirements-board__card-risk-more">
+                  {formatRiskOverflow(riskBadges.length - 1)}
+                </span>
               ) : null}
             </div>
           ) : null}
 
-          <div className="requirements-board__card-progress-block">
-            <div>
-              <span>推进进度</span>
-              <strong title={taskProgressLabel}>{taskProgressLabel}</strong>
-            </div>
-            {tasks.length ? <RequirementProgress value={requirement.progress} /> : null}
+          <div className="requirements-board__card-status-row">
+            <strong title={taskProgressLabel}>{taskProgressLabel}</strong>
+            {blockedRisk ? <span title={blockedRisk.label}>阻塞 {blockedRisk.count}</span> : null}
+            <em title={dateLabel}>{dateLabel}</em>
           </div>
 
+          {tasks.length ? (
+            <div className="requirements-board__card-progress-line" aria-hidden="true">
+              <span style={{ width: `${requirement.progress}%` }} />
+            </div>
+          ) : null}
+
           <footer className="requirements-board__card-meta">
-            <span title={`负责人：${ownerLine}；参与团队：${teamLine}`}>
+            <span title={`负责人：${ownerTitle}`}>
               <UserOutlined /> {ownerLine}
             </span>
-            <span title={dateLabel}>
-              <CalendarOutlined /> {dateLabel}
-            </span>
+            <span title={`参与团队：${teamTitle}`}>团队 {teamLine}</span>
           </footer>
         </article>
       )}
