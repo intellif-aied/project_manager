@@ -48,6 +48,9 @@ func (h *FollowHandler) Followers(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "target_type and target_id are required"})
 		return
 	}
+	if !validateUUIDParam(w, targetID, "target_id") {
+		return
+	}
 	visible, err := h.targetVisible(u, targetType, targetID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -101,6 +104,9 @@ func (h *FollowHandler) Follow(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "target_type and target_id are required"})
 		return
 	}
+	if !validateUUIDParam(w, req.TargetID, "target_id") {
+		return
+	}
 	visible, err := h.targetVisible(u, req.TargetType, req.TargetID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -130,6 +136,9 @@ func (h *FollowHandler) Unfollow(w http.ResponseWriter, r *http.Request) {
 	targetID := chi.URLParam(r, "target_id")
 	if !isFollowTargetType(targetType) || targetID == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid follow target"})
+		return
+	}
+	if !validateUUIDParam(w, targetID, "target_id") {
 		return
 	}
 	if _, err := h.db.Exec(`

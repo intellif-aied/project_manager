@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -16,6 +18,22 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func readJSON(r *http.Request, v any) error {
 	return json.NewDecoder(r.Body).Decode(v)
+}
+
+func validateUUIDParam(w http.ResponseWriter, value, name string) bool {
+	if isValidUUID(value) {
+		return true
+	}
+	writeJSON(w, http.StatusBadRequest, map[string]string{
+		"code":  "invalid_id",
+		"error": "invalid " + name,
+	})
+	return false
+}
+
+func isValidUUID(value string) bool {
+	_, err := uuid.Parse(value)
+	return err == nil
 }
 
 func nullString(s *string) sql.NullString {

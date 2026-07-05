@@ -5,10 +5,11 @@ import {
   Button,
   Card,
   Col,
-  Descriptions,
   InputNumber,
+  Progress,
   Result,
   Row,
+  Segmented,
   Slider,
   Space,
   Tag,
@@ -23,6 +24,7 @@ import { isEditConflict } from "@/shared/request/apiError";
 import { buildListReturnUrl } from "@/shared/utils/urlQuery";
 
 import "../../aidashboard-pattern.css";
+import type { TaskDisplayStatus } from "../../api/types";
 import { TaskPriorityTag, TaskStatusTag } from "../../dashboard/shared";
 import { requirementsBoardApi } from "../../requirements/api/requirementsBoardApi";
 import { invalidateRequirementTaskWorkspace } from "../../requirements/queryInvalidation";
@@ -30,14 +32,44 @@ import type { MockTaskDependency, MockTaskStatus, MockTokenSource } from "../../
 
 const { Text } = Typography;
 
+const TASK_STATUS_OPTIONS: Array<{ label: string; value: MockTaskStatus }> = [
+  { label: "未开始", value: "todo" },
+  { label: "进行中", value: "in_progress" },
+  { label: "已完成", value: "done" }
+];
+
+function dependencyKey(dependency: MockTaskDependency) {
+  return `${dependency.item_type ?? "task"}:${dependency.item_id || dependency.task_id}`;
+}
+
+function dependencyTitle(dependency: MockTaskDependency) {
+  return dependency.title || dependency.task_title || dependency.item_id || dependency.task_id || "未命名工作项";
+}
+
+function dependencyPath(dependency: MockTaskDependency) {
+  const targetId = dependency.item_id || dependency.task_id;
+  if ((dependency.item_type ?? "task") === "requirement") {
+    return `/requirements/${targetId}`;
+  }
+  return `/tasks/${targetId}`;
+}
+
+function isTaskDependencyStatus(status: string): status is TaskDisplayStatus {
+  return status === "todo" || status === "in_progress" || status === "done" || status === "blocked";
+}
+
 function DependencyList({ deps, empty }: { deps: MockTaskDependency[]; empty: string }) {
   if (!deps.length) return <Text type="secondary">{empty}</Text>;
   return (
     <Space orientation="vertical" size={6} style={{ width: "100%" }}>
       {deps.map((dependency) => (
-        <Space key={dependency.task_id} size={8}>
-          <TaskStatusTag status={dependency.status} />
-          <Link to={`/tasks/${dependency.task_id}`}>{dependency.task_title}</Link>
+        <Space key={dependencyKey(dependency)} size={8}>
+          {isTaskDependencyStatus(dependency.status) ? (
+            <TaskStatusTag status={dependency.status} />
+          ) : (
+            <Tag color={dependency.status === "completed" ? "success" : "warning"}>需求</Tag>
+          )}
+          <Link to={dependencyPath(dependency)}>{dependencyTitle(dependency)}</Link>
         </Space>
       ))}
     </Space>
@@ -55,11 +87,16 @@ function formatTokenSourceTime(value: string) {
   return dayjs(value).format("MM-DD HH:mm");
 }
 
+function formatDate(value?: string) {
+  if (!value) return "-";
+  return dayjs(value).format("YYYY-MM-DD");
+}
+
 export function TaskDetailPage() {
   const { id = "" } = useParams<{ id: string }>();
   const location = useLocation();
   const queryClient = useQueryClient();
-  const { message, modal } = App.useApp();
+  const { message } = App.useApp();
   const [progressOverride, setProgressOverride] = useState<number | null>(null);
   const backTo = buildListReturnUrl("/requirements", location.search);
 
@@ -84,7 +121,7 @@ export function TaskDetailPage() {
   );
 
   const statusMutation = useMutation({
-    mutationFn: (status: Exclude<MockTaskStatus, "blocked">) =>
+    mutationFn: (status: MockTaskStatus) =>
       requirementsBoardApi.updateTaskStatus(id, status, task?.version ?? 0),
     onSuccess: (updated) => {
       message.success("任务状态已更新");
@@ -132,17 +169,8 @@ export function TaskDetailPage() {
     }
   });
 
-  const requestStatusChange = (status: Exclude<MockTaskStatus, "blocked">) => {
-    if (status === "done" || status === "todo") {
-      modal.confirm({
-        title: status === "done" ? "确认标记完成？" : "确认重新打开？",
-        content: "状态变化会同步影响需求的聚合进度。",
-        okText: status === "done" ? "标记完成" : "重新打开",
-        cancelText: "取消",
-        onOk: () => statusMutation.mutateAsync(status)
-      });
-      return;
-    }
+  const requestStatusChange = (status: MockTaskStatus) => {
+    if (status === task?.status || statusMutation.isPending) return;
     statusMutation.mutate(status);
   };
 
@@ -179,7 +207,7 @@ export function TaskDetailPage() {
     );
   }
 
-  const dependencyBlocked = task.status === "blocked";
+  const dependencyBlocked = task.risk_types?.includes("blocked") ?? false;
   const progress = progressOverride ?? task.progress;
   const canUpdateStatus = Boolean(task.can_update_status);
   const canUpdateProgress = Boolean(task.can_update_progress);
@@ -188,87 +216,89 @@ export function TaskDetailPage() {
     .map((id) => tokenSourceMap.get(id))
     .filter((source): source is MockTokenSource => Boolean(source));
   const linkedTotal = linkedSources.reduce((total, source) => total + source.token, 0);
+  const statusActions = canUpdateStatus ? (
+    <div className="aidashboard-task-detail__status-control">
+      <span>任务状态</span>
+      <Segmented
+        disabled={statusMutation.isPending}
+        options={TASK_STATUS_OPTIONS}
+        value={task.status}
+        onChange={(value) => {
+          requestStatusChange(value as MockTaskStatus);
+        }}
+      />
+    </div>
+  ) : null;
 
   return (
     <PagePanel
       title={task.title}
       description={`所属需求：${task.requirement_title} · 负责人：${task.assignee_name || "未分配"}`}
       backTo={backTo}
+      actions={statusActions}
       breadcrumbs={[
         { title: "业务" },
-        { title: "需求看板", path: "/requirements" },
+        { title: "需求看板", path: backTo },
         { title: task.title }
       ]}
     >
       <div className="aidashboard-task-detail">
-        <section className="aidashboard-task-detail__actions">
-          {canUpdateStatus ? (
-            <Space wrap>
-              {task.status !== "done" && !dependencyBlocked ? (
-                <Button
-                  type="primary"
-                  loading={statusMutation.isPending}
-                  onClick={() => requestStatusChange("done")}
-                >
-                  标记完成
-                </Button>
-              ) : null}
-              {task.status === "done" ? (
-                <Button
-                  loading={statusMutation.isPending}
-                  onClick={() => requestStatusChange("todo")}
-                >
-                  重新打开
-                </Button>
-              ) : null}
-              {task.status === "todo" && !dependencyBlocked ? (
-                <Button
-                  loading={statusMutation.isPending}
-                  onClick={() => requestStatusChange("in_progress")}
-                >
-                  开始任务
-                </Button>
-              ) : null}
-            </Space>
-          ) : null}
-          {dependencyBlocked ? <Tag color="error">依赖未完成，当前任务处于阻塞展示状态</Tag> : null}
+        {dependencyBlocked ? (
+          <Alert
+            type="warning"
+            showIcon
+            message="上游依赖未完成"
+            description="当前任务暂不能推进。"
+          />
+        ) : null}
+
+        <section className="aidashboard-task-detail__overview">
+          <div className="aidashboard-task-detail__overview-main">
+            <div className="aidashboard-task-detail__status-line">
+              <TaskStatusTag status={task.status} />
+              <TaskPriorityTag priority={task.priority} />
+            </div>
+            <div>
+              <span>任务进度</span>
+              <strong>{progress}%</strong>
+            </div>
+            <Progress percent={progress} showInfo={false} />
+          </div>
+          <div className="aidashboard-task-detail__meta-grid">
+            <div>
+              <span>负责人</span>
+              <strong>{task.assignee_name || "未分配"}</strong>
+            </div>
+            <div>
+              <span>截止日期</span>
+              <strong>{formatDate(task.due_date)}</strong>
+            </div>
+            <div>
+              <span>工作记录</span>
+              <strong>{linkedTotal > 0 ? `${formatTokens(linkedTotal)} Token` : "暂无"}</strong>
+            </div>
+          </div>
         </section>
 
         <Row gutter={[16, 16]}>
           <Col xs={24} lg={12}>
-            <Card size="small" title="任务信息">
-              <Descriptions column={1} size="small" labelStyle={{ width: 110 }}>
-                <Descriptions.Item label="状态">
-                  <TaskStatusTag status={task.status} />
-                </Descriptions.Item>
-                <Descriptions.Item label="优先级">
-                  <TaskPriorityTag priority={task.priority} />
-                </Descriptions.Item>
-                <Descriptions.Item label="截止日期">{task.due_date || "-"}</Descriptions.Item>
-                <Descriptions.Item label="任务验收标准">
-                  {task.acceptance_criteria.length ? (
-                    <Space orientation="vertical" size={4}>
-                      {task.acceptance_criteria.map((criterion, index) => (
-                        <Space key={`${index}-${criterion}`} align="start">
-                          <Tag>标准 {index + 1}</Tag>
-                          <Text>{criterion}</Text>
-                        </Space>
-                      ))}
-                    </Space>
-                  ) : (
-                    <Text type="secondary">暂无任务验收标准</Text>
-                  )}
-                </Descriptions.Item>
-                <Descriptions.Item label="Token 来源">
-                  {linkedTotal > 0
-                    ? `已关联 ${formatTokens(linkedTotal)} Token`
-                    : "暂无关联 Token 来源"}
-                </Descriptions.Item>
-              </Descriptions>
+            <Card size="small" title="验收标准" className="aidashboard-task-detail__card">
+              {task.acceptance_criteria.length ? (
+                <div className="aidashboard-task-detail__criteria">
+                  {task.acceptance_criteria.map((criterion, index) => (
+                    <div key={`${index}-${criterion}`}>
+                      <span>{index + 1}</span>
+                      <p>{criterion}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <Text type="secondary">暂无任务验收标准</Text>
+              )}
             </Card>
           </Col>
           <Col xs={24} lg={12}>
-            <Card size="small" title="依赖阻塞">
+            <Card size="small" title="依赖关系" className="aidashboard-task-detail__card">
               <Space orientation="vertical" size={12} style={{ width: "100%" }}>
                 <div>
                   <Text type="secondary" className="aidashboard-task-detail__label">
@@ -289,32 +319,29 @@ export function TaskDetailPage() {
           </Col>
         </Row>
 
-        <Card size="small" title="Token 来源">
+        <Card size="small" title="工作记录" className="aidashboard-task-detail__card">
           {linkedSources.length ? (
             <Space orientation="vertical" size={8} style={{ width: "100%" }}>
               {linkedSources.map((source) => (
-                <div key={source.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "10px 12px", background: "#f8fafc", border: "1px solid #e5eaf3", borderRadius: 10 }}>
-                  <div style={{ display: "grid", gap: 3, minWidth: 0 }}>
-                    <strong style={{ color: "#253047", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {source.summary || "（无摘要）"}
-                    </strong>
-                    <span style={{ color: "#8a95a6", fontSize: 11 }}>
-                      {formatTokenSourceTime(source.recorded_at)} · {source.tool} · {source.uploader}
-                    </span>
+                <div key={source.id} className="aidashboard-task-detail__record">
+                  <div>
+                    <strong>{source.summary || "（无摘要）"}</strong>
+                    <span>{formatTokenSourceTime(source.recorded_at)} · {source.tool} · {source.uploader}</span>
                   </div>
-                  <span style={{ color: "#526173", fontSize: 12 }}>{formatTokens(source.token)} Token</span>
+                  <span>{formatTokens(source.token)} Token</span>
                 </div>
               ))}
             </Space>
           ) : (
-            <Text type="secondary">暂无关联 Token 来源。</Text>
+            <Text type="secondary">暂无关联工作记录。</Text>
           )}
         </Card>
 
-        <Card title="任务进度" className="aidashboard-task-detail__progress-card">
+        <Card title="任务进度" className="aidashboard-task-detail__progress-card aidashboard-task-detail__card">
           <p>{canUpdateProgress ? "拖动滑块或输入百分比后保存。" : "当前任务为只读。"} </p>
           <div className="aidashboard-task-detail__progress-editor">
             <Slider
+              className="aidashboard-task-detail__progress-slider"
               min={0}
               max={100}
               value={progress}

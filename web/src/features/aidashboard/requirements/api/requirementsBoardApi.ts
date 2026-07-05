@@ -25,7 +25,7 @@ import {
   updateTaskProgress,
   updateTaskStatus
 } from "../../api/client";
-import type { Requirement, Task } from "../../api/types";
+import type { Requirement, SessionTokens, Task } from "../../api/types";
 import type {
   CreateMockRequirementInput,
   CreateMockTaskInput,
@@ -81,6 +81,8 @@ function normalizeRequirement(requirement: Requirement): MockRequirement {
     team_ids: requirement.team_ids ?? [],
     team_names: requirement.team_names ?? [],
     token_source_ids: requirement.token_source_ids ?? [],
+    dependencies: requirement.dependencies ?? [],
+    blocking: requirement.blocking ?? [],
     follow_summary: requirement.follow_summary ?? {
       count: 0,
       score: 0,
@@ -115,7 +117,7 @@ function normalizeTask(task: Task): MockTask {
     acceptance_criteria: task.acceptance_criteria ?? [],
     assignee_id: task.assignee_id,
     assignee_name: task.assignee_name,
-    status: (task.display_status || task.status) as MockTaskStatus,
+    status: task.status as MockTaskStatus,
     priority: task.priority,
     progress: task.progress ?? 0,
     due_date: task.due_date,
@@ -144,6 +146,15 @@ function dateDaysAgo(days: number) {
   const date = new Date();
   date.setUTCDate(date.getUTCDate() - days);
   return date.toISOString().slice(0, 10);
+}
+
+function sessionTokenSourceId(source: SessionTokens) {
+  return source.slice_key || `${source.session_id}:${source.activity_date || source.activity_start_at || source.started_at}`;
+}
+
+function parseSessionTokenSourceId(sourceId: string) {
+  const [sessionId, activityDate] = sourceId.split(":");
+  return { sessionId, activityDate: activityDate || undefined };
 }
 
 async function getNormalizedTask(taskId: string) {
@@ -225,16 +236,26 @@ export const requirementsBoardApi = {
     return normalizeTask(await updateTaskProgress(taskId, progress, baseVersion));
   },
 
-  async updateTaskStatus(taskId: string, status: Exclude<MockTaskStatus, "blocked">, baseVersion: number) {
+  async updateTaskStatus(taskId: string, status: MockTaskStatus, baseVersion: number) {
     return normalizeTask(await updateTaskStatus(taskId, status, baseVersion));
   },
 
-  async addTaskDependency(taskId: string, dependsOnId: string, baseVersion: number) {
-    return normalizeTask(await addTaskDependency(taskId, dependsOnId, baseVersion));
+  async addTaskDependency(
+    taskId: string,
+    dependsOnId: string,
+    baseVersion: number,
+    dependsOnType: "requirement" | "task" = "task"
+  ) {
+    return normalizeTask(await addTaskDependency(taskId, dependsOnId, baseVersion, dependsOnType));
   },
 
-  async removeTaskDependency(taskId: string, dependsOnId: string, baseVersion: number) {
-    return normalizeTask(await removeTaskDependency(taskId, dependsOnId, baseVersion));
+  async removeTaskDependency(
+    taskId: string,
+    dependsOnId: string,
+    baseVersion: number,
+    dependsOnType: "requirement" | "task" = "task"
+  ) {
+    return normalizeTask(await removeTaskDependency(taskId, dependsOnId, baseVersion, dependsOnType));
   },
 
   async listTeams() {
@@ -278,12 +299,12 @@ export const requirementsBoardApi = {
         scope: "mine"
       });
       return sources.map((source) => ({
-        id: source.session_id,
-        recorded_at: source.started_at,
+        id: sessionTokenSourceId(source),
+        recorded_at: source.activity_start_at ?? source.started_at,
         tool: source.agent_type,
         uploader: source.user_name,
         token: source.total_tokens,
-        summary: source.session_ref
+        summary: source.summary || source.session_ref
       }));
     } catch {
       return [];
@@ -291,24 +312,70 @@ export const requirementsBoardApi = {
   },
 
   async linkTaskTokenSources(taskId: string, sourceIds: string[]) {
-    await Promise.all(sourceIds.map((sourceId) => updateSessionTask(sourceId, taskId)));
+    await Promise.all(
+      sourceIds.map((sourceId) => {
+        const { sessionId, activityDate } = parseSessionTokenSourceId(sourceId);
+        return updateSessionTask(sessionId, taskId, activityDate);
+      })
+    );
+    return getNormalizedTask(taskId);
+  },
+
+  async setTaskTokenSources(taskId: string, nextSourceIds: string[], currentSourceIds: string[]) {
+    const nextSet = new Set(nextSourceIds);
+    const currentSet = new Set(currentSourceIds);
+    const toAdd = nextSourceIds.filter((sourceId) => !currentSet.has(sourceId));
+    const toRemove = currentSourceIds.filter((sourceId) => !nextSet.has(sourceId));
+    await Promise.all([
+      ...toAdd.map((sourceId) => {
+        const { sessionId, activityDate } = parseSessionTokenSourceId(sourceId);
+        return updateSessionTask(sessionId, taskId, activityDate);
+      }),
+      ...toRemove.map((sourceId) => {
+        const { sessionId, activityDate } = parseSessionTokenSourceId(sourceId);
+        return updateSessionTask(sessionId, null, activityDate);
+      })
+    ]);
     return getNormalizedTask(taskId);
   },
 
   async unlinkTaskTokenSource(taskId: string, sourceId: string) {
-    await updateSessionTask(sourceId, null);
+    const { sessionId, activityDate } = parseSessionTokenSourceId(sourceId);
+    await updateSessionTask(sessionId, null, activityDate);
     return getNormalizedTask(taskId);
   },
 
   async linkRequirementTokenSources(requirementId: string, sourceIds: string[]) {
     await Promise.all(
-      sourceIds.map((sourceId) => updateSessionRequirement(sourceId, requirementId))
+      sourceIds.map((sourceId) => {
+        const { sessionId, activityDate } = parseSessionTokenSourceId(sourceId);
+        return updateSessionRequirement(sessionId, requirementId, activityDate);
+      })
     );
     return normalizeRequirement(await fetchRequirement(requirementId));
   },
 
+  async setRequirementTokenSources(requirementId: string, nextSourceIds: string[], currentSourceIds: string[]) {
+    const nextSet = new Set(nextSourceIds);
+    const currentSet = new Set(currentSourceIds);
+    const toAdd = nextSourceIds.filter((sourceId) => !currentSet.has(sourceId));
+    const toRemove = currentSourceIds.filter((sourceId) => !nextSet.has(sourceId));
+    await Promise.all([
+      ...toAdd.map((sourceId) => {
+        const { sessionId, activityDate } = parseSessionTokenSourceId(sourceId);
+        return updateSessionRequirement(sessionId, requirementId, activityDate);
+      }),
+      ...toRemove.map((sourceId) => {
+        const { sessionId, activityDate } = parseSessionTokenSourceId(sourceId);
+        return updateSessionRequirement(sessionId, null, activityDate);
+      })
+    ]);
+    return normalizeRequirement(await fetchRequirement(requirementId));
+  },
+
   async unlinkRequirementTokenSource(requirementId: string, sourceId: string) {
-    await updateSessionRequirement(sourceId, null);
+    const { sessionId, activityDate } = parseSessionTokenSourceId(sourceId);
+    await updateSessionRequirement(sessionId, null, activityDate);
     return normalizeRequirement(await fetchRequirement(requirementId));
   }
 };

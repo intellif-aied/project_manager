@@ -39,8 +39,9 @@ export interface AdminBatchAddUsersResponse {
 
 export type RequirementStatus = "todo" | "review" | "active" | "completed" | "cancelled";
 export type RequirementPriority = "low" | "medium" | "high" | "urgent";
-export type TaskStatus = "todo" | "in_progress" | "done" | "blocked";
-export type StoredTaskStatus = Exclude<TaskStatus, "blocked">;
+export type TaskStatus = "todo" | "in_progress" | "done";
+export type TaskDisplayStatus = TaskStatus | "blocked";
+export type StoredTaskStatus = TaskStatus;
 export type TaskPriority = "low" | "medium" | "high";
 
 export interface RequirementTaskSummaryDTO {
@@ -94,6 +95,8 @@ export interface Requirement {
   team_ids: string[];
   team_names: string[];
   token_source_ids: string[];
+  dependencies?: TaskDep[];
+  blocking?: TaskDep[];
   task_summary: RequirementTaskSummaryDTO;
   risk_summary: RequirementRiskSummaryDTO;
   follow_summary?: RequirementFollowSummaryDTO;
@@ -119,9 +122,14 @@ export interface ACStatus {
 }
 
 export interface TaskDep {
-  task_id: string;
-  task_title: string;
-  status: TaskStatus;
+  item_type?: "requirement" | "task";
+  item_id?: string;
+  title?: string;
+  task_id?: string;
+  task_title?: string;
+  requirement_id?: string;
+  requirement_title?: string;
+  status: RequirementStatus | TaskDisplayStatus | string;
   due_date?: string;
 }
 
@@ -135,7 +143,7 @@ export interface Task {
   assignee_name?: string;
   creator_tl_id: string;
   status: TaskStatus;
-  display_status: TaskStatus;
+  display_status: TaskDisplayStatus;
   priority: TaskPriority;
   progress: number;
   due_date?: string;

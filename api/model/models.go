@@ -52,6 +52,8 @@ type Requirement struct {
 	TeamIDs            []string                 `json:"team_ids"`
 	TeamNames          []string                 `json:"team_names"`
 	TokenSourceIDs     []string                 `json:"token_source_ids"`
+	Dependencies       []TaskDep                `json:"dependencies,omitempty"`
+	Blocking           []TaskDep                `json:"blocking,omitempty"`
 	TaskSummary        RequirementTaskSummary   `json:"task_summary"`
 	RiskSummary        RequirementRiskSummary   `json:"risk_summary"`
 	FollowSummary      RequirementFollowSummary `json:"follow_summary"`
@@ -102,10 +104,15 @@ type Task struct {
 }
 
 type TaskDep struct {
-	TaskID    string  `json:"task_id"`
-	TaskTitle string  `json:"task_title"`
-	Status    string  `json:"status"`
-	DueDate   *string `json:"due_date,omitempty"`
+	ItemType         string  `json:"item_type"`
+	ItemID           string  `json:"item_id"`
+	Title            string  `json:"title"`
+	TaskID           string  `json:"task_id,omitempty"`
+	TaskTitle        string  `json:"task_title,omitempty"`
+	RequirementID    string  `json:"requirement_id,omitempty"`
+	RequirementTitle string  `json:"requirement_title,omitempty"`
+	Status           string  `json:"status"`
+	DueDate          *string `json:"due_date,omitempty"`
 }
 
 type RequirementTaskSummary struct {
@@ -460,11 +467,13 @@ type UpdateTaskProgressRequest struct {
 
 type UpdateSessionRequirementRequest struct {
 	RequirementID *string `json:"requirement_id"`
+	ActivityDate  *string `json:"activity_date,omitempty"`
 }
 
 type AddDependencyRequest struct {
-	DependsOnID string `json:"depends_on_id"`
-	BaseVersion int64  `json:"base_version"`
+	DependsOnType string `json:"depends_on_type,omitempty"`
+	DependsOnID   string `json:"depends_on_id"`
+	BaseVersion   int64  `json:"base_version"`
 }
 
 type BatchSessionUpload struct {
@@ -522,7 +531,8 @@ type SessionActivitySliceUpload struct {
 }
 
 type UpdateSessionTaskRequest struct {
-	TaskID *string `json:"task_id"`
+	TaskID       *string `json:"task_id"`
+	ActivityDate *string `json:"activity_date,omitempty"`
 }
 
 type UpdateReportRequest struct {

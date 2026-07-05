@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/aidashboard/api/model"
@@ -702,10 +703,37 @@ func (h *SessionHandler) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
 		return
 	}
+	activityDate := ""
+	if req.ActivityDate != nil {
+		activityDate = strings.TrimSpace(*req.ActivityDate)
+	}
+	if activityDate != "" {
+		if _, err := time.Parse("2006-01-02", activityDate); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid activity_date"})
+			return
+		}
+	}
 
 	var reqID *string
 	if req.TaskID != nil && *req.TaskID != "" {
 		h.db.QueryRow("SELECT requirement_id FROM tasks WHERE id = $1", *req.TaskID).Scan(&reqID)
+	}
+	if activityDate != "" {
+		res, err := h.db.Exec(`
+			UPDATE session_activity_slices
+			SET task_id = $1, requirement_id = $2
+			WHERE session_id = $3 AND activity_date = $4::date AND (user_id = $5 OR $6 = 'admin')`,
+			req.TaskID, reqID, id, activityDate, u.ID, u.Role)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if rows, _ := res.RowsAffected(); rows == 0 {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "session slice not found"})
+			return
+		}
+		h.Get(w, r)
+		return
 	}
 
 	res, err := h.db.Exec(`
@@ -722,6 +750,7 @@ func (h *SessionHandler) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, _ = h.db.Exec("UPDATE token_usage SET task_id = $1, requirement_id = $2 WHERE session_id = $3", req.TaskID, reqID, id)
+	_, _ = h.db.Exec("UPDATE session_activity_slices SET task_id = $1, requirement_id = $2 WHERE session_id = $3", req.TaskID, reqID, id)
 	h.Get(w, r)
 }
 
@@ -733,6 +762,16 @@ func (h *SessionHandler) UpdateRequirement(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
 		return
 	}
+	activityDate := ""
+	if req.ActivityDate != nil {
+		activityDate = strings.TrimSpace(*req.ActivityDate)
+	}
+	if activityDate != "" {
+		if _, err := time.Parse("2006-01-02", activityDate); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid activity_date"})
+			return
+		}
+	}
 	if req.RequirementID != nil && *req.RequirementID != "" {
 		var exists bool
 		if err := h.db.QueryRow("SELECT EXISTS(SELECT 1 FROM requirements WHERE id = $1)", *req.RequirementID).Scan(&exists); err != nil {
@@ -743,6 +782,23 @@ func (h *SessionHandler) UpdateRequirement(w http.ResponseWriter, r *http.Reques
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "requirement not found"})
 			return
 		}
+	}
+	if activityDate != "" {
+		res, err := h.db.Exec(`
+			UPDATE session_activity_slices
+			SET task_id = NULL, requirement_id = $1
+			WHERE session_id = $2 AND activity_date = $3::date AND (user_id = $4 OR $5 = 'admin')`,
+			req.RequirementID, id, activityDate, u.ID, u.Role)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if rows, _ := res.RowsAffected(); rows == 0 {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "session slice not found"})
+			return
+		}
+		h.Get(w, r)
+		return
 	}
 	res, err := h.db.Exec(`
 		UPDATE sessions
@@ -757,6 +813,7 @@ func (h *SessionHandler) UpdateRequirement(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	_, _ = h.db.Exec("UPDATE token_usage SET task_id = NULL, requirement_id = $1 WHERE session_id = $2", req.RequirementID, id)
+	_, _ = h.db.Exec("UPDATE session_activity_slices SET task_id = NULL, requirement_id = $1 WHERE session_id = $2", req.RequirementID, id)
 	h.Get(w, r)
 }
 

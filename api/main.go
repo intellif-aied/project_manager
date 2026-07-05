@@ -121,6 +121,8 @@ func main() {
 		r.Put("/requirements/{id}", reqH.Update)
 		r.Delete("/requirements/{id}", reqH.Delete)
 		r.Put("/requirements/{id}/restore", reqH.Restore)
+		r.Post("/requirements/{id}/dependencies", reqH.AddDependency)
+		r.Delete("/requirements/{id}/dependencies/{target_type}/{dep_id}", reqH.RemoveDependency)
 		r.Get("/requirements/{id}/ac", reqH.GetAC)
 		r.Post("/requirements/{id}/regenerate-ac", reqH.RegenerateAC)
 

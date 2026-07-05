@@ -16,10 +16,9 @@ import "../../aidashboard-pattern.css";
 import { TaskPriorityTag, TaskStatusTag } from "../../dashboard/shared";
 
 const STATUS_FILTER_OPTIONS: Array<{ value: TaskStatus; label: string }> = [
-  { value: "todo", label: "待办" },
+  { value: "todo", label: "未开始" },
   { value: "in_progress", label: "进行中" },
-  { value: "done", label: "已完成" },
-  { value: "blocked", label: "已阻塞" }
+  { value: "done", label: "已完成" }
 ];
 
 export function TasksListPage() {

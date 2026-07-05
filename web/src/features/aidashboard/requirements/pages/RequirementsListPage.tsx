@@ -89,6 +89,7 @@ import type {
   MockFavorite,
   MockRequirement,
   MockTask,
+  MockTaskDependency,
   MockTaskPriority,
   MockTaskStatus,
   MockTokenSource,
@@ -253,10 +254,9 @@ const PRIORITY_META: Record<RequirementPriority, { label: string; color: string 
 };
 
 const TASK_STATUS_META: Record<MockTaskStatus, { label: string; tone: string }> = {
-  todo: { label: "待办", tone: "neutral" },
+  todo: { label: "未开始", tone: "neutral" },
   in_progress: { label: "进行中", tone: "info" },
-  done: { label: "完成", tone: "success" },
-  blocked: { label: "阻塞", tone: "danger" }
+  done: { label: "已完成", tone: "success" }
 };
 
 const REQUIREMENT_STAGE_TONE: Record<RequirementStage, string> = {
@@ -308,6 +308,33 @@ function formatDate(value?: string) {
   return value ? dayjs(value).format("YYYY-MM-DD") : "未设置";
 }
 
+function getDependencyType(dependency: MockTaskDependency) {
+  return dependency.item_type ?? "task";
+}
+
+function getDependencyId(dependency: MockTaskDependency) {
+  return dependency.item_id || dependency.task_id || "";
+}
+
+function getDependencyTitle(dependency: MockTaskDependency) {
+  return dependency.title || dependency.task_title || dependency.item_id || dependency.task_id || "未命名工作项";
+}
+
+function getDependencyLabel(dependency: MockTaskDependency) {
+  const title = getDependencyTitle(dependency);
+  const requirementTitle = dependency.requirement_title;
+  if (getDependencyType(dependency) === "requirement") {
+    return `需求 · ${title}`;
+  }
+  return requirementTitle ? `${title} · ${requirementTitle}` : title;
+}
+
+function isDependencyDone(dependency: MockTaskDependency) {
+  return getDependencyType(dependency) === "requirement"
+    ? dependency.status === "completed"
+    : dependency.status === "done";
+}
+
 function isBeforeToday(value?: string) {
   if (!value) return false;
   const parsed = dayjs(value);
@@ -330,8 +357,7 @@ function getRequirementRiskBadges(
       .length;
   const blocked =
     summary?.blocked ??
-    requirementTasks.filter((task) => task.risk_types?.includes("blocked") || task.status === "blocked")
-      .length;
+    requirementTasks.filter(isTaskBlocked).length;
   const dependencyConflict =
     summary?.dependency_conflict ??
     requirementTasks.filter((task) => task.risk_types?.includes("dependency_conflict")).length;
@@ -357,6 +383,14 @@ function getRequirementRiskBadges(
   return badges;
 }
 
+function formatRiskOverflow(count: number) {
+  return `另有 ${count} 项风险`;
+}
+
+function isTaskBlocked(task: Pick<MockTask, "risk_types">) {
+  return task.risk_types?.includes("blocked") ?? false;
+}
+
 function getTaskRiskBadges(task: MockTask): TaskRiskBadge[] {
   if (task.status === "done") return [];
   const riskTypes = task.risk_types ?? [];
@@ -364,7 +398,7 @@ function getTaskRiskBadges(task: MockTask): TaskRiskBadge[] {
   if (riskTypes.includes("overdue") || isBeforeToday(task.due_date)) {
     badges.push({ key: "overdue", label: "逾期", tone: "danger" });
   }
-  if (riskTypes.includes("blocked") || task.status === "blocked") {
+  if (riskTypes.includes("blocked")) {
     badges.push({ key: "blocked", label: "依赖阻塞", tone: "danger" });
   }
   if (riskTypes.includes("dependency_conflict")) {
@@ -637,6 +671,10 @@ function getQuickEditPopupContainer(triggerNode: HTMLElement) {
   return triggerNode.parentElement ?? document.body;
 }
 
+function getTaskModalPopupContainer(triggerNode: HTMLElement) {
+  return document.body;
+}
+
 function RequirementProgress({ value }: { value: number }) {
   return (
     <div className="requirements-board__progress">
@@ -647,7 +685,7 @@ function RequirementProgress({ value }: { value: number }) {
 }
 
 export function RequirementsListPage() {
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const { user } = useAuth();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -779,6 +817,34 @@ export function RequirementsListPage() {
   const toggleTaskFavorite = (taskId: string) =>
     favoriteMutation.mutate({ targetType: "task", targetId: taskId });
 
+  const deleteTaskFromTreeMutation = useMutation({
+    mutationFn: (task: MockTask) => requirementsBoardApi.deleteTask(task.id, task.version),
+    onSuccess: (_result, task) => {
+      message.success("任务已删除");
+      void invalidateRequirementTaskWorkspace(queryClient, {
+        requirementId: task.requirement_id,
+        taskId: task.id
+      });
+      if (selectedTask?.id === task.id) {
+        setSelectedTask(undefined);
+      }
+    },
+    onError: (error) => {
+      if (handleEditConflict(error, message, queryClient)) return;
+      message.error(error instanceof Error ? error.message : "任务删除失败");
+    }
+  });
+  const confirmDeleteTask = (task: MockTask) => {
+    modal.confirm({
+      title: "确认删除任务？",
+      content: "删除后会解绑相关 Session/Token/文档，并重算需求进度，操作不可恢复。",
+      okText: "删除任务",
+      okButtonProps: { danger: true },
+      cancelText: "取消",
+      onOk: () => deleteTaskFromTreeMutation.mutateAsync(task)
+    });
+  };
+
   const canMoveRequirement = Boolean(
     user && ["admin", "director", "pm", "team_leader"].includes(user.role)
   );
@@ -844,9 +910,7 @@ export function RequirementsListPage() {
   }, [tasks]);
 
   const navigationTask = tasks.find((item) => item.id === searchParams.get("taskId"));
-  const navigationRequirement = navigationTask
-    ? undefined
-    : requirements.find((item) => item.id === searchParams.get("requirementId"));
+  const navigationRequirement = requirements.find((item) => item.id === searchParams.get("requirementId"));
   const selectedRequirementFromLatest = selectedRequirement
     ? (requirements.find((item) => item.id === selectedRequirement.id) ?? selectedRequirement)
     : undefined;
@@ -865,6 +929,40 @@ export function RequirementsListPage() {
         return next;
       },
       { replace: true }
+    );
+  };
+  const clearTaskTarget = () => {
+    setSearchParams(
+      (previous) => {
+        const next = new URLSearchParams(previous);
+        next.delete("taskId");
+        return next;
+      },
+      { replace: true }
+    );
+  };
+  const openRequirementDetail = (requirement: MockRequirement) => {
+    setSelectedRequirement(requirement);
+    setCreatorOpen(false);
+    setSearchParams(
+      (previous) => {
+        const next = new URLSearchParams(previous);
+        next.set("requirementId", requirement.id);
+        next.delete("taskId");
+        return next;
+      },
+      { replace: false }
+    );
+  };
+  const openTaskDetail = (task: MockTask) => {
+    setSelectedTask(task);
+    setSearchParams(
+      (previous) => {
+        const next = new URLSearchParams(previous);
+        next.set("taskId", task.id);
+        return next;
+      },
+      { replace: false }
     );
   };
 
@@ -1266,7 +1364,7 @@ export function RequirementsListPage() {
                                 isCompletedColumn={column.value === "completed"}
                                 isFavorite={favoriteRequirementIds.has(requirement.id)}
                                 onToggleFavorite={() => toggleRequirementFavorite(requirement.id)}
-                                onOpen={() => setSelectedRequirement(requirement)}
+                                onOpen={() => openRequirementDetail(requirement)}
                               />
                             ))}
                             {provided.placeholder}
@@ -1291,8 +1389,9 @@ export function RequirementsListPage() {
               favoriteRequirementIds={favoriteRequirementIds}
               favoriteTaskIds={favoriteTaskIds}
               onToggle={toggleRequirement}
-              onOpenRequirement={setSelectedRequirement}
-              onOpenTask={(task) => setSelectedTask(task)}
+              onOpenRequirement={openRequirementDetail}
+              onOpenTask={openTaskDetail}
+              onDeleteTask={confirmDeleteTask}
               onToggleRequirementFavorite={toggleRequirementFavorite}
               onToggleTaskFavorite={toggleTaskFavorite}
             />
@@ -1303,6 +1402,7 @@ export function RequirementsListPage() {
       <RequirementDrawer
         requirement={activeRequirement}
         tasks={activeRequirement ? (tasksByRequirement.get(activeRequirement.id) ?? []) : []}
+        dependencyTasks={tasks}
         tokenSources={tokenSources}
         tokenSourceMap={tokenSourceMap}
         creatorOpen={creatorOpen}
@@ -1325,26 +1425,23 @@ export function RequirementsListPage() {
           clearNavigationTarget();
         }}
         onSaved={(updated) => setSelectedRequirement(updated)}
-        onOpenTask={(task) => setSelectedTask(task)}
+        onOpenTask={openTaskDetail}
       />
-      <TaskDrawer
+      <TaskDetailModal
         task={activeTask}
-        requirementTasks={
-          activeTask ? (tasksByRequirement.get(activeTask.requirement_id) ?? []) : []
-        }
-        tokenSources={tokenSources}
+        dependencyTasks={tasks}
         tokenSourceMap={tokenSourceMap}
         isFavorite={activeTask ? favoriteTaskIds.has(activeTask.id) : false}
         canManage={canManageTaskForUser(user, activeTask)}
         onToggleFavorite={activeTask ? () => toggleTaskFavorite(activeTask.id) : undefined}
         onClose={() => {
           setSelectedTask(undefined);
-          clearNavigationTarget();
+          clearTaskTarget();
         }}
         onSaved={(updated) => setSelectedTask(updated)}
         onDeleted={() => {
           setSelectedTask(undefined);
-          clearNavigationTarget();
+          clearTaskTarget();
         }}
       />
       <Modal
@@ -1471,7 +1568,9 @@ function RequirementCard({
           {showRiskRow ? (
             <div className="requirements-board__card-risks">
               <strong>{primaryRisk?.label}</strong>
-              {riskBadges.length > 1 ? <Tag color="warning">+{riskBadges.length - 1}</Tag> : null}
+              {riskBadges.length > 1 ? (
+                <Tag color="warning">{formatRiskOverflow(riskBadges.length - 1)}</Tag>
+              ) : null}
             </div>
           ) : null}
 
@@ -1506,6 +1605,7 @@ function RequirementTree({
   onToggle,
   onOpenRequirement,
   onOpenTask,
+  onDeleteTask,
   onToggleRequirementFavorite,
   onToggleTaskFavorite
 }: {
@@ -1517,6 +1617,7 @@ function RequirementTree({
   onToggle: (id: string) => void;
   onOpenRequirement: (requirement: MockRequirement) => void;
   onOpenTask: (task: MockTask) => void;
+  onDeleteTask: (task: MockTask) => void;
   onToggleRequirementFavorite: (requirementId: string) => void;
   onToggleTaskFavorite: (taskId: string) => void;
 }) {
@@ -1589,7 +1690,7 @@ function RequirementTree({
     {
       title: "风险",
       key: "risk",
-      width: 132,
+      width: 176,
       render: (_, requirement) => {
         const requirementTasks = tasksByRequirement.get(requirement.id) ?? [];
         const riskBadges = getRequirementRiskBadges(requirement, requirementTasks);
@@ -1598,7 +1699,7 @@ function RequirementTree({
         return (
           <span className={`requirements-tree__risk is-${primaryRisk.tone}`}>
             {primaryRisk.label}
-            {riskBadges.length > 1 ? <em>+{riskBadges.length - 1}</em> : null}
+            {riskBadges.length > 1 ? <em>{formatRiskOverflow(riskBadges.length - 1)}</em> : null}
           </span>
         );
       }
@@ -1651,10 +1752,10 @@ function RequirementTree({
                 <span>进度</span>
                 <span>截止</span>
                 <span>关注度</span>
-                <span>关注</span>
+                <span>操作</span>
               </div>
               {[...requirementTasks]
-                .sort((a, b) => Number(b.status === "blocked") - Number(a.status === "blocked"))
+                .sort((a, b) => Number(isTaskBlocked(b)) - Number(isTaskBlocked(a)))
                 .map((task) => {
                   const taskRiskBadges = getTaskRiskBadges(task);
                   return (
@@ -1697,19 +1798,59 @@ function RequirementTree({
                       <div className="requirements-tree__task-attention">
                         <TaskAttentionPill task={task} />
                       </div>
-                      <button
-                        type="button"
-                        className={`requirements-tree__favorite requirements-tree__task-favorite${
-                          favoriteTaskIds.has(task.id) ? " is-active" : ""
-                        }`}
-                        aria-label={favoriteTaskIds.has(task.id) ? "取消关注任务" : "关注任务"}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          onToggleTaskFavorite(task.id);
-                        }}
-                      >
-                        {favoriteTaskIds.has(task.id) ? <StarFilled /> : <StarOutlined />}
-                      </button>
+                      <div className="requirements-tree__task-actions">
+                        <button
+                          type="button"
+                          className={`requirements-tree__favorite requirements-tree__task-favorite${
+                            favoriteTaskIds.has(task.id) ? " is-active" : ""
+                          }`}
+                          aria-label={favoriteTaskIds.has(task.id) ? "取消关注任务" : "关注任务"}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onToggleTaskFavorite(task.id);
+                          }}
+                        >
+                          {favoriteTaskIds.has(task.id) ? <StarFilled /> : <StarOutlined />}
+                        </button>
+                        <Dropdown
+                          trigger={["click"]}
+                          menu={{
+                            items: [
+                              {
+                                key: "open",
+                                icon: <FileTextOutlined />,
+                                label: "打开详情"
+                              },
+                              ...(task.can_delete
+                                ? [
+                                    {
+                                      key: "delete",
+                                      danger: true,
+                                      icon: <DeleteOutlined />,
+                                      label: "删除任务"
+                                    }
+                                  ]
+                                : [])
+                            ],
+                            onClick: ({ key, domEvent }) => {
+                              domEvent.stopPropagation();
+                              if (key === "delete") {
+                                onDeleteTask(task);
+                                return;
+                              }
+                              onOpenTask(task);
+                            }
+                          }}
+                        >
+                          <Button
+                            type="text"
+                            size="small"
+                            icon={<MoreOutlined />}
+                            aria-label="任务操作"
+                            onClick={(event) => event.stopPropagation()}
+                          />
+                        </Dropdown>
+                      </div>
                     </div>
                   );
                 })}
@@ -1723,7 +1864,7 @@ function RequirementTree({
 
 interface TokenSourcePickerProps {
   open: boolean;
-  excludeIds: string[];
+  selectedIds: string[];
   onCancel: () => void;
   onConfirm: (ids: string[]) => Promise<void> | void;
   confirmLoading?: boolean;
@@ -1731,7 +1872,7 @@ interface TokenSourcePickerProps {
 
 function TokenSourcePicker({
   open,
-  excludeIds,
+  selectedIds,
   onCancel,
   onConfirm,
   confirmLoading
@@ -1741,7 +1882,8 @@ function TokenSourcePicker({
   const [dateRange, setDateRange] = useState<[string, string]>();
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
-  const excludeSet = useMemo(() => new Set(excludeIds), [excludeIds]);
+  const selectedIdsKey = useMemo(() => selectedIds.join("|"), [selectedIds]);
+  const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
   const sessionsQuery = useQuery({
     queryKey: ["requirements-board", "linkable-session-tokens", page, pageSize, dateRange],
     queryFn: () =>
@@ -1756,9 +1898,36 @@ function TokenSourcePicker({
     staleTime: 60_000
   });
   const sessions = useMemo(() => sessionsQuery.data?.items ?? [], [sessionsQuery.data]);
-  const available = useMemo(
-    () => sessions.filter((source) => !excludeSet.has(source.session_id) && source.total_tokens > 0),
-    [sessions, excludeSet]
+  const rows = useMemo(
+    () => sessions.filter((source) => source.total_tokens > 0),
+    [sessions]
+  );
+  useEffect(() => {
+    if (!open) return;
+    setSelected(selectedIds);
+    setSelectedRows({});
+    setPage(1);
+  }, [open, selectedIdsKey]);
+  useEffect(() => {
+    if (!open || !rows.length) return;
+    setSelectedRows((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      rows.forEach((row) => {
+        const key = sessionRowKey(row);
+        if ((selected.includes(key) || selectedIdSet.has(key)) && next[key] !== row) {
+          next[key] = row;
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, [open, rows, selected, selectedIdSet]);
+  const selectionChanged = useMemo(
+    () =>
+      selected.length !== selectedIds.length ||
+      selected.some((id) => !selectedIdSet.has(id)),
+    [selected, selectedIdSet, selectedIds.length]
   );
   const selectedTokenTotal = useMemo(
     () =>
@@ -1768,21 +1937,22 @@ function TokenSourcePicker({
       }, 0),
     [selected, selectedRows]
   );
-  const selectedSessionIds = useMemo(
-    () => Array.from(new Set(selected.map((id) => selectedRows[id]?.session_id).filter(Boolean))),
-    [selected, selectedRows]
+  const selectedSliceKeys = useMemo(
+    () => selected,
+    [selected]
   );
 
   const columns: TableProps<SessionTokens>["columns"] = [
     {
       title: "Session",
       key: "record",
-      width: 260,
+      width: 300,
       render: (_, source) => <span className="tokens-session-id">{realSessionId(source)}</span>
     },
     {
       title: "摘要",
       dataIndex: "summary",
+      width: 390,
       render: (value: string | undefined) =>
         value ? (
           <span className="tokens-session-summary" title={value}>
@@ -1795,14 +1965,14 @@ function TokenSourcePicker({
     {
       title: "Token",
       dataIndex: "total_tokens",
-      width: 100,
+      width: 110,
       align: "right" as const,
       render: (value: number) => <span className="tokens-total-cell">{formatTokens(value)}</span>
     },
     {
       title: "日期范围",
       dataIndex: "activity_start_at",
-      width: 170,
+      width: 230,
       render: (_, source) => <span className="tokens-activity-range">{formatSessionActivityRange(source)}</span>
     }
   ];
@@ -1817,7 +1987,7 @@ function TokenSourcePicker({
         </div>
       }
       open={open}
-      width={780}
+      width={1120}
       onCancel={() => {
         setSelected([]);
         setSelectedRows({});
@@ -1826,11 +1996,11 @@ function TokenSourcePicker({
         setPageSize(10);
         onCancel();
       }}
-      okText={selectedSessionIds.length ? `关联 ${selectedSessionIds.length} 条记录` : "关联记录"}
-      okButtonProps={{ disabled: !selectedSessionIds.length, loading: confirmLoading }}
+      okText={selectedSliceKeys.length ? `保存 ${selectedSliceKeys.length} 条关联` : "清空关联"}
+      okButtonProps={{ disabled: !selectionChanged, loading: confirmLoading }}
       cancelText="取消"
       onOk={async () => {
-        await onConfirm(selectedSessionIds);
+        await onConfirm(selectedSliceKeys);
         setSelected([]);
         setSelectedRows({});
       }}
@@ -1846,52 +2016,50 @@ function TokenSourcePicker({
             const nextRange =
               values[0] && values[1] ? ([values[0], values[1]] as [string, string]) : undefined;
             setDateRange(nextRange);
-            setSelected([]);
-            setSelectedRows({});
             setPage(1);
           }}
         />
       </div>
       <div className="requirements-session-modal__table tokens-table-card">
         <Table<SessionTokens>
-        rowKey={sessionRowKey}
-        size="small"
-        columns={columns}
-        dataSource={available}
-        loading={sessionsQuery.isLoading}
-        pagination={{
-          current: sessionsQuery.data?.page ?? page,
-          pageSize: sessionsQuery.data?.page_size ?? pageSize,
-          total: sessionsQuery.data?.total ?? 0,
-          showSizeChanger: true,
-          showTotal: (value) => `共 ${value} 条工作记录`,
-          onChange: (nextPage, nextPageSize) => {
-            setPage(nextPage);
-            setPageSize(nextPageSize);
-          }
-        }}
-          scroll={{ y: 360 }}
-        rowSelection={{
-          preserveSelectedRowKeys: true,
-          selectedRowKeys: selected,
-          onChange: (keys, rows) => {
-            const nextRows = { ...selectedRows };
-            rows.forEach((row) => {
-              nextRows[sessionRowKey(row)] = row;
-            });
-            setSelected(keys as string[]);
-            setSelectedRows(nextRows);
-          }
-        }}
-        locale={{ emptyText: "暂无可关联 session" }}
+          rowKey={sessionRowKey}
+          size="small"
+          tableLayout="fixed"
+          columns={columns}
+          dataSource={rows}
+          loading={sessionsQuery.isLoading}
+          pagination={{
+            current: sessionsQuery.data?.page ?? page,
+            pageSize: sessionsQuery.data?.page_size ?? pageSize,
+            total: sessionsQuery.data?.total ?? 0,
+            showSizeChanger: true,
+            showTotal: (value) => `共 ${value} 条工作记录`,
+            onChange: (nextPage, nextPageSize) => {
+              setPage(nextPage);
+              setPageSize(nextPageSize);
+            }
+          }}
+          rowSelection={{
+            preserveSelectedRowKeys: true,
+            selectedRowKeys: selected,
+            onChange: (keys, rows) => {
+              const nextRows = { ...selectedRows };
+              rows.forEach((row) => {
+                nextRows[sessionRowKey(row)] = row;
+              });
+              setSelected(keys as string[]);
+              setSelectedRows(nextRows);
+            }
+          }}
+          locale={{ emptyText: "暂无可关联 session" }}
         />
       </div>
       <div className="requirements-session-modal__summary">
         <span>
-          本页可选 {available.length} 条
+          本页 {rows.length} 条
           {dateRange ? ` · ${dateRange[0]} 至 ${dateRange[1]}` : ""}
         </span>
-        <strong>已选 {selectedSessionIds.length} 条 · {formatTokens(selectedTokenTotal)} Token</strong>
+        <strong>已选 {selectedSliceKeys.length} 条 · {formatTokens(selectedTokenTotal)} Token</strong>
       </div>
     </Modal>
   );
@@ -1900,6 +2068,7 @@ function TokenSourcePicker({
 function RequirementDrawer({
   requirement,
   tasks,
+  dependencyTasks,
   tokenSources,
   tokenSourceMap,
   creatorOpen,
@@ -1915,6 +2084,7 @@ function RequirementDrawer({
 }: {
   requirement?: MockRequirement;
   tasks: MockTask[];
+  dependencyTasks: MockTask[];
   tokenSources: MockTokenSource[];
   tokenSourceMap: Map<string, MockTokenSource>;
   creatorOpen: boolean;
@@ -2093,7 +2263,7 @@ function RequirementDrawer({
   );
   const totalTokens = requirementTokens + taskTokens;
   const completedCount = tasks.filter((task) => task.status === "done").length;
-  const blockedCount = tasks.filter((task) => task.status === "blocked").length;
+  const blockedCount = tasks.filter(isTaskBlocked).length;
   const canQuickEditRequirement = Boolean(requirement?.can_update);
 
   const quickUpdateMutation = useMutation({
@@ -2146,7 +2316,11 @@ function RequirementDrawer({
 
   const linkMutation = useMutation({
     mutationFn: (sourceIds: string[]) =>
-      requirementsBoardApi.linkRequirementTokenSources(requirement!.id, sourceIds),
+      requirementsBoardApi.setRequirementTokenSources(
+        requirement!.id,
+        sourceIds,
+        requirement!.token_source_ids
+      ),
     onSuccess: (updated) => {
       message.success("已关联 session");
       onSaved(updated);
@@ -2518,15 +2692,15 @@ function RequirementDrawer({
                       </div>
                     </div>
                     {creatorOpen ? (
-                      <TaskCreateModal
-                        embedded
-                        open={creatorOpen}
-                        requirementId={requirement.id}
-                        requirementTitle={requirement.title}
-                        existingTasks={tasks}
-                        onCancel={() => onCreatorOpenChange(false)}
-                        onCreated={() => onCreatorOpenChange(false)}
-                      />
+	                      <TaskCreateModal
+	                        embedded
+	                        open={creatorOpen}
+	                        requirementId={requirement.id}
+	                        requirementTitle={requirement.title}
+	                        existingTasks={dependencyTasks}
+	                        onCancel={() => onCreatorOpenChange(false)}
+	                        onCreated={() => onCreatorOpenChange(false)}
+	                      />
                     ) : null}
                     {!tasks.length && !creatorOpen ? (
                       <div className="requirements-drawer__execution-empty">
@@ -2534,39 +2708,62 @@ function RequirementDrawer({
                       </div>
                     ) : tasks.length ? (
                       <div className="requirements-drawer__task-list">
+                        <div className="requirements-drawer__task-list-head" aria-hidden="true">
+                          <span>任务</span>
+                          <span>状态</span>
+                          <span>负责人</span>
+                          <span>截止</span>
+                          <span>进度</span>
+                          <span>风险</span>
+                        </div>
                         {[...tasks]
                           .sort(
-                            (a, b) =>
-                              Number(b.status === "blocked") - Number(a.status === "blocked")
+                            (a, b) => Number(isTaskBlocked(b)) - Number(isTaskBlocked(a))
                           )
                           .map((task) => {
                             const tTokens = sumTokensFromSources(
                               task.token_source_ids,
                               tokenSourceMap
                             );
+                            const riskBadges = getTaskRiskBadges(task);
+                            const primaryRisk = riskBadges[0];
                             return (
                               <button
                                 key={task.id}
                                 type="button"
-                                className={`requirements-drawer__task-item${
-                                  task.status === "blocked" ? " has-blocked" : ""
+                                className={`requirements-drawer__task-row${
+                                  isTaskBlocked(task) || primaryRisk ? " has-risk" : ""
                                 }`}
                                 onClick={() => onOpenTask(task)}
                               >
-                                <div>
-                                  <strong>{task.title}</strong>
+                                <div className="requirements-drawer__task-title">
+                                  <strong title={task.title}>{task.title}</strong>
                                   <span>
-                                    {task.assignee_name || "未分配"} · {formatDate(task.due_date)}
+                                    {task.dependencies.length
+                                      ? `${task.dependencies.length} 个上游依赖`
+                                      : "无上游依赖"}
+                                    {tTokens > 0 ? ` · ${formatEvidenceCount(tTokens)}` : ""}
                                   </span>
                                 </div>
-                                <TaskStatusTag status={task.status} />
-                                <RequirementProgress value={task.progress} />
-                                <small>
-                                  {task.dependencies.length
-                                    ? `${task.dependencies.length} 个上游依赖`
-                                    : "无上游依赖"}
-                                  {tTokens > 0 ? ` · ${formatEvidenceCount(tTokens)}` : ""}
-                                </small>
+                                <div className="requirements-drawer__task-state">
+                                  <TaskStatusPill status={task.status} />
+                                  <PriorityPill priority={task.priority} />
+                                </div>
+                                <span className="requirements-drawer__task-owner" title={task.assignee_name || "未分配"}>
+                                  {task.assignee_name || "未分配"}
+                                </span>
+                                <span className="requirements-drawer__task-date">{formatDate(task.due_date)}</span>
+                                <div className="requirements-drawer__task-progress-inline">
+                                  <Progress percent={task.progress} showInfo={false} size="small" />
+                                  <strong>{task.progress}%</strong>
+                                </div>
+                                <span
+                                  className={`requirements-drawer__task-risk${
+                                    primaryRisk ? ` is-${primaryRisk.tone}` : ""
+                                  }`}
+                                >
+                                  {primaryRisk?.label ?? "正常"}
+                                </span>
                               </button>
                             );
                           })}
@@ -2678,7 +2875,7 @@ function RequirementDrawer({
 
           <TokenSourcePicker
             open={pickerOpen}
-            excludeIds={requirement.token_source_ids}
+            selectedIds={requirement.token_source_ids}
             confirmLoading={linkMutation.isPending}
             onCancel={() => setPickerOpen(false)}
             onConfirm={async (ids) => {
@@ -2977,7 +3174,7 @@ function TaskCreateModal({
 
   const dependencyOptions = existingTasks.map((task) => ({
     value: task.id,
-    label: task.title
+    label: task.requirement_title ? `${task.title} · ${task.requirement_title}` : task.title
   }));
 
   const createMutation = useMutation({
@@ -3073,13 +3270,13 @@ function TaskCreateModal({
             <Form.Item label="上游依赖" name="dependency_task_ids" rules={dependencyArrayRules()}>
               <Select
                 mode="multiple"
-                placeholder="选择上游依赖任务"
+                placeholder="搜索并选择上游任务"
                 options={dependencyOptions}
                 allowClear
               />
             </Form.Item>
           ) : (
-            <p className="requirements-task-modal__hint">当前需求暂无可选上游任务。</p>
+            <p className="requirements-task-modal__hint">暂无可选上游任务。</p>
           )}
         </section>
         <section className="requirements-task-modal__section">
@@ -3220,10 +3417,9 @@ function TokenSourceList({
   );
 }
 
-function TaskDrawer({
+function TaskDetailModal({
   task,
-  requirementTasks,
-  tokenSources,
+  dependencyTasks,
   tokenSourceMap,
   isFavorite,
   canManage,
@@ -3233,8 +3429,7 @@ function TaskDrawer({
   onDeleted
 }: {
   task?: MockTask;
-  requirementTasks: MockTask[];
-  tokenSources: MockTokenSource[];
+  dependencyTasks: MockTask[];
   tokenSourceMap: Map<string, MockTokenSource>;
   isFavorite: boolean;
   canManage: boolean;
@@ -3244,27 +3439,37 @@ function TaskDrawer({
   onDeleted: () => void;
 }) {
   return (
-    <Drawer
-      className="requirements-drawer"
-      size={640}
+    <Modal
+      className="requirements-task-detail-modal"
+      wrapClassName="requirements-task-detail-modal-wrap"
+      width={1120}
+      zIndex={1300}
       open={Boolean(task)}
-      onClose={onClose}
+      onCancel={onClose}
+      footer={null}
+      destroyOnHidden
+      style={{ top: 36 }}
+      styles={{
+        body: {
+          maxHeight: "calc(100vh - 156px)",
+          overflowY: "auto",
+          padding: "16px 20px 20px"
+        }
+      }}
       title={
         task ? (
-          <div className="requirements-drawer__title-row">
-            <div className="requirements-drawer__title">
-              <strong>{task.title}</strong>
-            </div>
+          <div className="requirements-task-detail-modal__title">
             {onToggleFavorite ? (
               <button
                 type="button"
-                className={`requirements-drawer__favorite${isFavorite ? " is-active" : ""}`}
+                className={`requirements-task-detail-modal__favorite${isFavorite ? " is-active" : ""}`}
                 aria-label={isFavorite ? "取消关注" : "关注任务"}
                 onClick={onToggleFavorite}
               >
                 {isFavorite ? <StarFilled style={{ color: "#f59e0b" }} /> : <StarOutlined />}
               </button>
             ) : null}
+            <strong title={task.title}>{task.title}</strong>
           </div>
         ) : (
           "任务详情"
@@ -3275,30 +3480,27 @@ function TaskDrawer({
         <TaskDrawerContent
           key={`${task.id}-${task.updated_at}`}
           task={task}
-          requirementTasks={requirementTasks}
-          tokenSources={tokenSources}
+          dependencyTasks={dependencyTasks}
           tokenSourceMap={tokenSourceMap}
           canManage={canManage}
           onSaved={onSaved}
           onDeleted={onDeleted}
         />
       ) : null}
-    </Drawer>
+    </Modal>
   );
 }
 
 function TaskDrawerContent({
   task,
-  requirementTasks,
-  tokenSources,
+  dependencyTasks,
   tokenSourceMap,
   canManage,
   onSaved,
   onDeleted
 }: {
   task: MockTask;
-  requirementTasks: MockTask[];
-  tokenSources: MockTokenSource[];
+  dependencyTasks: MockTask[];
   tokenSourceMap: Map<string, MockTokenSource>;
   canManage: boolean;
   onSaved: (task: MockTask) => void;
@@ -3309,8 +3511,10 @@ function TaskDrawerContent({
   const [progress, setProgress] = useState(task.progress);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
-  const [dependencyDraft, setDependencyDraft] = useState<string>();
-  const dependencyBlocked = task.status === "blocked";
+  const dependencyBlocked = isTaskBlocked(task);
+  useEffect(() => {
+    setProgress(task.progress);
+  }, [task.id, task.progress]);
   const refreshAfterConflict = (error: unknown, fallback: string) => {
     if (handleEditConflict(error, message, queryClient)) return;
     message.error(error instanceof Error ? error.message : fallback);
@@ -3334,6 +3538,7 @@ function TaskDrawerContent({
       okText: "删除任务",
       okButtonProps: { danger: true },
       cancelText: "取消",
+      zIndex: 1500,
       onOk: () => deleteMutation.mutateAsync()
     });
   };
@@ -3350,7 +3555,7 @@ function TaskDrawerContent({
     onError: (error) => refreshAfterConflict(error, "进度保存失败")
   });
   const statusMutation = useMutation({
-    mutationFn: (next: Exclude<MockTaskStatus, "blocked">) =>
+    mutationFn: (next: MockTaskStatus) =>
       requirementsBoardApi.updateTaskStatus(task.id, next, task.version),
     onSuccess: (updated) => {
       message.success("任务状态已更新");
@@ -3362,49 +3567,13 @@ function TaskDrawerContent({
     },
     onError: (error) => refreshAfterConflict(error, "状态更新失败")
   });
-  const addDependencyMutation = useMutation({
-    mutationFn: (dependsOnId: string) =>
-      requirementsBoardApi.addTaskDependency(task.id, dependsOnId, task.version),
-    onSuccess: (updated) => {
-      message.success("上游依赖已更新");
-      setDependencyDraft(undefined);
-      onSaved(updated);
-      void invalidateRequirementTaskWorkspace(queryClient, {
-        requirementId: updated.requirement_id,
-        taskId: updated.id
-      });
-    },
-    onError: (error) => refreshAfterConflict(error, "依赖更新失败")
-  });
-  const removeDependencyMutation = useMutation({
-    mutationFn: (dependsOnId: string) =>
-      requirementsBoardApi.removeTaskDependency(task.id, dependsOnId, task.version),
-    onSuccess: (updated) => {
-      message.success("上游依赖已移除");
-      onSaved(updated);
-      void invalidateRequirementTaskWorkspace(queryClient, {
-        requirementId: updated.requirement_id,
-        taskId: updated.id
-      });
-    },
-    onError: (error) => refreshAfterConflict(error, "依赖移除失败")
-  });
-  const requestStatusChange = (next: Exclude<MockTaskStatus, "blocked">) => {
-    if (next === "done" || next === "todo") {
-      modal.confirm({
-        title: next === "done" ? "确认标记完成？" : "确认重新打开？",
-        content: "状态变化会同步影响需求的聚合进度。",
-        okText: next === "done" ? "标记完成" : "重新打开",
-        cancelText: "取消",
-        onOk: () => statusMutation.mutateAsync(next)
-      });
-      return;
-    }
+  const requestStatusChange = (next: MockTaskStatus) => {
+    if (next === task.status) return;
     statusMutation.mutate(next);
   };
   const linkMutation = useMutation({
     mutationFn: (sourceIds: string[]) =>
-      requirementsBoardApi.linkTaskTokenSources(task.id, sourceIds),
+      requirementsBoardApi.setTaskTokenSources(task.id, sourceIds, task.token_source_ids),
     onSuccess: (updated) => {
       message.success("已关联 session");
       onSaved(updated);
@@ -3416,101 +3585,78 @@ function TaskDrawerContent({
     },
     onError: (error) => message.error(error instanceof Error ? error.message : "关联失败")
   });
-  const unlinkMutation = useMutation({
-    mutationFn: (sourceId: string) => requirementsBoardApi.unlinkTaskTokenSource(task.id, sourceId),
-    onSuccess: (updated) => {
-      message.success("已移除 session");
-      onSaved(updated);
-      void invalidateRequirementTaskWorkspace(queryClient, {
-        requirementId: updated.requirement_id,
-        taskId: updated.id
-      });
-    },
-    onError: (error) => message.error(error instanceof Error ? error.message : "移除失败")
-  });
-
   const linkedSources = task.token_source_ids
     .map((id) => tokenSourceMap.get(id))
     .filter((source): source is MockTokenSource => Boolean(source));
   const linkedTotal = linkedSources.reduce((total, source) => total + source.token, 0);
-  const primaryStatusAction = (() => {
-    if (!task.can_update_status) return undefined;
-    if (task.status === "done") {
+  const taskRiskItems = getTaskRiskBadges(task).map((risk) => {
+    if (risk.key === "overdue") {
       return {
-        label: "重新打开",
-        onClick: () => requestStatusChange("todo")
+        ...risk,
+        description: `截止日期 ${formatDate(task.due_date)}，请确认是否需要调整计划或重新分配。`
       };
     }
-    if (dependencyBlocked) return undefined;
-    if (task.status === "todo") {
+    if (risk.key === "blocked") {
       return {
-        label: "开始任务",
-        onClick: () => requestStatusChange("in_progress")
+        ...risk,
+        description: task.dependencies.length
+          ? "存在未完成的上游依赖，完成前不建议继续推进当前任务。"
+          : "任务存在阻塞风险，请确认阻塞原因。"
       };
     }
     return {
-      label: "标记完成",
-      onClick: () => requestStatusChange("done")
+      ...risk,
+      description: "依赖关系存在异常，请检查上游工作项是否重复、失效或互相冲突。"
     };
-  })();
-  const moreActionItems = task.can_delete
-    ? [
-        {
-          key: "delete",
-          danger: true,
-          icon: <DeleteOutlined />,
-          label: "删除任务",
-          onClick: handleDelete
-        }
-      ]
-    : [];
+  });
+  const progressDirty = progress !== task.progress;
+  const statusSegmentOptions = [
+    { label: "未开始", value: "todo" },
+    { label: "进行中", value: "in_progress" },
+    { label: "已完成", value: "done" }
+  ];
+  if (editOpen) {
+    return (
+      <TaskEditModal
+        embedded
+        open={editOpen}
+        task={task}
+        existingTasks={dependencyTasks}
+        onCancel={() => setEditOpen(false)}
+        onSaved={(updated) => {
+          setEditOpen(false);
+          onSaved(updated);
+        }}
+      />
+    );
+  }
 
   return (
-    <Space orientation="vertical" size={16} style={{ width: "100%" }}>
-      <section className="requirements-drawer__summary requirements-task-detail__summary">
-        <div className="requirements-drawer__summary-head">
-          <div className="requirements-drawer__summary-tags">
-            <TaskStatusTag status={task.status} />
-            <RequirementPriorityTag priority={task.priority} />
+    <div className="requirements-task-detail">
+      <section className="requirements-task-detail__hero">
+        <div className="requirements-task-detail__hero-head">
+          <div className="requirements-task-detail__status">
+            <TaskStatusPill status={task.status} />
+            <PriorityPill priority={task.priority} />
             {dependencyBlocked ? <Tag color="error">上游阻塞</Tag> : null}
           </div>
-          {(task.can_update_status || task.can_update_meta || task.can_delete) ? (
+          {(task.can_update_meta || task.can_delete) ? (
             <div className="requirements-drawer__actions">
-              {primaryStatusAction ? (
-                <Button
-                  type="primary"
-                  loading={statusMutation.isPending}
-                  onClick={primaryStatusAction.onClick}
-                >
-                  {primaryStatusAction.label}
-                </Button>
-              ) : null}
               {task.can_update_meta ? (
                 <Button icon={<EditOutlined />} onClick={() => setEditOpen(true)}>
                   编辑
                 </Button>
               ) : null}
-              {moreActionItems.length ? (
-                <Dropdown menu={{ items: moreActionItems }} trigger={["click"]}>
-                  <Button icon={<MoreOutlined />} aria-label="更多操作" />
-                </Dropdown>
+              {task.can_delete ? (
+                <Button danger icon={<DeleteOutlined />} onClick={handleDelete}>
+                  删除任务
+                </Button>
               ) : null}
             </div>
           ) : null}
         </div>
-        {dependencyBlocked ? (
-          <Alert
-            type="warning"
-            showIcon
-            message="上游任务未完成，当前任务暂不能推进"
-            style={{ marginBottom: 12 }}
-          />
-        ) : null}
-        <div className="requirements-drawer__summary-strip">
-          <div>
-            <span>任务进度</span>
-            <RequirementProgress value={task.progress} />
-          </div>
+
+        <div className="requirements-task-detail__meta-strip">
           <div>
             <span>负责人</span>
             <strong>{task.assignee_name || "未分配"}</strong>
@@ -3519,180 +3665,182 @@ function TaskDrawerContent({
             <span>截止日期</span>
             <strong>{formatDate(task.due_date)}</strong>
           </div>
+          <div>
+            <span>关联 session</span>
+            <div className="requirements-task-detail__session-meta">
+              <strong
+                title={
+                  linkedSources.length
+                    ? `已关联 ${linkedSources.length} 条，约 ${formatTokens(linkedTotal)} Token`
+                    : "未关联工作记录"
+                }
+              >
+                {linkedSources.length
+                  ? `${linkedSources.length} 条 · ${formatTokens(linkedTotal)} Token`
+                  : "未关联"}
+              </strong>
+              {canManage ? (
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<LinkOutlined />}
+                  aria-label="管理关联 session"
+                  onClick={() => setPickerOpen(true)}
+                />
+              ) : null}
+            </div>
+          </div>
         </div>
-        <div className="requirements-drawer__progress-editor">
-          <Slider min={0} max={100} value={progress} disabled={!task.can_update_progress} onChange={setProgress} />
-          <Space.Compact>
-            <InputNumber
+
+        <div className="requirements-task-detail__progress-control">
+          <div className="requirements-task-detail__progress-row">
+            <div className="requirements-task-detail__progress-label">
+              <span>任务进度</span>
+              <strong>{progress}%</strong>
+            </div>
+            <Slider
+              className="requirements-task-detail__progress-slider"
               min={0}
               max={100}
               value={progress}
               disabled={!task.can_update_progress}
+              styles={{
+                track: { backgroundImage: "linear-gradient(180deg, #91caff, #1677ff)" },
+                handle: { borderColor: "#1677ff", boxShadow: "0 2px 8px rgba(22, 119, 255, 0.28)" }
+              }}
+              tooltip={{ formatter: (value) => `${value ?? 0}%` }}
+              onChange={setProgress}
+            />
+            <InputNumber
+              min={0}
+              max={100}
+              value={progress}
+              addonAfter="%"
+              disabled={!task.can_update_progress}
               onChange={(value) => setProgress(value ?? 0)}
             />
-            <Button disabled>%</Button>
-          </Space.Compact>
-          <Button
-            type="primary"
-            loading={progressMutation.isPending}
-            disabled={!task.can_update_progress || progress === task.progress}
-            onClick={() => progressMutation.mutate()}
-          >
-            保存进度
-          </Button>
-        </div>
-      </section>
-
-      <section className="requirements-drawer__section">
-        <h3>任务信息</h3>
-        <div className="requirements-task-detail__meta">
-          <div>
-            <span>所属需求</span>
-            <strong>{task.requirement_title}</strong>
-          </div>
-          <div>
-            <span>最近更新</span>
-            <strong>{formatDateTime(task.updated_at)}</strong>
-          </div>
-        </div>
-        {task.acceptance_criteria.length ? (
-          <ol className="requirements-drawer__ac-list">
-            {task.acceptance_criteria.map((item, index) => (
-              <li key={`${index}-${item}`}>
-                <span>AC {index + 1}</span>
-                {item}
-              </li>
-            ))}
-          </ol>
-        ) : (
-          <p style={{ margin: "12px 0 0", color: "#7a879a" }}>暂无任务验收标准</p>
-        )}
-      </section>
-
-      <section className="requirements-drawer__section">
-        <div className="requirements-drawer__section-head">
-          <h3>上游依赖</h3>
-          <span>{task.dependencies.length ? `${task.dependencies.length} 个依赖` : "无上游依赖"}</span>
-        </div>
-        {task.dependencies.length ? (
-          <Space wrap size={6}>
-            {task.dependencies.map((dependency) => (
-              <Tag
-                key={dependency.task_id}
-                color={dependency.status === "done" ? "success" : "error"}
-                closable={Boolean(task.can_manage_dependencies)}
-                onClose={(event) => {
-                  event.preventDefault();
-                  removeDependencyMutation.mutate(dependency.task_id);
-                }}
-              >
-                {dependency.task_title}
-              </Tag>
-            ))}
-          </Space>
-        ) : null}
-        <Space.Compact style={{ width: "100%", marginTop: 12 }}>
-          <Select
-            allowClear
-            showSearch
-            value={dependencyDraft}
-            disabled={!task.can_manage_dependencies}
-            placeholder="选择同一需求内的上游任务"
-            optionFilterProp="label"
-            options={requirementTasks
-              .filter(
-                (candidate) =>
-                  candidate.id !== task.id &&
-                  !task.dependencies.some((dependency) => dependency.task_id === candidate.id)
-              )
-              .map((candidate) => ({ value: candidate.id, label: candidate.title }))}
-            onChange={setDependencyDraft}
-          />
-          <Button
-            loading={addDependencyMutation.isPending}
-            disabled={!task.can_manage_dependencies || !dependencyDraft}
-            onClick={() => dependencyDraft && addDependencyMutation.mutate(dependencyDraft)}
-          >
-            添加依赖
-          </Button>
-        </Space.Compact>
-      </section>
-
-      <section className="requirements-drawer__section">
-        <div className="requirements-drawer__section-head">
-          <h3>关联 session</h3>
-          <div className="requirements-drawer__section-actions">
-            {linkedTotal > 0 ? (
-              <span>已关联 {formatTokens(linkedTotal)} Token</span>
-            ) : null}
-            {canManage ? (
-              <Button size="small" icon={<LinkOutlined />} onClick={() => setPickerOpen(true)}>
-                关联 session
-              </Button>
-            ) : null}
-          </div>
-        </div>
-        {linkedSources.length ? (
-          <Space orientation="vertical" size={8} style={{ width: "100%" }}>
-            {linkedSources.map((source) => (
-              <div key={source.id} className="requirements-drawer__token-row">
-                <div className="requirements-drawer__token-row-main">
-                  <strong>{source.summary || "（无摘要）"}</strong>
-                  <span>
-                    {formatTokenSourceTime(source.recorded_at)} · {source.tool} · {source.uploader}
-                  </span>
-                </div>
-                <div className="requirements-drawer__token-row-meta">
-                  <span>{formatTokens(source.token)} Token</span>
-                  <Button
-                    size="small"
-                    type="text"
-                    icon={<CloseOutlined />}
-                    loading={unlinkMutation.isPending && unlinkMutation.variables === source.id}
-                    disabled={!canManage}
-                    onClick={() => unlinkMutation.mutate(source.id)}
-                    aria-label="移除"
-                  />
-                </div>
+            <Button
+              type="primary"
+              loading={progressMutation.isPending}
+              disabled={!task.can_update_progress || !progressDirty}
+              onClick={() => progressMutation.mutate()}
+            >
+              保存
+            </Button>
+            {task.can_update_status ? (
+              <div className="requirements-task-detail__status-switch">
+                {statusSegmentOptions.map((option) => {
+                  const active = task.status === option.value;
+                  return (
+                    <Button
+                      key={option.value}
+                      size="small"
+                      type={active ? "primary" : "default"}
+                      disabled={statusMutation.isPending || active}
+                      onClick={() => requestStatusChange(option.value as MockTaskStatus)}
+                    >
+                      {option.label}
+                    </Button>
+                  );
+                })}
               </div>
-            ))}
-          </Space>
-        ) : (
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无关联 session" />
-        )}
+            ) : (
+              <TaskStatusPill status={task.status} />
+            )}
+          </div>
+        </div>
       </section>
+
+      <div className="requirements-task-detail__layout">
+        <section className="requirements-drawer__section requirements-task-detail__risk-card">
+          <div className="requirements-drawer__section-head">
+            <h3>风险</h3>
+            <span>{taskRiskItems.length ? `${taskRiskItems.length} 项` : "暂无风险"}</span>
+          </div>
+          {taskRiskItems.length ? (
+            <div className="requirements-task-detail__risk-list">
+              {taskRiskItems.map((risk) => (
+                <div className={`is-${risk.tone}`} key={risk.key}>
+                  <WarningOutlined />
+                  <div>
+                    <strong>{risk.label}</strong>
+                    <span>{risk.description}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="requirements-task-detail__healthy-risk">
+              当前任务未命中逾期、阻塞或依赖冲突。
+            </div>
+          )}
+        </section>
+
+        <section className="requirements-drawer__section">
+          <div className="requirements-drawer__section-head">
+            <h3>任务信息</h3>
+            <span>所属需求</span>
+          </div>
+          <div className="requirements-task-detail__requirement-link">
+            <strong title={task.requirement_title}>{task.requirement_title}</strong>
+          </div>
+          <div className="requirements-task-detail__info-row">
+            <span>上游依赖</span>
+            {task.dependencies.length ? (
+              <div className="requirements-task-detail__dependency-list">
+                {task.dependencies.map((dependency) => (
+                  <Tag
+                    key={`${getDependencyType(dependency)}:${getDependencyId(dependency)}`}
+                    color={isDependencyDone(dependency) ? "success" : "error"}
+                  >
+                    {getDependencyLabel(dependency)}
+                  </Tag>
+                ))}
+              </div>
+            ) : (
+              <strong>无上游依赖</strong>
+            )}
+          </div>
+          {task.acceptance_criteria.length ? (
+            <ol className="requirements-drawer__ac-list requirements-task-detail__criteria-list">
+              {task.acceptance_criteria.map((item, index) => (
+                <li key={`${index}-${item}`}>
+                  <span>AC {index + 1}</span>
+                  {item}
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className="requirements-task-detail__muted">暂无任务验收标准</p>
+          )}
+        </section>
+      </div>
 
       <TokenSourcePicker
         open={pickerOpen}
-        excludeIds={task.token_source_ids}
+        selectedIds={task.token_source_ids}
         confirmLoading={linkMutation.isPending}
         onCancel={() => setPickerOpen(false)}
         onConfirm={async (ids) => {
           await linkMutation.mutateAsync(ids);
         }}
       />
-
-      <TaskEditModal
-        open={editOpen}
-        task={task}
-        onCancel={() => setEditOpen(false)}
-        onSaved={(updated) => {
-          setEditOpen(false);
-          onSaved(updated);
-        }}
-      />
-    </Space>
+    </div>
   );
 }
 
 function TaskEditModal({
+  embedded = false,
   open,
   task,
+  existingTasks,
   onCancel,
   onSaved
 }: {
+  embedded?: boolean;
   open: boolean;
   task: MockTask;
+  existingTasks: MockTask[];
   onCancel: () => void;
   onSaved: (task: MockTask) => void;
 }) {
@@ -3703,6 +3851,7 @@ function TaskEditModal({
     assignee_id?: string;
     priority: MockTaskPriority;
     due_date?: dayjs.Dayjs;
+    dependency_task_ids?: string[];
     acceptance_criteria?: string[];
   }>();
 
@@ -3711,6 +3860,34 @@ function TaskEditModal({
     queryFn: () => requirementsBoardApi.listAssignees(),
     staleTime: 5 * 60_000
   });
+  const currentDependencyTaskIds = useMemo(
+    () =>
+      task.dependencies
+        .filter((dependency) => getDependencyType(dependency) === "task")
+        .map(getDependencyId)
+        .filter(Boolean)
+        .filter((dependencyId) => dependencyId !== task.id),
+    [task.dependencies, task.id]
+  );
+  const dependencyOptions = useMemo(() => {
+    const options = existingTasks
+      .filter((item) => item.id !== task.id)
+      .map((item) => ({
+        value: item.id,
+        label: item.requirement_title ? `${item.title} · ${item.requirement_title}` : item.title
+      }));
+
+    task.dependencies
+      .filter((dependency) => getDependencyType(dependency) === "task")
+      .forEach((dependency) => {
+        const dependencyId = getDependencyId(dependency);
+        if (dependencyId && dependencyId !== task.id && !options.some((item) => item.value === dependencyId)) {
+          options.push({ value: dependencyId, label: getDependencyLabel(dependency) });
+        }
+      });
+
+    return options;
+  }, [existingTasks, task.dependencies, task.id]);
 
   const initialValues = useMemo(
     () => ({
@@ -3718,9 +3895,10 @@ function TaskEditModal({
       assignee_id: task.assignee_id,
       priority: task.priority,
       due_date: task.due_date ? dayjs(task.due_date) : undefined,
+      dependency_task_ids: currentDependencyTaskIds,
       acceptance_criteria: task.acceptance_criteria.length ? task.acceptance_criteria : [""]
     }),
-    [task]
+    [currentDependencyTaskIds, task]
   );
   const canReassign = task.can_reassign === true;
 
@@ -3738,6 +3916,7 @@ function TaskEditModal({
       assignee_id?: string;
       priority: MockTaskPriority;
       due_date?: dayjs.Dayjs;
+      dependency_task_ids?: string[];
       acceptance_criteria?: string[];
     }) => {
       const payload = {
@@ -3748,7 +3927,37 @@ function TaskEditModal({
         base_version: task.version,
         ...(canReassign ? { assignee_id: values.assignee_id } : {})
       };
-      return requirementsBoardApi.updateTask(task.id, payload);
+      return requirementsBoardApi.updateTask(task.id, payload).then(async (updatedTask) => {
+        const selectedDependencyIds = Array.from(new Set(values.dependency_task_ids ?? []))
+          .filter(Boolean)
+          .filter((dependencyId) => dependencyId !== task.id);
+        const selectedDependencySet = new Set(selectedDependencyIds);
+        const currentDependencySet = new Set(currentDependencyTaskIds);
+        let latestTask = updatedTask;
+
+        for (const dependencyId of currentDependencyTaskIds) {
+          if (!selectedDependencySet.has(dependencyId)) {
+            latestTask = await requirementsBoardApi.removeTaskDependency(
+              task.id,
+              dependencyId,
+              latestTask.version,
+              "task"
+            );
+          }
+        }
+        for (const dependencyId of selectedDependencyIds) {
+          if (!currentDependencySet.has(dependencyId)) {
+            latestTask = await requirementsBoardApi.addTaskDependency(
+              task.id,
+              dependencyId,
+              latestTask.version,
+              "task"
+            );
+          }
+        }
+
+        return latestTask;
+      });
     },
     onSuccess: (updated) => {
       message.success("任务已更新");
@@ -3763,6 +3972,100 @@ function TaskEditModal({
       message.error(error instanceof Error ? error.message : "任务更新失败");
     }
   });
+
+  const formContent = (
+    <Form
+      form={form}
+      layout="vertical"
+      initialValues={initialValues}
+      onFinish={(values) => updateMutation.mutate(values)}
+    >
+      <Form.Item
+        label="任务标题"
+        name="title"
+        rules={titleRules("任务标题")}
+      >
+        <Input placeholder="任务标题" />
+      </Form.Item>
+      <div className="requirements-task-edit-panel__grid">
+        <Form.Item label="负责人" name="assignee_id" rules={requiredSelectRules("负责人")}>
+          <Select
+            placeholder="选择负责人"
+            loading={assigneesQuery.isLoading}
+            disabled={!canReassign || assigneesQuery.isLoading || assigneesQuery.isError}
+            getPopupContainer={getTaskModalPopupContainer}
+            classNames={{ popup: { root: "requirements-task-detail-popup" } }}
+            options={(assigneesQuery.data ?? []).map((item: MockAssignee) => ({
+              value: item.id,
+              label: `${item.name} (${item.employee_id})`
+            }))}
+          />
+        </Form.Item>
+        <Form.Item
+          label="优先级"
+          name="priority"
+          rules={requiredSelectRules("优先级")}
+        >
+          <Select
+            getPopupContainer={getTaskModalPopupContainer}
+            classNames={{ popup: { root: "requirements-task-detail-popup" } }}
+            options={[
+              { value: "low", label: "低" },
+              { value: "medium", label: "中" },
+              { value: "high", label: "高" }
+            ]}
+          />
+        </Form.Item>
+        <Form.Item label="截止日期" name="due_date">
+          <DatePicker
+            getPopupContainer={getTaskModalPopupContainer}
+            classNames={{ popup: { root: "requirements-task-detail-popup" } }}
+            style={{ width: "100%" }}
+          />
+        </Form.Item>
+      </div>
+      <Form.Item label="上游依赖" name="dependency_task_ids" rules={dependencyArrayRules()}>
+        <Select
+          mode="multiple"
+          placeholder={dependencyOptions.length ? "选择上游任务" : "暂无可选上游任务"}
+          disabled={!dependencyOptions.length}
+          options={dependencyOptions}
+          allowClear
+          getPopupContainer={getTaskModalPopupContainer}
+          classNames={{ popup: { root: "requirements-task-detail-popup" } }}
+        />
+      </Form.Item>
+      <Form.Item label="标准列表" name="acceptance_criteria" rules={acceptanceCriteriaRules()}>
+        <AcceptanceCriteriaEditor placeholder="输入一条可验证的任务验收标准" />
+      </Form.Item>
+    </Form>
+  );
+
+  if (embedded) {
+    if (!open) return null;
+    return (
+      <section className="requirements-task-edit-panel">
+        <div className="requirements-task-edit-panel__head">
+          <div className="requirements-modal-title">
+            <strong>编辑任务</strong>
+            <span>{task.title}</span>
+          </div>
+          <Button onClick={onCancel}>返回详情</Button>
+        </div>
+        {formContent}
+        <div className="requirements-task-edit-panel__footer">
+          <Button onClick={onCancel}>取消</Button>
+          <Button
+            type="primary"
+            loading={updateMutation.isPending}
+            onClick={() => form.submit()}
+          >
+            保存
+          </Button>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <Modal
@@ -3779,50 +4082,7 @@ function TaskEditModal({
       cancelText="取消"
       confirmLoading={updateMutation.isPending}
     >
-      <Form
-        form={form}
-        layout="vertical"
-        initialValues={initialValues}
-        onFinish={(values) => updateMutation.mutate(values)}
-      >
-        <Form.Item
-          label="任务标题"
-          name="title"
-          rules={titleRules("任务标题")}
-        >
-          <Input placeholder="任务标题" />
-        </Form.Item>
-        <Form.Item label="负责人" name="assignee_id" rules={requiredSelectRules("负责人")}>
-          <Select
-            placeholder="选择负责人"
-            loading={assigneesQuery.isLoading}
-            disabled={!canReassign || assigneesQuery.isLoading || assigneesQuery.isError}
-            options={(assigneesQuery.data ?? []).map((item: MockAssignee) => ({
-              value: item.id,
-              label: `${item.name} (${item.employee_id})`
-            }))}
-          />
-        </Form.Item>
-        <Form.Item
-          label="优先级"
-          name="priority"
-          rules={requiredSelectRules("优先级")}
-        >
-          <Select
-            options={[
-              { value: "low", label: "低" },
-              { value: "medium", label: "中" },
-              { value: "high", label: "高" }
-            ]}
-          />
-        </Form.Item>
-        <Form.Item label="截止日期" name="due_date">
-          <DatePicker style={{ width: "100%" }} />
-        </Form.Item>
-        <Form.Item label="标准列表" name="acceptance_criteria" rules={acceptanceCriteriaRules()}>
-          <AcceptanceCriteriaEditor placeholder="输入一条可验证的任务验收标准" />
-        </Form.Item>
-      </Form>
+      {formContent}
     </Modal>
   );
 }

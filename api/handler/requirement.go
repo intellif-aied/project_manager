@@ -112,6 +112,9 @@ func (h *RequirementHandler) List(w http.ResponseWriter, r *http.Request) {
 
 func (h *RequirementHandler) Get(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	if !validateUUIDParam(w, id, "requirement_id") {
+		return
+	}
 	u := getUser(r)
 	var req model.Requirement
 	var acStr string
@@ -267,6 +270,9 @@ func (h *RequirementHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 func (h *RequirementHandler) Update(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	if !validateUUIDParam(w, id, "requirement_id") {
+		return
+	}
 	u := getUser(r)
 	var req model.UpdateRequirementRequest
 	if err := readJSON(r, &req); err != nil {
@@ -436,6 +442,9 @@ func (h *RequirementHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 func (h *RequirementHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	if !validateUUIDParam(w, id, "requirement_id") {
+		return
+	}
 	u := getUser(r)
 	var req model.RequirementVersionRequest
 	if err := readJSON(r, &req); err != nil {
@@ -492,6 +501,9 @@ func (h *RequirementHandler) Restore(w http.ResponseWriter, r *http.Request) {
 func (h *RequirementHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	u := getUser(r)
+	if !validateUUIDParam(w, id, "requirement_id") {
+		return
+	}
 	baseVersion, ok := parseBaseVersionFromQuery(w, r)
 	if !ok {
 		return
@@ -528,10 +540,15 @@ func (h *RequirementHandler) Delete(w http.ResponseWriter, r *http.Request) {
 
 	var hasAssociations bool
 	if err := tx.QueryRow(`
-		SELECT EXISTS(SELECT 1 FROM tasks WHERE requirement_id = $1)
-		    OR EXISTS(SELECT 1 FROM sessions WHERE requirement_id = $1)
-		    OR EXISTS(SELECT 1 FROM token_usage WHERE requirement_id = $1)
-		    OR EXISTS(SELECT 1 FROM documents WHERE requirement_id = $1)`, id).Scan(&hasAssociations); err != nil {
+			SELECT EXISTS(SELECT 1 FROM tasks WHERE requirement_id = $1)
+			    OR EXISTS(SELECT 1 FROM sessions WHERE requirement_id = $1)
+			    OR EXISTS(SELECT 1 FROM token_usage WHERE requirement_id = $1)
+			    OR EXISTS(SELECT 1 FROM documents WHERE requirement_id = $1)
+			    OR EXISTS(
+					SELECT 1 FROM work_item_relations
+					WHERE (source_type = 'requirement' AND source_id = $1)
+					   OR (target_type = 'requirement' AND target_id = $1)
+				)`, id).Scan(&hasAssociations); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -566,8 +583,155 @@ func (h *RequirementHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "id": id})
 }
 
+func (h *RequirementHandler) AddDependency(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if !validateUUIDParam(w, id, "requirement_id") {
+		return
+	}
+	u := getUser(r)
+	var req model.AddDependencyRequest
+	if err := readJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		return
+	}
+	if !requireBaseVersion(w, req.BaseVersion) {
+		return
+	}
+	targetType, typeErr := normalizeWorkItemType(req.DependsOnType)
+	if typeErr != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": typeErr.Error()})
+		return
+	}
+	allowed, permErr := h.canManageRequirement(u, id)
+	if permErr != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": permErr.Error()})
+		return
+	}
+	if !allowed {
+		writeRequirementForbiddenOrNotFound(w, h.db, id, "insufficient permissions to update requirement dependencies")
+		return
+	}
+
+	tx, err := h.db.Begin()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	defer tx.Rollback()
+
+	var currentVersion int64
+	if err := tx.QueryRow(`SELECT version FROM requirements WHERE id = $1 FOR UPDATE`, id).Scan(&currentVersion); err == sql.ErrNoRows {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	} else if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if currentVersion != req.BaseVersion {
+		writeEditConflict(w, currentVersion)
+		return
+	}
+	taskHandler := NewTaskHandler(h.db)
+	status, err := taskHandler.validateWorkItemDependencyTx(tx, u, "requirement", id, targetType, req.DependsOnID)
+	if err != nil {
+		writeJSON(w, status, map[string]string{"error": err.Error()})
+		return
+	}
+	res, err := tx.Exec(`
+		INSERT INTO work_item_relations (source_type, source_id, target_type, target_id, relation_type, created_by)
+		VALUES ('requirement', $1, $2, $3, 'depends_on', CAST($4 AS bigint))
+		ON CONFLICT DO NOTHING`, id, targetType, req.DependsOnID, u.ID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if rows, _ := res.RowsAffected(); rows > 0 {
+		if _, err := tx.Exec(`UPDATE requirements SET version = version + 1, updated_at = now() WHERE id = $1`, id); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	h.Get(w, r)
+}
+
+func (h *RequirementHandler) RemoveDependency(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	depID := chi.URLParam(r, "dep_id")
+	if !validateUUIDParam(w, id, "requirement_id") || !validateUUIDParam(w, depID, "dependency_id") {
+		return
+	}
+	u := getUser(r)
+	baseVersion, ok := parseBaseVersionFromQuery(w, r)
+	if !ok {
+		return
+	}
+	targetType, typeErr := normalizeWorkItemType(chi.URLParam(r, "target_type"))
+	if typeErr != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": typeErr.Error()})
+		return
+	}
+	allowed, permErr := h.canManageRequirement(u, id)
+	if permErr != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": permErr.Error()})
+		return
+	}
+	if !allowed {
+		writeRequirementForbiddenOrNotFound(w, h.db, id, "insufficient permissions to update requirement dependencies")
+		return
+	}
+
+	tx, err := h.db.Begin()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	defer tx.Rollback()
+
+	var currentVersion int64
+	if err := tx.QueryRow(`SELECT version FROM requirements WHERE id = $1 FOR UPDATE`, id).Scan(&currentVersion); err == sql.ErrNoRows {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	} else if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if currentVersion != baseVersion {
+		writeEditConflict(w, currentVersion)
+		return
+	}
+	res, err := tx.Exec(`
+		DELETE FROM work_item_relations
+		WHERE source_type = 'requirement'
+		  AND source_id = $1
+		  AND target_type = $2
+		  AND target_id = $3
+		  AND relation_type = 'depends_on'`, id, targetType, depID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if rows, _ := res.RowsAffected(); rows > 0 {
+		if _, err := tx.Exec(`UPDATE requirements SET version = version + 1, updated_at = now() WHERE id = $1`, id); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	h.Get(w, r)
+}
+
 func (h *RequirementHandler) GetAC(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	if !validateUUIDParam(w, id, "requirement_id") {
+		return
+	}
 	u := getUser(r)
 	allowed, permErr := h.canViewRequirement(u, id)
 	if permErr != nil {
@@ -602,6 +766,9 @@ func (h *RequirementHandler) GetAC(w http.ResponseWriter, r *http.Request) {
 
 func (h *RequirementHandler) RegenerateAC(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	if !validateUUIDParam(w, id, "requirement_id") {
+		return
+	}
 	u := getUser(r)
 	var req model.RegenerateACRequest
 	if err := readJSON(r, &req); err != nil {
@@ -686,6 +853,7 @@ func (h *RequirementHandler) loadTeams(req *model.Requirement) {
 }
 
 func (h *RequirementHandler) loadProjection(req *model.Requirement, u *model.User) {
+	taskHandler := NewTaskHandler(h.db)
 	rows, err := h.db.Query(`
 		SELECT t.id, t.requirement_id, r.title, t.title,
 			COALESCE(t.acceptance_criteria, ARRAY[]::text[]), t.assignee_id, COALESCE(COALESCE(NULLIF(a.nickname,''), a.username), ''),
@@ -699,7 +867,6 @@ func (h *RequirementHandler) loadProjection(req *model.Requirement, u *model.Use
 	tasks := []model.Task{}
 	if err == nil {
 		defer rows.Close()
-		taskHandler := NewTaskHandler(h.db)
 		for rows.Next() {
 			var task model.Task
 			var ac pq.StringArray
@@ -722,6 +889,7 @@ func (h *RequirementHandler) loadProjection(req *model.Requirement, u *model.Use
 			tasks = append(tasks, task)
 		}
 	}
+	req.Dependencies, req.Blocking = taskHandler.loadWorkItemRelations("requirement", req.ID)
 	req.Progress = service.AggregateRequirementProgress(tasks)
 	req.TaskSummary, req.RiskSummary = service.SummarizeRequirement(*req, tasks, time.Now())
 	userID := ""
@@ -742,20 +910,33 @@ func (h *RequirementHandler) loadProjection(req *model.Requirement, u *model.Use
 
 	var hasAssociations bool
 	_ = h.db.QueryRow(`
-		SELECT EXISTS(SELECT 1 FROM tasks WHERE requirement_id = $1)
-		    OR EXISTS(SELECT 1 FROM sessions WHERE requirement_id = $1)
-		    OR EXISTS(SELECT 1 FROM token_usage WHERE requirement_id = $1)
-		    OR EXISTS(SELECT 1 FROM documents WHERE requirement_id = $1)`, req.ID).Scan(&hasAssociations)
+			SELECT EXISTS(SELECT 1 FROM tasks WHERE requirement_id = $1)
+			    OR EXISTS(SELECT 1 FROM sessions WHERE requirement_id = $1)
+			    OR EXISTS(SELECT 1 FROM token_usage WHERE requirement_id = $1)
+			    OR EXISTS(SELECT 1 FROM documents WHERE requirement_id = $1)
+			    OR EXISTS(
+					SELECT 1 FROM work_item_relations
+					WHERE (source_type = 'requirement' AND source_id = $1)
+					   OR (target_type = 'requirement' AND target_id = $1)
+				)`, req.ID).Scan(&hasAssociations)
 	req.CanDelete = !hasAssociations
 	h.applyRequirementPermissions(req, u)
 	req.CanDelete = req.CanDelete && !hasAssociations
 
 	tokenRows, tokenErr := h.db.Query(`
-		SELECT DISTINCT s.id
-		FROM sessions s
-		JOIN token_usage tu ON tu.session_id = s.id
-		WHERE s.requirement_id = $1 AND s.task_id IS NULL
-		ORDER BY s.id`, req.ID)
+		SELECT source_id
+		FROM (
+			SELECT DISTINCT sas.session_id::text || ':' || sas.activity_date::text AS source_id
+			FROM session_activity_slices sas
+			WHERE sas.requirement_id = $1 AND sas.task_id IS NULL
+			UNION
+			SELECT DISTINCT s.id::text AS source_id
+			FROM sessions s
+			JOIN token_usage tu ON tu.session_id = s.id
+			WHERE s.requirement_id = $1 AND s.task_id IS NULL
+			  AND NOT EXISTS (SELECT 1 FROM session_activity_slices sas WHERE sas.session_id = s.id)
+		) sources
+		ORDER BY source_id`, req.ID)
 	if tokenErr == nil {
 		defer tokenRows.Close()
 		for tokenRows.Next() {

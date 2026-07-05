@@ -59,6 +59,8 @@ export interface BoardRequirement {
   team_ids: string[];
   team_names: string[];
   token_source_ids: string[];
+  dependencies: BoardTaskDependency[];
+  blocking: BoardTaskDependency[];
   follow_summary: RequirementFollowSummaryDTO;
   risk_summary?: RequirementRiskSummaryDTO;
   can_update?: boolean;
@@ -142,7 +144,7 @@ export interface CreateBoardTaskInput {
 export interface UpdateBoardTaskInput {
   title?: string;
   assignee_id?: string;
-  status?: Exclude<BoardTaskStatus, "blocked">;
+  status?: BoardTaskStatus;
   priority?: BoardTaskPriority;
   progress?: number;
   due_date?: string;

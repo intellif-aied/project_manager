@@ -350,13 +350,22 @@ func expectDashboardTaskRiskCandidateQuery(mock sqlmock.Sqlmock, userID string) 
 }
 
 func expectTaskDependencies(mock sqlmock.Sqlmock, taskID string, unfinishedCount int) {
-	depRows := sqlmock.NewRows([]string{"task_id", "title", "status", "due_date"})
+	depRows := sqlmock.NewRows([]string{
+		"item_type", "item_id", "title", "task_id", "task_title",
+		"requirement_id", "requirement_title", "status", "due_date",
+	})
 	for i := 0; i < unfinishedCount; i++ {
-		depRows.AddRow("dependency-"+taskID, "上游任务", "todo", nil)
+		depRows.AddRow("task", "dependency-"+taskID, "上游任务", "dependency-"+taskID, "上游任务", "req-upstream", "上游需求", "todo", nil)
 	}
-	mock.ExpectQuery(`SELECT td\.depends_on_id, t\.title, t\.status, t\.due_date`).
-		WithArgs(taskID).
+	mock.ExpectQuery(`(?s)SELECT rel\.target_type.*FROM work_item_relations rel.*WHERE rel\.source_type = \$1 AND rel\.source_id = \$2`).
+		WithArgs("task", taskID).
 		WillReturnRows(depRows)
+	mock.ExpectQuery(`(?s)SELECT rel\.source_type.*FROM work_item_relations rel.*WHERE rel\.target_type = \$1 AND rel\.target_id = \$2`).
+		WithArgs("task", taskID).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"item_type", "item_id", "title", "task_id", "task_title",
+			"requirement_id", "requirement_title", "status", "due_date",
+		}))
 }
 
 func expectAttentionScore(mock sqlmock.Sqlmock, targetType, targetID string, score int) {

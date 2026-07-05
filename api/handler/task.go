@@ -127,6 +127,9 @@ func (h *TaskHandler) List(w http.ResponseWriter, r *http.Request) {
 
 func (h *TaskHandler) Get(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	if !validateUUIDParam(w, id, "task_id") {
+		return
+	}
 	u := getUser(r)
 	var t model.Task
 	var ac pq.StringArray
@@ -188,6 +191,9 @@ func (h *TaskHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "requirement_id and title required"})
 		return
 	}
+	if !validateUUIDParam(w, req.RequirementID, "requirement_id") {
+		return
+	}
 	if (req.AssigneeID == nil || *req.AssigneeID == "") && u != nil && u.Role == "employee" {
 		req.AssigneeID = &u.ID
 	}
@@ -213,7 +219,7 @@ func (h *TaskHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, depID := range req.DependsOnIDs {
-		status, err := h.validateDependency(u, req.RequirementID, "", depID)
+		status, err := h.validateWorkItemDependency(u, "task", "", "task", depID)
 		if err != nil {
 			writeJSON(w, status, map[string]string{"error": err.Error()})
 			return
@@ -233,7 +239,10 @@ func (h *TaskHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, depID := range req.DependsOnIDs {
-		if _, err := h.db.Exec("INSERT INTO task_dependencies (task_id, depends_on_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", taskID, depID); err != nil {
+		if _, err := h.db.Exec(`
+			INSERT INTO work_item_relations (source_type, source_id, target_type, target_id, relation_type, created_by)
+			VALUES ('task', $1, 'task', $2, 'depends_on', CAST($3 AS bigint))
+			ON CONFLICT DO NOTHING`, taskID, depID, u.ID); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
@@ -245,6 +254,9 @@ func (h *TaskHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 func (h *TaskHandler) Update(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	if !validateUUIDParam(w, id, "task_id") {
+		return
+	}
 	u := getUser(r)
 	var req model.UpdateTaskRequest
 	if err := readJSON(r, &req); err != nil {
@@ -383,6 +395,9 @@ func taskAssigneeChanged(current sql.NullString, next *string) bool {
 
 func (h *TaskHandler) UpdateStatus(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	if !validateUUIDParam(w, id, "task_id") {
+		return
+	}
 	u := getUser(r)
 	var req model.UpdateTaskStatusRequest
 	if err := readJSON(r, &req); err != nil {
@@ -449,6 +464,9 @@ func (h *TaskHandler) UpdateStatus(w http.ResponseWriter, r *http.Request) {
 
 func (h *TaskHandler) UpdateProgress(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	if !validateUUIDParam(w, id, "task_id") {
+		return
+	}
 	u := getUser(r)
 	var req model.UpdateTaskProgressRequest
 	if err := readJSON(r, &req); err != nil {
@@ -504,6 +522,9 @@ func (h *TaskHandler) UpdateProgress(w http.ResponseWriter, r *http.Request) {
 
 func (h *TaskHandler) AddDependency(w http.ResponseWriter, r *http.Request) {
 	taskID := chi.URLParam(r, "id")
+	if !validateUUIDParam(w, taskID, "task_id") {
+		return
+	}
 	u := getUser(r)
 	var req model.AddDependencyRequest
 	if err := readJSON(r, &req); err != nil {
@@ -511,6 +532,11 @@ func (h *TaskHandler) AddDependency(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !requireBaseVersion(w, req.BaseVersion) {
+		return
+	}
+	targetType, typeErr := normalizeWorkItemType(req.DependsOnType)
+	if typeErr != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": typeErr.Error()})
 		return
 	}
 
@@ -560,13 +586,16 @@ func (h *TaskHandler) AddDependency(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	status, err := h.validateDependencyTx(tx, u, task.RequirementID, taskID, req.DependsOnID)
+	status, err := h.validateWorkItemDependencyTx(tx, u, "task", taskID, targetType, req.DependsOnID)
 	if err != nil {
 		writeJSON(w, status, map[string]string{"error": err.Error()})
 		return
 	}
 
-	res, err := tx.Exec("INSERT INTO task_dependencies (task_id, depends_on_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", taskID, req.DependsOnID)
+	res, err := tx.Exec(`
+		INSERT INTO work_item_relations (source_type, source_id, target_type, target_id, relation_type, created_by)
+		VALUES ('task', $1, $2, $3, 'depends_on', CAST($4 AS bigint))
+		ON CONFLICT DO NOTHING`, taskID, targetType, req.DependsOnID, u.ID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -587,9 +616,17 @@ func (h *TaskHandler) AddDependency(w http.ResponseWriter, r *http.Request) {
 func (h *TaskHandler) RemoveDependency(w http.ResponseWriter, r *http.Request) {
 	taskID := chi.URLParam(r, "id")
 	depID := chi.URLParam(r, "dep_id")
+	if !validateUUIDParam(w, taskID, "task_id") || !validateUUIDParam(w, depID, "dependency_id") {
+		return
+	}
 	u := getUser(r)
 	baseVersion, ok := parseBaseVersionFromQuery(w, r)
 	if !ok {
+		return
+	}
+	targetType, typeErr := normalizeWorkItemType(r.URL.Query().Get("depends_on_type"))
+	if typeErr != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": typeErr.Error()})
 		return
 	}
 	task, err := h.loadTaskAccess(taskID)
@@ -639,7 +676,13 @@ func (h *TaskHandler) RemoveDependency(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := tx.Exec("DELETE FROM task_dependencies WHERE task_id = $1 AND depends_on_id = $2", taskID, depID)
+	res, err := tx.Exec(`
+		DELETE FROM work_item_relations
+		WHERE source_type = 'task'
+		  AND source_id = $1
+		  AND target_type = $2
+		  AND target_id = $3
+		  AND relation_type = 'depends_on'`, taskID, targetType, depID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -659,6 +702,9 @@ func (h *TaskHandler) RemoveDependency(w http.ResponseWriter, r *http.Request) {
 
 func (h *TaskHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	if !validateUUIDParam(w, id, "task_id") {
+		return
+	}
 	u := getUser(r)
 	baseVersion, ok := parseBaseVersionFromQuery(w, r)
 	if !ok {
@@ -741,6 +787,13 @@ func (h *TaskHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	if _, err := tx.Exec(`
+		DELETE FROM work_item_relations
+		WHERE (source_type = 'task' AND source_id = $1)
+		   OR (target_type = 'task' AND target_id = $1)`, id); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
 	if _, err := tx.Exec(`DELETE FROM tasks WHERE id = $1`, id); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -762,37 +815,7 @@ func (h *TaskHandler) Delete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *TaskHandler) loadDeps(t *model.Task) {
-	rows, _ := h.db.Query(`
-		SELECT td.depends_on_id, t.title, t.status, t.due_date
-		FROM task_dependencies td
-		JOIN tasks t ON t.id = td.depends_on_id
-		WHERE td.task_id = $1`, t.ID)
-	if rows != nil {
-		defer rows.Close()
-		for rows.Next() {
-			var d model.TaskDep
-			var dueDate sql.NullString
-			rows.Scan(&d.TaskID, &d.TaskTitle, &d.Status, &dueDate)
-			d.DueDate = nullStringPtr(dueDate)
-			t.Dependencies = append(t.Dependencies, d)
-		}
-	}
-
-	rows, _ = h.db.Query(`
-		SELECT td.task_id, t.title, t.status, t.due_date
-		FROM task_dependencies td
-		JOIN tasks t ON t.id = td.task_id
-		WHERE td.depends_on_id = $1`, t.ID)
-	if rows != nil {
-		defer rows.Close()
-		for rows.Next() {
-			var d model.TaskDep
-			var dueDate sql.NullString
-			rows.Scan(&d.TaskID, &d.TaskTitle, &d.Status, &dueDate)
-			d.DueDate = nullStringPtr(dueDate)
-			t.Blocking = append(t.Blocking, d)
-		}
-	}
+	t.Dependencies, t.Blocking = h.loadWorkItemRelations("task", t.ID)
 }
 
 func (h *TaskHandler) enrichTask(t *model.Task, u *model.User) {
@@ -807,11 +830,19 @@ func (h *TaskHandler) enrichTask(t *model.Task, u *model.User) {
 		userID = u.ID
 	}
 	rows, err := h.db.Query(`
-		SELECT DISTINCT s.id
-		FROM sessions s
-		JOIN token_usage tu ON tu.session_id = s.id
-		WHERE s.task_id = $1
-		ORDER BY s.id`, t.ID)
+		SELECT source_id
+		FROM (
+			SELECT DISTINCT sas.session_id::text || ':' || sas.activity_date::text AS source_id
+			FROM session_activity_slices sas
+			WHERE sas.task_id = $1
+			UNION
+			SELECT DISTINCT s.id::text AS source_id
+			FROM sessions s
+			JOIN token_usage tu ON tu.session_id = s.id
+			WHERE s.task_id = $1
+			  AND NOT EXISTS (SELECT 1 FROM session_activity_slices sas WHERE sas.session_id = s.id)
+		) sources
+		ORDER BY source_id`, t.ID)
 	if err == nil {
 		defer rows.Close()
 		for rows.Next() {
@@ -835,43 +866,120 @@ func (h *TaskHandler) enrichTask(t *model.Task, u *model.User) {
 	h.applyTaskPermissions(t, u)
 }
 
-func (h *TaskHandler) validateDependency(u *model.User, requirementID, taskID, dependsOnID string) (int, error) {
-	if dependsOnID == "" {
+func (h *TaskHandler) loadWorkItemRelations(itemType, itemID string) ([]model.TaskDep, []model.TaskDep) {
+	dependencies := h.loadRelationSide(`
+		SELECT rel.target_type,
+			rel.target_id::text,
+			COALESCE(target_task.title, target_req.title, '已删除工作项') AS title,
+			target_task.id::text,
+			target_task.title,
+			COALESCE(target_task.requirement_id::text, target_req.id::text, '') AS requirement_id,
+			COALESCE(target_task_req.title, target_req.title, '') AS requirement_title,
+			COALESCE(target_task.status, target_req.status, '') AS status,
+			CASE
+				WHEN rel.target_type = 'task' THEN target_task.due_date::text
+				ELSE target_req.deadline::text
+			END AS due_date
+		FROM work_item_relations rel
+		LEFT JOIN tasks target_task ON rel.target_type = 'task' AND target_task.id = rel.target_id
+		LEFT JOIN requirements target_task_req ON target_task_req.id = target_task.requirement_id
+		LEFT JOIN requirements target_req ON rel.target_type = 'requirement' AND target_req.id = rel.target_id
+		WHERE rel.source_type = $1 AND rel.source_id = $2 AND rel.relation_type = 'depends_on'
+		ORDER BY rel.created_at`, itemType, itemID)
+	blocking := h.loadRelationSide(`
+		SELECT rel.source_type,
+			rel.source_id::text,
+			COALESCE(source_task.title, source_req.title, '已删除工作项') AS title,
+			source_task.id::text,
+			source_task.title,
+			COALESCE(source_task.requirement_id::text, source_req.id::text, '') AS requirement_id,
+			COALESCE(source_task_req.title, source_req.title, '') AS requirement_title,
+			COALESCE(source_task.status, source_req.status, '') AS status,
+			CASE
+				WHEN rel.source_type = 'task' THEN source_task.due_date::text
+				ELSE source_req.deadline::text
+			END AS due_date
+		FROM work_item_relations rel
+		LEFT JOIN tasks source_task ON rel.source_type = 'task' AND source_task.id = rel.source_id
+		LEFT JOIN requirements source_task_req ON source_task_req.id = source_task.requirement_id
+		LEFT JOIN requirements source_req ON rel.source_type = 'requirement' AND source_req.id = rel.source_id
+		WHERE rel.target_type = $1 AND rel.target_id = $2 AND rel.relation_type = 'depends_on'
+		ORDER BY rel.created_at`, itemType, itemID)
+	return dependencies, blocking
+}
+
+func (h *TaskHandler) loadRelationSide(query, itemType, itemID string) []model.TaskDep {
+	rows, err := h.db.Query(query, itemType, itemID)
+	if err != nil {
+		return []model.TaskDep{}
+	}
+	defer rows.Close()
+
+	items := []model.TaskDep{}
+	for rows.Next() {
+		var d model.TaskDep
+		var dueDate sql.NullString
+		var taskID, taskTitle, requirementID, requirementTitle sql.NullString
+		if err := rows.Scan(
+			&d.ItemType,
+			&d.ItemID,
+			&d.Title,
+			&taskID,
+			&taskTitle,
+			&requirementID,
+			&requirementTitle,
+			&d.Status,
+			&dueDate,
+		); err != nil {
+			continue
+		}
+		d.TaskID = nullStringValue(taskID)
+		d.TaskTitle = nullStringValue(taskTitle)
+		d.RequirementID = nullStringValue(requirementID)
+		d.RequirementTitle = nullStringValue(requirementTitle)
+		d.DueDate = nullStringPtr(dueDate)
+		if d.ItemType == "task" {
+			d.TaskID = d.ItemID
+			if d.TaskTitle == "" {
+				d.TaskTitle = d.Title
+			}
+		}
+		items = append(items, d)
+	}
+	return items
+}
+
+func (h *TaskHandler) validateWorkItemDependency(u *model.User, sourceType, sourceID, targetType, targetID string) (int, error) {
+	if targetID == "" {
 		return http.StatusBadRequest, fmt.Errorf("depends_on_id is required")
 	}
-	if taskID != "" && taskID == dependsOnID {
-		return http.StatusBadRequest, fmt.Errorf("task cannot depend on itself")
+	if !isValidUUID(targetID) {
+		return http.StatusBadRequest, fmt.Errorf("invalid depends_on_id")
 	}
-	dependency, err := h.loadTaskAccess(dependsOnID)
-	if err == sql.ErrNoRows {
-		return http.StatusNotFound, fmt.Errorf("dependency task not found")
+	if sourceID != "" && sourceType == targetType && sourceID == targetID {
+		return http.StatusBadRequest, fmt.Errorf("work item cannot depend on itself")
 	}
-	if err != nil {
-		return http.StatusInternalServerError, err
+	if status, err := h.validateWorkItemVisibility(u, targetType, targetID); err != nil {
+		return status, err
 	}
-	visible, err := h.canViewTaskRecord(u, dependency)
-	if err != nil {
-		return http.StatusInternalServerError, err
-	}
-	if !visible {
-		return http.StatusNotFound, fmt.Errorf("dependency task not found")
-	}
-	if dependency.RequirementID != requirementID {
-		return http.StatusBadRequest, fmt.Errorf("dependencies must belong to the same requirement")
-	}
-	if taskID == "" {
+	if sourceID == "" {
 		return http.StatusOK, nil
 	}
 	var createsCycle bool
 	if err := h.db.QueryRow(`
-			WITH RECURSIVE upstream(id) AS (
-				SELECT depends_on_id FROM task_dependencies WHERE task_id = $1
+			WITH RECURSIVE upstream(source_type, source_id, target_type, target_id) AS (
+				SELECT source_type, source_id, target_type, target_id
+				FROM work_item_relations
+				WHERE source_type = $1 AND source_id = $2 AND relation_type = 'depends_on'
 				UNION
-				SELECT td.depends_on_id
-				FROM task_dependencies td
-				JOIN upstream u ON td.task_id = u.id
+				SELECT wir.source_type, wir.source_id, wir.target_type, wir.target_id
+				FROM work_item_relations wir
+				JOIN upstream u ON wir.source_type = u.target_type AND wir.source_id = u.target_id
+				WHERE wir.relation_type = 'depends_on'
 			)
-			SELECT EXISTS(SELECT 1 FROM upstream WHERE id = $2)`, dependsOnID, taskID).Scan(&createsCycle); err != nil {
+			SELECT EXISTS(
+				SELECT 1 FROM upstream WHERE target_type = $3 AND target_id = $4
+			)`, targetType, targetID, sourceType, sourceID).Scan(&createsCycle); err != nil {
 		return http.StatusInternalServerError, err
 	}
 	if createsCycle {
@@ -880,49 +988,118 @@ func (h *TaskHandler) validateDependency(u *model.User, requirementID, taskID, d
 	return http.StatusOK, nil
 }
 
-func (h *TaskHandler) validateDependencyTx(tx *sql.Tx, u *model.User, requirementID, taskID, dependsOnID string) (int, error) {
-	if dependsOnID == "" {
+func (h *TaskHandler) validateWorkItemVisibility(u *model.User, targetType, targetID string) (int, error) {
+	switch targetType {
+	case "task":
+		dependency, err := h.loadTaskAccess(targetID)
+		if err == sql.ErrNoRows {
+			return http.StatusNotFound, fmt.Errorf("dependency task not found")
+		}
+		if err != nil {
+			return http.StatusInternalServerError, err
+		}
+		visible, err := h.canViewTaskRecord(u, dependency)
+		if err != nil {
+			return http.StatusInternalServerError, err
+		}
+		if !visible {
+			return http.StatusNotFound, fmt.Errorf("dependency task not found")
+		}
+		return http.StatusOK, nil
+	case "requirement":
+		visible, err := NewRequirementHandler(h.db, nil).canViewRequirement(u, targetID)
+		if err != nil {
+			return http.StatusInternalServerError, err
+		}
+		if !visible {
+			return http.StatusNotFound, fmt.Errorf("dependency requirement not found")
+		}
+		return http.StatusOK, nil
+	default:
+		return http.StatusBadRequest, fmt.Errorf("invalid depends_on_type")
+	}
+}
+
+func (h *TaskHandler) validateWorkItemDependencyTx(tx *sql.Tx, u *model.User, sourceType, sourceID, targetType, targetID string) (int, error) {
+	if targetID == "" {
 		return http.StatusBadRequest, fmt.Errorf("depends_on_id is required")
 	}
-	if taskID != "" && taskID == dependsOnID {
-		return http.StatusBadRequest, fmt.Errorf("task cannot depend on itself")
+	if !isValidUUID(targetID) {
+		return http.StatusBadRequest, fmt.Errorf("invalid depends_on_id")
 	}
-	dependency, err := h.loadTaskAccessTx(tx, dependsOnID)
-	if err == sql.ErrNoRows {
-		return http.StatusNotFound, fmt.Errorf("dependency task not found")
+	if sourceID != "" && sourceType == targetType && sourceID == targetID {
+		return http.StatusBadRequest, fmt.Errorf("work item cannot depend on itself")
 	}
-	if err != nil {
-		return http.StatusInternalServerError, err
+	if status, err := h.validateWorkItemVisibilityTx(tx, u, targetType, targetID); err != nil {
+		return status, err
 	}
-	visible, err := h.canViewTaskRecordTx(tx, u, dependency)
-	if err != nil {
-		return http.StatusInternalServerError, err
-	}
-	if !visible {
-		return http.StatusNotFound, fmt.Errorf("dependency task not found")
-	}
-	if dependency.RequirementID != requirementID {
-		return http.StatusBadRequest, fmt.Errorf("dependencies must belong to the same requirement")
-	}
-	if taskID == "" {
+	if sourceID == "" {
 		return http.StatusOK, nil
 	}
 	var createsCycle bool
 	if err := tx.QueryRow(`
-			WITH RECURSIVE upstream(id) AS (
-				SELECT depends_on_id FROM task_dependencies WHERE task_id = $1
+			WITH RECURSIVE upstream(source_type, source_id, target_type, target_id) AS (
+				SELECT source_type, source_id, target_type, target_id
+				FROM work_item_relations
+				WHERE source_type = $1 AND source_id = $2 AND relation_type = 'depends_on'
 				UNION
-				SELECT td.depends_on_id
-				FROM task_dependencies td
-				JOIN upstream u ON td.task_id = u.id
+				SELECT wir.source_type, wir.source_id, wir.target_type, wir.target_id
+				FROM work_item_relations wir
+				JOIN upstream u ON wir.source_type = u.target_type AND wir.source_id = u.target_id
+				WHERE wir.relation_type = 'depends_on'
 			)
-			SELECT EXISTS(SELECT 1 FROM upstream WHERE id = $2)`, dependsOnID, taskID).Scan(&createsCycle); err != nil {
+			SELECT EXISTS(
+				SELECT 1 FROM upstream WHERE target_type = $3 AND target_id = $4
+			)`, targetType, targetID, sourceType, sourceID).Scan(&createsCycle); err != nil {
 		return http.StatusInternalServerError, err
 	}
 	if createsCycle {
 		return http.StatusBadRequest, fmt.Errorf("dependency would create a cycle")
 	}
 	return http.StatusOK, nil
+}
+
+func (h *TaskHandler) validateWorkItemVisibilityTx(tx *sql.Tx, u *model.User, targetType, targetID string) (int, error) {
+	switch targetType {
+	case "task":
+		dependency, err := h.loadTaskAccessTx(tx, targetID)
+		if err == sql.ErrNoRows {
+			return http.StatusNotFound, fmt.Errorf("dependency task not found")
+		}
+		if err != nil {
+			return http.StatusInternalServerError, err
+		}
+		visible, err := h.canViewTaskRecordTx(tx, u, dependency)
+		if err != nil {
+			return http.StatusInternalServerError, err
+		}
+		if !visible {
+			return http.StatusNotFound, fmt.Errorf("dependency task not found")
+		}
+		return http.StatusOK, nil
+	case "requirement":
+		visible, err := h.canViewRequirementTx(tx, u, targetID)
+		if err != nil {
+			return http.StatusInternalServerError, err
+		}
+		if !visible {
+			return http.StatusNotFound, fmt.Errorf("dependency requirement not found")
+		}
+		return http.StatusOK, nil
+	default:
+		return http.StatusBadRequest, fmt.Errorf("invalid depends_on_type")
+	}
+}
+
+func normalizeWorkItemType(value string) (string, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "task", nil
+	}
+	if trimmed != "task" && trimmed != "requirement" {
+		return "", fmt.Errorf("invalid depends_on_type")
+	}
+	return trimmed, nil
 }
 
 func (h *TaskHandler) loadTaskAccessTx(tx *sql.Tx, taskID string) (taskAccessRecord, error) {
@@ -952,17 +1129,47 @@ func (h *TaskHandler) canViewTaskRecordTx(tx *sql.Tx, u *model.User, task taskAc
 				SELECT 1 FROM requirement_teams rt
 				WHERE rt.requirement_id = $1 AND rt.team_id = $2
 			)
-			OR EXISTS (
-				SELECT 1 FROM users assignee
-				WHERE assignee.id = $3 AND assignee.team_id = $2
-			)`
+		OR EXISTS (
+			SELECT 1 FROM users assignee
+			WHERE assignee.id = CAST($3 AS bigint) AND assignee.team_id = $2
+		)`
 	if u.Role == "team_leader" {
-		query += ` OR $4 = $5`
+		query += ` OR CAST($4 AS bigint) = CAST($5 AS bigint)`
 		err := tx.QueryRow(query+`)`, task.RequirementID, *u.TeamID, task.AssigneeID, task.CreatorTLID, u.ID).Scan(&allowed)
 		return allowed, err
 	}
 	err := tx.QueryRow(query+`)`, task.RequirementID, *u.TeamID, task.AssigneeID).Scan(&allowed)
 	return allowed, err
+}
+
+func (h *TaskHandler) canViewRequirementTx(tx *sql.Tx, u *model.User, requirementID string) (bool, error) {
+	if u == nil {
+		return false, nil
+	}
+	if isGlobalRequirementManager(u.Role) {
+		var exists bool
+		err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM requirements WHERE id = $1)`, requirementID).Scan(&exists)
+		return exists, err
+	}
+	var allowed bool
+	query := `
+		SELECT EXISTS(
+			SELECT 1 FROM requirements r
+			WHERE r.id = $1
+			  AND (r.creator_id = CAST($2 AS bigint) OR r.owner_id = CAST($2 AS bigint) OR EXISTS (
+				SELECT 1 FROM requirement_owners ro
+				WHERE ro.requirement_id = r.id AND ro.user_id = CAST($2 AS bigint)
+			  )`
+	args := []any{requirementID, u.ID}
+	if hasTeam(u) {
+		query += ` OR EXISTS (
+				SELECT 1 FROM requirement_teams rt
+				WHERE rt.requirement_id = r.id AND rt.team_id = $3
+			  )`
+		args = append(args, *u.TeamID)
+	}
+	query += `))`
+	return allowed, tx.QueryRow(query, args...).Scan(&allowed)
 }
 
 func (h *TaskHandler) updateRequirementProgress(taskID string) {

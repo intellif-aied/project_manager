@@ -4,6 +4,7 @@ import type { SegmentedOptions } from "antd/es/segmented";
 import type {
   RequirementPriority,
   RequirementStatus,
+  TaskDisplayStatus,
   TaskPriority,
   TaskStatus
 } from "../api/types";
@@ -110,10 +111,10 @@ export function DeadlineCell({ deadline }: { deadline?: string }) {
   );
 }
 
-const TASK_STATUS_META: Record<TaskStatus, { color: string; label: string }> = {
-  todo: { color: "default", label: "待办" },
+const TASK_STATUS_META: Record<TaskDisplayStatus, { color: string; label: string }> = {
+  todo: { color: "default", label: "未开始" },
   in_progress: { color: "processing", label: "进行中" },
-  done: { color: "success", label: "完成" },
+  done: { color: "success", label: "已完成" },
   blocked: { color: "error", label: "阻塞" }
 };
 
@@ -125,7 +126,7 @@ const REQ_STATUS_META: Record<RequirementStatus, { color: string; label: string 
   cancelled: { color: "default", label: "已取消" }
 };
 
-export function TaskStatusTag({ status }: { status: TaskStatus }) {
+export function TaskStatusTag({ status }: { status: TaskDisplayStatus | TaskStatus }) {
   const meta = TASK_STATUS_META[status] ?? { color: "default", label: status || "未知" };
   return <Tag color={meta.color}>{meta.label}</Tag>;
 }

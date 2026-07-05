@@ -172,18 +172,30 @@ export const updateTaskStatus = (id: string, status: string, baseVersion: number
   unwrap(api.put<Task>(`/tasks/${id}/status`, { status, base_version: baseVersion }, { skipErrorHandler: true }));
 export const updateTaskProgress = (id: string, progress: number, baseVersion: number) =>
   unwrap(api.put<Task>(`/tasks/${id}/progress`, { progress, base_version: baseVersion }, { skipErrorHandler: true }));
-export const addTaskDependency = (taskId: string, dependsOnId: string, baseVersion: number) =>
+export const addTaskDependency = (
+  taskId: string,
+  dependsOnId: string,
+  baseVersion: number,
+  dependsOnType: "requirement" | "task" = "task"
+) =>
   unwrap(
     api.post<Task>(
       `/tasks/${taskId}/dependencies`,
-      { depends_on_id: dependsOnId, base_version: baseVersion },
+      { depends_on_type: dependsOnType, depends_on_id: dependsOnId, base_version: baseVersion },
       { skipErrorHandler: true }
     )
   );
-export const removeTaskDependency = (taskId: string, depId: string, baseVersion: number) =>
+export const removeTaskDependency = (
+  taskId: string,
+  depId: string,
+  baseVersion: number,
+  dependsOnType: "requirement" | "task" = "task"
+) =>
   unwrap(
     api.delete<Task>(
-      `/tasks/${taskId}/dependencies/${depId}?base_version=${encodeURIComponent(baseVersion)}`,
+      `/tasks/${taskId}/dependencies/${depId}?base_version=${encodeURIComponent(
+        baseVersion
+      )}&depends_on_type=${encodeURIComponent(dependsOnType)}`,
       undefined,
       {
         skipErrorHandler: true
@@ -225,12 +237,24 @@ export const fetchDashboardRisks = () =>
 
 export const fetchSessions = (params?: Record<string, string>) =>
   unwrap(api.get<PaginatedSessions>("/sessions", params));
-export const updateSessionTask = (sessionId: string, taskId: string | null) =>
-  unwrap(api.put<Session>(`/sessions/${sessionId}/task`, { task_id: taskId }));
-export const updateSessionRequirement = (sessionId: string, requirementId: string | null) =>
+export const updateSessionTask = (
+  sessionId: string,
+  taskId: string | null,
+  activityDate?: string
+) =>
+  unwrap(api.put<Session>(`/sessions/${sessionId}/task`, {
+    task_id: taskId,
+    ...(activityDate ? { activity_date: activityDate } : {})
+  }));
+export const updateSessionRequirement = (
+  sessionId: string,
+  requirementId: string | null,
+  activityDate?: string
+) =>
   unwrap(
     api.put<Session>(`/sessions/${sessionId}/requirement`, {
-      requirement_id: requirementId
+      requirement_id: requirementId,
+      ...(activityDate ? { activity_date: activityDate } : {})
     })
   );
 export const withdrawSession = (sessionId: string) =>

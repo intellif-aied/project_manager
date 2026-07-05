@@ -23,7 +23,7 @@ func DeriveTaskRisks(task model.Task, now time.Time) []string {
 	today := startOfDay(now)
 	hasDependencyConflict := false
 	for _, dependency := range task.Dependencies {
-		if dependency.Status == "done" {
+		if dependencyDone(dependency) {
 			continue
 		}
 		if dependencyBlocksTask(task, dependency, today) {
@@ -42,6 +42,13 @@ func DeriveTaskRisks(task model.Task, now time.Time) []string {
 		risks = append(risks, TaskRiskDependencyConflict)
 	}
 	return risks
+}
+
+func dependencyDone(dependency model.TaskDep) bool {
+	if dependency.ItemType == "requirement" {
+		return dependency.Status == "completed"
+	}
+	return dependency.Status == "done"
 }
 
 func dependencyBlocksTask(task model.Task, dependency model.TaskDep, today time.Time) bool {
@@ -137,6 +144,11 @@ func SummarizeRequirement(requirement model.Requirement, tasks []model.Task, now
 	taskSummary, riskSummary := SummarizeRequirementTasks(tasks)
 	if IsRequirementOverdue(requirement, now) {
 		riskSummary.RequirementOverdue = 1
+	}
+	for _, dependency := range requirement.Dependencies {
+		if !dependencyDone(dependency) {
+			riskSummary.DependencyConflict++
+		}
 	}
 	return taskSummary, riskSummary
 }
