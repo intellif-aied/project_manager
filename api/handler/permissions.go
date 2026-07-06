@@ -203,7 +203,7 @@ func (h *TaskHandler) canReassignTask(u *model.User, responsibleUserIDs []string
 		return false, "insufficient permissions to reassign task", nil
 	}
 	if u.Role == "employee" {
-		return false, "employee cannot reassign tasks", nil
+		return false, "员工不能修改任务负责人", nil
 	}
 	if isGlobalTaskManager(u.Role) {
 		ok, err := h.validateTaskResponsibleUsers(responsibleUserIDs, nil)
