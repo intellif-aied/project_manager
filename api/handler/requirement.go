@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aidashboard/api/internal/biztime"
 	"github.com/aidashboard/api/model"
 	"github.com/aidashboard/api/service"
 	"github.com/go-chi/chi/v5"
@@ -30,6 +31,11 @@ func NewRequirementHandlerWithRecorder(db *sql.DB, ai *service.AIClient, recorde
 }
 
 func (h *RequirementHandler) List(w http.ResponseWriter, r *http.Request) {
+	if shouldUseRequirementPagedResponse(r) {
+		h.listRequirementsPaged(w, r)
+		return
+	}
+
 	u := getUser(r)
 	query := `
 		SELECT r.id, r.title, r.description, r.feishu_doc_url, r.acceptance_criteria,
@@ -107,6 +113,307 @@ func (h *RequirementHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, reqs)
+}
+
+func shouldUseRequirementPagedResponse(r *http.Request) bool {
+	q := r.URL.Query()
+	return q.Get("view") != "" || q.Get("page") != "" || q.Get("page_size") != "" || q.Get("scope") != "" || q.Get("keyword") != "" || q.Get("priority") != "" || q.Get("risk") != ""
+}
+
+func (h *RequirementHandler) listRequirementsPaged(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("view") == "board" {
+		h.listRequirementBoard(w, r)
+		return
+	}
+	page, pageSize := parsePagination(r, 20, 100)
+	items, total, err := h.listRequirementPage(r, getUser(r), page, pageSize, "")
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, model.PaginatedRequirements{
+		Items:    items,
+		Total:    total,
+		Page:     page,
+		PageSize: pageSize,
+	})
+}
+
+func (h *RequirementHandler) listRequirementBoard(w http.ResponseWriter, r *http.Request) {
+	u := getUser(r)
+	columnPageSize := parsePositiveInt(r.URL.Query().Get("column_page_size"), 20)
+	if columnPageSize <= 0 {
+		columnPageSize = 20
+	}
+	if columnPageSize > 100 {
+		columnPageSize = 100
+	}
+	statuses := []string{"todo", "review", "active", "completed"}
+	if status := r.URL.Query().Get("status"); status != "" {
+		statuses = []string{status}
+	}
+	columns := make([]model.RequirementBoardColumn, 0, len(statuses))
+	total := 0
+	for _, status := range statuses {
+		items, columnTotal, err := h.listRequirementPage(r, u, 1, columnPageSize, status)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		total += columnTotal
+		columns = append(columns, model.RequirementBoardColumn{
+			Status:   status,
+			Items:    items,
+			Total:    columnTotal,
+			Page:     1,
+			PageSize: columnPageSize,
+			HasMore:  columnTotal > len(items),
+		})
+	}
+	writeJSON(w, http.StatusOK, model.RequirementBoardResponse{
+		Columns:        columns,
+		Total:          total,
+		ColumnPageSize: columnPageSize,
+	})
+}
+
+func (h *RequirementHandler) listRequirementPage(r *http.Request, u *model.User, page, pageSize int, statusOverride string) ([]model.Requirement, int, error) {
+	where, args := h.requirementListWhere(r, u, statusOverride)
+	from := `
+		FROM requirements r
+		JOIN users u ON u.id = r.creator_id`
+	whereSQL := " WHERE " + strings.Join(where, " AND ")
+	var total int
+	if err := h.db.QueryRow("SELECT COUNT(*) "+from+whereSQL, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	query := `
+		SELECT r.id, r.title, r.description, r.feishu_doc_url, r.acceptance_criteria,
+			r.creator_id, COALESCE(COALESCE(NULLIF(u.nickname,''), u.username),''), r.creator_role, r.status, r.priority,
+			r.progress, r.deadline, r.completed_at, r.created_at, r.updated_at, r.version` + from + whereSQL +
+		fmt.Sprintf(" ORDER BY r.updated_at DESC, r.created_at DESC, r.id DESC LIMIT $%d OFFSET $%d", len(args)+1, len(args)+2)
+	queryArgs := append(append([]any{}, args...), pageSize, (page-1)*pageSize)
+	rows, err := h.db.Query(query, queryArgs...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	reqs, scanErr := scanRequirementRows(rows)
+	if scanErr != nil {
+		return nil, 0, scanErr
+	}
+	for i := range reqs {
+		h.loadTeams(&reqs[i])
+		h.loadResponsibles(&reqs[i])
+		h.loadProjection(&reqs[i], u)
+	}
+	return reqs, total, nil
+}
+
+func scanRequirementRows(rows *sql.Rows) ([]model.Requirement, error) {
+	reqs := []model.Requirement{}
+	for rows.Next() {
+		var req model.Requirement
+		var acStr string
+		var deadline sql.NullString
+		var feishuURL sql.NullString
+		var completedAt sql.NullTime
+		if err := rows.Scan(&req.ID, &req.Title, &req.Description, &feishuURL, &acStr,
+			&req.CreatorID, &req.CreatorName, &req.CreatorRole, &req.Status, &req.Priority,
+			&req.Progress, &deadline, &completedAt, &req.CreatedAt, &req.UpdatedAt, &req.Version); err != nil {
+			return nil, err
+		}
+		req.FeishuDocURL = nullStringPtr(feishuURL)
+		req.Deadline = nullStringPtr(deadline)
+		req.AcceptanceCriteria = parseTextArray(acStr)
+		req.CompletedAt = nullTimePtr(completedAt)
+		reqs = append(reqs, req)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return reqs, nil
+}
+
+func (h *RequirementHandler) requirementListWhere(r *http.Request, u *model.User, statusOverride string) ([]string, []any) {
+	q := r.URL.Query()
+	where := []string{"1=1"}
+	args := []any{}
+	addArg := func(value any) string {
+		args = append(args, value)
+		return fmt.Sprintf("$%d", len(args))
+	}
+
+	status := statusOverride
+	if status == "" {
+		status = q.Get("status")
+	}
+	if status != "" {
+		where = append(where, "r.status = "+addArg(status))
+	} else {
+		where = append(where, "r.status <> 'cancelled'")
+	}
+
+	if teamID := q.Get("team_id"); teamID != "" {
+		where = append(where, fmt.Sprintf("EXISTS (SELECT 1 FROM requirement_teams rt WHERE rt.requirement_id = r.id AND rt.team_id = %s)", addArg(teamID)))
+	}
+	if priority := q.Get("priority"); priority != "" {
+		where = append(where, "r.priority = "+addArg(priority))
+	}
+	if keyword := strings.TrimSpace(q.Get("keyword")); keyword != "" {
+		pattern := "%" + keyword + "%"
+		placeholder := addArg(pattern)
+		where = append(where, fmt.Sprintf(`(
+			r.title ILIKE %[1]s
+			OR r.description ILIKE %[1]s
+			OR r.acceptance_criteria::text ILIKE %[1]s
+			OR COALESCE(NULLIF(u.nickname,''), u.username) ILIKE %[1]s
+			OR EXISTS (
+				SELECT 1 FROM requirement_responsibles rr
+				JOIN users ru ON ru.id = rr.user_id
+				WHERE rr.requirement_id = r.id AND COALESCE(NULLIF(ru.nickname,''), ru.username) ILIKE %[1]s
+			)
+			OR EXISTS (
+				SELECT 1 FROM requirement_teams rt
+				JOIN teams t ON t.id = rt.team_id
+				WHERE rt.requirement_id = r.id AND t.name ILIKE %[1]s
+			)
+			OR EXISTS (
+				SELECT 1 FROM tasks task
+				LEFT JOIN task_responsibles tr ON tr.task_id = task.id
+				LEFT JOIN users tu ON tu.id = tr.user_id
+				WHERE task.requirement_id = r.id
+				  AND (task.title ILIKE %[1]s OR COALESCE(NULLIF(tu.nickname,''), tu.username) ILIKE %[1]s)
+			)
+		)`, placeholder))
+	}
+
+	h.appendRequirementRoleFilter(&where, &args, u)
+	h.appendRequirementScopeFilter(&where, &args, u, q.Get("scope"))
+	h.appendRequirementRiskFilter(&where, &args, q.Get("risk"))
+	return where, args
+}
+
+func (h *RequirementHandler) appendRequirementRoleFilter(where *[]string, args *[]any, u *model.User) {
+	addArg := func(value any) string {
+		*args = append(*args, value)
+		return fmt.Sprintf("$%d", len(*args))
+	}
+	switch {
+	case u.Role == "team_leader" && u.TeamID != nil:
+		userID := addArg(u.ID)
+		teamID := addArg(*u.TeamID)
+		*where = append(*where, fmt.Sprintf(`(
+			r.creator_id = %s
+			OR EXISTS (SELECT 1 FROM requirement_responsibles rr WHERE rr.requirement_id = r.id AND rr.user_id = %s)
+			OR EXISTS (SELECT 1 FROM requirement_teams rt WHERE rt.requirement_id = r.id AND rt.team_id = %s)
+		)`, userID, userID, teamID))
+	case u.Role == "employee" && u.TeamID != nil:
+		userID := addArg(u.ID)
+		teamID := addArg(*u.TeamID)
+		*where = append(*where, fmt.Sprintf(`(
+			EXISTS (SELECT 1 FROM requirement_responsibles rr WHERE rr.requirement_id = r.id AND rr.user_id = %s)
+			OR r.creator_id = %s
+			OR EXISTS (SELECT 1 FROM requirement_teams rt WHERE rt.requirement_id = r.id AND rt.team_id = %s)
+		)`, userID, userID, teamID))
+	case u.Role == "employee":
+		userID := addArg(u.ID)
+		*where = append(*where, fmt.Sprintf(`(
+			EXISTS (SELECT 1 FROM requirement_responsibles rr WHERE rr.requirement_id = r.id AND rr.user_id = %s)
+			OR r.creator_id = %s
+		)`, userID, userID))
+	}
+}
+
+func (h *RequirementHandler) appendRequirementScopeFilter(where *[]string, args *[]any, u *model.User, scope string) {
+	if scope == "" || scope == "all" {
+		return
+	}
+	addArg := func(value any) string {
+		*args = append(*args, value)
+		return fmt.Sprintf("$%d", len(*args))
+	}
+	userID := addArg(u.ID)
+	reqFollow := fmt.Sprintf("EXISTS (SELECT 1 FROM user_follows f WHERE f.user_id = %s AND f.target_type = 'requirement' AND f.target_id = r.id)", userID)
+	taskFollow := fmt.Sprintf("EXISTS (SELECT 1 FROM tasks task JOIN user_follows f ON f.target_type = 'task' AND f.target_id = task.id WHERE task.requirement_id = r.id AND f.user_id = %s)", userID)
+	reqAssigned := fmt.Sprintf("EXISTS (SELECT 1 FROM requirement_responsibles rr WHERE rr.requirement_id = r.id AND rr.user_id = %s)", userID)
+	taskAssigned := fmt.Sprintf("EXISTS (SELECT 1 FROM tasks task JOIN task_responsibles tr ON tr.task_id = task.id WHERE task.requirement_id = r.id AND tr.user_id = %s)", userID)
+	reqCreated := fmt.Sprintf("r.creator_id = %s", userID)
+	taskCreated := fmt.Sprintf("EXISTS (SELECT 1 FROM tasks task WHERE task.requirement_id = r.id AND task.creator_id = %s)", userID)
+	switch scope {
+	case "mine":
+		*where = append(*where, fmt.Sprintf("(%s OR %s OR %s OR %s OR %s OR %s)", reqFollow, taskFollow, reqAssigned, taskAssigned, reqCreated, taskCreated))
+	case "followed":
+		*where = append(*where, fmt.Sprintf("(%s OR %s)", reqFollow, taskFollow))
+	case "assigned":
+		*where = append(*where, fmt.Sprintf("(%s OR %s)", reqAssigned, taskAssigned))
+	case "created":
+		*where = append(*where, fmt.Sprintf("(%s OR %s)", reqCreated, taskCreated))
+	}
+}
+
+func (h *RequirementHandler) appendRequirementRiskFilter(where *[]string, args *[]any, risk string) {
+	if risk == "" {
+		return
+	}
+	addArg := func(value any) string {
+		*args = append(*args, value)
+		return fmt.Sprintf("$%d", len(*args))
+	}
+	today := addArg(biztime.Date(biztime.Now()))
+	switch risk {
+	case "requirement_overdue":
+		*where = append(*where, fmt.Sprintf("(r.status NOT IN ('completed', 'cancelled') AND r.deadline IS NOT NULL AND r.deadline < %s)", today))
+	case "task_overdue":
+		*where = append(*where, fmt.Sprintf(`EXISTS (
+			SELECT 1 FROM tasks task
+			WHERE task.requirement_id = r.id
+			  AND task.status <> 'done'
+			  AND task.due_date IS NOT NULL
+			  AND task.due_date < %s
+		)`, today))
+	case "blocked":
+		*where = append(*where, requirementBlockedRiskSQL(today))
+	case "dependency_conflict":
+		*where = append(*where, requirementDependencyConflictRiskSQL())
+	}
+}
+
+func requirementBlockedRiskSQL(today string) string {
+	return fmt.Sprintf(`EXISTS (
+		SELECT 1
+		FROM tasks task
+		JOIN work_item_relations rel ON rel.source_type = 'task' AND rel.source_id = task.id AND rel.relation_type = 'depends_on'
+		LEFT JOIN tasks dep_task ON rel.target_type = 'task' AND dep_task.id = rel.target_id
+		LEFT JOIN requirements dep_req ON rel.target_type = 'requirement' AND dep_req.id = rel.target_id
+		WHERE task.requirement_id = r.id
+		  AND task.status <> 'done'
+		  AND COALESCE(dep_task.status, dep_req.status, '') NOT IN ('done', 'completed')
+		  AND (
+			task.status = 'in_progress'
+			OR (task.due_date IS NOT NULL AND task.due_date <= %[1]s)
+			OR (CASE WHEN rel.target_type = 'task' THEN dep_task.due_date ELSE dep_req.deadline END) IS NOT NULL
+			   AND (CASE WHEN rel.target_type = 'task' THEN dep_task.due_date ELSE dep_req.deadline END) < %[1]s
+		  )
+	)`, today)
+}
+
+func requirementDependencyConflictRiskSQL() string {
+	return `EXISTS (
+		SELECT 1
+		FROM tasks task
+		JOIN work_item_relations rel ON rel.source_type = 'task' AND rel.source_id = task.id AND rel.relation_type = 'depends_on'
+		LEFT JOIN tasks dep_task ON rel.target_type = 'task' AND dep_task.id = rel.target_id
+		LEFT JOIN requirements dep_req ON rel.target_type = 'requirement' AND dep_req.id = rel.target_id
+		WHERE task.requirement_id = r.id
+		  AND task.status <> 'done'
+		  AND task.due_date IS NOT NULL
+		  AND COALESCE(dep_task.status, dep_req.status, '') NOT IN ('done', 'completed')
+		  AND (CASE WHEN rel.target_type = 'task' THEN dep_task.due_date ELSE dep_req.deadline END) IS NOT NULL
+		  AND (CASE WHEN rel.target_type = 'task' THEN dep_task.due_date ELSE dep_req.deadline END) >= task.due_date
+	)`
 }
 
 func (h *RequirementHandler) Get(w http.ResponseWriter, r *http.Request) {

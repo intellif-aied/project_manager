@@ -179,6 +179,35 @@ type TaskDependencyDTO = TaskDep
 type RequirementRiskSummaryDTO = RequirementRiskSummary
 type RequirementFollowStateDTO = RequirementFollowState
 
+type PaginatedRequirements struct {
+	Items    []Requirement `json:"items"`
+	Total    int           `json:"total"`
+	Page     int           `json:"page"`
+	PageSize int           `json:"page_size"`
+}
+
+type PaginatedTasks struct {
+	Items    []Task `json:"items"`
+	Total    int    `json:"total"`
+	Page     int    `json:"page"`
+	PageSize int    `json:"page_size"`
+}
+
+type RequirementBoardColumn struct {
+	Status   string        `json:"status"`
+	Items    []Requirement `json:"items"`
+	Total    int           `json:"total"`
+	Page     int           `json:"page"`
+	PageSize int           `json:"page_size"`
+	HasMore  bool          `json:"has_more"`
+}
+
+type RequirementBoardResponse struct {
+	Columns        []RequirementBoardColumn `json:"columns"`
+	Total          int                      `json:"total"`
+	ColumnPageSize int                      `json:"column_page_size"`
+}
+
 type UserFollow struct {
 	UserID     string    `json:"user_id"`
 	TargetType string    `json:"target_type"`
@@ -193,6 +222,13 @@ type FollowFollower struct {
 	TeamID     *string   `json:"teamId,omitempty"`
 	TeamName   *string   `json:"teamName,omitempty"`
 	FollowedAt time.Time `json:"followedAt"`
+}
+
+type PaginatedFollowFollowers struct {
+	Items    []FollowFollower `json:"items"`
+	Total    int              `json:"total"`
+	Page     int              `json:"page"`
+	PageSize int              `json:"page_size"`
 }
 
 type FollowRequest struct {
@@ -237,6 +273,13 @@ type DashboardFollowItem struct {
 	Navigation                  DashboardNavigationTarget `json:"navigation"`
 }
 
+type PaginatedDashboardFollowItems struct {
+	Items    []DashboardFollowItem `json:"items"`
+	Total    int                   `json:"total"`
+	Page     int                   `json:"page"`
+	PageSize int                   `json:"page_size"`
+}
+
 type DashboardRiskTaskSummary struct {
 	TaskID                    string    `json:"taskId"`
 	Title                     string    `json:"title"`
@@ -270,6 +313,13 @@ type DashboardRiskGroup struct {
 	SortHasOverdue          bool                      `json:"-"`
 	SortEarliestOverdueDate *string                   `json:"-"`
 	SortUpdatedAt           time.Time                 `json:"-"`
+}
+
+type PaginatedDashboardRiskGroups struct {
+	Items    []DashboardRiskGroup `json:"items"`
+	Total    int                  `json:"total"`
+	Page     int                  `json:"page"`
+	PageSize int                  `json:"page_size"`
 }
 
 type Session struct {

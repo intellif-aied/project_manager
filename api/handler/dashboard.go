@@ -62,6 +62,11 @@ func (h *DashboardHandler) Follows(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	sortDashboardFollowItems(items)
+	if shouldUseDashboardPagedResponse(r) {
+		page, pageSize := parsePagination(r, 20, 100)
+		writeJSON(w, http.StatusOK, paginateDashboardFollowItems(items, page, pageSize))
+		return
+	}
 	writeJSON(w, http.StatusOK, items)
 }
 
@@ -180,6 +185,11 @@ func (h *DashboardHandler) MyItems(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	sortDashboardFollowItems(items)
+	if shouldUseDashboardPagedResponse(r) {
+		page, pageSize := parsePagination(r, 20, 100)
+		writeJSON(w, http.StatusOK, paginateDashboardFollowItems(items, page, pageSize))
+		return
+	}
 	writeJSON(w, http.StatusOK, items)
 }
 
@@ -198,7 +208,51 @@ func (h *DashboardHandler) Risks(w http.ResponseWriter, r *http.Request) {
 	}
 	groups := h.dashboardRiskGroups(requirementFacts, taskFacts)
 	sortDashboardRiskGroups(groups)
+	if shouldUseDashboardPagedResponse(r) {
+		page, pageSize := parsePagination(r, 20, 100)
+		writeJSON(w, http.StatusOK, paginateDashboardRiskGroups(groups, page, pageSize))
+		return
+	}
 	writeJSON(w, http.StatusOK, groups)
+}
+
+func shouldUseDashboardPagedResponse(r *http.Request) bool {
+	q := r.URL.Query()
+	return q.Get("page") != "" || q.Get("page_size") != ""
+}
+
+func paginateDashboardFollowItems(items []model.DashboardFollowItem, page, pageSize int) model.PaginatedDashboardFollowItems {
+	total := len(items)
+	start, end := pageBounds(total, page, pageSize)
+	return model.PaginatedDashboardFollowItems{
+		Items:    items[start:end],
+		Total:    total,
+		Page:     page,
+		PageSize: pageSize,
+	}
+}
+
+func paginateDashboardRiskGroups(items []model.DashboardRiskGroup, page, pageSize int) model.PaginatedDashboardRiskGroups {
+	total := len(items)
+	start, end := pageBounds(total, page, pageSize)
+	return model.PaginatedDashboardRiskGroups{
+		Items:    items[start:end],
+		Total:    total,
+		Page:     page,
+		PageSize: pageSize,
+	}
+}
+
+func pageBounds(total, page, pageSize int) (int, int) {
+	start := (page - 1) * pageSize
+	if start > total {
+		start = total
+	}
+	end := start + pageSize
+	if end > total {
+		end = total
+	}
+	return start, end
 }
 
 func (h *DashboardHandler) requirementFollowItem(id, userID string) (model.DashboardFollowItem, bool) {

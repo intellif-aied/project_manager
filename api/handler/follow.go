@@ -61,13 +61,32 @@ func (h *FollowHandler) Followers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := h.db.Query(`
+	page, pageSize := parsePagination(r, 20, 100)
+	paged := shouldUseFollowFollowersPagedResponse(r)
+	total := 0
+	if paged {
+		if err := h.db.QueryRow(`
+			SELECT COUNT(*)
+			FROM user_follows f
+			WHERE f.target_type = $1 AND f.target_id = $2`, targetType, targetID).Scan(&total); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+
+	query := `
 		SELECT u.id, COALESCE(NULLIF(u.nickname,''), u.username), u.app_role, u.team_id, t.name, f.created_at
 		FROM user_follows f
 		JOIN users u ON u.id = f.user_id
 		LEFT JOIN teams t ON t.id = u.team_id
 		WHERE f.target_type = $1 AND f.target_id = $2
-		ORDER BY f.created_at ASC`, targetType, targetID)
+		ORDER BY f.created_at ASC`
+	args := []any{targetType, targetID}
+	if paged {
+		query += " LIMIT $3 OFFSET $4"
+		args = append(args, pageSize, (page-1)*pageSize)
+	}
+	rows, err := h.db.Query(query, args...)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -90,7 +109,21 @@ func (h *FollowHandler) Followers(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	if paged {
+		writeJSON(w, http.StatusOK, model.PaginatedFollowFollowers{
+			Items:    followers,
+			Total:    total,
+			Page:     page,
+			PageSize: pageSize,
+		})
+		return
+	}
 	writeJSON(w, http.StatusOK, followers)
+}
+
+func shouldUseFollowFollowersPagedResponse(r *http.Request) bool {
+	q := r.URL.Query()
+	return q.Get("page") != "" || q.Get("page_size") != ""
 }
 
 func (h *FollowHandler) Follow(w http.ResponseWriter, r *http.Request) {

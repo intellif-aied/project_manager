@@ -34,11 +34,7 @@ func NewTaskHandlerWithRecorder(db *sql.DB, recorder *service.WorkItemEventRecor
 
 func (h *TaskHandler) List(w http.ResponseWriter, r *http.Request) {
 	u := getUser(r)
-	query := `
-		SELECT t.id, t.requirement_id, r.title as req_title, t.title,
-			COALESCE(t.acceptance_criteria, ARRAY[]::text[]),
-			t.creator_id::text, COALESCE(COALESCE(NULLIF(c.nickname,''), c.username),''), t.status, t.priority, t.progress, t.due_date, t.completed_at,
-			t.created_at, t.updated_at, t.version
+	baseQuery := `
 		FROM tasks t
 		JOIN requirements r ON r.id = t.requirement_id
 		JOIN users c ON c.id = t.creator_id
@@ -47,13 +43,19 @@ func (h *TaskHandler) List(w http.ResponseWriter, r *http.Request) {
 	argIdx := 1
 
 	if reqID := r.URL.Query().Get("requirement_id"); reqID != "" {
-		query += fmt.Sprintf(" AND t.requirement_id = $%d", argIdx)
+		baseQuery += fmt.Sprintf(" AND t.requirement_id = $%d", argIdx)
 		args = append(args, reqID)
 		argIdx++
 	}
 
+	if requirementKeyword := strings.TrimSpace(r.URL.Query().Get("requirement_keyword")); requirementKeyword != "" {
+		baseQuery += fmt.Sprintf(" AND r.title ILIKE '%%' || $%d || '%%'", argIdx)
+		args = append(args, requirementKeyword)
+		argIdx++
+	}
+
 	if responsibleUserID := r.URL.Query().Get("responsible_user_id"); responsibleUserID != "" {
-		query += fmt.Sprintf(` AND EXISTS (
+		baseQuery += fmt.Sprintf(` AND EXISTS (
 			SELECT 1 FROM task_responsibles tr
 			WHERE tr.task_id = t.id AND tr.user_id = CAST($%d AS bigint)
 		)`, argIdx)
@@ -62,7 +64,7 @@ func (h *TaskHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if status := r.URL.Query().Get("status"); status != "" {
-		query += fmt.Sprintf(" AND t.status = $%d", argIdx)
+		baseQuery += fmt.Sprintf(" AND t.status = $%d", argIdx)
 		args = append(args, status)
 		argIdx++
 	}
@@ -70,7 +72,7 @@ func (h *TaskHandler) List(w http.ResponseWriter, r *http.Request) {
 	switch u.Role {
 	case "team_leader":
 		if u.TeamID != nil {
-			query += fmt.Sprintf(` AND (
+			baseQuery += fmt.Sprintf(` AND (
 				t.creator_id = CAST($%d AS bigint)
 				OR EXISTS (
 					SELECT 1 FROM task_responsibles tr
@@ -85,11 +87,11 @@ func (h *TaskHandler) List(w http.ResponseWriter, r *http.Request) {
 			args = append(args, u.ID, *u.TeamID, *u.TeamID)
 			argIdx += 3
 		} else {
-			query += " AND 1=0"
+			baseQuery += " AND 1=0"
 		}
 	case "employee":
 		if u.TeamID != nil {
-			query += fmt.Sprintf(` AND (
+			baseQuery += fmt.Sprintf(` AND (
 				EXISTS (
 					SELECT 1 FROM task_responsibles tr
 					JOIN users responsible ON responsible.id = tr.user_id
@@ -103,11 +105,28 @@ func (h *TaskHandler) List(w http.ResponseWriter, r *http.Request) {
 			args = append(args, *u.TeamID, *u.TeamID)
 			argIdx += 2
 		} else {
-			query += " AND 1=0"
+			baseQuery += " AND 1=0"
 		}
 	}
 
-	query += " ORDER BY t.created_at DESC"
+	query := `
+		SELECT t.id, t.requirement_id, r.title as req_title, t.title,
+			COALESCE(t.acceptance_criteria, ARRAY[]::text[]),
+			t.creator_id::text, COALESCE(COALESCE(NULLIF(c.nickname,''), c.username),''), t.status, t.priority, t.progress, t.due_date, t.completed_at,
+			t.created_at, t.updated_at, t.version
+	` + baseQuery + " ORDER BY r.updated_at DESC, t.created_at DESC"
+	paginated := r.URL.Query().Has("page") || r.URL.Query().Has("page_size")
+	page, pageSize := parsePagination(r, 20, 100)
+	total := 0
+	if paginated {
+		countQuery := "SELECT COUNT(*) " + baseQuery
+		if err := h.db.QueryRow(countQuery, args...).Scan(&total); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		query += fmt.Sprintf(" LIMIT $%d OFFSET $%d", argIdx, argIdx+1)
+		args = append(args, pageSize, (page-1)*pageSize)
+	}
 
 	rows, err := h.db.Query(query, args...)
 	if err != nil {
@@ -137,6 +156,16 @@ func (h *TaskHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := rows.Err(); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	if paginated {
+		writeJSON(w, http.StatusOK, model.PaginatedTasks{
+			Items:    tasks,
+			Total:    total,
+			Page:     page,
+			PageSize: pageSize,
+		})
 		return
 	}
 
