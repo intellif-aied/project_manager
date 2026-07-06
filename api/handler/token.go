@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/aidashboard/api/internal/biztime"
 	"github.com/aidashboard/api/model"
 	"github.com/lib/pq"
 )
@@ -118,10 +119,9 @@ func (h *TokenHandler) ListSessionTokens(w http.ResponseWriter, r *http.Request)
 	from := r.URL.Query().Get("from")
 	to := r.URL.Query().Get("to")
 	if from == "" || to == "" {
-		now := time.Now()
-		firstOfMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
-		from = firstOfMonth.Format("2006-01-02")
-		to = now.Format("2006-01-02")
+		now := biztime.Now()
+		from = biztime.MonthStart(now).Format("2006-01-02")
+		to = biztime.Date(now)
 	}
 
 	scope, scopeArgs, _ := buildActivityScope(u, r.URL.Query().Get("scope"))
@@ -436,19 +436,18 @@ func (h *TokenHandler) querySeries(where string, args []any) ([]model.TokenPoint
 }
 
 func resolvePeriod(period, from, to string) (string, string, error) {
-	today := time.Now().Format("2006-01-02")
+	return resolvePeriodAt(period, from, to, biztime.Now())
+}
+
+func resolvePeriodAt(period, from, to string, now time.Time) (string, string, error) {
+	today := biztime.Date(now)
 	switch period {
 	case "today":
 		return today, today, nil
 	case "week":
-		// Week starts Monday in date_trunc('week')
-		start := time.Now().AddDate(0, 0, -int(time.Now().Weekday())+1)
-		if time.Now().Weekday() == time.Sunday {
-			start = time.Now().AddDate(0, 0, -6)
-		}
-		return start.Format("2006-01-02"), today, nil
+		return biztime.WeekStart(now).Format("2006-01-02"), today, nil
 	case "month":
-		return time.Now().AddDate(0, 0, -time.Now().Day()+1).Format("2006-01-02"), today, nil
+		return biztime.MonthStart(now).Format("2006-01-02"), today, nil
 	case "range":
 		if from == "" || to == "" {
 			return "", "", fmt.Errorf("range period requires from and to")

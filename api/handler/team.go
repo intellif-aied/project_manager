@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/aidashboard/api/internal/biztime"
 	"github.com/aidashboard/api/model"
 )
 
@@ -29,7 +30,7 @@ func (h *TeamHandler) Activity(w http.ResponseWriter, r *http.Request) {
 
 	date := r.URL.Query().Get("date")
 	if date == "" {
-		date = time.Now().Format("2006-01-02")
+		date = biztime.Today()
 	}
 
 	// Scope teams by role

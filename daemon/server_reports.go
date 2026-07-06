@@ -214,7 +214,7 @@ func cmdServeReports(args []string) {
 			return
 		}
 		if req.ReportDate == "" {
-			req.ReportDate = time.Now().Format("2006-01-02")
+			req.ReportDate = activityDate(time.Now())
 		}
 		reportID, sessionCount, err := generateServerReportForUser(db, cfg, req.UserID, req.ReportDate)
 		if err != nil {
@@ -250,7 +250,7 @@ func cmdServeReports(args []string) {
 			return
 		}
 		if req.ReportDate == "" {
-			req.ReportDate = time.Now().Format("2006-01-02")
+			req.ReportDate = activityDate(time.Now())
 		}
 		draft, err := generateServerDraftReport(cfg, req)
 		if err != nil {
@@ -302,7 +302,7 @@ func cmdServeReports(args []string) {
 			return
 		}
 		if req.ReportDate == "" {
-			req.ReportDate = time.Now().Format("2006-01-02")
+			req.ReportDate = activityDate(time.Now())
 		}
 		reportID, err := generateServerTeamReport(db, cfg, req.TeamID, req.LeaderID, req.ReportDate)
 		if err != nil {
@@ -324,7 +324,7 @@ func cmdServeReports(args []string) {
 			return
 		}
 		if req.ReportDate == "" {
-			req.ReportDate = time.Now().Format("2006-01-02")
+			req.ReportDate = activityDate(time.Now())
 		}
 		reportID, err := generateServerDepartmentReport(db, cfg, req.ReportDate)
 		if err != nil {

@@ -3,6 +3,7 @@ package service
 import (
 	"time"
 
+	"github.com/aidashboard/api/internal/biztime"
 	"github.com/aidashboard/api/model"
 )
 
@@ -81,16 +82,15 @@ func parseOptionalDate(value *string) (time.Time, bool) {
 }
 
 func startOfDay(value time.Time) time.Time {
-	utc := value.UTC()
-	return time.Date(utc.Year(), utc.Month(), utc.Day(), 0, 0, 0, 0, time.UTC)
+	return biztime.StartOfDay(value)
 }
 
 func parseTaskDate(value string) (time.Time, bool) {
-	if parsed, err := time.Parse("2006-01-02", value); err == nil {
-		return parsed.UTC(), true
+	if parsed, err := biztime.ParseDate(value); err == nil {
+		return parsed, true
 	}
 	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
-		return time.Date(parsed.UTC().Year(), parsed.UTC().Month(), parsed.UTC().Day(), 0, 0, 0, 0, time.UTC), true
+		return biztime.StartOfDay(parsed), true
 	}
 	return time.Time{}, false
 }

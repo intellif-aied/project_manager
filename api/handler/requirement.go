@@ -16,12 +16,17 @@ import (
 )
 
 type RequirementHandler struct {
-	db *sql.DB
-	ai *service.AIClient
+	db            *sql.DB
+	ai            *service.AIClient
+	eventRecorder *service.WorkItemEventRecorder
 }
 
 func NewRequirementHandler(db *sql.DB, ai *service.AIClient) *RequirementHandler {
 	return &RequirementHandler{db: db, ai: ai}
+}
+
+func NewRequirementHandlerWithRecorder(db *sql.DB, ai *service.AIClient, recorder *service.WorkItemEventRecorder) *RequirementHandler {
+	return &RequirementHandler{db: db, ai: ai, eventRecorder: recorder}
 }
 
 func (h *RequirementHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -265,6 +270,7 @@ func (h *RequirementHandler) Create(w http.ResponseWriter, r *http.Request) {
 	h.loadTeams(&result)
 	h.loadOwners(&result)
 	h.loadProjection(&result, u)
+	h.recordRequirementEvent(r.Context(), u, result.ID, "requirement_created", "创建了需求", nil, requirementEventData(result), nil)
 	writeJSON(w, http.StatusCreated, result)
 }
 
@@ -294,6 +300,10 @@ func (h *RequirementHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if !allowed {
 		writeRequirementForbiddenOrNotFound(w, h.db, id, "insufficient permissions to update requirement")
 		return
+	}
+	beforeState, beforeStateErr := loadRequirementEventState(h.db, id)
+	if beforeStateErr != nil {
+		log.Printf("load requirement before state failed: requirement_id=%s error=%v", id, beforeStateErr)
 	}
 
 	ownerTouched := req.OwnerIDs != nil || req.OwnerID != nil || req.ClearOwner
@@ -395,6 +405,7 @@ func (h *RequirementHandler) Update(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		h.recordRequirementChange(r.Context(), u, id, beforeState)
 		h.Get(w, r)
 		return
 	}
@@ -437,6 +448,7 @@ func (h *RequirementHandler) Update(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	h.recordRequirementChange(r.Context(), u, id, beforeState)
 	h.Get(w, r)
 }
 
@@ -462,6 +474,10 @@ func (h *RequirementHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	if !allowed {
 		writeRequirementForbiddenOrNotFound(w, h.db, id, "insufficient permissions to restore requirements")
 		return
+	}
+	beforeState, beforeStateErr := loadRequirementEventState(h.db, id)
+	if beforeStateErr != nil {
+		log.Printf("load requirement before restore failed: requirement_id=%s error=%v", id, beforeStateErr)
 	}
 
 	res, err := h.db.Exec(`
@@ -495,6 +511,11 @@ func (h *RequirementHandler) Restore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if beforeState != nil {
+		h.recordRequirementChange(r.Context(), u, id, beforeState)
+	} else {
+		h.recordRequirementEvent(r.Context(), u, id, "requirement_restored", "恢复了需求", nil, nil, nil)
+	}
 	h.Get(w, r)
 }
 
@@ -516,6 +537,10 @@ func (h *RequirementHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	if !allowed {
 		writeRequirementForbiddenOrNotFound(w, h.db, id, "insufficient permissions to delete requirements")
 		return
+	}
+	beforeState, beforeStateErr := loadRequirementEventState(h.db, id)
+	if beforeStateErr != nil {
+		log.Printf("load requirement before delete failed: requirement_id=%s error=%v", id, beforeStateErr)
 	}
 
 	tx, err := h.db.Begin()
@@ -580,6 +605,7 @@ func (h *RequirementHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	h.recordRequirementEvent(r.Context(), u, id, "requirement_deleted", "删除了需求", beforeState, nil, nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "id": id})
 }
 
@@ -645,7 +671,9 @@ func (h *RequirementHandler) AddDependency(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	dependencyAdded := false
 	if rows, _ := res.RowsAffected(); rows > 0 {
+		dependencyAdded = true
 		if _, err := tx.Exec(`UPDATE requirements SET version = version + 1, updated_at = now() WHERE id = $1`, id); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
@@ -654,6 +682,10 @@ func (h *RequirementHandler) AddDependency(w http.ResponseWriter, r *http.Reques
 	if err := tx.Commit(); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
+	}
+	if dependencyAdded {
+		metadata := loadWorkItemEventMetadata(h.db, targetType, req.DependsOnID)
+		h.recordRequirementEvent(r.Context(), u, id, "requirement_dependency_added", "新增了需求上游依赖", nil, nil, metadata)
 	}
 	h.Get(w, r)
 }
@@ -714,7 +746,9 @@ func (h *RequirementHandler) RemoveDependency(w http.ResponseWriter, r *http.Req
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	dependencyRemoved := false
 	if rows, _ := res.RowsAffected(); rows > 0 {
+		dependencyRemoved = true
 		if _, err := tx.Exec(`UPDATE requirements SET version = version + 1, updated_at = now() WHERE id = $1`, id); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
@@ -723,6 +757,10 @@ func (h *RequirementHandler) RemoveDependency(w http.ResponseWriter, r *http.Req
 	if err := tx.Commit(); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
+	}
+	if dependencyRemoved {
+		metadata := loadWorkItemEventMetadata(h.db, targetType, depID)
+		h.recordRequirementEvent(r.Context(), u, id, "requirement_dependency_removed", "移除了需求上游依赖", metadata, nil, metadata)
 	}
 	h.Get(w, r)
 }
@@ -787,6 +825,10 @@ func (h *RequirementHandler) RegenerateAC(w http.ResponseWriter, r *http.Request
 		writeRequirementForbiddenOrNotFound(w, h.db, id, "only director/pm/tl can regenerate AC")
 		return
 	}
+	beforeState, beforeStateErr := loadRequirementEventState(h.db, id)
+	if beforeStateErr != nil {
+		log.Printf("load requirement before regenerate ac failed: requirement_id=%s error=%v", id, beforeStateErr)
+	}
 
 	var title, description string
 	var currentVersion int64
@@ -829,6 +871,11 @@ func (h *RequirementHandler) RegenerateAC(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	if beforeState != nil {
+		h.recordRequirementChange(r.Context(), u, id, beforeState)
+	} else {
+		h.recordRequirementEvent(r.Context(), u, id, "requirement_ac_updated", "重新生成了验收标准", nil, map[string]any{"acceptance_criteria": ac}, nil)
+	}
 	h.Get(w, r)
 }
 

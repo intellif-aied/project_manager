@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aidashboard/api/internal/biztime"
 	"github.com/aidashboard/api/model"
 	"github.com/aidashboard/api/service"
 	"github.com/lib/pq"
@@ -182,7 +183,7 @@ func (h *DashboardHandler) MyItems(w http.ResponseWriter, r *http.Request) {
 
 func (h *DashboardHandler) Risks(w http.ResponseWriter, r *http.Request) {
 	u := getUser(r)
-	now := time.Now().UTC()
+	now := biztime.Now()
 	requirementFacts, err := h.loadRequirementRiskFacts(u.ID, now)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -617,8 +618,7 @@ func unfinishedDependencyCount(task model.Task) int {
 }
 
 func dashboardDateString(value time.Time) string {
-	utc := value.UTC()
-	return time.Date(utc.Year(), utc.Month(), utc.Day(), 0, 0, 0, 0, time.UTC).Format("2006-01-02")
+	return biztime.Date(value)
 }
 
 func normalizeDashboardDate(value *string) *string {
@@ -935,10 +935,8 @@ func displayDate(value *string) string {
 }
 
 func recentUpdateLabel(value time.Time) string {
-	now := time.Now().UTC()
-	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
-	updated := value.UTC()
-	updatedDay := time.Date(updated.Year(), updated.Month(), updated.Day(), 0, 0, 0, 0, time.UTC)
+	today := biztime.StartOfDay(time.Now())
+	updatedDay := biztime.StartOfDay(value)
 	days := int(today.Sub(updatedDay).Hours() / 24)
 	if days <= 0 {
 		return "今天更新"

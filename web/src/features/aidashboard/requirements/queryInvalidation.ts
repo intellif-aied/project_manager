@@ -5,7 +5,12 @@ export function invalidateRequirementTaskWorkspace(
   options: { requirementId?: string; taskId?: string } = {}
 ) {
   const invalidations = [
-    queryClient.invalidateQueries({ queryKey: ["requirements-board"] }),
+    queryClient.invalidateQueries({
+      predicate: (query) => {
+        const [scope, resource] = query.queryKey;
+        return scope === "requirements-board" && resource !== "task-events";
+      }
+    }),
     queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
     queryClient.invalidateQueries({ queryKey: ["tasks"] }),
     queryClient.invalidateQueries({ queryKey: ["follows"] }),

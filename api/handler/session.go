@@ -19,13 +19,23 @@ import (
 )
 
 type SessionHandler struct {
-	db    *sql.DB
-	store *storage.MinioStorage
-	ai    *service.AIClient
+	db            *sql.DB
+	store         *storage.MinioStorage
+	ai            *service.AIClient
+	eventRecorder *service.WorkItemEventRecorder
 }
 
 func NewSessionHandler(db *sql.DB, store *storage.MinioStorage, ai *service.AIClient) *SessionHandler {
 	return &SessionHandler{db: db, store: store, ai: ai}
+}
+
+func NewSessionHandlerWithRecorder(
+	db *sql.DB,
+	store *storage.MinioStorage,
+	ai *service.AIClient,
+	recorder *service.WorkItemEventRecorder,
+) *SessionHandler {
+	return &SessionHandler{db: db, store: store, ai: ai, eventRecorder: recorder}
 }
 
 func (h *SessionHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -718,6 +728,7 @@ func (h *SessionHandler) UpdateTask(w http.ResponseWriter, r *http.Request) {
 	if req.TaskID != nil && *req.TaskID != "" {
 		h.db.QueryRow("SELECT requirement_id FROM tasks WHERE id = $1", *req.TaskID).Scan(&reqID)
 	}
+	previousTaskID, previousRequirementID := h.loadSessionTaskAssociation(id, activityDate)
 	if activityDate != "" {
 		res, err := h.db.Exec(`
 			UPDATE session_activity_slices
@@ -732,6 +743,7 @@ func (h *SessionHandler) UpdateTask(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "session slice not found"})
 			return
 		}
+		h.recordSessionTaskChange(r.Context(), u, id, activityDate, previousTaskID, previousRequirementID, req.TaskID, reqID)
 		h.Get(w, r)
 		return
 	}
@@ -751,6 +763,7 @@ func (h *SessionHandler) UpdateTask(w http.ResponseWriter, r *http.Request) {
 	}
 	_, _ = h.db.Exec("UPDATE token_usage SET task_id = $1, requirement_id = $2 WHERE session_id = $3", req.TaskID, reqID, id)
 	_, _ = h.db.Exec("UPDATE session_activity_slices SET task_id = $1, requirement_id = $2 WHERE session_id = $3", req.TaskID, reqID, id)
+	h.recordSessionTaskChange(r.Context(), u, id, activityDate, previousTaskID, previousRequirementID, req.TaskID, reqID)
 	h.Get(w, r)
 }
 
@@ -783,6 +796,7 @@ func (h *SessionHandler) UpdateRequirement(w http.ResponseWriter, r *http.Reques
 			return
 		}
 	}
+	_, previousRequirementID := h.loadSessionTaskAssociation(id, activityDate)
 	if activityDate != "" {
 		res, err := h.db.Exec(`
 			UPDATE session_activity_slices
@@ -797,6 +811,7 @@ func (h *SessionHandler) UpdateRequirement(w http.ResponseWriter, r *http.Reques
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "session slice not found"})
 			return
 		}
+		h.recordSessionRequirementChange(r.Context(), u, id, activityDate, previousRequirementID, req.RequirementID)
 		h.Get(w, r)
 		return
 	}
@@ -814,7 +829,70 @@ func (h *SessionHandler) UpdateRequirement(w http.ResponseWriter, r *http.Reques
 	}
 	_, _ = h.db.Exec("UPDATE token_usage SET task_id = NULL, requirement_id = $1 WHERE session_id = $2", req.RequirementID, id)
 	_, _ = h.db.Exec("UPDATE session_activity_slices SET task_id = NULL, requirement_id = $1 WHERE session_id = $2", req.RequirementID, id)
+	h.recordSessionRequirementChange(r.Context(), u, id, activityDate, previousRequirementID, req.RequirementID)
 	h.Get(w, r)
+}
+
+func (h *SessionHandler) loadSessionTaskAssociation(sessionID string, activityDate string) (string, string) {
+	var taskID, requirementID sql.NullString
+	var err error
+	if activityDate != "" {
+		err = h.db.QueryRow(`
+			SELECT task_id::text, requirement_id::text
+			FROM session_activity_slices
+			WHERE session_id = $1 AND activity_date = $2::date`, sessionID, activityDate).Scan(&taskID, &requirementID)
+	} else {
+		err = h.db.QueryRow(`
+			SELECT task_id::text, requirement_id::text
+			FROM sessions
+			WHERE id = $1`, sessionID).Scan(&taskID, &requirementID)
+	}
+	if err != nil {
+		return "", ""
+	}
+	return nullStringValue(taskID), nullStringValue(requirementID)
+}
+
+func (h *SessionHandler) recordSessionTaskChange(
+	ctx context.Context,
+	actor *model.User,
+	sessionID string,
+	activityDate string,
+	previousTaskID string,
+	previousRequirementID string,
+	nextTaskID *string,
+	nextRequirementID *string,
+) {
+	nextTask := ""
+	if nextTaskID != nil {
+		nextTask = strings.TrimSpace(*nextTaskID)
+	}
+	if previousTaskID != "" && previousTaskID != nextTask {
+		h.recordSessionTaskEvent(ctx, actor, "task_session_unlinked", "取消关联 session", previousTaskID, previousRequirementID, sessionID, activityDate)
+	}
+	if nextTask != "" && nextTask != previousTaskID {
+		h.recordSessionTaskEvent(ctx, actor, "task_session_linked", "关联了 session", nextTask, stringValue(nextRequirementID), sessionID, activityDate)
+	}
+}
+
+func (h *SessionHandler) recordSessionRequirementChange(
+	ctx context.Context,
+	actor *model.User,
+	sessionID string,
+	activityDate string,
+	previousRequirementID string,
+	nextRequirementID *string,
+) {
+	nextRequirement := ""
+	if nextRequirementID != nil {
+		nextRequirement = strings.TrimSpace(*nextRequirementID)
+	}
+	if previousRequirementID != "" && previousRequirementID != nextRequirement {
+		h.recordSessionRequirementEvent(ctx, actor, "requirement_session_unlinked", "取消关联 session", previousRequirementID, sessionID, activityDate)
+	}
+	if nextRequirement != "" && nextRequirement != previousRequirementID {
+		h.recordSessionRequirementEvent(ctx, actor, "requirement_session_linked", "关联了 session", nextRequirement, sessionID, activityDate)
+	}
 }
 
 func (h *SessionHandler) Withdraw(w http.ResponseWriter, r *http.Request) {

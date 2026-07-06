@@ -47,6 +47,7 @@ import {
   Tabs,
   Table,
   Tag,
+  Timeline,
   Tooltip
 } from "antd";
 import type { TableProps } from "antd";
@@ -62,7 +63,13 @@ import { isEditConflict } from "@/shared/request/apiError";
 import { appendSearch } from "@/shared/utils/urlQuery";
 
 import { fetchFollowFollowers, fetchSessionTokens } from "../../api/client";
-import type { AttentionLevel, DashboardFollowFollowerDTO, FollowTargetType, SessionTokens } from "../../api/types";
+import type {
+  AttentionLevel,
+  DashboardFollowFollowerDTO,
+  FollowTargetType,
+  SessionTokens,
+  WorkItemEventDTO
+} from "../../api/types";
 import { AcceptanceCriteriaEditor } from "../components/AcceptanceCriteriaEditor";
 import {
   RequirementMetricCard,
@@ -91,6 +98,7 @@ import type {
   MockTaskDependency,
   MockTaskPriority,
   MockTaskStatus,
+  MockTeam,
   MockTokenSource,
   RequirementPriority,
   RequirementStage
@@ -920,6 +928,9 @@ export function RequirementsListPage() {
         ["requirements-board", "requirements"],
         (current = []) => current.map((item) => (item.id === updated.id ? updated : item))
       );
+      void queryClient.invalidateQueries({
+        queryKey: ["requirements-board", "requirement-events", updated.id]
+      });
       if (selectedRequirement?.id === updated.id) {
         setSelectedRequirement(updated);
       }
@@ -2132,21 +2143,42 @@ export function RequirementDrawer({
     setQuickEditor(undefined);
   }, [requirement?.id]);
 
-  const invalidateBoard = (requirementId = requirement?.id) =>
-    invalidateRequirementTaskWorkspace(queryClient, { requirementId });
+  const invalidateBoard = (requirementId = requirement?.id) => {
+    void invalidateRequirementTaskWorkspace(queryClient, { requirementId });
+    if (requirementId) {
+      void queryClient.invalidateQueries({
+        queryKey: ["requirements-board", "requirement-events", requirementId]
+      });
+    }
+  };
 
   const assigneesQuery = useQuery({
     queryKey: ["requirements-board", "assignees"],
     queryFn: () => requirementsBoardApi.listAssignees(),
-    enabled: Boolean(requirement?.can_update),
+    enabled: Boolean(requirement?.id),
     staleTime: 5 * 60_000
   });
   const teamsQuery = useQuery({
     queryKey: ["requirements-board", "teams"],
     queryFn: () => requirementsBoardApi.listTeams(),
-    enabled: Boolean(requirement?.can_update),
+    enabled: Boolean(requirement?.id),
     staleTime: 5 * 60_000
   });
+  const requirementEventsQuery = useQuery({
+    queryKey: ["requirements-board", "requirement-events", requirement?.id],
+    queryFn: () => requirementsBoardApi.listRequirementEvents(requirement!.id),
+    enabled: Boolean(requirement?.id),
+    staleTime: 0,
+    refetchOnMount: "always"
+  });
+  const eventUserNameMap = useMemo(
+    () => buildWorkItemEventUserNameMap(assigneesQuery.data ?? [], requirement),
+    [assigneesQuery.data, requirement]
+  );
+  const eventTeamNameMap = useMemo(
+    () => buildWorkItemEventTeamNameMap(teamsQuery.data ?? [], requirement),
+    [teamsQuery.data, requirement]
+  );
 
   const quickAssigneeOptions = useMemo(() => {
     const options = (assigneesQuery.data ?? []).map((assignee) => ({
@@ -2879,6 +2911,29 @@ export function RequirementDrawer({
                 )
               },
               {
+                key: "activity",
+                label: (
+                  <span className="requirements-drawer__tab-label">
+                    动态 <Badge size="small" count={requirementEventsQuery.data?.total ?? 0} />
+                  </span>
+                ),
+                children: (
+                  <section className="requirements-drawer__section requirements-drawer__events-panel">
+                    <div className="requirements-drawer__section-head">
+                      <h3>操作记录</h3>
+                      <span>需求与任务关键变更</span>
+                    </div>
+                    <WorkItemEventTimeline
+                      events={requirementEventsQuery.data?.items ?? []}
+                      loading={requirementEventsQuery.isLoading}
+                      emptyText="暂无操作记录"
+                      userNameMap={eventUserNameMap}
+                      teamNameMap={eventTeamNameMap}
+                    />
+                  </section>
+                )
+              },
+              {
                 key: "overview",
                 label: "信息",
                 children: (
@@ -3458,6 +3513,257 @@ function TokenSourceList({
       ) : null}
     </div>
   );
+}
+
+function WorkItemEventTimeline({
+  events,
+  loading,
+  emptyText,
+  compact = false,
+  userNameMap,
+  teamNameMap
+}: {
+  events: WorkItemEventDTO[];
+  loading: boolean;
+  emptyText: string;
+  compact?: boolean;
+  userNameMap?: Map<string, string>;
+  teamNameMap?: Map<string, string>;
+}) {
+  if (loading) {
+    return (
+      <div className="requirements-event-timeline">
+        <Skeleton active paragraph={{ rows: compact ? 2 : 4 }} title={false} />
+      </div>
+    );
+  }
+  if (!events.length) {
+    return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={emptyText} />;
+  }
+  return (
+    <Timeline
+      className={`requirements-event-timeline${compact ? " is-compact" : ""}`}
+      items={events.map((event) => {
+        const metaText = getWorkItemEventMetaText(event, userNameMap, teamNameMap);
+        const eventTitle = getWorkItemEventTitle(event);
+        return {
+          key: event.id,
+          dot: <ClockCircleOutlined />,
+          children: (
+            <div className="requirements-event-timeline__item">
+              <div className="requirements-event-timeline__body">
+                <div className="requirements-event-timeline__main">
+                  <strong title={eventTitle}>{eventTitle}</strong>
+                  <span>{formatDateTime(event.created_at)}</span>
+                </div>
+                <div className="requirements-event-timeline__meta">
+                  <span title={getWorkItemEventActorTitle(event)}>
+                    {getWorkItemEventActorLabel(event)}
+                  </span>
+                  {metaText ? <em title={metaText}>{metaText}</em> : null}
+                </div>
+              </div>
+            </div>
+          )
+        };
+      })}
+    />
+  );
+}
+
+function getWorkItemEventTitle(event: WorkItemEventDTO) {
+  const baseTitle = event.event_title || "操作记录";
+  if (event.event_type === "task_deleted") {
+    const taskTitle = getWorkItemEventString(event.before_data?.title);
+    if (taskTitle && !baseTitle.includes(taskTitle)) {
+      return `${baseTitle}：${taskTitle}`;
+    }
+  }
+  return baseTitle;
+}
+
+function getWorkItemEventString(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function getWorkItemEventActorLabel(event: WorkItemEventDTO) {
+  const role = ROLE_LABELS[event.actor_role as UserRole] ?? event.actor_role;
+  if (!event.actor_name) return "系统";
+  return role ? `${event.actor_name}（${role}）` : event.actor_name;
+}
+
+function getWorkItemEventActorTitle(event: WorkItemEventDTO) {
+  const actor = getWorkItemEventActorLabel(event);
+  return event.actor_id ? `${actor} · ID ${event.actor_id}` : actor;
+}
+
+function getWorkItemEventMetaText(
+  event: WorkItemEventDTO,
+  userNameMap?: Map<string, string>,
+  teamNameMap?: Map<string, string>
+) {
+  const metadata = event.metadata ?? {};
+  if (typeof metadata.target_title === "string" && metadata.target_title) {
+    return `关联对象：${metadata.target_title}`;
+  }
+  if (typeof metadata.session_id === "string" && metadata.session_id) {
+    return metadata.activity_date
+      ? `Session ${metadata.session_id} · ${metadata.activity_date}`
+      : `Session ${metadata.session_id}`;
+  }
+  const changed = metadata.changed_fields;
+  if (Array.isArray(changed) && changed.length) {
+    const changeText = getWorkItemEventChangeText(
+      event,
+      changed.map((field) => String(field)),
+      userNameMap,
+      teamNameMap
+    );
+    if (changeText) return changeText;
+    return `变更字段：${changed.map((field) => getWorkItemEventFieldLabel(String(field))).join("、")}`;
+  }
+  if (event.target_type === "task" && event.task_id) {
+    return "任务动态";
+  }
+  return "";
+}
+
+function getWorkItemEventChangeText(
+  event: WorkItemEventDTO,
+  fields: string[],
+  userNameMap?: Map<string, string>,
+  teamNameMap?: Map<string, string>
+) {
+  const details = fields
+    .map((field) => {
+      const beforeValue = formatWorkItemEventValue(
+        field,
+        event.before_data?.[field],
+        event,
+        userNameMap,
+        teamNameMap
+      );
+      const afterValue = formatWorkItemEventValue(
+        field,
+        event.after_data?.[field],
+        event,
+        userNameMap,
+        teamNameMap
+      );
+      if (!beforeValue && !afterValue) return "";
+      if (beforeValue === afterValue) return "";
+      return `${getWorkItemEventFieldLabel(field)}：${beforeValue || "未设置"} → ${afterValue || "未设置"}`;
+    })
+    .filter(Boolean);
+  return details.join("；");
+}
+
+function formatWorkItemEventValue(
+  field: string,
+  value: unknown,
+  event: WorkItemEventDTO,
+  userNameMap?: Map<string, string>,
+  teamNameMap?: Map<string, string>
+) {
+  if (value === null || value === undefined || value === "") return "";
+  if (field === "status" && typeof value === "string") {
+    if (event.target_type === "task" || event.event_type.startsWith("task_")) {
+      return TASK_STATUS_META[value as MockTaskStatus]?.label ?? value;
+    }
+    return STAGE_META[value as RequirementStage]?.label ?? value;
+  }
+  if (field === "priority" && typeof value === "string") {
+    return PRIORITY_META[value as RequirementPriority]?.label ?? value;
+  }
+  if ((field === "deadline" || field === "due_date") && typeof value === "string") {
+    return formatDate(value);
+  }
+  if (field === "progress" && (typeof value === "number" || typeof value === "string")) {
+    return `${value}%`;
+  }
+  if (field === "acceptance_criteria" && Array.isArray(value)) {
+    return `${value.length} 项`;
+  }
+  if ((field === "owner_ids" || field === "assignee_id") && Array.isArray(value)) {
+    return formatMappedEventValues(value, userNameMap);
+  }
+  if (field === "assignee_id" && typeof value === "string") {
+    return userNameMap?.get(value) ?? value;
+  }
+  if (field === "team_ids" && Array.isArray(value)) {
+    return formatMappedEventValues(value, teamNameMap);
+  }
+  if (Array.isArray(value)) {
+    return value.length ? value.map((item) => String(item)).join("、") : "";
+  }
+  if (typeof value === "object") {
+    return JSON.stringify(value);
+  }
+  return truncateEventValue(String(value));
+}
+
+function formatMappedEventValues(values: unknown[], nameMap?: Map<string, string>) {
+  return values.length
+    ? values.map((item) => {
+        const id = String(item);
+        return nameMap?.get(id) ?? id;
+      }).join("、")
+    : "";
+}
+
+function buildWorkItemEventUserNameMap(
+  assignees: MockAssignee[],
+  requirement?: MockRequirement,
+  task?: MockTask
+) {
+  const result = new Map<string, string>();
+  assignees.forEach((assignee) => {
+    result.set(assignee.id, assignee.name || assignee.id);
+  });
+  requirement?.owners.forEach((owner) => {
+    result.set(owner.id, owner.name || owner.id);
+  });
+  if (requirement?.creator_id) {
+    result.set(requirement.creator_id, requirement.creator_name || requirement.creator_id);
+  }
+  if (task?.assignee_id) {
+    result.set(task.assignee_id, task.assignee_name || task.assignee_id);
+  }
+  return result;
+}
+
+function buildWorkItemEventTeamNameMap(teams: MockTeam[], requirement?: MockRequirement) {
+  const result = new Map<string, string>();
+  teams.forEach((team) => {
+    result.set(team.id, team.name || team.id);
+  });
+  requirement?.team_ids.forEach((teamId, index) => {
+    const teamName = requirement.team_names[index];
+    if (teamName) result.set(teamId, teamName);
+  });
+  return result;
+}
+
+function truncateEventValue(value: string) {
+  return value.length > 36 ? `${value.slice(0, 36)}...` : value;
+}
+
+function getWorkItemEventFieldLabel(field: string) {
+  const labels: Record<string, string> = {
+    title: "标题",
+    description: "描述",
+    feishu_doc_url: "飞书文档",
+    priority: "优先级",
+    status: "状态",
+    deadline: "截止日期",
+    due_date: "截止日期",
+    owner_ids: "负责人",
+    assignee_id: "负责人",
+    team_ids: "参与团队",
+    progress: "进度",
+    acceptance_criteria: "验收标准"
+  };
+  return labels[field] ?? field;
 }
 
 function BlockingDependencyTrace({
@@ -4056,6 +4362,31 @@ function TaskDrawerContent({
   const [pickerOpen, setPickerOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const dependencyBlocked = isTaskBlocked(task);
+  const taskEventsQuery = useQuery({
+    queryKey: ["requirements-board", "task-events", task.id],
+    queryFn: () => requirementsBoardApi.listTaskEvents(task.id),
+    enabled: Boolean(task.id),
+    staleTime: 0,
+    refetchOnMount: "always"
+  });
+  const assigneesQuery = useQuery({
+    queryKey: ["requirements-board", "assignees"],
+    queryFn: () => requirementsBoardApi.listAssignees(),
+    enabled: Boolean(task.id),
+    staleTime: 5 * 60_000
+  });
+  const eventUserNameMap = useMemo(
+    () => buildWorkItemEventUserNameMap(assigneesQuery.data ?? [], undefined, task),
+    [assigneesQuery.data, task]
+  );
+  const invalidateTaskEvents = (taskId = task.id) => {
+    void queryClient.invalidateQueries({
+      queryKey: ["requirements-board", "task-events", taskId]
+    });
+    void queryClient.invalidateQueries({
+      queryKey: ["requirements-board", "requirement-events", task.requirement_id]
+    });
+  };
   useEffect(() => {
     setProgress(task.progress);
   }, [task.id, task.progress]);
@@ -4066,12 +4397,29 @@ function TaskDrawerContent({
   const deleteMutation = useMutation({
     mutationFn: () => requirementsBoardApi.deleteTask(task.id, task.version),
     onSuccess: () => {
+      const deletedTaskId = task.id;
+      const requirementId = task.requirement_id;
       message.success("任务已删除");
-      void invalidateRequirementTaskWorkspace(queryClient, {
-        requirementId: task.requirement_id,
-        taskId: task.id
+      void queryClient.cancelQueries({
+        queryKey: ["requirements-board", "task-events", deletedTaskId]
+      });
+      queryClient.removeQueries({
+        queryKey: ["requirements-board", "task-events", deletedTaskId]
+      });
+      queryClient.removeQueries({
+        queryKey: ["requirements-board", "task", deletedTaskId]
       });
       onDeleted();
+      void queryClient.invalidateQueries({ queryKey: ["requirements-board", "requirements"] });
+      void queryClient.invalidateQueries({ queryKey: ["requirements-board", "tasks"] });
+      void queryClient.invalidateQueries({ queryKey: ["requirements-board", "token-sources"] });
+      void queryClient.invalidateQueries({
+        queryKey: ["requirements-board", "requirement-events", requirementId]
+      });
+      void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      void queryClient.invalidateQueries({ queryKey: ["tasks"] });
+      void queryClient.invalidateQueries({ queryKey: ["follows"] });
+      void queryClient.invalidateQueries({ queryKey: ["sessions"] });
     },
     onError: (error) => refreshAfterConflict(error, "任务删除失败")
   });
@@ -4091,6 +4439,7 @@ function TaskDrawerContent({
     onSuccess: (updated) => {
       message.success("任务进度已保存");
       onSaved(updated);
+      invalidateTaskEvents(updated.id);
       void invalidateRequirementTaskWorkspace(queryClient, {
         requirementId: updated.requirement_id,
         taskId: updated.id
@@ -4104,6 +4453,7 @@ function TaskDrawerContent({
     onSuccess: (updated) => {
       message.success("任务状态已更新");
       onSaved(updated);
+      invalidateTaskEvents(updated.id);
       void invalidateRequirementTaskWorkspace(queryClient, {
         requirementId: updated.requirement_id,
         taskId: updated.id
@@ -4121,6 +4471,7 @@ function TaskDrawerContent({
     onSuccess: (updated) => {
       message.success("已关联 session");
       onSaved(updated);
+      invalidateTaskEvents(updated.id);
       void invalidateRequirementTaskWorkspace(queryClient, {
         requirementId: updated.requirement_id,
         taskId: updated.id
@@ -4173,6 +4524,7 @@ function TaskDrawerContent({
         onSaved={(updated) => {
           setEditOpen(false);
           onSaved(updated);
+          invalidateTaskEvents(updated.id);
         }}
       />
     );
@@ -4369,6 +4721,20 @@ function TaskDrawerContent({
             )}
           </div>
         </div>
+      </section>
+
+      <section className="requirements-drawer__section requirements-task-detail__events-panel">
+        <div className="requirements-drawer__section-head">
+          <h3>操作记录</h3>
+          <span>{taskEventsQuery.data?.total ? `共 ${taskEventsQuery.data.total} 条` : "操作留痕"}</span>
+        </div>
+        <WorkItemEventTimeline
+          events={taskEventsQuery.data?.items ?? []}
+          loading={taskEventsQuery.isLoading}
+          emptyText="暂无任务操作记录"
+          compact
+          userNameMap={eventUserNameMap}
+        />
       </section>
 
       <TokenSourcePicker

@@ -74,7 +74,7 @@ a {
   min-height: 100vh;
 }
 
-body .ant-modal .ant-modal-container {
+body .ant-modal:not(.ant-modal-confirm) .ant-modal-container {
   padding: 0 !important;
 }
 

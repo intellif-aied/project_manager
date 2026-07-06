@@ -121,3 +121,16 @@ func TestAggregateRequirementProgress(t *testing.T) {
 		t.Fatalf("AggregateRequirementProgress(nil) = %d, want 0", got)
 	}
 }
+
+func TestDeriveTaskRisksUsesBusinessDateBoundary(t *testing.T) {
+	now := time.Date(2026, 7, 5, 16, 30, 0, 0, time.UTC) // 2026-07-06 00:30 Asia/Shanghai.
+	yesterday := "2026-07-05"
+	today := "2026-07-06"
+
+	if got := DeriveTaskRisks(model.Task{Status: "todo", DueDate: &yesterday}, now); !reflect.DeepEqual(got, []string{TaskRiskOverdue}) {
+		t.Fatalf("yesterday risks = %#v, want overdue", got)
+	}
+	if got := DeriveTaskRisks(model.Task{Status: "todo", DueDate: &today}, now); len(got) != 0 {
+		t.Fatalf("today risks = %#v, want none", got)
+	}
+}

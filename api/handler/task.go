@@ -3,6 +3,7 @@ package handler
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -14,11 +15,16 @@ import (
 )
 
 type TaskHandler struct {
-	db *sql.DB
+	db            *sql.DB
+	eventRecorder *service.WorkItemEventRecorder
 }
 
 func NewTaskHandler(db *sql.DB) *TaskHandler {
 	return &TaskHandler{db: db}
+}
+
+func NewTaskHandlerWithRecorder(db *sql.DB, recorder *service.WorkItemEventRecorder) *TaskHandler {
+	return &TaskHandler{db: db, eventRecorder: recorder}
 }
 
 func (h *TaskHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -248,6 +254,15 @@ func (h *TaskHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	h.updateRequirementProgress(taskID)
+	if afterState, err := loadTaskEventState(h.db, taskID); err == nil {
+		h.recordTaskEvent(r.Context(), u, taskID, req.RequirementID, "task_created", "创建了任务", nil, afterState, nil)
+	} else {
+		log.Printf("load task after create failed: task_id=%s error=%v", taskID, err)
+	}
+	for _, depID := range req.DependsOnIDs {
+		metadata := loadWorkItemEventMetadata(h.db, "task", depID)
+		h.recordTaskEvent(r.Context(), u, taskID, req.RequirementID, "task_dependency_added", "新增了任务上游依赖", nil, nil, metadata)
+	}
 
 	writeJSON(w, http.StatusCreated, map[string]string{"id": taskID, "status": "created"})
 }
@@ -300,6 +315,10 @@ func (h *TaskHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "insufficient permissions to update task"})
 		return
+	}
+	beforeState, beforeStateErr := loadTaskEventState(h.db, id)
+	if beforeStateErr != nil {
+		log.Printf("load task before update failed: task_id=%s error=%v", id, beforeStateErr)
 	}
 	if req.AssigneeID != nil && taskAssigneeChanged(task.AssigneeID, req.AssigneeID) {
 		reassignAllowed, message, err := h.canReassignTask(u, req.AssigneeID)
@@ -379,6 +398,7 @@ func (h *TaskHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.updateRequirementProgress(id)
+	h.recordTaskChange(r.Context(), u, id, beforeState)
 
 	h.Get(w, r)
 }
@@ -439,6 +459,10 @@ func (h *TaskHandler) UpdateStatus(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "insufficient permissions to update task status"})
 		return
 	}
+	beforeState, beforeStateErr := loadTaskEventState(h.db, id)
+	if beforeStateErr != nil {
+		log.Printf("load task before status update failed: task_id=%s error=%v", id, beforeStateErr)
+	}
 
 	res, err := h.db.Exec(`
 		UPDATE tasks
@@ -458,6 +482,7 @@ func (h *TaskHandler) UpdateStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.updateRequirementProgress(id)
+	h.recordTaskChange(r.Context(), u, id, beforeState)
 
 	h.Get(w, r)
 }
@@ -507,6 +532,10 @@ func (h *TaskHandler) UpdateProgress(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "insufficient permissions to update task progress"})
 		return
 	}
+	beforeState, beforeStateErr := loadTaskEventState(h.db, id)
+	if beforeStateErr != nil {
+		log.Printf("load task before progress update failed: task_id=%s error=%v", id, beforeStateErr)
+	}
 	res, err := h.db.Exec("UPDATE tasks SET progress = $1, version = version + 1, updated_at = now() WHERE id = $2 AND version = $3", req.Progress, id, req.BaseVersion)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -517,6 +546,7 @@ func (h *TaskHandler) UpdateProgress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.updateRequirementProgress(id)
+	h.recordTaskChange(r.Context(), u, id, beforeState)
 	h.Get(w, r)
 }
 
@@ -600,7 +630,9 @@ func (h *TaskHandler) AddDependency(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	dependencyAdded := false
 	if rows, _ := res.RowsAffected(); rows > 0 {
+		dependencyAdded = true
 		if _, err := tx.Exec("UPDATE tasks SET version = version + 1, updated_at = now() WHERE id = $1", taskID); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
@@ -609,6 +641,10 @@ func (h *TaskHandler) AddDependency(w http.ResponseWriter, r *http.Request) {
 	if err := tx.Commit(); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
+	}
+	if dependencyAdded {
+		metadata := loadWorkItemEventMetadata(h.db, targetType, req.DependsOnID)
+		h.recordTaskEvent(r.Context(), u, taskID, task.RequirementID, "task_dependency_added", "新增了任务上游依赖", nil, nil, metadata)
 	}
 	h.Get(w, r)
 }
@@ -687,7 +723,9 @@ func (h *TaskHandler) RemoveDependency(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	dependencyRemoved := false
 	if rows, _ := res.RowsAffected(); rows > 0 {
+		dependencyRemoved = true
 		if _, err := tx.Exec("UPDATE tasks SET version = version + 1, updated_at = now() WHERE id = $1", taskID); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
@@ -696,6 +734,10 @@ func (h *TaskHandler) RemoveDependency(w http.ResponseWriter, r *http.Request) {
 	if err := tx.Commit(); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
+	}
+	if dependencyRemoved {
+		metadata := loadWorkItemEventMetadata(h.db, targetType, depID)
+		h.recordTaskEvent(r.Context(), u, taskID, task.RequirementID, "task_dependency_removed", "移除了任务上游依赖", metadata, nil, metadata)
 	}
 	h.Get(w, r)
 }
@@ -765,6 +807,10 @@ func (h *TaskHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		writeEditConflict(w, currentVersion)
 		return
 	}
+	beforeState, beforeStateErr := loadTaskEventState(h.db, id)
+	if beforeStateErr != nil {
+		log.Printf("load task before delete failed: task_id=%s error=%v", id, beforeStateErr)
+	}
 
 	if _, err := tx.Exec(`SELECT id FROM requirements WHERE id = $1 FOR UPDATE`, requirementID); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -780,6 +826,13 @@ func (h *TaskHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := tx.Exec(`UPDATE documents SET task_id = NULL WHERE task_id = $1`, id); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if _, err := tx.Exec(`
+		UPDATE session_activity_slices
+		SET task_id = NULL, requirement_id = COALESCE(requirement_id, $2::uuid)
+		WHERE task_id = $1`, id, requirementID); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -811,6 +864,13 @@ func (h *TaskHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	eventTitle := "删除了任务"
+	if beforeState != nil {
+		if title, _ := beforeState["title"].(string); strings.TrimSpace(title) != "" {
+			eventTitle = "删除了任务：" + strings.TrimSpace(title)
+		}
+	}
+	h.recordTaskEvent(r.Context(), u, id, requirementID, "task_deleted", eventTitle, beforeState, nil, nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "id": id})
 }
 

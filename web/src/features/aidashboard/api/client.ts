@@ -31,6 +31,7 @@ import type {
   ManagedSkill,
   PaginatedDailyReports,
   PaginatedDepartmentReports,
+  PaginatedWorkItemEvents,
   PaginatedPersonalWeeklyReports,
   PaginatedSessions,
   PaginatedSessionTokens,
@@ -143,12 +144,40 @@ export const restoreRequirement = (id: string, baseVersion: number) =>
 export const fetchACStatus = (id: string) => unwrap(api.get<ACStatus[]>(`/requirements/${id}/ac`));
 export const regenerateAC = (id: string, baseVersion: number) =>
   unwrap(api.post<Requirement>(`/requirements/${id}/regenerate-ac`, { base_version: baseVersion }));
+export const fetchRequirementEvents = (id: string, params?: { page?: number; page_size?: number }) =>
+  unwrap(
+    api.get<PaginatedWorkItemEvents>(`/requirements/${id}/events`, {
+      page: String(params?.page ?? 1),
+      page_size: String(params?.page_size ?? 20)
+    })
+  );
 
 // ───────────────────────── Tasks ─────────────────────────
 
 export const fetchTasks = (params?: Record<string, string>) =>
   unwrap(api.get<Task[]>("/tasks", params));
 export const fetchTask = (id: string) => unwrap(api.get<Task>(`/tasks/${id}`));
+export const fetchTaskEvents = async (id: string, params?: { page?: number; page_size?: number }) => {
+  const page = params?.page ?? 1;
+  const pageSize = params?.page_size ?? 20;
+  try {
+    return await unwrap(
+      api.get<PaginatedWorkItemEvents>(
+        `/tasks/${id}/events`,
+        {
+          page: String(page),
+          page_size: String(pageSize)
+        },
+        { skipErrorHandler: true }
+      )
+    );
+  } catch (error) {
+    if (error instanceof HttpError && error.status === 404) {
+      return { items: [], total: 0, page, page_size: pageSize };
+    }
+    throw error;
+  }
+};
 export const createTask = (data: {
   requirement_id: string;
   title: string;

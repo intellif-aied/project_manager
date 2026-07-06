@@ -642,8 +642,9 @@ func cmdConsume(args []string) {
 }
 
 func runConsumerOnce(cfg *Config, consumerCfg ConsumerConfig) error {
-	targetDate := time.Now().AddDate(0, 0, consumerCfg.ReportOffset).Format("2006-01-02")
-	if targetDate != time.Now().Format("2006-01-02") {
+	now := time.Now().In(activityLocation())
+	targetDate := now.AddDate(0, 0, consumerCfg.ReportOffset).Format("2006-01-02")
+	if targetDate != activityDate(now) {
 		return fmt.Errorf("AIDA_REPORT_DATE_OFFSET is not supported by the current API; use 0 for today's report")
 	}
 	if consumerCfg.DatabaseURL != "" {

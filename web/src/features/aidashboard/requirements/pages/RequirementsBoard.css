@@ -2948,6 +2948,131 @@
   color: #7a879a;
   font-size: 12px;
 }
+.requirements-event-timeline {
+  min-width: 0;
+  margin: 0;
+  overflow-x: visible;
+  padding: 2px 0 0 12px;
+}
+.requirements-event-timeline .ant-timeline-item {
+  min-width: 0;
+  padding-bottom: 10px;
+}
+.requirements-event-timeline.is-compact .ant-timeline-item {
+  padding-bottom: 8px;
+}
+.requirements-event-timeline .ant-timeline-item:last-child {
+  padding-bottom: 0;
+}
+.requirements-event-timeline .ant-timeline-item-tail {
+  border-inline-start-color: #dbe6f5;
+}
+.requirements-event-timeline .ant-timeline-item-head-custom {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  color: #2563eb;
+  background: #eef5ff;
+  border: 1px solid #dbeafe;
+  border-radius: 999px;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.08);
+}
+.requirements-event-timeline.is-compact .ant-timeline-item-head-custom {
+  width: 20px;
+  height: 20px;
+  font-size: 12px;
+}
+.requirements-event-timeline .ant-timeline-item-content {
+  min-width: 0;
+  margin-inline-start: 34px;
+}
+.requirements-event-timeline.is-compact .ant-timeline-item-content {
+  margin-inline-start: 30px;
+}
+.requirements-event-timeline__item {
+  min-width: 0;
+  padding: 8px 10px;
+  background: #fbfcfe;
+  border: 1px solid #edf2f8;
+  border-radius: 8px;
+}
+.requirements-event-timeline.is-compact .requirements-event-timeline__item {
+  padding: 7px 9px;
+}
+.requirements-event-timeline__body {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.requirements-event-timeline__main,
+.requirements-event-timeline__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.requirements-event-timeline__main strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #253047;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.requirements-event-timeline__main span {
+  flex: 0 0 auto;
+  color: #94a3b8;
+  font-size: 12px;
+}
+.requirements-event-timeline__meta span,
+.requirements-event-timeline__meta em {
+  min-width: 0;
+  overflow: hidden;
+  color: #64748b;
+  font-size: 12px;
+  font-style: normal;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.requirements-event-timeline__meta em {
+  color: #7a879a;
+}
+.requirements-drawer--requirement .requirements-drawer__events-panel {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100dvh - 200px);
+  overflow: hidden;
+}
+.requirements-drawer__events-panel .requirements-drawer__section-head {
+  flex: 0 0 auto;
+}
+.requirements-drawer__events-panel .requirements-event-timeline {
+  flex: 1 1 auto;
+  max-height: none;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 6px;
+}
+@supports not (height: 100dvh) {
+  .requirements-drawer--requirement .requirements-drawer__events-panel {
+    max-height: calc(100vh - 200px);
+  }
+}
+.requirements-drawer__events-panel .requirements-event-timeline::-webkit-scrollbar {
+  width: 6px;
+}
+.requirements-drawer__events-panel .requirements-event-timeline::-webkit-scrollbar-thumb {
+  background: #cbd7e6;
+  border-radius: 999px;
+}
+.requirements-task-detail__events-panel {
+  border-color: #e8eef7;
+}
 .requirements-drawer__token-row-main {
   display: grid;
   gap: 3px;
@@ -4124,9 +4249,43 @@
   border: 1px solid #cfe0f8;
   border-radius: 8px;
 }
+.requirements-dependency-picker-modal .ant-modal-container,
+.requirements-dependency-picker-modal .ant-modal-content {
+  overflow: hidden;
+  padding: 0;
+  border-radius: 12px;
+}
+.requirements-dependency-picker-modal .ant-modal-header {
+  padding: 13px 52px 12px 20px;
+  margin: 0;
+  border-bottom: 1px solid #edf1f6;
+}
+.requirements-dependency-picker-modal .ant-modal-title {
+  color: #172033;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+.requirements-dependency-picker-modal .ant-modal-close {
+  top: 12px;
+  inset-inline-end: 12px;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+}
+.requirements-dependency-picker-modal .ant-modal-close:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(22, 119, 255, 0.16);
+}
 .requirements-dependency-picker-modal .ant-modal-body {
   padding: 16px 20px 12px;
   overflow-x: hidden;
+}
+.requirements-dependency-picker-modal .ant-modal-footer {
+  padding: 10px 20px 12px;
+  margin-top: 0;
+  background: #f8fafc;
+  border-top: 1px solid #edf1f6;
 }
 .requirements-dependency-picker {
   display: grid;

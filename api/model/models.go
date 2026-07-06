@@ -147,6 +147,30 @@ type RequirementFollowState struct {
 	TaskCount   int  `json:"task_count"`
 }
 
+type WorkItemEvent struct {
+	ID            string         `json:"id"`
+	TargetType    string         `json:"target_type"`
+	TargetID      string         `json:"target_id"`
+	RequirementID *string        `json:"requirement_id,omitempty"`
+	TaskID        *string        `json:"task_id,omitempty"`
+	ActorID       *string        `json:"actor_id,omitempty"`
+	ActorName     string         `json:"actor_name"`
+	ActorRole     string         `json:"actor_role"`
+	EventType     string         `json:"event_type"`
+	EventTitle    string         `json:"event_title"`
+	BeforeData    map[string]any `json:"before_data"`
+	AfterData     map[string]any `json:"after_data"`
+	Metadata      map[string]any `json:"metadata"`
+	CreatedAt     time.Time      `json:"created_at"`
+}
+
+type PaginatedWorkItemEvents struct {
+	Items    []WorkItemEvent `json:"items"`
+	Total    int             `json:"total"`
+	Page     int             `json:"page"`
+	PageSize int             `json:"page_size"`
+}
+
 // P0 API DTO aliases keep the contract names explicit while reusing the
 // existing transport structs used by legacy handlers.
 type RequirementListItemDTO = Requirement

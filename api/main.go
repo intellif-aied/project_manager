@@ -45,9 +45,10 @@ func main() {
 	authH := handler.NewAuthHandler(database, aihubClient, cfg.BootstrapAdminUIDs)
 	aiClient := service.NewAIClient()
 	managedAgentClient := service.NewManagedAgentClient(cfg.ManagedAgentURL, cfg.ManagedAgentToken)
-	reqH := handler.NewRequirementHandler(database, aiClient)
-	taskH := handler.NewTaskHandler(database)
-	sessionH := handler.NewSessionHandler(database, minioStore, aiClient)
+	workItemEventRecorder := service.NewWorkItemEventRecorder(database)
+	reqH := handler.NewRequirementHandlerWithRecorder(database, aiClient, workItemEventRecorder)
+	taskH := handler.NewTaskHandlerWithRecorder(database, workItemEventRecorder)
+	sessionH := handler.NewSessionHandlerWithRecorder(database, minioStore, aiClient, workItemEventRecorder)
 	reportH := handler.NewReportHandler(database, cfg.ReportGeneratorURL)
 	managedAgentH := handler.NewManagedAgentHandlerWithDefaults(database, managedAgentClient, handler.ManagedAgentDefaults{
 		Engine:                         cfg.ManagedAgentDefaultEngine,
@@ -125,6 +126,7 @@ func main() {
 		r.Delete("/requirements/{id}/dependencies/{target_type}/{dep_id}", reqH.RemoveDependency)
 		r.Get("/requirements/{id}/ac", reqH.GetAC)
 		r.Post("/requirements/{id}/regenerate-ac", reqH.RegenerateAC)
+		r.Get("/requirements/{id}/events", reqH.ListEvents)
 
 		r.Get("/tasks", taskH.List)
 		r.Post("/tasks", taskH.Create)
@@ -135,6 +137,7 @@ func main() {
 		r.Put("/tasks/{id}/progress", taskH.UpdateProgress)
 		r.Post("/tasks/{id}/dependencies", taskH.AddDependency)
 		r.Delete("/tasks/{id}/dependencies/{dep_id}", taskH.RemoveDependency)
+		r.Get("/tasks/{id}/events", taskH.ListEvents)
 
 		r.Get("/follows", followH.List)
 		r.Get("/follows/followers", followH.Followers)

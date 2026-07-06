@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aidashboard/api/internal/biztime"
 	"github.com/aidashboard/api/model"
 	"github.com/aidashboard/api/service"
 	"github.com/go-chi/chi/v5"
@@ -1111,7 +1112,7 @@ func (h *ReportHandler) ListTeamMemberReports(w http.ResponseWriter, r *http.Req
 
 	date := r.URL.Query().Get("date")
 	if date == "" {
-		date = time.Now().Format("2006-01-02")
+		date = biztime.Today()
 	}
 
 	teamID := u.TeamID
@@ -1171,7 +1172,7 @@ func (h *ReportHandler) GetTeamReportSources(w http.ResponseWriter, r *http.Requ
 
 	date := r.URL.Query().Get("date")
 	if date == "" {
-		date = time.Now().Format("2006-01-02")
+		date = biztime.Today()
 	}
 
 	teamID := u.TeamID
@@ -1730,7 +1731,7 @@ func (h *ReportHandler) GetDepartmentReportSources(w http.ResponseWriter, r *htt
 
 	date := r.URL.Query().Get("date")
 	if date == "" {
-		date = time.Now().Format("2006-01-02")
+		date = biztime.Today()
 	}
 
 	rows, err := h.db.Query(`
@@ -1880,7 +1881,7 @@ func (h *ReportHandler) SaveDepartmentReportToday(w http.ResponseWriter, r *http
 	}
 	reportDate := req.ReportDate
 	if strings.TrimSpace(reportDate) == "" {
-		reportDate = time.Now().Format("2006-01-02")
+		reportDate = biztime.Today()
 	}
 
 	sources, err := h.buildDepartmentReportSources(reportDate)
@@ -3211,7 +3212,7 @@ func reportDateFromRequest(r *http.Request) string {
 	if reportDate := r.URL.Query().Get("date"); reportDate != "" {
 		return reportDate
 	}
-	return time.Now().Format("2006-01-02")
+	return biztime.Today()
 }
 
 func parseUUIDArray(pgArray string) []string {

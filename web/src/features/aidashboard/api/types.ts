@@ -179,6 +179,30 @@ export interface RequirementFollowStateDTO {
   created_at: string;
 }
 
+export interface WorkItemEventDTO {
+  id: string;
+  target_type: "requirement" | "task";
+  target_id: string;
+  requirement_id?: string;
+  task_id?: string;
+  actor_id?: string;
+  actor_name: string;
+  actor_role: string;
+  event_type: string;
+  event_title: string;
+  before_data: Record<string, unknown>;
+  after_data: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface PaginatedWorkItemEvents {
+  items: WorkItemEventDTO[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
 export interface DashboardNavigationTargetDTO {
   requirementId: string;
   taskId?: string;

@@ -8,8 +8,10 @@ import {
   fetchAllSessionTokens,
   fetchFollows,
   fetchRequirement,
+  fetchRequirementEvents,
   fetchRequirements,
   fetchTask,
+  fetchTaskEvents,
   fetchTasks,
   fetchTaskAssignees,
   fetchTeams,
@@ -25,6 +27,8 @@ import {
   updateTaskProgress,
   updateTaskStatus
 } from "../../api/client";
+import dayjs from "dayjs";
+
 import type { Requirement, SessionTokens, Task } from "../../api/types";
 import type {
   CreateMockRequirementInput,
@@ -143,9 +147,7 @@ function normalizeTask(task: Task): MockTask {
 }
 
 function dateDaysAgo(days: number) {
-  const date = new Date();
-  date.setUTCDate(date.getUTCDate() - days);
-  return date.toISOString().slice(0, 10);
+  return dayjs().subtract(days, "day").format("YYYY-MM-DD");
 }
 
 function sessionTokenSourceId(source: SessionTokens) {
@@ -168,6 +170,10 @@ export const requirementsBoardApi = {
 
   async getRequirement(id: string) {
     return normalizeRequirement(await fetchRequirement(id));
+  },
+
+  async listRequirementEvents(id: string, pageSize = 100) {
+    return fetchRequirementEvents(id, { page: 1, page_size: pageSize });
   },
 
   async createRequirement(input: CreateMockRequirementInput) {
@@ -209,6 +215,10 @@ export const requirementsBoardApi = {
 
   async getTask(id: string) {
     return getNormalizedTask(id);
+  },
+
+  async listTaskEvents(id: string, pageSize = 100) {
+    return fetchTaskEvents(id, { page: 1, page_size: pageSize });
   },
 
   async createTask(input: CreateMockTaskInput) {
@@ -295,7 +305,7 @@ export const requirementsBoardApi = {
     try {
       const sources = await fetchAllSessionTokens({
         from: dateDaysAgo(90),
-        to: new Date().toISOString().slice(0, 10),
+        to: dayjs().format("YYYY-MM-DD"),
         scope: "mine"
       });
       return sources.map((source) => ({

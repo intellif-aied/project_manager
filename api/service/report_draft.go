@@ -2,8 +2,8 @@ package service
 
 import (
 	"fmt"
-	"time"
 
+	"github.com/aidashboard/api/internal/biztime"
 	"github.com/aidashboard/api/model"
 )
 
@@ -99,7 +99,7 @@ func ReportDraftSessionTitle(s model.ReportDraftSession) string {
 }
 
 func TodayInLocalDate() string {
-	return time.Now().Format("2006-01-02")
+	return biztime.Today()
 }
 
 func clampProgress(progress int) int {
