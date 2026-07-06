@@ -260,6 +260,7 @@ type DashboardFollowItem struct {
 	Deadline                    string                    `json:"deadline"`
 	Risk                        string                    `json:"risk"`
 	Dependency                  string                    `json:"dependency,omitempty"`
+	BlockingTasks               []TaskDep                 `json:"blockingTasks,omitempty"`
 	Activity                    string                    `json:"activity,omitempty"`
 	FollowedByMe                bool                      `json:"followedByMe"`
 	CreatedByMe                 bool                      `json:"createdByMe"`
@@ -285,6 +286,7 @@ type DashboardRiskTaskSummary struct {
 	Title                     string    `json:"title"`
 	Deadline                  string    `json:"deadline,omitempty"`
 	RiskTypes                 []string  `json:"riskTypes"`
+	BlockingDependencies      []TaskDep `json:"blockingDependencies,omitempty"`
 	UnfinishedDependencyCount int       `json:"unfinishedDependencyCount,omitempty"`
 	SortDueDate               *string   `json:"-"`
 	SortUpdatedAt             time.Time `json:"-"`

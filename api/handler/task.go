@@ -1041,7 +1041,26 @@ func (h *TaskHandler) loadWorkItemRelations(itemType, itemID string) ([]model.Ta
 			CASE
 				WHEN rel.target_type = 'task' THEN target_task.due_date::text
 				ELSE target_req.deadline::text
-			END AS due_date
+			END AS due_date,
+			COALESCE(
+				ARRAY(
+					SELECT tra.user_id::text
+					FROM task_responsibles tra
+					WHERE tra.task_id = target_task.id
+					ORDER BY tra.created_at
+				),
+				ARRAY[]::text[]
+			) AS responsible_user_ids,
+			COALESCE(
+				ARRAY(
+					SELECT COALESCE(ru.nickname, ru.username, ru.id::text)
+					FROM task_responsibles tra
+					JOIN users ru ON ru.id = tra.user_id
+					WHERE tra.task_id = target_task.id
+					ORDER BY tra.created_at
+				),
+				ARRAY[]::text[]
+			) AS responsible_names
 		FROM work_item_relations rel
 		LEFT JOIN tasks target_task ON rel.target_type = 'task' AND target_task.id = rel.target_id
 		LEFT JOIN requirements target_task_req ON target_task_req.id = target_task.requirement_id
@@ -1060,7 +1079,26 @@ func (h *TaskHandler) loadWorkItemRelations(itemType, itemID string) ([]model.Ta
 			CASE
 				WHEN rel.source_type = 'task' THEN source_task.due_date::text
 				ELSE source_req.deadline::text
-			END AS due_date
+			END AS due_date,
+			COALESCE(
+				ARRAY(
+					SELECT tra.user_id::text
+					FROM task_responsibles tra
+					WHERE tra.task_id = source_task.id
+					ORDER BY tra.created_at
+				),
+				ARRAY[]::text[]
+			) AS responsible_user_ids,
+			COALESCE(
+				ARRAY(
+					SELECT COALESCE(ru.nickname, ru.username, ru.id::text)
+					FROM task_responsibles tra
+					JOIN users ru ON ru.id = tra.user_id
+					WHERE tra.task_id = source_task.id
+					ORDER BY tra.created_at
+				),
+				ARRAY[]::text[]
+			) AS responsible_names
 		FROM work_item_relations rel
 		LEFT JOIN tasks source_task ON rel.source_type = 'task' AND source_task.id = rel.source_id
 		LEFT JOIN requirements source_task_req ON source_task_req.id = source_task.requirement_id
@@ -1082,6 +1120,7 @@ func (h *TaskHandler) loadRelationSide(query, itemType, itemID string) []model.T
 		var d model.TaskDep
 		var dueDate sql.NullString
 		var taskID, taskTitle, requirementID, requirementTitle sql.NullString
+		var responsibleIDs, responsibleNames pq.StringArray
 		if err := rows.Scan(
 			&d.ItemType,
 			&d.ItemID,
@@ -1092,6 +1131,8 @@ func (h *TaskHandler) loadRelationSide(query, itemType, itemID string) []model.T
 			&requirementTitle,
 			&d.Status,
 			&dueDate,
+			&responsibleIDs,
+			&responsibleNames,
 		); err != nil {
 			continue
 		}
@@ -1100,6 +1141,8 @@ func (h *TaskHandler) loadRelationSide(query, itemType, itemID string) []model.T
 		d.RequirementID = nullStringValue(requirementID)
 		d.RequirementTitle = nullStringValue(requirementTitle)
 		d.DueDate = nullStringPtr(dueDate)
+		d.ResponsibleIDs = []string(responsibleIDs)
+		d.ResponsibleNames = []string(responsibleNames)
 		if d.ItemType == "task" {
 			d.TaskID = d.ItemID
 			if d.TaskTitle == "" {

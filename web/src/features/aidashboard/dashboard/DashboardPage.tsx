@@ -76,6 +76,7 @@ import type {
   DashboardFollowFollowerDTO,
   PersonalWeeklyReport,
   Session,
+  TaskDependencyDTO,
   TaskProgressSuggestion as DraftTaskProgressSuggestion,
   TeamReport,
   TeamReportSources
@@ -164,6 +165,7 @@ interface FollowItem {
   deadline: string;
   risk: string;
   dependency?: string;
+  blockingTasks?: TaskDependencyDTO[];
   activity?: string;
   followedByMe?: boolean;
   createdByMe?: boolean;
@@ -195,6 +197,7 @@ interface RiskItem {
     title: string;
     deadline?: string;
     riskTypes: RiskType[];
+    blockingDependencies?: TaskDependencyDTO[];
     unfinishedDependencyCount?: number;
   };
   summary?: string;
@@ -1312,6 +1315,13 @@ export function DashboardPage() {
       setFollowLoadingMore(false);
     }
   };
+  const handleFollowMoreToggle = () => {
+    if (followExpanded) {
+      setFollowExpanded(false);
+      return;
+    }
+    void loadMoreFollowItems();
+  };
   const loadMoreRiskItems = async () => {
     if (!riskExpanded) {
       setRiskExpanded(true);
@@ -1332,6 +1342,13 @@ export function DashboardPage() {
     } finally {
       setRiskLoadingMore(false);
     }
+  };
+  const handleRiskMoreToggle = () => {
+    if (riskExpanded) {
+      setRiskExpanded(false);
+      return;
+    }
+    void loadMoreRiskItems();
   };
   const handleFollowListScroll = (event: UIEvent<HTMLDivElement>) => {
     if (!followExpanded || !followHasMore || followLoadingMore) return;
@@ -1901,23 +1918,14 @@ export function DashboardPage() {
                 ))}
               </div>
               {followTotal > DASHBOARD_PREVIEW_LIMIT ? (
-                <ListMoreAction
+                <InlineListMoreAction
                   expanded={followExpanded}
-                  hiddenCount={
-                    followExpanded
-                      ? Math.max(0, followTotal - visibleFollowItems.length)
-                      : followTotal - previewFollowItems.length
-                  }
                   previewCount={
                     followExpanded ? visibleFollowItems.length : previewFollowItems.length
                   }
                   totalCount={followTotal}
-                  title={followExpanded ? "我的事项加载进度" : "还有我的事项未显示"}
-                  label={followExpanded ? (followHasMore ? "加载更多" : "已全部显示") : "显示更多"}
-                  tone="follow"
                   loading={followLoadingMore}
-                  disabled={followExpanded && !followHasMore}
-                  onClick={loadMoreFollowItems}
+                  onClick={handleFollowMoreToggle}
                 />
               ) : null}
             </>
@@ -1953,21 +1961,12 @@ export function DashboardPage() {
                 ))}
               </div>
               {riskTotal > DASHBOARD_PREVIEW_LIMIT ? (
-                <ListMoreAction
+                <InlineListMoreAction
                   expanded={riskExpanded}
-                  hiddenCount={
-                    riskExpanded
-                      ? Math.max(0, riskTotal - visibleRiskItems.length)
-                      : riskTotal - previewRiskItems.length
-                  }
                   previewCount={riskExpanded ? visibleRiskItems.length : previewRiskItems.length}
                   totalCount={riskTotal}
-                  title={riskExpanded ? "风险提示加载进度" : "还有风险需要查看"}
-                  label={riskExpanded ? (riskHasMore ? "加载更多" : "已全部显示") : "显示更多"}
-                  tone="risk"
                   loading={riskLoadingMore}
-                  disabled={riskExpanded && !riskHasMore}
-                  onClick={loadMoreRiskItems}
+                  onClick={handleRiskMoreToggle}
                 />
               ) : null}
             </>
@@ -2213,50 +2212,33 @@ function SummaryChips({ items }: { items: SummaryChipItem[] }) {
   );
 }
 
-function ListMoreAction({
-  hiddenCount,
+function InlineListMoreAction({
+  expanded,
   previewCount,
   totalCount,
-  title,
-  label,
-  tone,
-  expanded = false,
   loading = false,
-  disabled = false,
   onClick
 }: {
-  hiddenCount: number;
+  expanded: boolean;
   previewCount: number;
   totalCount: number;
-  title: string;
-  label: string;
-  tone: "follow" | "risk";
-  expanded?: boolean;
   loading?: boolean;
-  disabled?: boolean;
   onClick: () => void;
 }) {
+  const hiddenCount = Math.max(0, totalCount - previewCount);
+  const summary = expanded
+    ? `已展开全部 ${totalCount} 项`
+    : `已显示 ${previewCount} / ${totalCount} 项，另有 ${hiddenCount} 项未展示`;
   return (
-    <div className={`console-list-more console-list-more--${tone}`}>
-      <div className="console-list-more__copy">
-        <strong>{title}</strong>
-        <span>
-          {expanded
-            ? previewCount >= totalCount
-              ? `已显示全部 ${totalCount} 项`
-              : `已显示 ${previewCount} / ${totalCount} 项，滚动到底自动加载更多`
-            : `已显示 ${previewCount} / ${totalCount} 项，另有 ${hiddenCount} 项可继续查看`}
-        </span>
-      </div>
+    <div className="console-inline-list-more">
+      <span className="console-inline-list-more__summary">{summary}</span>
       <Button
-        className="console-list-more__button"
-        icon={<UnorderedListOutlined />}
+        type="link"
+        className="console-inline-list-more__action"
         loading={loading}
-        disabled={disabled}
         onClick={onClick}
       >
-        {label}
-        {hiddenCount > 0 ? <span>{hiddenCount}</span> : null}
+        {expanded ? "收起" : "展开全部"}
       </Button>
     </div>
   );
@@ -4017,29 +3999,54 @@ function getTaskResponsibleText(
 function getMyItemPeopleLine(item: FollowItem, requirement?: MockRequirement, task?: MockTask) {
   if (item.type === "任务") {
     const taskResponsible = getTaskResponsibleText(task, item.taskResponsibleNames);
-    if (taskResponsible) return `任务负责人 ${taskResponsible}`;
-    if (item.owner) return `任务负责人 ${item.owner}`;
+    if (taskResponsible) return taskResponsible;
+    if (item.owner) return item.owner;
     if (item.creatorName) return `创建人 ${item.creatorName}`;
-    return "任务负责人未设置";
+    return "未设置";
   }
 
   const requirementResponsible = getRequirementResponsibleText(
     requirement,
     item.requirementResponsibleNames
   );
-  if (requirementResponsible) return `需求负责人 ${requirementResponsible}`;
+  if (requirementResponsible) return requirementResponsible;
   if (item.creatorName) return `创建人 ${item.creatorName}`;
   if (item.owner) return `创建人 ${item.owner}`;
   return "";
 }
 
 function getMyItemSubline(item: FollowItem, requirement?: MockRequirement, task?: MockTask) {
-  const parts = [getMyItemPeopleLine(item, requirement, task)];
+  const parts: string[] = [];
+  const blockerLine = getMyItemBlockerLine(item);
+  if (blockerLine) parts.push(blockerLine);
   if (item.type === "任务" && item.requirement) {
-    parts.push(`所属需求 ${item.requirement}`);
+    parts.push(`所属需求：${item.requirement}`);
   }
-  if (item.activity) parts.push(item.activity);
   return parts.filter(Boolean);
+}
+
+function getMyItemBlockerLine(item: FollowItem) {
+  const blockers = item.blockingTasks ?? [];
+  if (blockers.length) {
+    const visible = blockers.slice(0, 2).map(formatBlockingTaskSource);
+    const suffix = blockers.length > visible.length ? ` 等 ${blockers.length} 个` : "";
+    return `阻塞来源：${visible.join("、")}${suffix}`;
+  }
+  if (item.dependency) return `阻塞来源：${item.dependency}`;
+  return "";
+}
+
+function formatBlockingTaskSource(dependency: TaskDependencyDTO) {
+  const title = dependency.task_title || dependency.title || dependency.item_id || "未命名任务";
+  const displayTitle = compactWorkTitle(title);
+  const ownerText = formatCompactNames(dependency.responsible_names ?? []);
+  return ownerText ? `${displayTitle}（负责人 ${ownerText}）` : displayTitle;
+}
+
+function compactWorkTitle(title: string) {
+  const trimmed = title.trim();
+  const code = trimmed.match(/^[A-Za-z]+(?:-[A-Za-z0-9]+)+/u)?.[0];
+  return code || trimmed;
 }
 
 function normalizeFollowRiskLabel(item: FollowItem) {
@@ -4084,6 +4091,7 @@ function FollowCard({
   const isTask = item.type === "任务";
   const riskHint = getFollowRiskHint(item);
   const attention = showAttention ? getFollowAttentionConfig(item) : null;
+  const peopleLine = getMyItemPeopleLine(item, requirement, task);
   const subline = getMyItemSubline(item, requirement, task);
   const tone = riskHint?.tone ?? "muted";
   const className = [
@@ -4108,9 +4116,7 @@ function FollowCard({
           {item.title}
         </strong>
         {subline.length ? (
-          <span className="console-follow-card__subline" title={subline.join(" · ")}>
-            {subline.join(" · ")}
-          </span>
+          <OverflowPopoverText className="console-follow-card__subline" text={subline.join(" · ")} />
         ) : null}
       </div>
       <div className="console-follow-card__signals">
@@ -4127,6 +4133,7 @@ function FollowCard({
           )
         ) : null}
       </div>
+      <OverflowPopoverText className="console-follow-card__people" text={peopleLine} />
       <div className="console-follow-card__deadline" title={item.deadline || "未设置"}>
         <ClockCircleOutlined /> 截止 {item.deadline || "未设置"}
       </div>
@@ -4139,6 +4146,73 @@ function FollowCard({
         详情
       </Button>
     </article>
+  );
+}
+
+function OverflowPopoverText({ className, text }: { className: string; text: string }) {
+  const textRef = useRef<HTMLSpanElement>(null);
+  const [overflowing, setOverflowing] = useState(false);
+  const [open, setOpen] = useState(false);
+
+  const measureOverflow = () => {
+    const element = textRef.current;
+    if (!element) return false;
+    return (
+      element.scrollWidth > element.clientWidth + 1 ||
+      element.scrollHeight > element.clientHeight + 1
+    );
+  };
+
+  useEffect(() => {
+    const element = textRef.current;
+    if (!element) return;
+
+    const checkOverflow = () => {
+      const nextOverflowing = measureOverflow();
+      setOverflowing(nextOverflowing);
+      if (!nextOverflowing) setOpen(false);
+    };
+
+    checkOverflow();
+    const frame = window.requestAnimationFrame(checkOverflow);
+    const observer = new ResizeObserver(checkOverflow);
+    observer.observe(element);
+    window.addEventListener("resize", checkOverflow);
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      observer.disconnect();
+      window.removeEventListener("resize", checkOverflow);
+    };
+  }, [text]);
+
+  const handleOpenChange = (nextOpen: boolean) => {
+    if (!nextOpen) {
+      setOpen(false);
+      return;
+    }
+    const nextOverflowing = measureOverflow();
+    setOverflowing(nextOverflowing);
+    setOpen(nextOverflowing);
+  };
+
+  const node = (
+    <span ref={textRef} className={className}>
+      {text}
+    </span>
+  );
+
+  return (
+    <Popover
+      trigger="hover"
+      placement="bottomLeft"
+      open={open}
+      onOpenChange={handleOpenChange}
+      mouseEnterDelay={0.25}
+      content={overflowing ? <div className="console-overflow-popover-content">{text}</div> : null}
+    >
+      {node}
+    </Popover>
   );
 }
 
@@ -4450,6 +4524,7 @@ function RiskCard({
   const primaryRisk = getPrimaryRiskType(item);
   const summary = getRiskSummaryText(item);
   const riskTaskLine = getRepresentativeRiskTaskLine(item);
+  const blockerLine = getRiskBlockingSourceLine(item);
   const ownerText = getRequirementResponsibleText(requirement, item.requirementResponsibleNames);
   const deadline = getRiskDeadline(item);
   return (
@@ -4471,6 +4546,12 @@ function RiskCard({
             <em>风险任务：</em>
             {riskTaskLine}
           </span>
+        ) : null}
+        {blockerLine ? (
+          <OverflowPopoverText
+            className="console-risk-card__blocker"
+            text={`阻塞来源：${blockerLine}`}
+          />
         ) : null}
         {ownerText ? (
           <span className="console-risk-card__owner" title={ownerText}>
@@ -4531,10 +4612,44 @@ function getRepresentativeRiskTaskLine(item: RiskItem) {
     )
   );
   if (riskLabels.length) parts.push(riskLabels.join(" / "));
-  if ((task.unfinishedDependencyCount ?? 0) > 0) {
-    parts.push(`未完成依赖 ${task.unfinishedDependencyCount} 个`);
-  }
   return parts.join(" · ");
+}
+
+function getRiskBlockingSourceLine(item: RiskItem) {
+  const task = item.representativeTask;
+  if (!task) return "";
+  const blockers = task.blockingDependencies ?? [];
+  if (blockers.length) {
+    const visible = blockers.slice(0, 2).map(formatRiskBlockingDependency);
+    const suffix = blockers.length > visible.length ? ` +${blockers.length - visible.length}` : "";
+    return `${visible.join("、")}${suffix}`;
+  }
+  if ((task.unfinishedDependencyCount ?? 0) > 0) {
+    return `${task.unfinishedDependencyCount} 个上游任务未完成`;
+  }
+  return "";
+}
+
+function formatRiskBlockingDependency(dependency: TaskDependencyDTO) {
+  const title = compactWorkTitle(
+    dependency.task_title || dependency.title || dependency.item_id || "未命名任务"
+  );
+  const ownerText = formatCompactNames(dependency.responsible_names ?? []);
+  const parts = [ownerText ? `${title}（${ownerText}）` : title];
+  const status = riskDependencyStatusLabel(dependency.status);
+  if (status) parts.push(status);
+  if (dependency.due_date) parts.push(`截止 ${dependency.due_date}`);
+  return parts.join(" · ");
+}
+
+function riskDependencyStatusLabel(status?: string) {
+  if (!status) return "";
+  if (status === "todo") return "未开始";
+  if (status === "in_progress" || status === "active") return "进行中";
+  if (status === "review") return "评审";
+  if (status === "done" || status === "completed") return "已完成";
+  if (status === "cancelled") return "已取消";
+  return status;
 }
 
 function getRiskTagLabels(item: RiskItem) {

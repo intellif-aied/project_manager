@@ -7,7 +7,7 @@ import (
 
 const (
 	ReportSkillSlug         = "aida-report"
-	ReportSkillVersion      = "1.0.0"
+	ReportSkillVersion      = "1.0.2"
 	ReportSkillName         = "Aida Report Skill"
 	ReportMCPSlug           = "aida-report-mcp"
 	ReportMCPVersion        = "report-v1"
@@ -121,6 +121,19 @@ Use report_scope by source:
 - team source reports: report_scope=team
 - department source reports: report_scope=department
 
+## Authoritative Identity and Aggregation Rules
+
+- Treat run input target, scope_context, inventory owner metadata, and source report owner metadata as the only authoritative identity sources.
+- For personal reports, the report owner is the current self user or explicit owner metadata returned by MCP.
+- For team reports, team name and team leader/负责人 must come from scope_context.teams[].team_leader_name or explicit team metadata. Never use user_id, team_id, leader_id, director_user_id, the first member, most active member, or first personal report owner as team leader/负责人.
+- For department reports, department/director identity must come from scope_context.teams[].department_director_name, target, or explicit department metadata. Never use user_id, team_id, leader_id, a team leader, first team, first member, or first source report owner as department负责人.
+- Prefer role_label, is_team_leader, team_leader_name, and department_director_name over raw role/id fields. Raw ids are internal references only.
+- If leader/owner identity is not returned by MCP, omit that field or write "未提供"; do not guess from report content.
+- For team reports, aggregate across every expected member in scope_context.members or get_report_inventory. For department reports, aggregate across every expected team in scope_context.teams or get_report_inventory.
+- Coverage numerators and denominators must come from get_report_inventory expected/submitted counts or roster counts. Session counts and token counts are not report submission coverage.
+- Department weekly coverage must clearly say whether it is team weekly report coverage or personal weekly report coverage. Do not label personal weekly report counts as the department/team weekly coverage.
+- When quoting saved reports, preserve the source owner as the contributor only. A source personal report owner is not the team leader unless MCP explicitly says so.
+
 Use this exact tool argument contract:
 
 - get_sessions: {"scope": scope, "target": target, "date_range": date_range, "include_summary": true, "selected_session_slice_keys": optional_selected_session_slice_keys}.
@@ -141,16 +154,18 @@ Do not send period to read-list tools that require date_range or week_range. Do 
 2. Call get_existing_report first with {"report_type": report_type, "period": period, "target": target}.
 3. Select context tools by report_type:
    - personal_daily: get_sessions, get_tasks, get_requirements with scope.type=self and date_range for period.date.
-   - personal_weekly: get_daily_reports(report_scope=personal), get_sessions, get_tasks, get_requirements with scope.type=self and date_range for the week.
-   - team_daily: get_daily_reports(report_scope=personal), get_sessions, get_tasks, get_requirements, get_report_inventory(report_scope=personal, report_kind=daily) with scope.type=team and date_range for period.date.
-   - team_weekly: get_weekly_reports(report_scope=personal), get_daily_reports(report_scope=personal), get_sessions, get_tasks, get_requirements, get_report_inventory(report_scope=personal, report_kind=weekly) with scope.type=team.
-   - department_daily: get_daily_reports(report_scope=team), get_report_inventory(report_scope=team, report_kind=daily), get_requirements with scope.type=department and date_range for period.date.
-   - department_weekly: get_weekly_reports(report_scope=team), get_daily_reports(report_scope=department), get_weekly_reports(report_scope=personal), get_requirements, get_report_inventory(report_scope=team, report_kind=weekly) with scope.type=department.
-4. If selected_session_slice_keys is present and non-empty, every get_sessions call must include it so MCP filters to those slices. Use only facts returned by MCP tools. Do not invent tasks, sessions, blockers, progress, members, teams, or departments.
-5. For team and department reports, read scope_context from the MCP responses before writing the report. If a response has no scope_context, call get_sessions with include_summary=true for the same scope/date_range to obtain it.
-6. Produce concise Chinese Markdown suitable for the selected report_type.
-7. Call write_report_result with {"report_type": report_type, "period": period, "target": target, "run_id": run_id, "content": markdown, "summary": optional_summary}.
-8. If generation fails, call write_report_failure with {"report_type": report_type, "period": period, "target": target, "run_id": run_id, "error_message": error_message}.
+   - personal_weekly: get_daily_reports(report_scope=personal), get_tasks, get_requirements with scope.type=self and date_range for the week. Call get_sessions only for current-user session supplement when selected_session_slice_keys is present or saved personal daily reports are insufficient.
+   - team_daily: get_daily_reports(report_scope=personal), get_report_inventory(report_scope=personal, report_kind=daily), and optionally get_tasks/get_requirements with scope.type=team and date_range for period.date. Do not call get_sessions by default.
+   - team_weekly: get_weekly_reports(report_scope=personal), get_daily_reports(report_scope=personal), get_report_inventory(report_scope=personal, report_kind=weekly), and optionally get_tasks/get_requirements with scope.type=team. Do not call get_sessions by default.
+   - department_daily: get_daily_reports(report_scope=team), get_report_inventory(report_scope=team, report_kind=daily), and optionally get_requirements with scope.type=department and date_range for period.date. Do not call get_sessions by default.
+   - department_weekly: get_weekly_reports(report_scope=team), get_daily_reports(report_scope=team), get_report_inventory(report_scope=team, report_kind=weekly), and optionally get_requirements with scope.type=department. Do not call get_sessions by default.
+4. selected_session_slice_keys applies only to personal reports. If present and non-empty, pass it unchanged to personal get_sessions calls so MCP filters to those slices. Do not apply selected_session_slice_keys to team or department reports.
+5. Use source_state when present. If source_state.source_mode is reports_only, write that the report is based on saved reports. If it is sessions_only, write that it is based on session activity. If it is mixed, distinguish saved reports from supplemental data. If dependency_ready is false, list missing_names and do not invent missing lower-level report content.
+6. Use only facts returned by MCP tools. Do not invent tasks, sessions, blockers, progress, members, teams, or departments.
+7. For team and department reports, read scope_context from report/inventory MCP responses before writing the report. If a response has no scope_context, call get_report_inventory for the same scope/period to obtain roster context; do not call get_sessions just to obtain roster context.
+8. Produce concise Chinese Markdown suitable for the selected report_type.
+9. Call write_report_result with {"report_type": report_type, "period": period, "target": target, "run_id": run_id, "content": markdown, "summary": optional_summary}.
+10. If generation fails, call write_report_failure with {"report_type": report_type, "period": period, "target": target, "run_id": run_id, "error_message": error_message}.
 
 ## Roster Rules
 
@@ -158,14 +173,14 @@ Do not send period to read-list tools that require date_range or week_range. Do 
 - Sessions, daily reports, weekly reports, tasks, and requirements are activity evidence only. They must not decide whether a member exists.
 - Always distinguish total members, active members, and inactive/no-session members when scope_context is available.
 - If a member has no sessions or no saved report in the selected period, list them as no activity/no saved report instead of omitting them.
-- Use team_name from scope_context.teams or report owner metadata before showing team_id. If there is no real department entity, describe department reports as the director's management scope, not as a department ID.
+- Use team_name, team_leader_name, department_director_name, and role_label from scope_context before any raw id field. Never show user_id, team_id, report_id, session_id, or run_id in the report body.
 
 ## Source Priority
 
 - personal_daily: sessions, tasks, and requirements are primary sources.
 - personal_weekly: saved personal daily reports returned by get_daily_reports are the primary source; sessions, tasks, and requirements are supplemental evidence.
-- team_daily / team_weekly: saved personal daily/weekly reports returned by get_daily_reports/get_weekly_reports are the primary source for member work. Sessions, tasks, and requirements are supplemental evidence only when member reports are missing or need clarification.
-- department_daily / department_weekly: saved team daily/weekly reports returned by get_daily_reports/get_weekly_reports are the primary source for team work. Lower-level personal reports and sessions are supplemental evidence only when team reports are missing or need clarification.
+- team_daily / team_weekly: saved personal daily/weekly reports returned by get_daily_reports/get_weekly_reports are the primary source for member work. Do not scan team members' sessions by default. If member reports are missing, list missing reports instead of falling back to member sessions.
+- department_daily / department_weekly: saved team daily/weekly reports returned by get_daily_reports/get_weekly_reports are the primary source for team work. Do not scan all members' sessions by default. If team reports are missing, list missing teams instead of falling back to member sessions.
 - Token/session statistics are low-priority metrics. Do not make token totals, session counts, or model usage the main body of team or department reports.
 
 ## Output Rules

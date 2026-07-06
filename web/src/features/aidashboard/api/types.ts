@@ -148,6 +148,8 @@ export interface TaskDep {
   requirement_id?: string;
   requirement_title?: string;
   status: RequirementStatus | TaskDisplayStatus | string;
+  responsible_user_ids?: string[];
+  responsible_names?: string[];
   due_date?: string;
 }
 
@@ -269,6 +271,7 @@ export interface DashboardFollowItemDTO {
   deadline: string;
   risk: string;
   dependency?: string;
+  blockingTasks?: TaskDep[];
   activity?: string;
   followedByMe: boolean;
   createdByMe: boolean;
@@ -298,6 +301,7 @@ export interface DashboardRiskTaskSummaryDTO {
   title: string;
   deadline?: string;
   riskTypes: DashboardRiskType[];
+  blockingDependencies?: TaskDep[];
   unfinishedDependencyCount?: number;
 }
 

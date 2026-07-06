@@ -311,8 +311,10 @@ func (h *DashboardHandler) taskFollowItem(id, userID string) (model.DashboardFol
 	}
 	url := fmt.Sprintf("/requirements?requirementId=%s&taskId=%s", task.RequirementID, task.ID)
 	dependency := ""
+	blockingTasks := []model.TaskDep{}
 	if task.DisplayStatus == "blocked" {
-		dependency = unfinishedDependencyNames(task)
+		blockingTasks = unfinishedDependencies(task)
+		dependency = unfinishedDependencyNames(blockingTasks)
 	}
 	attention := h.followAttention("task", task.ID)
 	return model.DashboardFollowItem{
@@ -330,6 +332,7 @@ func (h *DashboardHandler) taskFollowItem(id, userID string) (model.DashboardFol
 		Deadline:             displayDate(task.DueDate),
 		Risk:                 taskRiskLabel(task.RiskTypes),
 		Dependency:           dependency,
+		BlockingTasks:        blockingTasks,
 		Activity:             recentUpdateLabel(task.UpdatedAt),
 		AttentionScore:       attention.score,
 		AttentionLevel:       attentionLevel(attention.score),
@@ -615,12 +618,17 @@ func dashboardRiskGroupBuilderFor(builders map[string]*dashboardRiskGroupBuilder
 }
 
 func dashboardRiskTaskSummary(fact dashboardTaskRiskFact) *model.DashboardRiskTaskSummary {
+	blockingDependencies := []model.TaskDep{}
+	if containsRiskType(fact.riskTypes, dashboardRiskTypeDependencyBlocker) {
+		blockingDependencies = unfinishedDependencies(fact.task)
+	}
 	summary := &model.DashboardRiskTaskSummary{
 		TaskID:                    fact.task.ID,
 		Title:                     fact.task.Title,
 		Deadline:                  displayDate(fact.task.DueDate),
 		RiskTypes:                 append([]string{}, fact.riskTypes...),
-		UnfinishedDependencyCount: fact.unfinishedDependencyCount,
+		BlockingDependencies:      blockingDependencies,
+		UnfinishedDependencyCount: len(blockingDependencies),
 		SortUpdatedAt:             fact.task.UpdatedAt,
 	}
 	if containsRiskType(fact.riskTypes, dashboardRiskTypeDeadline) {
@@ -679,13 +687,7 @@ func containsRiskType(items []string, riskType string) bool {
 }
 
 func unfinishedDependencyCount(task model.Task) int {
-	count := 0
-	for _, dependency := range task.Dependencies {
-		if dependency.Status != "done" {
-			count++
-		}
-	}
-	return count
+	return len(unfinishedDependencies(task))
 }
 
 func dashboardDateString(value time.Time) string {
@@ -937,12 +939,35 @@ func optionalDateBefore(left, right *string) bool {
 	return *left < *right
 }
 
-func unfinishedDependencyNames(task model.Task) string {
-	names := []string{}
+func unfinishedDependencies(task model.Task) []model.TaskDep {
+	items := []model.TaskDep{}
 	for _, dependency := range task.Dependencies {
-		if dependency.Status != "done" {
-			names = append(names, dependency.TaskTitle)
+		if isUnfinishedDependency(dependency) {
+			items = append(items, dependency)
 		}
+	}
+	return items
+}
+
+func isUnfinishedDependency(dependency model.TaskDep) bool {
+	if dependency.ItemType == "requirement" {
+		return dependency.Status != "completed" && dependency.Status != "cancelled"
+	}
+	return dependency.Status != "done"
+}
+
+func unfinishedDependencyNames(dependencies []model.TaskDep) string {
+	names := []string{}
+	for _, dependency := range dependencies {
+		title := dependency.TaskTitle
+		if title == "" {
+			title = dependency.Title
+		}
+		if len(dependency.ResponsibleNames) > 0 {
+			names = append(names, fmt.Sprintf("%s（负责人 %s）", title, strings.Join(dependency.ResponsibleNames, "、")))
+			continue
+		}
+		names = append(names, title)
 	}
 	if len(names) == 0 {
 		return "未完成上游任务"

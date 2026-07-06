@@ -235,6 +235,18 @@ function isWorkScope(value: string | null): value is WorkScope {
   );
 }
 
+function defaultRequirementWorkScope(user: User | null): WorkScope {
+  if (
+    user?.role === "employee" ||
+    user?.role === "pm" ||
+    user?.role === "team_leader" ||
+    user?.role === "director"
+  ) {
+    return "mine";
+  }
+  return "all";
+}
+
 function canManageTaskForUser(user: User | null, task?: MockTask) {
   if (!user || !task) return false;
   return Boolean(
@@ -805,13 +817,12 @@ export function RequirementsListPage() {
   const status = (searchParams.get("status") as RequirementStage | null) ?? undefined;
   const riskParam = searchParams.get("risk");
   const risk: RiskFilter | undefined = isRiskFilter(riskParam) ? riskParam : undefined;
+  const defaultWorkScope = defaultRequirementWorkScope(user);
   const workScope: WorkScope = isWorkScope(scopeParam)
     ? scopeParam
     : favoriteParam === "1"
       ? "followed"
-      : user?.role === "pm"
-        ? "mine"
-        : "all";
+      : defaultWorkScope;
   const requirementQueryParams = useMemo(() => {
     const params: Record<string, string> = {
       scope: workScope
@@ -852,7 +863,7 @@ export function RequirementsListPage() {
       (previous) => {
         const next = new URLSearchParams(previous);
         next.delete("favorite");
-        if (nextScope === "all" && user?.role !== "pm") {
+        if (nextScope === defaultWorkScope) {
           next.delete("scope");
         } else {
           next.set("scope", nextScope);
@@ -864,16 +875,17 @@ export function RequirementsListPage() {
   };
 
   useEffect(() => {
-    if (user?.role !== "pm" || searchParams.has("scope") || searchParams.has("favorite")) return;
+    if (defaultWorkScope === "all" || searchParams.has("scope") || searchParams.has("favorite"))
+      return;
     setSearchParams(
       (previous) => {
         const next = new URLSearchParams(previous);
-        next.set("scope", "mine");
+        next.set("scope", defaultWorkScope);
         return next;
       },
       { replace: true }
     );
-  }, [searchParams, setSearchParams, user?.role]);
+  }, [defaultWorkScope, searchParams, setSearchParams]);
 
   const boardRequirementsQuery = useQuery({
     queryKey: ["requirements-board", "requirements", "board", requirementQueryParams],
@@ -1331,7 +1343,6 @@ export function RequirementsListPage() {
           }
         }
       : false;
-  const defaultWorkScope: WorkScope = user?.role === "pm" ? "mine" : "all";
   const hasActiveFilters = Boolean(
     keyword || searchDraft || priority || status || risk || workScope !== defaultWorkScope
   );

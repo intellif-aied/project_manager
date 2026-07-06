@@ -669,11 +669,11 @@ func TestReportMCPGetSessionsReturnsScopeContextRoster(t *testing.T) {
 
 	mock.ExpectQuery("SELECT u.id::text,").
 		WithArgs(sqlmock.AnyArg()).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "username", "role", "team_id", "team_name", "director_user_id", "director_name"}).
-			AddRow("305", "测试03", "team_leader", "team-a", "测试小组A", "303", "测试01").
-			AddRow("306", "测试04", "employee", "team-a", "测试小组A", "303", "测试01").
-			AddRow("307", "测试05", "employee", "team-a", "测试小组A", "303", "测试01").
-			AddRow("311", "测试09", "employee", "team-a", "测试小组A", "303", "测试01"))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "username", "role", "team_id", "team_name", "director_user_id", "director_name", "team_leader_id", "team_leader_name"}).
+			AddRow("305", "测试03", "team_leader", "team-a", "测试小组A", "303", "测试01", "305", "测试03").
+			AddRow("306", "测试04", "employee", "team-a", "测试小组A", "303", "测试01", "305", "测试03").
+			AddRow("307", "测试05", "employee", "team-a", "测试小组A", "303", "测试01", "305", "测试03").
+			AddRow("311", "测试09", "employee", "team-a", "测试小组A", "303", "测试01", "305", "测试03"))
 
 	mock.ExpectQuery("SELECT id::text, COALESCE").
 		WithArgs(sqlmock.AnyArg()).
@@ -709,14 +709,29 @@ func TestReportMCPGetSessionsReturnsScopeContextRoster(t *testing.T) {
 	}
 	members := scopeContext["members"].([]any)
 	foundInactive := false
+	foundLeaderRole := false
 	for _, raw := range members {
 		m := raw.(map[string]any)
 		if m["user_id"] == "311" && m["active"] == false {
 			foundInactive = true
 		}
+		if m["user_id"] == "305" && m["role_label"] == "小组组长" && m["is_team_leader"] == true {
+			foundLeaderRole = true
+		}
 	}
 	if !foundInactive {
 		t.Fatalf("inactive member 311 missing: %#v", members)
+	}
+	if !foundLeaderRole {
+		t.Fatalf("team leader semantic fields missing: %#v", members)
+	}
+	teams := scopeContext["teams"].([]any)
+	if len(teams) != 1 {
+		t.Fatalf("teams=%#v, want one team", teams)
+	}
+	team := teams[0].(map[string]any)
+	if team["team_leader_name"] != "测试03" || team["department_director_name"] != "测试01" {
+		t.Fatalf("team semantic owner fields = %#v", team)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
@@ -736,10 +751,10 @@ func TestReportMCPInventoryTeamsRespectDepartmentScope(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("305").AddRow("306").AddRow("308"))
 	mock.ExpectQuery("SELECT u.id::text,").
 		WithArgs(sqlmock.AnyArg()).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "username", "role", "team_id", "team_name", "director_user_id", "director_name"}).
-			AddRow("305", "测试03", "team_leader", "team-a", "测试小组A", "303", "测试01").
-			AddRow("306", "测试04", "employee", "team-a", "测试小组A", "303", "测试01").
-			AddRow("308", "测试06", "team_leader", "team-b", "测试小组B", "303", "测试01"))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "username", "role", "team_id", "team_name", "director_user_id", "director_name", "team_leader_id", "team_leader_name"}).
+			AddRow("305", "测试03", "team_leader", "team-a", "测试小组A", "303", "测试01", "305", "测试03").
+			AddRow("306", "测试04", "employee", "team-a", "测试小组A", "303", "测试01", "305", "测试03").
+			AddRow("308", "测试06", "team_leader", "team-b", "测试小组B", "303", "测试01", "308", "测试06"))
 	mock.ExpectQuery("SELECT id::text, team_id::text, week_start::text").
 		WithArgs("2026-07-06", "2026-07-12", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "team_id", "week_start", "generation_mode", "edited"}).

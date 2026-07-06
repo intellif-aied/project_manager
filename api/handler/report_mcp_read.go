@@ -54,23 +54,45 @@ func loadUserInfoMap(ctx context.Context, db *sql.DB, userIDs []string) (map[str
 	return m, rows.Err()
 }
 
+func reportRoleLabel(role string) string {
+	switch role {
+	case "admin":
+		return "管理员"
+	case "director":
+		return "部门负责人"
+	case "team_leader":
+		return "小组组长"
+	case "pm":
+		return "PM"
+	case "employee":
+		return "成员"
+	default:
+		return role
+	}
+}
+
 type scopeMember struct {
-	UserID       string `json:"user_id"`
-	Username     string `json:"username"`
-	Role         string `json:"role"`
-	TeamID       string `json:"team_id,omitempty"`
-	TeamName     string `json:"team_name,omitempty"`
-	SessionCount int    `json:"session_count"`
-	Active       bool   `json:"active"`
+	UserID               string `json:"user_id"`
+	Username             string `json:"username"`
+	Role                 string `json:"role"`
+	RoleLabel            string `json:"role_label,omitempty"`
+	TeamID               string `json:"team_id,omitempty"`
+	TeamName             string `json:"team_name,omitempty"`
+	IsTeamLeader         bool   `json:"is_team_leader"`
+	IsDepartmentDirector bool   `json:"is_department_director"`
+	SessionCount         int    `json:"session_count"`
+	Active               bool   `json:"active"`
 }
 
 type scopeTeam struct {
-	TeamID            string `json:"team_id"`
-	TeamName          string `json:"team_name"`
-	LeaderID          string `json:"leader_id,omitempty"`
-	LeaderName        string `json:"leader_name,omitempty"`
-	MemberCount       int    `json:"member_count"`
-	ActiveMemberCount int    `json:"active_member_count,omitempty"`
+	TeamID                 string `json:"team_id"`
+	TeamName               string `json:"team_name"`
+	LeaderID               string `json:"leader_id,omitempty"`
+	LeaderName             string `json:"leader_name,omitempty"`
+	TeamLeaderName         string `json:"team_leader_name,omitempty"`
+	DepartmentDirectorName string `json:"department_director_name,omitempty"`
+	MemberCount            int    `json:"member_count"`
+	ActiveMemberCount      int    `json:"active_member_count,omitempty"`
 }
 
 type scopeContextPayload struct {
@@ -106,10 +128,19 @@ func loadScopeContext(ctx context.Context, db *sql.DB, rs *resolvedScope, active
 		       COALESCE(u.team_id::text,''),
 		       COALESCE(t.name,''),
 		       COALESCE(t.director_user_id::text,''),
-		       COALESCE(NULLIF(du.nickname,''), du.username, '')
+		       COALESCE(NULLIF(du.nickname,''), du.username, ''),
+		       COALESCE(tl.id::text, ''),
+		       COALESCE(NULLIF(tl.nickname,''), tl.username, '')
 		FROM users u
 		LEFT JOIN teams t ON t.id = u.team_id
 		LEFT JOIN users du ON du.id = t.director_user_id
+		LEFT JOIN LATERAL (
+			SELECT id, nickname, username
+			FROM users
+			WHERE team_id = t.id AND role = 'team_leader'
+			ORDER BY id
+			LIMIT 1
+		) tl ON true
 		WHERE u.id::text = ANY($1)
 		ORDER BY COALESCE(t.name,''), COALESCE(NULLIF(u.nickname,''), u.username), u.id`, pq.Array(rs.UserIDs))
 	if err != nil {
@@ -120,10 +151,13 @@ func loadScopeContext(ctx context.Context, db *sql.DB, rs *resolvedScope, active
 	teamIndex := map[string]int{}
 	for rows.Next() {
 		var m scopeMember
-		var leaderID, leaderName string
-		if err := rows.Scan(&m.UserID, &m.Username, &m.Role, &m.TeamID, &m.TeamName, &leaderID, &leaderName); err != nil {
+		var departmentDirectorID, departmentDirectorName, teamLeaderID, teamLeaderName string
+		if err := rows.Scan(&m.UserID, &m.Username, &m.Role, &m.TeamID, &m.TeamName, &departmentDirectorID, &departmentDirectorName, &teamLeaderID, &teamLeaderName); err != nil {
 			return payload, err
 		}
+		m.RoleLabel = reportRoleLabel(m.Role)
+		m.IsTeamLeader = m.Role == "team_leader"
+		m.IsDepartmentDirector = m.Role == "director" || (departmentDirectorID != "" && m.UserID == departmentDirectorID)
 		m.SessionCount = activeByUser[m.UserID]
 		m.Active = m.SessionCount > 0
 		payload.Members = append(payload.Members, m)
@@ -140,7 +174,14 @@ func loadScopeContext(ctx context.Context, db *sql.DB, rs *resolvedScope, active
 		if !ok {
 			idx = len(payload.Teams)
 			teamIndex[m.TeamID] = idx
-			payload.Teams = append(payload.Teams, scopeTeam{TeamID: m.TeamID, TeamName: m.TeamName, LeaderID: leaderID, LeaderName: leaderName})
+			payload.Teams = append(payload.Teams, scopeTeam{
+				TeamID:                 m.TeamID,
+				TeamName:               m.TeamName,
+				LeaderID:               teamLeaderID,
+				LeaderName:             teamLeaderName,
+				TeamLeaderName:         teamLeaderName,
+				DepartmentDirectorName: departmentDirectorName,
+			})
 		}
 		payload.Teams[idx].MemberCount++
 		if m.Active {
@@ -333,7 +374,19 @@ func (h *ReportMCPHandler) toolGetSessions(ctx context.Context, r *http.Request,
 		return nil, errMCPInternal
 	}
 
-	payload := map[string]any{"sessions": sessions, "scope_context": scopeContext}
+	payload := map[string]any{
+		"sessions":      sessions,
+		"scope_context": scopeContext,
+		"source_state": map[string]any{
+			"primary_source":   "sessions",
+			"source_mode":      "sessions_only",
+			"dependency_ready": true,
+			"expected_count":   len(sessions),
+			"existing_count":   len(sessions),
+			"missing_count":    0,
+			"missing_names":    []string{},
+		},
+	}
 	if args.IncludeSummary {
 		infoMap, _ := loadUserInfoMap(ctx, h.db, visible)
 		payload["summary"] = map[string]any{
@@ -512,6 +565,7 @@ func (h *ReportMCPHandler) toolGetDailyReports(ctx context.Context, r *http.Requ
 		"reports":       reports,
 		"missing":       missing,
 		"scope_context": scopeContext,
+		"source_state":  reportSourceState(reportScope, "daily", len(reports), len(reports)+len(missing), missing),
 		"summary": map[string]int{
 			"total_expected": len(reports) + len(missing),
 			"total_existing": len(reports),
@@ -703,6 +757,7 @@ func (h *ReportMCPHandler) toolGetWeeklyReports(ctx context.Context, r *http.Req
 		"reports":       reports,
 		"missing":       missing,
 		"scope_context": scopeContext,
+		"source_state":  reportSourceState(reportScope, "weekly", len(existingInventory), len(expectedInventory), missing),
 		"summary": map[string]int{
 			"total_expected": len(expectedInventory),
 			"total_existing": len(existingInventory),
@@ -1028,6 +1083,7 @@ func (h *ReportMCPHandler) toolGetReportInventory(ctx context.Context, r *http.R
 				"missing":  missing,
 			},
 			"scope_context": scopeContext,
+			"source_state":  reportSourceState(args.ReportScope, "daily", len(existing), len(expected), missing),
 			"summary": map[string]int{
 				"total_expected": len(expected),
 				"total_existing": len(existing),
@@ -1056,6 +1112,7 @@ func (h *ReportMCPHandler) toolGetReportInventory(ctx context.Context, r *http.R
 			"missing":  missing,
 		},
 		"scope_context": scopeContext,
+		"source_state":  reportSourceState(args.ReportScope, "weekly", len(existing), len(expected), missing),
 		"summary": map[string]int{
 			"total_expected": len(expected),
 			"total_existing": len(existing),
@@ -1654,6 +1711,73 @@ func computeMissing(expected, existing []map[string]any) []map[string]any {
 		}
 	}
 	return missing
+}
+
+func reportSourceState(reportScope, reportKind string, existingCount, expectedCount int, missing []map[string]any) map[string]any {
+	sourceMode := "reports_only"
+	switch {
+	case existingCount == 0 && expectedCount > 0:
+		sourceMode = "insufficient"
+	case len(missing) > 0:
+		sourceMode = "mixed"
+	}
+	return map[string]any{
+		"primary_source":   reportPrimarySource(reportScope, reportKind),
+		"source_mode":      sourceMode,
+		"dependency_ready": len(missing) == 0,
+		"expected_count":   expectedCount,
+		"existing_count":   existingCount,
+		"missing_count":    len(missing),
+		"missing_names":    missingDisplayNames(missing),
+	}
+}
+
+func reportPrimarySource(reportScope, reportKind string) string {
+	switch reportScope {
+	case "personal":
+		if reportKind == "weekly" {
+			return "personal_weekly_reports"
+		}
+		return "personal_daily_reports"
+	case "team":
+		if reportKind == "weekly" {
+			return "team_weekly_reports"
+		}
+		return "team_daily_reports"
+	case "department":
+		if reportKind == "weekly" {
+			return "department_weekly_reports"
+		}
+		return "department_daily_reports"
+	default:
+		return reportKind + "_reports"
+	}
+}
+
+func missingDisplayNames(missing []map[string]any) []string {
+	names := []string{}
+	seen := map[string]bool{}
+	for _, item := range missing {
+		name := displayNameFromInventoryItem(item)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		names = append(names, name)
+	}
+	return names
+}
+
+func displayNameFromInventoryItem(item map[string]any) string {
+	for _, key := range []string{"username", "team_name", "department_name"} {
+		if value, ok := item[key].(string); ok && value != "" {
+			return value
+		}
+	}
+	if value, ok := item["owner_type"].(string); ok && value == "department" {
+		return "部门"
+	}
+	return ""
 }
 
 func copyInventoryOwnerMetadata(dst, src map[string]any) {

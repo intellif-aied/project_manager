@@ -68,7 +68,7 @@ func Load() *Config {
 		ManagedAgentDefaultEngine:           getEnv("MANAGED_AGENT_DEFAULT_ENGINE", "claude-code"),
 		ManagedAgentDefaultModelID:          getEnv("MANAGED_AGENT_DEFAULT_MODEL_ID", "MiniMax-M2.5"),
 		ManagedAgentReportSkillSlug:         getEnv("MANAGED_AGENT_REPORT_SKILL_SLUG", "aida-report"),
-		ManagedAgentReportSkillVersion:      getEnv("MANAGED_AGENT_REPORT_SKILL_VERSION", "1.0.0"),
+		ManagedAgentReportSkillVersion:      getEnv("MANAGED_AGENT_REPORT_SKILL_VERSION", "1.0.2"),
 		ManagedAgentReportSkillName:         getEnv("MANAGED_AGENT_REPORT_SKILL_NAME", "Aida Report Skill"),
 		ManagedAgentReportSkillDescription:  getEnv("MANAGED_AGENT_REPORT_SKILL_DESCRIPTION", ""),
 		ManagedAgentReportSkillMarkdown:     readOptionalFile(getEnv("MANAGED_AGENT_REPORT_SKILL_MD_FILE", "")),
