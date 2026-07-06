@@ -259,6 +259,7 @@ type DashboardFollowItem struct {
 	Status                      string                    `json:"status"`
 	Deadline                    string                    `json:"deadline"`
 	Risk                        string                    `json:"risk"`
+	RiskEvidence                *DashboardRiskEvidence    `json:"riskEvidence,omitempty"`
 	Dependency                  string                    `json:"dependency,omitempty"`
 	BlockingTasks               []TaskDep                 `json:"blockingTasks,omitempty"`
 	Activity                    string                    `json:"activity,omitempty"`
@@ -272,6 +273,21 @@ type DashboardFollowItem struct {
 	SortDueDate                 *string                   `json:"-"`
 	SortUpdatedAt               time.Time                 `json:"-"`
 	Navigation                  DashboardNavigationTarget `json:"navigation"`
+}
+
+type DashboardRiskEvidence struct {
+	PrimaryRisk       string                        `json:"primaryRisk"`
+	AffectedTaskCount int                           `json:"affectedTaskCount"`
+	TotalRiskCount    int                           `json:"totalRiskCount"`
+	Samples           []DashboardRiskEvidenceSample `json:"samples"`
+}
+
+type DashboardRiskEvidenceSample struct {
+	TaskID          string    `json:"taskId"`
+	TaskTitle       string    `json:"taskTitle"`
+	RiskTypes       []string  `json:"riskTypes"`
+	BlockingSources []TaskDep `json:"blockingSources,omitempty"`
+	Deadline        string    `json:"deadline,omitempty"`
 }
 
 type PaginatedDashboardFollowItems struct {

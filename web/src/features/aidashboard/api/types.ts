@@ -270,6 +270,7 @@ export interface DashboardFollowItemDTO {
   status: string;
   deadline: string;
   risk: string;
+  riskEvidence?: DashboardRiskEvidenceDTO;
   dependency?: string;
   blockingTasks?: TaskDep[];
   activity?: string;
@@ -281,6 +282,21 @@ export interface DashboardFollowItemDTO {
   followerCount: number;
   riskPriority: number;
   navigation: DashboardNavigationTargetDTO;
+}
+
+export interface DashboardRiskEvidenceDTO {
+  primaryRisk: DashboardRiskType;
+  affectedTaskCount: number;
+  totalRiskCount: number;
+  samples: DashboardRiskEvidenceSampleDTO[];
+}
+
+export interface DashboardRiskEvidenceSampleDTO {
+  taskId: string;
+  taskTitle: string;
+  riskTypes: DashboardRiskType[];
+  blockingSources?: TaskDep[];
+  deadline?: string;
 }
 
 export interface PaginatedDashboardFollowItems {

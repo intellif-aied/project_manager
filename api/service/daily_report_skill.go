@@ -7,7 +7,7 @@ import (
 
 const (
 	ReportSkillSlug         = "aida-report"
-	ReportSkillVersion      = "1.0.2"
+	ReportSkillVersion      = "1.0.0"
 	ReportSkillName         = "Aida Report Skill"
 	ReportMCPSlug           = "aida-report-mcp"
 	ReportMCPVersion        = "report-v1"

@@ -268,7 +268,14 @@ func (h *DashboardHandler) requirementFollowItem(id, userID string) (model.Dashb
 		return model.DashboardFollowItem{}, false
 	}
 	req.Deadline = nullStringPtr(deadline)
-	NewRequirementHandler(h.db, nil).loadProjection(&req, &model.User{ID: userID})
+	reqHandler := NewRequirementHandler(h.db, nil)
+	reqHandler.loadResponsibles(&req)
+	taskHandler := NewTaskHandler(h.db)
+	req.Dependencies, _ = taskHandler.loadWorkItemRelations("requirement", req.ID)
+	tasks := h.loadDashboardRequirementTasks(req.ID, userID)
+	now := time.Now()
+	req.Progress = service.AggregateRequirementProgress(tasks)
+	req.TaskSummary, req.RiskSummary = service.SummarizeRequirement(req, tasks, now)
 	attention := h.followAttention("requirement", req.ID)
 	url := fmt.Sprintf("/requirements?requirementId=%s", req.ID)
 	return model.DashboardFollowItem{
@@ -283,6 +290,7 @@ func (h *DashboardHandler) requirementFollowItem(id, userID string) (model.Dashb
 		Status:                      requirementStatusLabel(req.Status),
 		Deadline:                    displayDate(req.Deadline),
 		Risk:                        requirementRiskLabel(req.RiskSummary),
+		RiskEvidence:                dashboardRequirementRiskEvidence(req, tasks, now),
 		Activity:                    recentUpdateLabel(updatedAt),
 		AttentionScore:              attention.score,
 		AttentionLevel:              attentionLevel(attention.score),
@@ -295,6 +303,36 @@ func (h *DashboardHandler) requirementFollowItem(id, userID string) (model.Dashb
 			URL:           url,
 		},
 	}, true
+}
+
+func (h *DashboardHandler) loadDashboardRequirementTasks(requirementID, userID string) []model.Task {
+	rows, err := h.db.Query(`
+		SELECT t.id, t.requirement_id, r.title, t.title,
+			COALESCE(t.acceptance_criteria, ARRAY[]::text[]),
+			t.creator_id::text, COALESCE(COALESCE(NULLIF(c.nickname,''), c.username), ''), t.status, t.priority, t.progress, t.due_date,
+			t.completed_at, t.created_at, t.updated_at, t.version
+		FROM tasks t
+		JOIN requirements r ON r.id = t.requirement_id
+		JOIN users c ON c.id = t.creator_id
+		WHERE t.requirement_id = $1
+		ORDER BY t.created_at`, requirementID)
+	if err != nil {
+		return []model.Task{}
+	}
+	defer rows.Close()
+
+	taskHandler := NewTaskHandler(h.db)
+	user := &model.User{ID: userID}
+	tasks := []model.Task{}
+	for rows.Next() {
+		task, err := scanProjectionTask(rows)
+		if err != nil {
+			continue
+		}
+		taskHandler.enrichTask(&task, user)
+		tasks = append(tasks, task)
+	}
+	return tasks
 }
 
 func (h *DashboardHandler) taskFollowItem(id, userID string) (model.DashboardFollowItem, bool) {
@@ -748,18 +786,99 @@ func representativeTaskPriority(riskTypes []string) int {
 	hasBlocker := containsRiskType(riskTypes, dashboardRiskTypeDependencyBlocker)
 	hasConflict := containsRiskType(riskTypes, dashboardRiskTypeDependencyConflict)
 	if hasDeadline && hasBlocker {
+		return 5
+	}
+	if hasBlocker {
+		return 4
+	}
+	if hasConflict {
 		return 3
 	}
 	if hasDeadline {
 		return 2
 	}
-	if hasBlocker {
-		return 1
-	}
-	if hasConflict {
-		return 1
-	}
 	return 0
+}
+
+func dashboardRequirementRiskEvidence(req model.Requirement, tasks []model.Task, now time.Time) *model.DashboardRiskEvidence {
+	_, riskSummary := service.SummarizeRequirement(req, tasks, now)
+	totalRiskCount := riskSummary.Blocked + riskSummary.Overdue + riskSummary.RequirementOverdue + riskSummary.DependencyConflict
+	if totalRiskCount == 0 {
+		return nil
+	}
+
+	samples := []model.DashboardRiskEvidenceSample{}
+	for _, task := range tasks {
+		if task.Status == "done" {
+			continue
+		}
+		riskTypes := dashboardTaskRiskTypes(task.RiskTypes)
+		if len(riskTypes) == 0 {
+			continue
+		}
+		sample := model.DashboardRiskEvidenceSample{
+			TaskID:    task.ID,
+			TaskTitle: task.Title,
+			RiskTypes: append([]string{}, riskTypes...),
+			Deadline:  displayDate(task.DueDate),
+		}
+		if containsRiskType(riskTypes, dashboardRiskTypeDependencyBlocker) {
+			sample.BlockingSources = unfinishedDependencies(task)
+		}
+		samples = append(samples, sample)
+	}
+
+	sortDashboardRiskEvidenceSamples(samples)
+	affectedTaskCount := len(samples)
+	if len(samples) > 3 {
+		samples = samples[:3]
+	}
+
+	return &model.DashboardRiskEvidence{
+		PrimaryRisk:       primaryRequirementRiskType(riskSummary),
+		AffectedTaskCount: affectedTaskCount,
+		TotalRiskCount:    totalRiskCount,
+		Samples:           samples,
+	}
+}
+
+func primaryRequirementRiskType(risk model.RequirementRiskSummary) string {
+	if risk.Blocked > 0 {
+		return dashboardRiskTypeDependencyBlocker
+	}
+	if risk.DependencyConflict > 0 {
+		return dashboardRiskTypeDependencyConflict
+	}
+	if risk.Overdue > 0 {
+		return dashboardRiskTypeDeadline
+	}
+	if risk.RequirementOverdue > 0 {
+		return dashboardRiskTypeRequirementOverdue
+	}
+	return ""
+}
+
+func sortDashboardRiskEvidenceSamples(samples []model.DashboardRiskEvidenceSample) {
+	sort.SliceStable(samples, func(i, j int) bool {
+		left := samples[i]
+		right := samples[j]
+		if leftPriority, rightPriority := representativeTaskPriority(left.RiskTypes), representativeTaskPriority(right.RiskTypes); leftPriority != rightPriority {
+			return leftPriority > rightPriority
+		}
+		leftDate := normalizeDashboardDateString(left.Deadline)
+		rightDate := normalizeDashboardDateString(right.Deadline)
+		if !sameOptionalDate(leftDate, rightDate) {
+			return optionalDateBefore(leftDate, rightDate)
+		}
+		return left.TaskTitle < right.TaskTitle
+	})
+}
+
+func normalizeDashboardDateString(value string) *string {
+	if strings.TrimSpace(value) == "" || value == "未设置" {
+		return nil
+	}
+	return normalizeDashboardDate(&value)
 }
 
 func dashboardRiskGroupSummary(group model.DashboardRiskGroup) string {

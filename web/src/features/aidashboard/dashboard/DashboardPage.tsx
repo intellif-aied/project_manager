@@ -164,6 +164,18 @@ interface FollowItem {
   status: string;
   deadline: string;
   risk: string;
+  riskEvidence?: {
+    primaryRisk?: RiskType;
+    affectedTaskCount?: number;
+    totalRiskCount?: number;
+    samples?: Array<{
+      taskId: string;
+      taskTitle: string;
+      riskTypes: RiskType[];
+      blockingSources?: TaskDependencyDTO[];
+      deadline?: string;
+    }>;
+  };
   dependency?: string;
   blockingTasks?: TaskDependencyDTO[];
   activity?: string;
@@ -4033,6 +4045,43 @@ function getMyItemBlockerLine(item: FollowItem) {
     return `阻塞来源：${visible.join("、")}${suffix}`;
   }
   if (item.dependency) return `阻塞来源：${item.dependency}`;
+  if (item.type === "需求") return getRequirementRiskEvidenceLine(item);
+  return "";
+}
+
+function getRequirementRiskEvidenceLine(item: FollowItem) {
+  const evidence = item.riskEvidence;
+  if (!evidence) return "";
+  const samples = evidence.samples ?? [];
+  const blockerSample = samples.find((sample) => sample.blockingSources?.length);
+  if (blockerSample) {
+    const blockers = blockerSample.blockingSources ?? [];
+    const visible = blockers.slice(0, 2).map(formatBlockingTaskSource);
+    const blockerSuffix = blockers.length > visible.length ? ` 等 ${blockers.length} 个` : "";
+    const affectedSuffix =
+      (evidence.affectedTaskCount ?? 0) > 1
+        ? ` · ${evidence.affectedTaskCount} 个任务受影响`
+        : "";
+    return `阻塞来源：${visible.join("、")}${blockerSuffix} · 影响任务：${compactWorkTitle(
+      blockerSample.taskTitle
+    )}${affectedSuffix}`;
+  }
+
+  const sample = samples[0];
+  if (sample) {
+    const labels = Array.from(new Set(sample.riskTypes.map(riskTypeLabel))).filter(Boolean);
+    const extraCount = Math.max((evidence.totalRiskCount ?? labels.length) - labels.length, 0);
+    const extraText = extraCount > 0 ? ` · 另有 ${extraCount} 项风险` : "";
+    return `风险任务：${compactWorkTitle(sample.taskTitle)}${
+      labels.length ? ` · ${labels.join(" / ")}` : ""
+    }${extraText}`;
+  }
+
+  if (evidence.primaryRisk) {
+    const countText =
+      (evidence.affectedTaskCount ?? 0) > 0 ? ` · ${evidence.affectedTaskCount} 个任务受影响` : "";
+    return `${riskTypeLabel(evidence.primaryRisk)}${countText}`;
+  }
   return "";
 }
 
@@ -4040,7 +4089,7 @@ function formatBlockingTaskSource(dependency: TaskDependencyDTO) {
   const title = dependency.task_title || dependency.title || dependency.item_id || "未命名任务";
   const displayTitle = compactWorkTitle(title);
   const ownerText = formatCompactNames(dependency.responsible_names ?? []);
-  return ownerText ? `${displayTitle}（负责人 ${ownerText}）` : displayTitle;
+  return ownerText ? `${displayTitle}（${ownerText}）` : displayTitle;
 }
 
 function compactWorkTitle(title: string) {
