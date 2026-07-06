@@ -19,6 +19,7 @@ type reportOwner struct {
 	Username   string `json:"username,omitempty"`
 	Role       string `json:"role,omitempty"`
 	TeamID     string `json:"team_id,omitempty"`
+	TeamName   string `json:"team_name,omitempty"`
 	LeaderID   string `json:"leader_id,omitempty"`
 	LeaderName string `json:"leader_name,omitempty"`
 	Scope      string `json:"scope,omitempty"`
@@ -53,6 +54,109 @@ func loadUserInfoMap(ctx context.Context, db *sql.DB, userIDs []string) (map[str
 	return m, rows.Err()
 }
 
+type scopeMember struct {
+	UserID       string `json:"user_id"`
+	Username     string `json:"username"`
+	Role         string `json:"role"`
+	TeamID       string `json:"team_id,omitempty"`
+	TeamName     string `json:"team_name,omitempty"`
+	SessionCount int    `json:"session_count"`
+	Active       bool   `json:"active"`
+}
+
+type scopeTeam struct {
+	TeamID            string `json:"team_id"`
+	TeamName          string `json:"team_name"`
+	LeaderID          string `json:"leader_id,omitempty"`
+	LeaderName        string `json:"leader_name,omitempty"`
+	MemberCount       int    `json:"member_count"`
+	ActiveMemberCount int    `json:"active_member_count,omitempty"`
+}
+
+type scopeContextPayload struct {
+	Type             string        `json:"type"`
+	TeamID           string        `json:"team_id,omitempty"`
+	TeamName         string        `json:"team_name,omitempty"`
+	DepartmentID     string        `json:"department_id,omitempty"`
+	Members          []scopeMember `json:"members"`
+	Teams            []scopeTeam   `json:"teams,omitempty"`
+	TotalMembers     int           `json:"total_members"`
+	ActiveMembers    int           `json:"active_members,omitempty"`
+	InactiveMembers  int           `json:"inactive_members,omitempty"`
+	HasActivityStats bool          `json:"has_activity_stats"`
+}
+
+func loadScopeContext(ctx context.Context, db *sql.DB, rs *resolvedScope, activeByUser map[string]int) (scopeContextPayload, error) {
+	payload := scopeContextPayload{Members: []scopeMember{}, Teams: []scopeTeam{}}
+	if rs == nil {
+		return payload, nil
+	}
+	payload.Type = rs.Type
+	payload.TeamID = rs.TeamID
+	payload.DepartmentID = rs.DepartmentID
+	payload.HasActivityStats = activeByUser != nil
+	if len(rs.UserIDs) == 0 {
+		return payload, nil
+	}
+
+	rows, err := db.QueryContext(ctx, `
+		SELECT u.id::text,
+		       COALESCE(NULLIF(u.nickname,''), u.username),
+		       COALESCE(u.role,''),
+		       COALESCE(u.team_id::text,''),
+		       COALESCE(t.name,''),
+		       COALESCE(t.director_user_id::text,''),
+		       COALESCE(NULLIF(du.nickname,''), du.username, '')
+		FROM users u
+		LEFT JOIN teams t ON t.id = u.team_id
+		LEFT JOIN users du ON du.id = t.director_user_id
+		WHERE u.id::text = ANY($1)
+		ORDER BY COALESCE(t.name,''), COALESCE(NULLIF(u.nickname,''), u.username), u.id`, pq.Array(rs.UserIDs))
+	if err != nil {
+		return payload, err
+	}
+	defer rows.Close()
+
+	teamIndex := map[string]int{}
+	for rows.Next() {
+		var m scopeMember
+		var leaderID, leaderName string
+		if err := rows.Scan(&m.UserID, &m.Username, &m.Role, &m.TeamID, &m.TeamName, &leaderID, &leaderName); err != nil {
+			return payload, err
+		}
+		m.SessionCount = activeByUser[m.UserID]
+		m.Active = m.SessionCount > 0
+		payload.Members = append(payload.Members, m)
+		if m.Active {
+			payload.ActiveMembers++
+		}
+		if payload.TeamID != "" && payload.TeamID == m.TeamID && payload.TeamName == "" {
+			payload.TeamName = m.TeamName
+		}
+		if m.TeamID == "" {
+			continue
+		}
+		idx, ok := teamIndex[m.TeamID]
+		if !ok {
+			idx = len(payload.Teams)
+			teamIndex[m.TeamID] = idx
+			payload.Teams = append(payload.Teams, scopeTeam{TeamID: m.TeamID, TeamName: m.TeamName, LeaderID: leaderID, LeaderName: leaderName})
+		}
+		payload.Teams[idx].MemberCount++
+		if m.Active {
+			payload.Teams[idx].ActiveMemberCount++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return payload, err
+	}
+	payload.TotalMembers = len(payload.Members)
+	if payload.HasActivityStats {
+		payload.InactiveMembers = payload.TotalMembers - payload.ActiveMembers
+	}
+	return payload, nil
+}
+
 type sessionsArgs struct {
 	Scope                    reportScope   `json:"scope"`
 	Target                   reportTarget  `json:"target,omitempty"`
@@ -70,6 +174,7 @@ type sessionItem struct {
 	Username            string         `json:"username"`
 	Role                string         `json:"role"`
 	TeamID              string         `json:"team_id"`
+	TeamName            string         `json:"team_name,omitempty"`
 	LocalSessionID      string         `json:"local_session_id,omitempty"`
 	SessionRef          string         `json:"session_ref"`
 	AgentType           string         `json:"agent_type"`
@@ -140,7 +245,7 @@ func (h *ReportMCPHandler) toolGetSessions(ctx context.Context, r *http.Request,
 		limit = 100
 	}
 	rows, err := h.db.QueryContext(ctx, `
-		SELECT s.id::text, sas.user_id::text, COALESCE(NULLIF(u.nickname,''),u.username), COALESCE(u.role,''), COALESCE(u.team_id::text,''),
+		SELECT s.id::text, sas.user_id::text, COALESCE(NULLIF(u.nickname,''),u.username), COALESCE(u.role,''), COALESCE(u.team_id::text,''), COALESCE(t.name,''),
 		       s.session_ref, s.agent_type, s.started_at, s.ended_at,
 		       sas.activity_date::text, sas.activity_start_at, sas.activity_end_at,
 		       ARRAY[sas.activity_date::text],
@@ -161,6 +266,7 @@ func (h *ReportMCPHandler) toolGetSessions(ctx context.Context, r *http.Request,
 		FROM session_activity_slices sas
 		JOIN sessions s ON s.id = sas.session_id
 		JOIN users u ON u.id = sas.user_id
+		LEFT JOIN teams t ON t.id = u.team_id
 		WHERE sas.activity_date >= $1::date AND sas.activity_date <= $2::date
 		  AND sas.user_id::text = ANY($3)
 		  AND (COALESCE(cardinality($4::text[]), 0) = 0 OR (s.id::text || ':' || sas.activity_date::text) = ANY($4::text[]))
@@ -177,7 +283,7 @@ func (h *ReportMCPHandler) toolGetSessions(ctx context.Context, r *http.Request,
 		var it sessionItem
 		var startedAt, endedAt, activityStartAt, activityEndAt sql.NullTime
 		var activityDates pq.StringArray
-		if err := rows.Scan(&it.ID, &it.UserID, &it.Username, &it.Role, &it.TeamID,
+		if err := rows.Scan(&it.ID, &it.UserID, &it.Username, &it.Role, &it.TeamID, &it.TeamName,
 			&it.SessionRef, &it.AgentType, &startedAt, &endedAt, &it.ActivityDate, &activityStartAt, &activityEndAt, &activityDates,
 			&it.Summary, &it.Excerpt, &it.MessageCount, &it.SourceEventCount,
 			&it.InputTokens, &it.OutputTokens, &it.CacheCreationTokens, &it.CacheReadTokens, &it.TotalTokens,
@@ -220,7 +326,14 @@ func (h *ReportMCPHandler) toolGetSessions(ctx context.Context, r *http.Request,
 		return nil, errMCPInternal
 	}
 
-	payload := map[string]any{"sessions": sessions}
+	contextScope := *rs
+	contextScope.UserIDs = visible
+	scopeContext, err := loadScopeContext(ctx, h.db, &contextScope, byUser)
+	if err != nil {
+		return nil, errMCPInternal
+	}
+
+	payload := map[string]any{"sessions": sessions, "scope_context": scopeContext}
 	if args.IncludeSummary {
 		infoMap, _ := loadUserInfoMap(ctx, h.db, visible)
 		payload["summary"] = map[string]any{
@@ -293,14 +406,21 @@ func (h *ReportMCPHandler) toolGetDailyReports(ctx context.Context, r *http.Requ
 			return nil, errForbidden
 		}
 	}
+	contextScope := *rs
+	contextScope.UserIDs = visible
+	scopeContext, err := loadScopeContext(ctx, h.db, &contextScope, nil)
+	if err != nil {
+		return nil, errMCPInternal
+	}
 
 	reports := []dailyReportItem{}
 	switch reportScope {
 	case "personal":
 		rows, err := h.db.QueryContext(ctx, `
-			SELECT dr.id::text, dr.user_id::text, COALESCE(NULLIF(u.nickname,''),u.username), COALESCE(u.role,''), COALESCE(u.team_id::text,''),
+			SELECT dr.id::text, dr.user_id::text, COALESCE(NULLIF(u.nickname,''),u.username), COALESCE(u.role,''), COALESCE(u.team_id::text,''), COALESCE(t.name,''),
 			       dr.report_date::text, dr.content, COALESCE(dr.generation_mode,'default'), dr.edited, COALESCE(dr.managed_agent_run_id::text,''), dr.updated_at
 			FROM daily_reports dr JOIN users u ON u.id = dr.user_id
+			LEFT JOIN teams t ON t.id = u.team_id
 			WHERE dr.report_date >= $1 AND dr.report_date <= $2 AND dr.user_id = ANY($3)
 			  AND dr.status IS NOT NULL
 			  AND NULLIF(TRIM(COALESCE(dr.content, '')), '') IS NOT NULL
@@ -311,7 +431,7 @@ func (h *ReportMCPHandler) toolGetDailyReports(ctx context.Context, r *http.Requ
 		defer rows.Close()
 		for rows.Next() {
 			var it dailyReportItem
-			if err := rows.Scan(&it.ID, &it.Owner.UserID, &it.Owner.Username, &it.Owner.Role, &it.Owner.TeamID,
+			if err := rows.Scan(&it.ID, &it.Owner.UserID, &it.Owner.Username, &it.Owner.Role, &it.Owner.TeamID, &it.Owner.TeamName,
 				&it.Date, &it.Content, &it.GenerationMode, &it.Edited, &it.ManagedAgentRunID, &it.UpdatedAt); err != nil {
 				return nil, errMCPInternal
 			}
@@ -327,20 +447,23 @@ func (h *ReportMCPHandler) toolGetDailyReports(ctx context.Context, r *http.Requ
 		}
 	case "team":
 		rows, err := h.db.QueryContext(ctx, `
-			SELECT tr.id::text, tr.team_id::text, tr.leader_id::text, COALESCE(NULLIF(u.nickname,''),u.username),
+			SELECT tr.id::text, tr.team_id::text, COALESCE(t.name,''), tr.leader_id::text, COALESCE(NULLIF(u.nickname,''),u.username),
 			       tr.report_date::text, tr.content, COALESCE(tr.generation_mode,'default'), tr.edited, COALESCE(tr.managed_agent_run_id::text,''), tr.updated_at
-			FROM team_reports tr LEFT JOIN users u ON u.id = tr.leader_id
+			FROM team_reports tr
+			LEFT JOIN teams t ON t.id = tr.team_id
+			LEFT JOIN users u ON u.id = tr.leader_id
 			WHERE tr.report_date >= $1 AND tr.report_date <= $2
+			  AND EXISTS (SELECT 1 FROM users vu WHERE vu.team_id = tr.team_id AND vu.id::text = ANY($3))
 			  AND tr.status IS NOT NULL
 			  AND NULLIF(TRIM(COALESCE(tr.content, '')), '') IS NOT NULL
-			ORDER BY tr.report_date DESC`, start, end)
+			ORDER BY tr.report_date DESC`, start, end, pq.Array(visible))
 		if err != nil {
 			return nil, errMCPInternal
 		}
 		defer rows.Close()
 		for rows.Next() {
 			var it dailyReportItem
-			if err := rows.Scan(&it.ID, &it.Owner.TeamID, &it.Owner.LeaderID, &it.Owner.LeaderName,
+			if err := rows.Scan(&it.ID, &it.Owner.TeamID, &it.Owner.TeamName, &it.Owner.LeaderID, &it.Owner.LeaderName,
 				&it.Date, &it.Content, &it.GenerationMode, &it.Edited, &it.ManagedAgentRunID, &it.UpdatedAt); err != nil {
 				return nil, errMCPInternal
 			}
@@ -386,8 +509,9 @@ func (h *ReportMCPHandler) toolGetDailyReports(ctx context.Context, r *http.Requ
 
 	missing := computeDailyMissing(ctx, h.db, reportScope, visible, start, end, reports)
 	payload := map[string]any{
-		"reports": reports,
-		"missing": missing,
+		"reports":       reports,
+		"missing":       missing,
+		"scope_context": scopeContext,
 		"summary": map[string]int{
 			"total_expected": len(reports) + len(missing),
 			"total_existing": len(reports),
@@ -458,14 +582,21 @@ func (h *ReportMCPHandler) toolGetWeeklyReports(ctx context.Context, r *http.Req
 			return nil, errForbidden
 		}
 	}
+	contextScope := *rs
+	contextScope.UserIDs = visible
+	scopeContext, err := loadScopeContext(ctx, h.db, &contextScope, nil)
+	if err != nil {
+		return nil, errMCPInternal
+	}
 
 	reports := []weeklyReportItem{}
 	switch reportScope {
 	case "personal":
 		rows, err := h.db.QueryContext(ctx, `
-			SELECT r.id::text, r.user_id::text, COALESCE(NULLIF(u.nickname,''),u.username), COALESCE(u.role,''), COALESCE(u.team_id::text,''),
+			SELECT r.id::text, r.user_id::text, COALESCE(NULLIF(u.nickname,''),u.username), COALESCE(u.role,''), COALESCE(u.team_id::text,''), COALESCE(t.name,''),
 			       r.week_start, r.week_end, r.content, COALESCE(r.generation_mode,'default'), r.edited, COALESCE(r.managed_agent_run_id::text,''), r.updated_at
 			FROM personal_weekly_reports r JOIN users u ON u.id = r.user_id
+			LEFT JOIN teams t ON t.id = u.team_id
 			WHERE r.week_start >= $1 AND r.week_end <= $2 AND r.user_id = ANY($3)
 			  AND r.status IS NOT NULL
 			  AND NULLIF(TRIM(COALESCE(r.content, '')), '') IS NOT NULL
@@ -477,7 +608,7 @@ func (h *ReportMCPHandler) toolGetWeeklyReports(ctx context.Context, r *http.Req
 		for rows.Next() {
 			var it weeklyReportItem
 			var ws2, we2 time.Time
-			if err := rows.Scan(&it.ID, &it.Owner.UserID, &it.Owner.Username, &it.Owner.Role, &it.Owner.TeamID,
+			if err := rows.Scan(&it.ID, &it.Owner.UserID, &it.Owner.Username, &it.Owner.Role, &it.Owner.TeamID, &it.Owner.TeamName,
 				&ws2, &we2, &it.Content, &it.GenerationMode, &it.Edited, &it.ManagedAgentRunID, &it.UpdatedAt); err != nil {
 				return nil, errMCPInternal
 			}
@@ -495,12 +626,15 @@ func (h *ReportMCPHandler) toolGetWeeklyReports(ctx context.Context, r *http.Req
 		}
 	case "team":
 		rows, err := h.db.QueryContext(ctx, `
-			SELECT r.id::text, r.team_id::text, r.leader_id::text, COALESCE(NULLIF(u.nickname,''),u.username),
+			SELECT r.id::text, r.team_id::text, COALESCE(t.name,''), r.leader_id::text, COALESCE(NULLIF(u.nickname,''),u.username),
 			       r.week_start, r.week_end, r.content, COALESCE(r.generation_mode,'default'), r.edited, COALESCE(r.managed_agent_run_id::text,''), r.updated_at
-			FROM team_weekly_reports r LEFT JOIN users u ON u.id = r.leader_id
+			FROM team_weekly_reports r
+			LEFT JOIN teams t ON t.id = r.team_id
+			LEFT JOIN users u ON u.id = r.leader_id
 			WHERE r.week_start >= $1 AND r.week_end <= $2
+			  AND EXISTS (SELECT 1 FROM users vu WHERE vu.team_id = r.team_id AND vu.id::text = ANY($3))
 			  AND NULLIF(TRIM(COALESCE(r.content, '')), '') IS NOT NULL
-			ORDER BY r.week_start DESC`, ws, we)
+			ORDER BY r.week_start DESC`, ws, we, pq.Array(visible))
 		if err != nil {
 			return nil, errMCPInternal
 		}
@@ -508,7 +642,7 @@ func (h *ReportMCPHandler) toolGetWeeklyReports(ctx context.Context, r *http.Req
 		for rows.Next() {
 			var it weeklyReportItem
 			var ws2, we2 time.Time
-			if err := rows.Scan(&it.ID, &it.Owner.TeamID, &it.Owner.LeaderID, &it.Owner.LeaderName,
+			if err := rows.Scan(&it.ID, &it.Owner.TeamID, &it.Owner.TeamName, &it.Owner.LeaderID, &it.Owner.LeaderName,
 				&ws2, &we2, &it.Content, &it.GenerationMode, &it.Edited, &it.ManagedAgentRunID, &it.UpdatedAt); err != nil {
 				return nil, errMCPInternal
 			}
@@ -555,13 +689,24 @@ func (h *ReportMCPHandler) toolGetWeeklyReports(ctx context.Context, r *http.Req
 			return nil, errMCPInternal
 		}
 	}
+	contextScope.UserIDs = visible
+	existingInventory, err := loadWeeklyInventoryExisting(ctx, h.db, reportScope, &contextScope, ws, we)
+	if err != nil {
+		return nil, errMCPInternal
+	}
+	expectedInventory, err := loadWeeklyInventoryExpected(ctx, h.db, reportScope, &contextScope, ws, we)
+	if err != nil {
+		return nil, errMCPInternal
+	}
+	missing := computeMissing(expectedInventory, existingInventory)
 	payload := map[string]any{
-		"reports": reports,
-		"missing": []any{},
+		"reports":       reports,
+		"missing":       missing,
+		"scope_context": scopeContext,
 		"summary": map[string]int{
-			"total_expected": len(reports),
-			"total_existing": len(reports),
-			"total_missing":  0,
+			"total_expected": len(expectedInventory),
+			"total_existing": len(existingInventory),
+			"total_missing":  len(missing),
 		},
 	}
 	return mcpTextResult(payload), nil
@@ -857,6 +1002,10 @@ func (h *ReportMCPHandler) toolGetReportInventory(ctx context.Context, r *http.R
 	if err := ensureTargetWithinScope(rs, target); err != nil {
 		return nil, err
 	}
+	scopeContext, err := loadScopeContext(ctx, h.db, rs, nil)
+	if err != nil {
+		return nil, errMCPInternal
+	}
 
 	if args.ReportKind == "daily" {
 		start, end, err := parseDateRange(args.DateRange)
@@ -878,6 +1027,7 @@ func (h *ReportMCPHandler) toolGetReportInventory(ctx context.Context, r *http.R
 				"existing": existing,
 				"missing":  missing,
 			},
+			"scope_context": scopeContext,
 			"summary": map[string]int{
 				"total_expected": len(expected),
 				"total_existing": len(existing),
@@ -905,6 +1055,7 @@ func (h *ReportMCPHandler) toolGetReportInventory(ctx context.Context, r *http.R
 			"existing": existing,
 			"missing":  missing,
 		},
+		"scope_context": scopeContext,
 		"summary": map[string]int{
 			"total_expected": len(expected),
 			"total_existing": len(existing),
@@ -1193,8 +1344,9 @@ func loadDailyInventoryExisting(ctx context.Context, db *sql.DB, reportScope str
 			SELECT id::text, team_id::text, report_date::text, COALESCE(generation_mode,'default'), edited
 			FROM team_reports
 			WHERE report_date >= $1 AND report_date <= $2
+			  AND EXISTS (SELECT 1 FROM users vu WHERE vu.team_id = team_reports.team_id AND vu.id::text = ANY($3))
 			  AND status IS NOT NULL
-			  AND NULLIF(TRIM(COALESCE(content, '')), '') IS NOT NULL`, start, end)
+			  AND NULLIF(TRIM(COALESCE(content, '')), '') IS NOT NULL`, start, end, pq.Array(rs.UserIDs))
 		if err != nil {
 			return nil, err
 		}
@@ -1332,7 +1484,8 @@ func loadWeeklyInventoryExisting(ctx context.Context, db *sql.DB, reportScope st
 			SELECT id::text, team_id::text, week_start::text, COALESCE(generation_mode,'default'), edited
 			FROM team_weekly_reports
 			WHERE week_start >= $1 AND week_end <= $2
-			  AND NULLIF(TRIM(COALESCE(content, '')), '') IS NOT NULL`, ws, we)
+			  AND EXISTS (SELECT 1 FROM users vu WHERE vu.team_id = team_weekly_reports.team_id AND vu.id::text = ANY($3))
+			  AND NULLIF(TRIM(COALESCE(content, '')), '') IS NOT NULL`, ws, we, pq.Array(rs.UserIDs))
 		if err != nil {
 			return nil, err
 		}
@@ -1443,6 +1596,9 @@ func loadInventoryTeams(ctx context.Context, db *sql.DB, rs *resolvedScope) ([]i
 	if rs != nil && rs.TeamID != "" {
 		query += ` WHERE id = $1`
 		args = append(args, rs.TeamID)
+	} else if rs != nil && rs.Type == "department" && rs.DepartmentID != "" {
+		query += ` WHERE director_user_id = $1`
+		args = append(args, rs.DepartmentID)
 	}
 	query += ` ORDER BY name`
 	rows, err := db.QueryContext(ctx, query, args...)

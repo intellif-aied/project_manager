@@ -96,6 +96,7 @@ Tool results use the MCP text-content shape:
     {"content":[{"type":"text","text":"{\"key\":\"value\"}"}]}
 
 Always parse content[0].text as JSON before reasoning over the returned data.
+Read tools may include scope_context. scope_context.members is the authoritative roster for the current report scope; scope_context.teams is the authoritative team list for team/department reports.
 
 ## Input Mapping
 
@@ -146,9 +147,18 @@ Do not send period to read-list tools that require date_range or week_range. Do 
    - department_daily: get_daily_reports(report_scope=team), get_report_inventory(report_scope=team, report_kind=daily), get_requirements with scope.type=department and date_range for period.date.
    - department_weekly: get_weekly_reports(report_scope=team), get_daily_reports(report_scope=department), get_weekly_reports(report_scope=personal), get_requirements, get_report_inventory(report_scope=team, report_kind=weekly) with scope.type=department.
 4. If selected_session_slice_keys is present and non-empty, every get_sessions call must include it so MCP filters to those slices. Use only facts returned by MCP tools. Do not invent tasks, sessions, blockers, progress, members, teams, or departments.
-5. Produce concise Chinese Markdown suitable for the selected report_type.
-6. Call write_report_result with {"report_type": report_type, "period": period, "target": target, "run_id": run_id, "content": markdown, "summary": optional_summary}.
-7. If generation fails, call write_report_failure with {"report_type": report_type, "period": period, "target": target, "run_id": run_id, "error_message": error_message}.
+5. For team and department reports, read scope_context from the MCP responses before writing the report. If a response has no scope_context, call get_sessions with include_summary=true for the same scope/date_range to obtain it.
+6. Produce concise Chinese Markdown suitable for the selected report_type.
+7. Call write_report_result with {"report_type": report_type, "period": period, "target": target, "run_id": run_id, "content": markdown, "summary": optional_summary}.
+8. If generation fails, call write_report_failure with {"report_type": report_type, "period": period, "target": target, "run_id": run_id, "error_message": error_message}.
+
+## Roster Rules
+
+- For team and department reports, the member roster must come from scope_context.members or get_report_inventory expected owners, never from sessions alone.
+- Sessions, daily reports, weekly reports, tasks, and requirements are activity evidence only. They must not decide whether a member exists.
+- Always distinguish total members, active members, and inactive/no-session members when scope_context is available.
+- If a member has no sessions or no saved report in the selected period, list them as no activity/no saved report instead of omitting them.
+- Use team_name from scope_context.teams or report owner metadata before showing team_id. If there is no real department entity, describe department reports as the director's management scope, not as a department ID.
 
 ## Source Priority
 
@@ -164,6 +174,7 @@ Do not send period to read-list tools that require date_range or week_range. Do 
 - If there is insufficient context, say so in the Markdown instead of filling gaps.
 - Missing daily/weekly reports are facts; include them only when relevant to the selected report type.
 - For team and department reports, summarize concrete work content, progress, risks, blockers, and cross-team coordination first; put metrics in a short appendix only when useful.
+- For team and department reports, never report active session users as the total roster. If scope_context shows inactive members, include a short inactive/no-activity row.
 - Never expose run_id, MCP URLs, token, credential slots, or internal configuration in the user-facing report.
 `, formatReportTypeList(data.SupportedReportTypes), data.MCPSlug, data.CredentialSlot)
 }

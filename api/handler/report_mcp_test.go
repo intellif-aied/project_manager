@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/aidashboard/api/model"
@@ -46,6 +47,27 @@ func reportMCPBody(t *testing.T, rec *httptest.ResponseRecorder) map[string]any 
 		t.Fatalf("unmarshal result: %v body=%s", err, rec.Body.String())
 	}
 	return result
+}
+
+func reportMCPTextPayload(t *testing.T, result map[string]any) map[string]any {
+	t.Helper()
+	content, ok := result["content"].([]any)
+	if !ok || len(content) == 0 {
+		t.Fatalf("content missing: %#v", result["content"])
+	}
+	first, ok := content[0].(map[string]any)
+	if !ok {
+		t.Fatalf("content[0] not object: %#v", content[0])
+	}
+	text, ok := first["text"].(string)
+	if !ok {
+		t.Fatalf("content[0].text not string: %#v", first["text"])
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(text), &payload); err != nil {
+		t.Fatalf("unmarshal text payload: %v text=%s", err, text)
+	}
+	return payload
 }
 
 func reportMCPError(t *testing.T, rec *httptest.ResponseRecorder) string {
@@ -614,6 +636,144 @@ func TestLoadDailyInventoryExpectedIncludesScopedTeams(t *testing.T) {
 	}
 	if got[0]["owner_type"] != "team" || got[0]["owner_id"] != "team-1" || got[0]["team_name"] != "小组A" {
 		t.Fatalf("unexpected expected row: %#v", got[0])
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReportMCPGetSessionsReturnsScopeContextRoster(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	h := NewReportMCPHandler(db)
+
+	mock.ExpectQuery("SELECT id::text FROM users WHERE team_id").
+		WithArgs("team-a").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("305").AddRow("306").AddRow("307").AddRow("311"))
+
+	now := time.Date(2026, 7, 6, 2, 0, 0, 0, time.UTC)
+	sessionRows := sqlmock.NewRows([]string{
+		"id", "user_id", "username", "role", "team_id", "team_name", "session_ref", "agent_type", "started_at", "ended_at",
+		"activity_date", "activity_start_at", "activity_end_at", "activity_dates", "summary", "excerpt", "message_count", "source_event_count",
+		"input_tokens", "output_tokens", "cache_creation_tokens", "cache_read_tokens", "total_tokens", "slice_count", "source_has_raw_log",
+		"token_slice_strategy", "summary_strategy", "is_estimated",
+	}).
+		AddRow("s-305", "305", "测试03", "team_leader", "team-a", "测试小组A", "prod-305", "codex", now, now.Add(10*time.Minute), "2026-07-06", now, now.Add(10*time.Minute), "{2026-07-06}", "日报验收", "", 6, 6, 100, 20, 0, 0, 120, 1, true, "actual", "summary", false).
+		AddRow("s-306", "306", "测试04", "employee", "team-a", "测试小组A", "prod-306", "codex", now, now.Add(10*time.Minute), "2026-07-06", now, now.Add(10*time.Minute), "{2026-07-06}", "日报验收", "", 6, 6, 100, 20, 0, 0, 120, 1, true, "actual", "summary", false)
+	mock.ExpectQuery("SELECT s.id::text, sas.user_id::text").
+		WithArgs("2026-07-06", "2026-07-06", sqlmock.AnyArg(), sqlmock.AnyArg(), 100).
+		WillReturnRows(sessionRows)
+
+	mock.ExpectQuery("SELECT u.id::text,").
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "username", "role", "team_id", "team_name", "director_user_id", "director_name"}).
+			AddRow("305", "测试03", "team_leader", "team-a", "测试小组A", "303", "测试01").
+			AddRow("306", "测试04", "employee", "team-a", "测试小组A", "303", "测试01").
+			AddRow("307", "测试05", "employee", "team-a", "测试小组A", "303", "测试01").
+			AddRow("311", "测试09", "employee", "team-a", "测试小组A", "303", "测试01"))
+
+	mock.ExpectQuery("SELECT id::text, COALESCE").
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "username", "role", "team_id"}).
+			AddRow("305", "测试03", "team_leader", "team-a").
+			AddRow("306", "测试04", "employee", "team-a").
+			AddRow("307", "测试05", "employee", "team-a").
+			AddRow("311", "测试09", "employee", "team-a"))
+
+	req := newReportMCPRequest("tools/call", map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "get_sessions",
+			"arguments": map[string]any{
+				"scope":           map[string]any{"type": "team"},
+				"date_range":      map[string]any{"start": "2026-07-06", "end": "2026-07-06"},
+				"include_summary": true,
+			},
+		},
+	})
+	req = requestWithUser(req, &model.User{ID: "305", Role: "team_leader", TeamID: strPtr("team-a")})
+	rec := httptest.NewRecorder()
+	h.Serve(rec, req)
+	payload := reportMCPTextPayload(t, reportMCPBody(t, rec))
+	scopeContext := payload["scope_context"].(map[string]any)
+	if got := int(scopeContext["total_members"].(float64)); got != 4 {
+		t.Fatalf("total_members=%d, want 4 payload=%#v", got, scopeContext)
+	}
+	if got := int(scopeContext["active_members"].(float64)); got != 2 {
+		t.Fatalf("active_members=%d, want 2 payload=%#v", got, scopeContext)
+	}
+	members := scopeContext["members"].([]any)
+	foundInactive := false
+	for _, raw := range members {
+		m := raw.(map[string]any)
+		if m["user_id"] == "311" && m["active"] == false {
+			foundInactive = true
+		}
+	}
+	if !foundInactive {
+		t.Fatalf("inactive member 311 missing: %#v", members)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReportMCPInventoryTeamsRespectDepartmentScope(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	h := NewReportMCPHandler(db)
+
+	mock.ExpectQuery("SELECT u.id::text").
+		WithArgs("303").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("305").AddRow("306").AddRow("308"))
+	mock.ExpectQuery("SELECT u.id::text,").
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "username", "role", "team_id", "team_name", "director_user_id", "director_name"}).
+			AddRow("305", "测试03", "team_leader", "team-a", "测试小组A", "303", "测试01").
+			AddRow("306", "测试04", "employee", "team-a", "测试小组A", "303", "测试01").
+			AddRow("308", "测试06", "team_leader", "team-b", "测试小组B", "303", "测试01"))
+	mock.ExpectQuery("SELECT id::text, team_id::text, week_start::text").
+		WithArgs("2026-07-06", "2026-07-12", sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "team_id", "week_start", "generation_mode", "edited"}).
+			AddRow("r-a", "team-a", "2026-07-06", "managed_agent", false))
+	mock.ExpectQuery("SELECT id::text, name FROM teams WHERE director_user_id").
+		WithArgs("303").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "name"}).AddRow("team-a", "测试小组A").AddRow("team-b", "测试小组B"))
+
+	req := newReportMCPRequest("tools/call", map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "get_report_inventory",
+			"arguments": map[string]any{
+				"scope":        map[string]any{"type": "department"},
+				"report_scope": "team",
+				"report_kind":  "weekly",
+				"week_range":   map[string]any{"week_start": "2026-07-06", "week_end": "2026-07-12"},
+			},
+		},
+	})
+	req = requestWithUser(req, &model.User{ID: "303", Role: "director"})
+	rec := httptest.NewRecorder()
+	h.Serve(rec, req)
+	payload := reportMCPTextPayload(t, reportMCPBody(t, rec))
+	inventory := payload["inventory"].(map[string]any)
+	expected := inventory["expected"].([]any)
+	missing := inventory["missing"].([]any)
+	if len(expected) != 2 {
+		t.Fatalf("expected teams=%d, want 2: %#v", len(expected), expected)
+	}
+	if len(missing) != 1 || missing[0].(map[string]any)["owner_id"] != "team-b" {
+		t.Fatalf("missing=%#v, want only team-b", missing)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
