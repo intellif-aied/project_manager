@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,6 +20,10 @@ type TaskHandler struct {
 	eventRecorder *service.WorkItemEventRecorder
 }
 
+type execer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
 func NewTaskHandler(db *sql.DB) *TaskHandler {
 	return &TaskHandler{db: db}
 }
@@ -31,12 +36,12 @@ func (h *TaskHandler) List(w http.ResponseWriter, r *http.Request) {
 	u := getUser(r)
 	query := `
 		SELECT t.id, t.requirement_id, r.title as req_title, t.title,
-			COALESCE(t.acceptance_criteria, ARRAY[]::text[]), t.assignee_id, COALESCE(COALESCE(NULLIF(a.nickname,''), a.username),''),
-			t.creator_tl_id, t.status, t.priority, t.progress, t.due_date, t.completed_at,
+			COALESCE(t.acceptance_criteria, ARRAY[]::text[]),
+			t.creator_id::text, COALESCE(COALESCE(NULLIF(c.nickname,''), c.username),''), t.status, t.priority, t.progress, t.due_date, t.completed_at,
 			t.created_at, t.updated_at, t.version
 		FROM tasks t
 		JOIN requirements r ON r.id = t.requirement_id
-		LEFT JOIN users a ON a.id = t.assignee_id
+		JOIN users c ON c.id = t.creator_id
 		WHERE 1=1`
 	args := []any{}
 	argIdx := 1
@@ -47,9 +52,12 @@ func (h *TaskHandler) List(w http.ResponseWriter, r *http.Request) {
 		argIdx++
 	}
 
-	if assignee := r.URL.Query().Get("assignee_id"); assignee != "" {
-		query += fmt.Sprintf(" AND t.assignee_id = $%d", argIdx)
-		args = append(args, assignee)
+	if responsibleUserID := r.URL.Query().Get("responsible_user_id"); responsibleUserID != "" {
+		query += fmt.Sprintf(` AND EXISTS (
+			SELECT 1 FROM task_responsibles tr
+			WHERE tr.task_id = t.id AND tr.user_id = CAST($%d AS bigint)
+		)`, argIdx)
+		args = append(args, responsibleUserID)
 		argIdx++
 	}
 
@@ -63,8 +71,12 @@ func (h *TaskHandler) List(w http.ResponseWriter, r *http.Request) {
 	case "team_leader":
 		if u.TeamID != nil {
 			query += fmt.Sprintf(` AND (
-				t.creator_tl_id = $%d
-				OR t.assignee_id IN (SELECT id FROM users WHERE team_id = $%d)
+				t.creator_id = CAST($%d AS bigint)
+				OR EXISTS (
+					SELECT 1 FROM task_responsibles tr
+					JOIN users responsible ON responsible.id = tr.user_id
+					WHERE tr.task_id = t.id AND responsible.team_id = $%d
+				)
 				OR EXISTS (
 					SELECT 1 FROM requirement_teams rt
 					WHERE rt.requirement_id = t.requirement_id AND rt.team_id = $%d
@@ -78,7 +90,11 @@ func (h *TaskHandler) List(w http.ResponseWriter, r *http.Request) {
 	case "employee":
 		if u.TeamID != nil {
 			query += fmt.Sprintf(` AND (
-				t.assignee_id IN (SELECT id FROM users WHERE team_id = $%d)
+				EXISTS (
+					SELECT 1 FROM task_responsibles tr
+					JOIN users responsible ON responsible.id = tr.user_id
+					WHERE tr.task_id = t.id AND responsible.team_id = $%d
+				)
 				OR EXISTS (
 					SELECT 1 FROM requirement_teams rt
 					WHERE rt.requirement_id = t.requirement_id AND rt.team_id = $%d
@@ -105,19 +121,15 @@ func (h *TaskHandler) List(w http.ResponseWriter, r *http.Request) {
 		var t model.Task
 		var ac pq.StringArray
 		var dueDate sql.NullString
-		var assigneeID sql.NullString
-		var assigneeName sql.NullString
 		var completedAt sql.NullTime
 		if err := rows.Scan(&t.ID, &t.RequirementID, &t.RequirementTitle, &t.Title,
-			&ac, &assigneeID, &assigneeName,
-			&t.CreatorTLID, &t.Status, &t.Priority, &t.Progress, &dueDate, &completedAt,
+			&ac,
+			&t.CreatorID, &t.CreatorName, &t.Status, &t.Priority, &t.Progress, &dueDate, &completedAt,
 			&t.CreatedAt, &t.UpdatedAt, &t.Version); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
 		t.AcceptanceCriteria = []string(ac)
-		t.AssigneeID = nullStringPtr(assigneeID)
-		t.AssigneeName = nullStringPtr(assigneeName)
 		t.DueDate = nullStringPtr(dueDate)
 		t.CompletedAt = nullTimePtr(completedAt)
 		h.enrichTask(&t, u)
@@ -140,22 +152,20 @@ func (h *TaskHandler) Get(w http.ResponseWriter, r *http.Request) {
 	var t model.Task
 	var ac pq.StringArray
 	var dueDate sql.NullString
-	var assigneeID sql.NullString
-	var assigneeName sql.NullString
 	var completedAt sql.NullTime
 
 	err := h.db.QueryRow(`
 		SELECT t.id, t.requirement_id, r.title, t.title,
-			COALESCE(t.acceptance_criteria, ARRAY[]::text[]), t.assignee_id, COALESCE(COALESCE(NULLIF(a.nickname,''), a.username),''),
-			t.creator_tl_id, t.status, t.priority, t.progress, t.due_date, t.completed_at,
+			COALESCE(t.acceptance_criteria, ARRAY[]::text[]),
+			t.creator_id::text, COALESCE(COALESCE(NULLIF(c.nickname,''), c.username),''), t.status, t.priority, t.progress, t.due_date, t.completed_at,
 			t.created_at, t.updated_at, t.version
 		FROM tasks t
 		JOIN requirements r ON r.id = t.requirement_id
-		LEFT JOIN users a ON a.id = t.assignee_id
+		JOIN users c ON c.id = t.creator_id
 		WHERE t.id = $1`, id).Scan(
 		&t.ID, &t.RequirementID, &t.RequirementTitle, &t.Title,
-		&ac, &assigneeID, &assigneeName,
-		&t.CreatorTLID, &t.Status, &t.Priority, &t.Progress, &dueDate, &completedAt,
+		&ac,
+		&t.CreatorID, &t.CreatorName, &t.Status, &t.Priority, &t.Progress, &dueDate, &completedAt,
 		&t.CreatedAt, &t.UpdatedAt, &t.Version,
 	)
 	if err == sql.ErrNoRows {
@@ -177,8 +187,6 @@ func (h *TaskHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	t.AcceptanceCriteria = []string(ac)
-	t.AssigneeID = nullStringPtr(assigneeID)
-	t.AssigneeName = nullStringPtr(assigneeName)
 	t.DueDate = nullStringPtr(dueDate)
 	t.CompletedAt = nullTimePtr(completedAt)
 	h.enrichTask(&t, u)
@@ -200,18 +208,19 @@ func (h *TaskHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if !validateUUIDParam(w, req.RequirementID, "requirement_id") {
 		return
 	}
-	if (req.AssigneeID == nil || *req.AssigneeID == "") && u != nil && u.Role == "employee" {
-		req.AssigneeID = &u.ID
-	}
-	if req.AssigneeID == nil || *req.AssigneeID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "assignee_id is required"})
+	responsibleUserIDs, responsibleErr := normalizeTaskResponsibleUserIDs(req.ResponsibleUserIDs)
+	if responsibleErr != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": responsibleErr.Error()})
 		return
+	}
+	if len(responsibleUserIDs) == 0 && u != nil && u.Role == "employee" {
+		responsibleUserIDs = []string{u.ID}
 	}
 	if req.Priority == "" {
 		req.Priority = "medium"
 	}
 
-	allowed, permissionMessage, err := h.canCreateTask(u, req.RequirementID, req.AssigneeID)
+	allowed, permissionMessage, err := h.canCreateTask(u, req.RequirementID, responsibleUserIDs)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -234,13 +243,17 @@ func (h *TaskHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	var taskID string
 	err = h.db.QueryRow(`
-		INSERT INTO tasks (requirement_id, title, acceptance_criteria, assignee_id, creator_tl_id, priority, due_date)
-		VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+		INSERT INTO tasks (requirement_id, title, acceptance_criteria, creator_id, priority, due_date)
+		VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
 		req.RequirementID, req.Title, pq.Array(req.AcceptanceCriteria),
-		nullString(req.AssigneeID), u.ID, req.Priority, nullString(req.DueDate),
+		u.ID, req.Priority, nullString(req.DueDate),
 	).Scan(&taskID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := syncTaskResponsibles(h.db, taskID, responsibleUserIDs); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 
@@ -320,8 +333,16 @@ func (h *TaskHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if beforeStateErr != nil {
 		log.Printf("load task before update failed: task_id=%s error=%v", id, beforeStateErr)
 	}
-	if req.AssigneeID != nil && taskAssigneeChanged(task.AssigneeID, req.AssigneeID) {
-		reassignAllowed, message, err := h.canReassignTask(u, req.AssigneeID)
+	responsibleTouched := req.ResponsibleUserIDs != nil
+	responsibleUserIDs := []string{}
+	if responsibleTouched {
+		var responsibleErr error
+		responsibleUserIDs, responsibleErr = normalizeTaskResponsibleUserIDs(*req.ResponsibleUserIDs)
+		if responsibleErr != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": responsibleErr.Error()})
+			return
+		}
+		reassignAllowed, message, err := h.canReassignTask(u, responsibleUserIDs)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
@@ -339,11 +360,6 @@ func (h *TaskHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if req.Title != nil {
 		sets = append(sets, fmt.Sprintf("title = $%d", argIdx))
 		args = append(args, *req.Title)
-		argIdx++
-	}
-	if req.AssigneeID != nil {
-		sets = append(sets, fmt.Sprintf("assignee_id = $%d", argIdx))
-		args = append(args, nullString(req.AssigneeID))
 		argIdx++
 	}
 	if req.Status != nil {
@@ -377,7 +393,7 @@ func (h *TaskHandler) Update(w http.ResponseWriter, r *http.Request) {
 		argIdx++
 	}
 
-	if len(sets) == 0 {
+	if len(sets) == 0 && !responsibleTouched {
 		writeNoFieldsToUpdate(w)
 		return
 	}
@@ -396,6 +412,12 @@ func (h *TaskHandler) Update(w http.ResponseWriter, r *http.Request) {
 		writeTaskNotFoundOrConflict(w, h.db, id)
 		return
 	}
+	if responsibleTouched {
+		if err := syncTaskResponsibles(h.db, id, responsibleUserIDs); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+	}
 
 	h.updateRequirementProgress(id)
 	h.recordTaskChange(r.Context(), u, id, beforeState)
@@ -403,14 +425,67 @@ func (h *TaskHandler) Update(w http.ResponseWriter, r *http.Request) {
 	h.Get(w, r)
 }
 
-func taskAssigneeChanged(current sql.NullString, next *string) bool {
-	if next == nil {
-		return false
+func normalizeTaskResponsibleUserIDs(rawIDs []string) ([]string, error) {
+	values := make([]string, 0, len(rawIDs))
+	seen := map[string]struct{}{}
+	for _, raw := range rawIDs {
+		value := strings.TrimSpace(raw)
+		if value == "" {
+			continue
+		}
+		if _, err := strconv.ParseInt(value, 10, 64); err != nil {
+			return nil, fmt.Errorf("invalid responsible_user_ids")
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		values = append(values, value)
 	}
-	if !current.Valid {
-		return *next != ""
+	return values, nil
+}
+
+func syncTaskResponsibles(db execer, taskID string, responsibleUserIDs []string) error {
+	if _, err := db.Exec(`DELETE FROM task_responsibles WHERE task_id = $1`, taskID); err != nil {
+		return err
 	}
-	return current.String != *next
+	for _, responsibleUserID := range responsibleUserIDs {
+		if _, err := db.Exec(`
+			INSERT INTO task_responsibles (task_id, user_id)
+			VALUES ($1, $2)
+			ON CONFLICT DO NOTHING`, taskID, nullableUserID(&responsibleUserID)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (h *TaskHandler) loadTaskResponsibles(t *model.Task) {
+	responsibles := []model.ResponsibleUser{}
+	responsibleIDs := []string{}
+	rows, err := h.db.Query(`
+		SELECT u.id::text, COALESCE(NULLIF(u.nickname,''), u.username), u.app_role, u.team_id::text, tm.name
+		FROM task_responsibles tr
+		JOIN users u ON u.id = tr.user_id
+		LEFT JOIN teams tm ON tm.id = u.team_id
+		WHERE tr.task_id = $1
+		ORDER BY tr.created_at, u.id`, t.ID)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var responsible model.ResponsibleUser
+			var teamID, teamName sql.NullString
+			if rows.Scan(&responsible.ID, &responsible.Name, &responsible.Role, &teamID, &teamName) != nil {
+				continue
+			}
+			responsible.TeamID = nullStringPtr(teamID)
+			responsible.TeamName = nullStringPtr(teamName)
+			responsibles = append(responsibles, responsible)
+			responsibleIDs = append(responsibleIDs, responsible.ID)
+		}
+	}
+	t.ResponsibleUsers = responsibles
+	t.ResponsibleUserIDs = responsibleIDs
 }
 
 func (h *TaskHandler) UpdateStatus(w http.ResponseWriter, r *http.Request) {
@@ -761,11 +836,10 @@ func (h *TaskHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback()
 
 	var requirementID string
-	var creatorTL string
-	var assigneeID sql.NullString
+	var creatorID string
 	var currentVersion int64
-	err = tx.QueryRow(`SELECT requirement_id, creator_tl_id, assignee_id, version FROM tasks WHERE id = $1 FOR UPDATE`, id).
-		Scan(&requirementID, &creatorTL, &assigneeID, &currentVersion)
+	err = tx.QueryRow(`SELECT requirement_id, creator_id::text, version FROM tasks WHERE id = $1 FOR UPDATE`, id).
+		Scan(&requirementID, &creatorID, &currentVersion)
 	if err == sql.ErrNoRows {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 		return
@@ -778,8 +852,7 @@ func (h *TaskHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	allowed, permErr := h.canManageTask(u, taskAccessRecord{
 		ID:            id,
 		RequirementID: requirementID,
-		AssigneeID:    assigneeID,
-		CreatorTLID:   creatorTL,
+		CreatorID:     creatorID,
 	})
 	if permErr != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": permErr.Error()})
@@ -789,8 +862,7 @@ func (h *TaskHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		visible, viewErr := h.canViewTaskRecord(u, taskAccessRecord{
 			ID:            id,
 			RequirementID: requirementID,
-			AssigneeID:    assigneeID,
-			CreatorTLID:   creatorTL,
+			CreatorID:     creatorID,
 		})
 		if viewErr != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": viewErr.Error()})
@@ -879,6 +951,7 @@ func (h *TaskHandler) loadDeps(t *model.Task) {
 }
 
 func (h *TaskHandler) enrichTask(t *model.Task, u *model.User) {
+	h.loadTaskResponsibles(t)
 	h.loadDeps(t)
 	t.RiskTypes = service.DeriveTaskRisks(*t, time.Now())
 	t.DisplayStatus = service.DisplayTaskStatus(*t)
@@ -1165,9 +1238,9 @@ func normalizeWorkItemType(value string) (string, error) {
 func (h *TaskHandler) loadTaskAccessTx(tx *sql.Tx, taskID string) (taskAccessRecord, error) {
 	var task taskAccessRecord
 	err := tx.QueryRow(`
-		SELECT id, requirement_id, assignee_id, creator_tl_id
+		SELECT id, requirement_id, creator_id::text
 		FROM tasks
-		WHERE id = $1`, taskID).Scan(&task.ID, &task.RequirementID, &task.AssigneeID, &task.CreatorTLID)
+		WHERE id = $1`, taskID).Scan(&task.ID, &task.RequirementID, &task.CreatorID)
 	return task, err
 }
 
@@ -1182,23 +1255,27 @@ func (h *TaskHandler) canViewTaskRecordTx(tx *sql.Tx, u *model.User, task taskAc
 		return false, nil
 	}
 	var allowed bool
-	query := `
+	err := tx.QueryRow(`
 		SELECT EXISTS(
 			SELECT 1
 			WHERE EXISTS (
 				SELECT 1 FROM requirement_teams rt
 				WHERE rt.requirement_id = $1 AND rt.team_id = $2
 			)
-		OR EXISTS (
-			SELECT 1 FROM users assignee
-			WHERE assignee.id = CAST($3 AS bigint) AND assignee.team_id = $2
-		)`
-	if u.Role == "team_leader" {
-		query += ` OR CAST($4 AS bigint) = CAST($5 AS bigint)`
-		err := tx.QueryRow(query+`)`, task.RequirementID, *u.TeamID, task.AssigneeID, task.CreatorTLID, u.ID).Scan(&allowed)
-		return allowed, err
-	}
-	err := tx.QueryRow(query+`)`, task.RequirementID, *u.TeamID, task.AssigneeID).Scan(&allowed)
+			OR EXISTS (
+				SELECT 1 FROM task_responsibles tr
+				JOIN users responsible ON responsible.id = tr.user_id
+				WHERE tr.task_id = $3 AND responsible.team_id = $2
+			)
+			OR EXISTS (
+				SELECT 1 FROM requirements r
+				WHERE r.id = $1 AND (r.creator_id = CAST($4 AS bigint) OR EXISTS (
+					SELECT 1 FROM requirement_responsibles rr
+					WHERE rr.requirement_id = r.id AND rr.user_id = CAST($4 AS bigint)
+				))
+			)
+			OR CAST($5 AS bigint) = CAST($4 AS bigint)
+		)`, task.RequirementID, *u.TeamID, task.ID, u.ID, task.CreatorID).Scan(&allowed)
 	return allowed, err
 }
 
@@ -1216,9 +1293,9 @@ func (h *TaskHandler) canViewRequirementTx(tx *sql.Tx, u *model.User, requiremen
 		SELECT EXISTS(
 			SELECT 1 FROM requirements r
 			WHERE r.id = $1
-			  AND (r.creator_id = CAST($2 AS bigint) OR r.owner_id = CAST($2 AS bigint) OR EXISTS (
-				SELECT 1 FROM requirement_owners ro
-				WHERE ro.requirement_id = r.id AND ro.user_id = CAST($2 AS bigint)
+			  AND (r.creator_id = CAST($2 AS bigint) OR EXISTS (
+				SELECT 1 FROM requirement_responsibles rr
+				WHERE rr.requirement_id = r.id AND rr.user_id = CAST($2 AS bigint)
 			  )`
 	args := []any{requirementID, u.ID}
 	if hasTeam(u) {

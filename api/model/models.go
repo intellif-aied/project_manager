@@ -39,12 +39,8 @@ type Requirement struct {
 	CreatorID          string                   `json:"creator_id"`
 	CreatorName        string                   `json:"creator_name"`
 	CreatorRole        string                   `json:"creator_role"`
-	OwnerIDs           []string                 `json:"owner_ids"`
-	Owners             []RequirementOwner       `json:"owners"`
-	OwnerID            *string                  `json:"owner_id,omitempty"`
-	OwnerName          *string                  `json:"owner_name,omitempty"`
-	OwnerTeamID        *string                  `json:"owner_team_id,omitempty"`
-	OwnerTeamName      *string                  `json:"owner_team_name,omitempty"`
+	ResponsibleUserIDs []string                 `json:"responsible_user_ids"`
+	ResponsibleUsers   []ResponsibleUser        `json:"responsible_users"`
 	Status             string                   `json:"status"`
 	Priority           string                   `json:"priority"`
 	Progress           int                      `json:"progress"`
@@ -77,9 +73,10 @@ type Task struct {
 	RequirementTitle      string                   `json:"requirement_title,omitempty"`
 	Title                 string                   `json:"title"`
 	AcceptanceCriteria    []string                 `json:"acceptance_criteria"`
-	AssigneeID            *string                  `json:"assignee_id,omitempty"`
-	AssigneeName          *string                  `json:"assignee_name,omitempty"`
-	CreatorTLID           string                   `json:"creator_tl_id"`
+	CreatorID             string                   `json:"creator_id"`
+	CreatorName           string                   `json:"creator_name"`
+	ResponsibleUserIDs    []string                 `json:"responsible_user_ids"`
+	ResponsibleUsers      []ResponsibleUser        `json:"responsible_users"`
 	Status                string                   `json:"status"`
 	DisplayStatus         string                   `json:"display_status"`
 	Priority              string                   `json:"priority"`
@@ -104,15 +101,17 @@ type Task struct {
 }
 
 type TaskDep struct {
-	ItemType         string  `json:"item_type"`
-	ItemID           string  `json:"item_id"`
-	Title            string  `json:"title"`
-	TaskID           string  `json:"task_id,omitempty"`
-	TaskTitle        string  `json:"task_title,omitempty"`
-	RequirementID    string  `json:"requirement_id,omitempty"`
-	RequirementTitle string  `json:"requirement_title,omitempty"`
-	Status           string  `json:"status"`
-	DueDate          *string `json:"due_date,omitempty"`
+	ItemType         string   `json:"item_type"`
+	ItemID           string   `json:"item_id"`
+	Title            string   `json:"title"`
+	TaskID           string   `json:"task_id,omitempty"`
+	TaskTitle        string   `json:"task_title,omitempty"`
+	RequirementID    string   `json:"requirement_id,omitempty"`
+	RequirementTitle string   `json:"requirement_title,omitempty"`
+	Status           string   `json:"status"`
+	ResponsibleIDs   []string `json:"responsible_user_ids,omitempty"`
+	ResponsibleNames []string `json:"responsible_names,omitempty"`
+	DueDate          *string  `json:"due_date,omitempty"`
 }
 
 type RequirementTaskSummary struct {
@@ -128,7 +127,7 @@ type RequirementRiskSummary struct {
 	DependencyConflict int `json:"dependency_conflict"`
 }
 
-type RequirementOwner struct {
+type ResponsibleUser struct {
 	ID       string  `json:"id"`
 	Name     string  `json:"name"`
 	Role     string  `json:"role"`
@@ -208,28 +207,34 @@ type DashboardNavigationTarget struct {
 }
 
 type DashboardFollowItem struct {
-	Key            string                    `json:"key"`
-	Type           string                    `json:"type"`
-	Title          string                    `json:"title"`
-	Requirement    string                    `json:"requirement,omitempty"`
-	RequirementID  string                    `json:"requirementId"`
-	TaskID         *string                   `json:"taskId,omitempty"`
-	Owner          string                    `json:"owner"`
-	Status         string                    `json:"status"`
-	Deadline       string                    `json:"deadline"`
-	Risk           string                    `json:"risk"`
-	Dependency     string                    `json:"dependency,omitempty"`
-	Activity       string                    `json:"activity,omitempty"`
-	FollowedByMe   bool                      `json:"followedByMe"`
-	CreatedByMe    bool                      `json:"createdByMe"`
-	AssignedToMe   bool                      `json:"assignedToMe"`
-	AttentionScore int                       `json:"attentionScore"`
-	AttentionLevel string                    `json:"attentionLevel"`
-	FollowerCount  int                       `json:"followerCount"`
-	RiskPriority   int                       `json:"riskPriority"`
-	SortDueDate    *string                   `json:"-"`
-	SortUpdatedAt  time.Time                 `json:"-"`
-	Navigation     DashboardNavigationTarget `json:"navigation"`
+	Key                         string                    `json:"key"`
+	Type                        string                    `json:"type"`
+	Title                       string                    `json:"title"`
+	Requirement                 string                    `json:"requirement,omitempty"`
+	RequirementID               string                    `json:"requirementId"`
+	TaskID                      *string                   `json:"taskId,omitempty"`
+	CreatorID                   string                    `json:"creatorId,omitempty"`
+	CreatorName                 string                    `json:"creatorName,omitempty"`
+	RequirementResponsibleIDs   []string                  `json:"requirementResponsibleIds,omitempty"`
+	RequirementResponsibleNames []string                  `json:"requirementResponsibleNames,omitempty"`
+	TaskResponsibleIDs          []string                  `json:"taskResponsibleIds,omitempty"`
+	TaskResponsibleNames        []string                  `json:"taskResponsibleNames,omitempty"`
+	ResponsibleNames            []string                  `json:"responsibleNames,omitempty"`
+	Status                      string                    `json:"status"`
+	Deadline                    string                    `json:"deadline"`
+	Risk                        string                    `json:"risk"`
+	Dependency                  string                    `json:"dependency,omitempty"`
+	Activity                    string                    `json:"activity,omitempty"`
+	FollowedByMe                bool                      `json:"followedByMe"`
+	CreatedByMe                 bool                      `json:"createdByMe"`
+	AssignedToMe                bool                      `json:"assignedToMe"`
+	AttentionScore              int                       `json:"attentionScore"`
+	AttentionLevel              string                    `json:"attentionLevel"`
+	FollowerCount               int                       `json:"followerCount"`
+	RiskPriority                int                       `json:"riskPriority"`
+	SortDueDate                 *string                   `json:"-"`
+	SortUpdatedAt               time.Time                 `json:"-"`
+	Navigation                  DashboardNavigationTarget `json:"navigation"`
 }
 
 type DashboardRiskTaskSummary struct {
@@ -429,8 +434,7 @@ type CreateRequirementRequest struct {
 	FeishuDocURL       *string  `json:"feishu_doc_url,omitempty"`
 	Priority           string   `json:"priority"`
 	Deadline           *string  `json:"deadline,omitempty"`
-	OwnerIDs           []string `json:"owner_ids,omitempty"`
-	OwnerID            *string  `json:"owner_id,omitempty"`
+	ResponsibleUserIDs []string `json:"responsible_user_ids,omitempty"`
 	TeamIDs            []string `json:"team_ids"`
 	AcceptanceCriteria []string `json:"acceptance_criteria,omitempty"`
 }
@@ -442,9 +446,7 @@ type UpdateRequirementRequest struct {
 	Priority           *string   `json:"priority,omitempty"`
 	Status             *string   `json:"status,omitempty"`
 	Deadline           *string   `json:"deadline,omitempty"`
-	OwnerIDs           *[]string `json:"owner_ids,omitempty"`
-	OwnerID            *string   `json:"owner_id,omitempty"`
-	ClearOwner         bool      `json:"clear_owner,omitempty"`
+	ResponsibleUserIDs *[]string `json:"responsible_user_ids,omitempty"`
 	TeamIDs            *[]string `json:"team_ids,omitempty"`
 	AcceptanceCriteria *[]string `json:"acceptance_criteria,omitempty"`
 	BaseVersion        int64     `json:"base_version"`
@@ -462,7 +464,7 @@ type CreateTaskRequest struct {
 	RequirementID      string   `json:"requirement_id"`
 	Title              string   `json:"title"`
 	AcceptanceCriteria []string `json:"acceptance_criteria,omitempty"`
-	AssigneeID         *string  `json:"assignee_id,omitempty"`
+	ResponsibleUserIDs []string `json:"responsible_user_ids,omitempty"`
 	Priority           string   `json:"priority"`
 	DueDate            *string  `json:"due_date,omitempty"`
 	DependsOnIDs       []string `json:"depends_on_ids,omitempty"`
@@ -471,7 +473,7 @@ type CreateTaskRequest struct {
 type UpdateTaskRequest struct {
 	Title              *string   `json:"title,omitempty"`
 	AcceptanceCriteria *[]string `json:"acceptance_criteria,omitempty"`
-	AssigneeID         *string   `json:"assignee_id,omitempty"`
+	ResponsibleUserIDs *[]string `json:"responsible_user_ids,omitempty"`
 	Status             *string   `json:"status,omitempty"`
 	Priority           *string   `json:"priority,omitempty"`
 	DueDate            *string   `json:"due_date,omitempty"`
@@ -1241,8 +1243,6 @@ type WeeklyTaskSource struct {
 	TaskTitle        string  `json:"task_title"`
 	RequirementID    string  `json:"requirement_id"`
 	RequirementTitle string  `json:"requirement_title"`
-	AssigneeID       *string `json:"assignee_id,omitempty"`
-	AssigneeName     string  `json:"assignee_name"`
 	Status           string  `json:"status"`
 	Priority         string  `json:"priority"`
 	DueDate          *string `json:"due_date,omitempty"`

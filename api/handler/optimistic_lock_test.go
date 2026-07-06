@@ -68,10 +68,17 @@ func TestUpdateTaskReturnsConflictForStaleBaseVersion(t *testing.T) {
 	}
 	defer db.Close()
 
-	mock.ExpectQuery(`SELECT id, requirement_id, assignee_id, creator_tl_id`).
+	mock.ExpectQuery(`SELECT id, requirement_id, creator_id::text`).
 		WithArgs(testTaskID).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "requirement_id", "assignee_id", "creator_tl_id"}).
-			AddRow(testTaskID, testRequirementID, nil, "tl-1"))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "requirement_id", "creator_id"}).
+			AddRow(testTaskID, testRequirementID, "creator-1"))
+	mock.ExpectQuery(`SELECT requirement_id::text, title, COALESCE\(acceptance_criteria, ARRAY\[\]::text\[\]\),`).
+		WithArgs(testTaskID).
+		WillReturnRows(sqlmock.NewRows([]string{"requirement_id", "title", "acceptance_criteria", "status", "priority", "progress", "due_date"}).
+			AddRow(testRequirementID, "task title", "{AC}", "todo", "medium", 0, nil))
+	mock.ExpectQuery(`SELECT user_id::text\s+FROM task_responsibles`).
+		WithArgs(testTaskID).
+		WillReturnRows(sqlmock.NewRows([]string{"user_id"}))
 	mock.ExpectExec(`UPDATE tasks SET`).
 		WithArgs("B task", testTaskID, int64(1)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
@@ -170,14 +177,17 @@ func TestDeleteTaskClearsSessionActivitySlicesBeforeDeletingTask(t *testing.T) {
 	defer db.Close()
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT requirement_id, creator_tl_id, assignee_id, version FROM tasks WHERE id = \$1 FOR UPDATE`).
+	mock.ExpectQuery(`SELECT requirement_id, creator_id::text, version FROM tasks WHERE id = \$1 FOR UPDATE`).
 		WithArgs(testTaskID).
-		WillReturnRows(sqlmock.NewRows([]string{"requirement_id", "creator_tl_id", "assignee_id", "version"}).
-			AddRow(testRequirementID, "tl-1", nil, int64(9)))
+		WillReturnRows(sqlmock.NewRows([]string{"requirement_id", "creator_id", "version"}).
+			AddRow(testRequirementID, "creator-1", int64(9)))
 	mock.ExpectQuery(`SELECT requirement_id::text, title, COALESCE\(acceptance_criteria, ARRAY\[\]::text\[\]\),`).
 		WithArgs(testTaskID).
-		WillReturnRows(sqlmock.NewRows([]string{"requirement_id", "title", "acceptance_criteria", "assignee_id", "status", "priority", "progress", "due_date"}).
-			AddRow(testRequirementID, "task title", "{AC}", nil, "todo", "medium", 0, nil))
+		WillReturnRows(sqlmock.NewRows([]string{"requirement_id", "title", "acceptance_criteria", "status", "priority", "progress", "due_date"}).
+			AddRow(testRequirementID, "task title", "{AC}", "todo", "medium", 0, nil))
+	mock.ExpectQuery(`SELECT user_id::text\s+FROM task_responsibles`).
+		WithArgs(testTaskID).
+		WillReturnRows(sqlmock.NewRows([]string{"user_id"}))
 	mock.ExpectExec(`SELECT id FROM requirements WHERE id = \$1 FOR UPDATE`).
 		WithArgs(testRequirementID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -229,7 +239,7 @@ func TestListTaskEventsFallsBackToEventHistoryWhenTaskWasDeleted(t *testing.T) {
 	}
 	defer db.Close()
 
-	mock.ExpectQuery(`SELECT id, requirement_id, assignee_id, creator_tl_id\s+FROM tasks\s+WHERE id = \$1`).
+	mock.ExpectQuery(`SELECT id, requirement_id, creator_id::text\s+FROM tasks\s+WHERE id = \$1`).
 		WithArgs(testTaskID).
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery(`SELECT requirement_id::text\s+FROM work_item_events`).

@@ -15,6 +15,14 @@ import { appendSearch } from "@/shared/utils/urlQuery";
 import "../../aidashboard-pattern.css";
 import { TaskPriorityTag, TaskStatusTag } from "../../dashboard/shared";
 
+function taskResponsibleLabel(task: Pick<Task, "responsible_users" | "responsible_user_ids">) {
+  const names = (task.responsible_users ?? []).map((responsible) => responsible.name || responsible.id).filter(Boolean);
+  if (!names.length) return task.responsible_user_ids?.length ? task.responsible_user_ids.join("、") : "-";
+  const visible = names.slice(0, 2);
+  const restCount = names.length - visible.length;
+  return restCount > 0 ? `${visible.join("、")} +${restCount}` : visible.join("、");
+}
+
 const STATUS_FILTER_OPTIONS: Array<{ value: TaskStatus; label: string }> = [
   { value: "todo", label: "未开始" },
   { value: "in_progress", label: "进行中" },
@@ -69,7 +77,7 @@ export function TasksListPage() {
       render: (v?: string) => v || "-",
       width: 220
     },
-    { title: "负责人", dataIndex: "assignee_name", render: (v?: string) => v || "-", width: 120 },
+    { title: "负责人", key: "responsibles", render: (_, task) => taskResponsibleLabel(task), width: 140 },
     {
       title: "状态",
       dataIndex: "status",

@@ -33,11 +33,9 @@ function hasControlCharacter(value: string) {
 
 function requiredTrimmedTextRule(label: string): Rule {
   return {
-    validator: async (_, value?: string) => {
-      if (!value || !value.trim()) {
-        throw new Error(`请输入${label}`);
-      }
-    }
+    required: true,
+    whitespace: true,
+    message: `请输入${label}`
   };
 }
 

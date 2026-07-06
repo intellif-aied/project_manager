@@ -619,11 +619,21 @@ func (h *ReportHandler) loadDraftSessions(userID string, sessionIDs []string) ([
 
 func (h *ReportHandler) loadDraftTaskCandidates(userID string) ([]model.ReportDraftTaskCandidate, error) {
 	rows, err := h.db.Query(`
-		SELECT t.id::text, t.title, r.id::text, r.title, t.status, t.progress, COALESCE(COALESCE(NULLIF(u.nickname,''), u.username), '')
+		SELECT t.id::text, t.title, r.id::text, r.title, t.status, t.progress,
+			COALESCE(
+				NULLIF(string_agg(DISTINCT COALESCE(NULLIF(ru.nickname,''), ru.username), '、') FILTER (WHERE ru.id IS NOT NULL), ''),
+				''
+			)
 		FROM tasks t
 		JOIN requirements r ON r.id = t.requirement_id
-		LEFT JOIN users u ON u.id = t.assignee_id
-		WHERE t.assignee_id = $1 AND t.status IN ('todo', 'in_progress')
+		LEFT JOIN task_responsibles tr_all ON tr_all.task_id = t.id
+		LEFT JOIN users ru ON ru.id = tr_all.user_id
+		WHERE t.status IN ('todo', 'in_progress')
+		  AND EXISTS (
+			SELECT 1 FROM task_responsibles tr
+			WHERE tr.task_id = t.id AND tr.user_id = $1
+		  )
+		GROUP BY t.id, t.title, r.id, r.title, t.status, t.progress, t.updated_at, t.created_at
 		ORDER BY t.updated_at DESC, t.created_at DESC
 		LIMIT 50`, userID)
 	if err != nil {

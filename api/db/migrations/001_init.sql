@@ -50,7 +50,6 @@ CREATE TABLE requirements (
     acceptance_criteria TEXT[] NOT NULL DEFAULT '{}',
     creator_id          BIGINT NOT NULL REFERENCES users(id),
     creator_role        TEXT NOT NULL,
-    owner_id            BIGINT REFERENCES users(id),
     status              TEXT NOT NULL DEFAULT 'todo' CHECK (status IN ('todo', 'review', 'active', 'completed', 'cancelled')),
     priority            TEXT NOT NULL DEFAULT 'medium' CHECK (priority IN ('low', 'medium', 'high', 'urgent')),
     progress            INTEGER NOT NULL DEFAULT 0 CHECK (progress >= 0 AND progress <= 100),
@@ -62,7 +61,6 @@ CREATE TABLE requirements (
 );
 CREATE INDEX idx_requirements_status ON requirements(status);
 CREATE INDEX idx_requirements_creator ON requirements(creator_id);
-CREATE INDEX idx_requirements_owner ON requirements(owner_id);
 CREATE INDEX idx_requirements_deadline ON requirements(deadline);
 
 CREATE TABLE requirement_teams (
@@ -76,8 +74,7 @@ CREATE TABLE tasks (
     requirement_id      UUID NOT NULL REFERENCES requirements(id),
     title               TEXT NOT NULL,
     acceptance_criteria TEXT[],
-    assignee_id         BIGINT REFERENCES users(id),
-    creator_tl_id       BIGINT NOT NULL REFERENCES users(id),
+    creator_id          BIGINT NOT NULL REFERENCES users(id),
     status              TEXT NOT NULL DEFAULT 'todo' CHECK (status IN ('todo', 'in_progress', 'done')),
     priority            TEXT NOT NULL DEFAULT 'medium' CHECK (priority IN ('low', 'medium', 'high')),
     progress            INTEGER NOT NULL DEFAULT 0 CHECK (progress >= 0 AND progress <= 100),
@@ -88,7 +85,7 @@ CREATE TABLE tasks (
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_tasks_requirement ON tasks(requirement_id);
-CREATE INDEX idx_tasks_assignee ON tasks(assignee_id);
+CREATE INDEX idx_tasks_creator ON tasks(creator_id);
 CREATE INDEX idx_tasks_status ON tasks(status);
 CREATE INDEX idx_tasks_due_date ON tasks(due_date) WHERE status <> 'done';
 

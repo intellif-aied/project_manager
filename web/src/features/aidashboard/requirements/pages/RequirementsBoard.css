@@ -5180,3 +5180,177 @@
 .requirements-board__refresh-action.ant-btn {
   border-color: rgba(214, 224, 238, 0.92);
 }
+
+/* Requirements contrast calibration: keep normal cards quiet, make blocked/followed states scan faster. */
+.requirements-board__card.has-risk,
+.requirements-board__card.has-warning {
+  border-color: #fed7aa;
+  background: linear-gradient(90deg, rgba(255, 247, 237, 0.74) 0, rgba(255, 255, 255, 0.99) 34px);
+  box-shadow:
+    inset 3px 0 0 #f97316,
+    0 1px 2px rgba(15, 23, 42, 0.035),
+    0 6px 16px rgba(15, 23, 42, 0.026);
+}
+
+.requirements-board__card.has-danger,
+.requirements-board__card.has-blocked {
+  border-color: #fecaca;
+  background: linear-gradient(90deg, rgba(255, 241, 242, 0.86) 0, rgba(255, 255, 255, 0.99) 38px);
+  box-shadow:
+    inset 4px 0 0 #dc2626,
+    0 1px 2px rgba(127, 29, 29, 0.06),
+    0 8px 18px rgba(127, 29, 29, 0.055);
+}
+
+.requirements-board__card.has-risk:hover,
+.requirements-board__card.has-warning:hover {
+  border-color: #fdba74;
+  box-shadow:
+    inset 3px 0 0 #ea580c,
+    0 10px 22px rgba(154, 52, 18, 0.095);
+}
+
+.requirements-board__card.has-danger:hover,
+.requirements-board__card.has-blocked:hover {
+  border-color: #fca5a5;
+  box-shadow:
+    inset 4px 0 0 #b91c1c,
+    0 10px 22px rgba(127, 29, 29, 0.12);
+}
+
+.requirements-board__card-risk-line.is-warning .requirements-board__card-risk-chip,
+.requirements-board__card-risk-chip {
+  color: #9a3412;
+  background: #fff7ed;
+  border-color: #fdba74;
+}
+
+.requirements-board__card-risk-line.is-danger .requirements-board__card-risk-chip {
+  color: #b91c1c;
+  background: #fff1f2;
+  border-color: #fca5a5;
+}
+
+.requirements-board__card.has-blocked .requirements-board__card-risk-line.is-danger .requirements-board__card-risk-chip {
+  color: #991b1b;
+  background: #fee2e2;
+  border-color: #f87171;
+}
+
+.requirements-board__card-risk-more {
+  color: #9a3412;
+  font-weight: 680;
+}
+
+.requirements-board__card-status-row span {
+  color: #b91c1c;
+}
+
+.requirements-board__card.has-blocked .requirements-board__card-status-row span {
+  height: 20px;
+  padding: 0 7px;
+  color: #991b1b;
+  font-weight: 760;
+  line-height: 18px;
+  background: #fee2e2;
+  border: 1px solid #fca5a5;
+  border-radius: 999px;
+}
+
+.requirements-board__card.has-blocked .requirements-board__card-status-row span::before {
+  display: none;
+}
+
+.requirements-board__favorite,
+.requirements-tree__favorite,
+.requirements-drawer__favorite {
+  color: #7c8da5;
+  border: 1px solid transparent;
+  opacity: 0.92;
+}
+
+.requirements-board__favorite:hover,
+.requirements-tree__favorite:hover,
+.requirements-drawer__favorite:hover {
+  color: #b45309;
+  background: #fff7ed;
+  border-color: #fcd34d;
+  opacity: 1;
+}
+
+.requirements-board__favorite.is-active,
+.requirements-tree__favorite.is-active,
+.requirements-drawer__favorite.is-active {
+  color: #d97706;
+  background: #fffbeb;
+  border-color: #fbbf24;
+  opacity: 1;
+  box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.16);
+}
+
+.requirements-board__card:hover .requirements-board__favorite.is-active {
+  opacity: 1;
+}
+
+.requirements-tree__action-follow.is-active.ant-btn {
+  color: #b45309;
+  font-weight: 650;
+  background: #fffbeb;
+  border-color: #fcd34d;
+}
+
+.requirements-attention-pill.is-notable {
+  color: #1d4ed8;
+  background: #dbeafe;
+  border-color: #93c5fd;
+}
+
+.requirements-attention-pill.is-important {
+  color: #92400e;
+  background: #fef3c7;
+  border-color: #fbbf24;
+}
+
+.requirements-attention-pill.is-high {
+  color: #991b1b;
+  background: #fee2e2;
+  border-color: #fca5a5;
+}
+
+.requirements-tree__risk.is-danger,
+.requirements-tree__task-risk.is-danger,
+.requirements-drawer__task-risk.is-danger {
+  color: #b91c1c;
+  font-weight: 720;
+  background: #fee2e2;
+  border: 1px solid #fca5a5;
+}
+
+.requirements-tree__risk.is-warning,
+.requirements-tree__task-risk.is-warning,
+.requirements-drawer__task-risk.is-warning {
+  color: #9a3412;
+  font-weight: 700;
+  background: #fff7ed;
+  border: 1px solid #fdba74;
+}
+
+.requirements-tree__task-item.has-risk,
+.requirements-drawer__task-row.has-risk {
+  background: linear-gradient(90deg, rgba(255, 247, 237, 0.84) 0, #ffffff 34px);
+  box-shadow: inset 4px 0 0 #f97316;
+}
+
+.requirements-drawer__summary-item.is-danger {
+  background: #fff1f2;
+  border-color: #fecaca;
+}
+
+.requirements-drawer__summary-item.is-danger strong {
+  color: #b91c1c;
+}
+
+.requirements-drawer__summary-item.is-warning {
+  background: #fff7ed;
+  border-color: #fdba74;
+}

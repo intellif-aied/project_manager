@@ -610,8 +610,13 @@ func (h *SessionHandler) matchTaskAsync(sessionID, userID string, summary *strin
 	}
 
 	rows, err := h.db.Query(`
-		SELECT id, title FROM tasks
-		WHERE assignee_id = $1 AND status IN ('todo','in_progress')`, userID)
+		SELECT DISTINCT t.id, t.title
+		FROM tasks t
+		WHERE t.status IN ('todo','in_progress')
+		  AND EXISTS (
+			SELECT 1 FROM task_responsibles tr
+			WHERE tr.task_id = t.id AND tr.user_id = $1
+		  )`, userID)
 	if err != nil {
 		log.Printf("matchTaskAsync: query tasks failed: %v", err)
 		return

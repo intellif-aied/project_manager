@@ -159,7 +159,11 @@ interface FollowItem {
   requirement?: string;
   requirementId: string;
   taskId?: string;
-  owner: string;
+  creatorName?: string;
+  requirementResponsibleNames?: string[];
+  taskResponsibleNames?: string[];
+  responsibleNames?: string[];
+  owner?: string;
   status: string;
   deadline: string;
   risk: string;
@@ -3826,6 +3830,18 @@ function ReportStatusTag({ status }: { status: ReportStatus }) {
   return <Tag color={color}>{label}</Tag>;
 }
 
+
+function getFollowResponsibleText(item: FollowItem) {
+  const names = item.responsibleNames?.length
+    ? item.responsibleNames
+    : item.type === "任务"
+      ? item.taskResponsibleNames ?? []
+      : item.requirementResponsibleNames ?? [];
+  if (names.length) return names.slice(0, 2).join("、") + (names.length > 2 ? ` +${names.length - 2}` : "");
+  if (item.owner) return item.owner;
+  return item.creatorName ? `创建人 ${item.creatorName}` : "负责人未设置";
+}
+
 function FollowCard({
   item,
   showAttention,
@@ -3869,7 +3885,7 @@ function FollowCard({
       ) : null}
       <div className="console-follow-card__meta">
         <span>
-          <ClockCircleOutlined /> {item.owner} · {item.deadline}
+          <ClockCircleOutlined /> {getFollowResponsibleText(item)} · {item.deadline}
         </span>
       </div>
       <Button

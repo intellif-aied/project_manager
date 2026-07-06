@@ -611,15 +611,24 @@ func (h *ReportMCPHandler) toolGetTasks(ctx context.Context, r *http.Request, ra
 	}
 
 	rows, err := h.db.QueryContext(ctx, `
-		SELECT t.id::text, t.title, t.status, COALESCE(t.progress,0), COALESCE(t.assignee_id::text,''),
-		       COALESCE(NULLIF(u.nickname,''),u.username), r.id::text, COALESCE(r.title,''),
-		       t.updated_at
+		SELECT t.id::text, t.title, t.status, COALESCE(t.progress,0),
+		       COALESCE(MIN(tr_all.user_id::text), ''),
+		       COALESCE(
+		           NULLIF(string_agg(DISTINCT COALESCE(NULLIF(ru.nickname,''), ru.username), '、') FILTER (WHERE ru.id IS NOT NULL), ''),
+		           ''
+		       ),
+		       r.id::text, COALESCE(r.title,''), t.updated_at
 		FROM tasks t
 		LEFT JOIN requirements r ON r.id = t.requirement_id
-		LEFT JOIN users u ON u.id = t.assignee_id
+		LEFT JOIN task_responsibles tr_all ON tr_all.task_id = t.id
+		LEFT JOIN users ru ON ru.id = tr_all.user_id
 		WHERE t.updated_at >= $1 AND t.updated_at < ($2::date + 1)
-		  AND t.assignee_id = ANY($3)
+		  AND EXISTS (
+			SELECT 1 FROM task_responsibles tr
+			WHERE tr.task_id = t.id AND tr.user_id = ANY($3)
+		  )
 		  AND t.status = ANY($4)
+		GROUP BY t.id, t.title, t.status, t.progress, r.id, r.title, t.updated_at
 		ORDER BY t.updated_at DESC LIMIT 200`, start, end, pq.Array(visible), pq.Array(statuses))
 	if err != nil {
 		return nil, errMCPInternal

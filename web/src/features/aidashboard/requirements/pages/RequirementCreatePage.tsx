@@ -32,7 +32,7 @@ interface CreateFormValues {
   description: string;
   priority: RequirementPriority;
   deadline?: dayjs.Dayjs;
-  owner_ids?: string[];
+  responsible_user_ids?: string[];
   team_ids?: string[];
   feishu_doc_url?: string;
   acceptance_criteria: string[];
@@ -65,7 +65,7 @@ export function RequirementCreatePage() {
         description: normalizeRequiredText(values.description),
         priority: values.priority,
         deadline: values.deadline?.format("YYYY-MM-DD"),
-        owner_ids: values.owner_ids ?? [],
+        responsible_user_ids: values.responsible_user_ids ?? [],
         team_ids: values.team_ids ?? [],
         feishu_doc_url: normalizeOptionalText(values.feishu_doc_url),
         acceptance_criteria: normalizeCriteria(values.acceptance_criteria)
@@ -229,7 +229,7 @@ export function RequirementCreatePage() {
                 <Form.Item label="截止日期" name="deadline">
                   <DatePicker />
                 </Form.Item>
-                <Form.Item label="负责人" name="owner_ids">
+                <Form.Item label="负责人" name="responsible_user_ids">
                   <Select
                     allowClear
                     mode="multiple"

@@ -28,7 +28,7 @@ import type { TaskDisplayStatus } from "../../api/types";
 import { TaskPriorityTag, TaskStatusTag } from "../../dashboard/shared";
 import { requirementsBoardApi } from "../../requirements/api/requirementsBoardApi";
 import { invalidateRequirementTaskWorkspace } from "../../requirements/queryInvalidation";
-import type { MockTaskDependency, MockTaskStatus, MockTokenSource } from "../../requirements/types";
+import type { MockTask, MockTaskDependency, MockTaskStatus, MockTokenSource } from "../../requirements/types";
 
 const { Text } = Typography;
 
@@ -74,6 +74,14 @@ function DependencyList({ deps, empty }: { deps: MockTaskDependency[]; empty: st
       ))}
     </Space>
   );
+}
+
+function taskResponsibleLabel(task: Pick<MockTask, "responsible_users" | "responsible_user_ids">) {
+  const names = task.responsible_users.map((responsible) => responsible.name || responsible.id).filter(Boolean);
+  if (!names.length) return task.responsible_user_ids.length ? task.responsible_user_ids.join("、") : "未分配";
+  const visible = names.slice(0, 2);
+  const restCount = names.length - visible.length;
+  return restCount > 0 ? `${visible.join("、")} +${restCount}` : visible.join("、");
 }
 
 function formatTokens(value: number) {
@@ -233,7 +241,7 @@ export function TaskDetailPage() {
   return (
     <PagePanel
       title={task.title}
-      description={`所属需求：${task.requirement_title} · 负责人：${task.assignee_name || "未分配"}`}
+      description={`所属需求：${task.requirement_title} · 负责人：${taskResponsibleLabel(task)}`}
       backTo={backTo}
       actions={statusActions}
       breadcrumbs={[
@@ -267,7 +275,7 @@ export function TaskDetailPage() {
           <div className="aidashboard-task-detail__meta-grid">
             <div>
               <span>负责人</span>
-              <strong>{task.assignee_name || "未分配"}</strong>
+              <strong>{taskResponsibleLabel(task)}</strong>
             </div>
             <div>
               <span>截止日期</span>

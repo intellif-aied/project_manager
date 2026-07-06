@@ -441,18 +441,41 @@ function getTaskRiskBadges(task: MockTask): TaskRiskBadge[] {
 }
 
 function getRequirementOwnerLabel(requirement: MockRequirement) {
-  const ownerNames = requirement.owners.map((owner) => owner.name || owner.id).filter(Boolean);
-  if (ownerNames.length === 0) {
+  const responsibleNames = requirement.responsible_users
+    .map((responsible) => responsible.name || responsible.id)
+    .filter(Boolean);
+  if (responsibleNames.length === 0) {
     return "未指定负责人";
   }
-  const visibleOwners = ownerNames.slice(0, 2);
-  const restCount = ownerNames.length - visibleOwners.length;
-  return restCount > 0 ? `${visibleOwners.join("、")} +${restCount}` : visibleOwners.join("、");
+  const visibleResponsibles = responsibleNames.slice(0, 2);
+  const restCount = responsibleNames.length - visibleResponsibles.length;
+  return restCount > 0 ? `${visibleResponsibles.join("、")} +${restCount}` : visibleResponsibles.join("、");
 }
 
 function getRequirementOwnerTitle(requirement: MockRequirement) {
-  const ownerNames = requirement.owners.map((owner) => owner.name || owner.id).filter(Boolean);
-  return ownerNames.length ? ownerNames.join("、") : "未指定负责人";
+  const responsibleNames = requirement.responsible_users
+    .map((responsible) => responsible.name || responsible.id)
+    .filter(Boolean);
+  return responsibleNames.length ? responsibleNames.join("、") : "未指定负责人";
+}
+
+function getTaskResponsibleNames(task: Pick<MockTask, "responsible_users" | "responsible_user_ids">) {
+  const names = task.responsible_users.map((responsible) => responsible.name || responsible.id).filter(Boolean);
+  if (names.length) return names;
+  return task.responsible_user_ids.filter(Boolean);
+}
+
+function getTaskResponsibleLabel(task: Pick<MockTask, "responsible_users" | "responsible_user_ids">, limit = 2) {
+  const names = getTaskResponsibleNames(task);
+  if (!names.length) return "未分配";
+  const visible = names.slice(0, limit);
+  const restCount = names.length - visible.length;
+  return restCount > 0 ? `${visible.join("、")} +${restCount}` : visible.join("、");
+}
+
+function getTaskResponsibleTitle(task: Pick<MockTask, "responsible_users" | "responsible_user_ids">) {
+  const names = getTaskResponsibleNames(task);
+  return names.length ? names.join("、") : "未分配";
 }
 
 function getRequirementTeamCompactLabel(requirement: MockRequirement, limit = 2) {
@@ -920,7 +943,7 @@ export function RequirementsListPage() {
       message.error(error instanceof Error ? error.message : "需求阶段更新失败");
     },
     onSuccess: (updated, variables) => {
-      const shouldPromptOwner = Boolean(variables.promptOwnerAfterSave && updated.owner_ids.length === 0);
+      const shouldPromptOwner = Boolean(variables.promptOwnerAfterSave && updated.responsible_user_ids.length === 0);
       if (!shouldPromptOwner) {
         message.success("需求阶段已更新");
       }
@@ -1005,14 +1028,19 @@ export function RequirementsListPage() {
       const requirementFollowed = favoriteRequirementIds.has(requirement.id);
       const requirementAssigned =
         Boolean(currentUserId) &&
-        (requirement.owner_id === currentUserId ||
-          requirement.owners.some((owner) => owner.id === currentUserId));
+        (requirement.responsible_user_ids.includes(currentUserId) ||
+          requirement.responsible_users.some((responsible) => responsible.id === currentUserId));
       const requirementCreated = Boolean(currentUserId) && requirement.creator_id === currentUserId;
       const taskFollowed = requirementTasks.some((task) => favoriteTaskIds.has(task.id));
       const taskAssigned =
-        Boolean(currentUserId) && requirementTasks.some((task) => task.assignee_id === currentUserId);
+        Boolean(currentUserId) &&
+        requirementTasks.some(
+          (task) =>
+            task.responsible_user_ids.includes(currentUserId) ||
+            task.responsible_users.some((responsible) => responsible.id === currentUserId)
+        );
       const taskCreated =
-        Boolean(currentUserId) && requirementTasks.some((task) => task.creator_tl_id === currentUserId);
+        Boolean(currentUserId) && requirementTasks.some((task) => task.creator_id === currentUserId);
       const followedMatched = requirementFollowed || taskFollowed;
       const assignedMatched = requirementAssigned || taskAssigned;
       const createdMatched = requirementCreated || taskCreated;
@@ -1026,10 +1054,10 @@ export function RequirementsListPage() {
         requirement.title,
         requirement.description,
         requirement.creator_name,
-        ...requirement.owners.map((owner) => owner.name || owner.id),
+        ...requirement.responsible_users.map((responsible) => responsible.name || responsible.id),
         ...requirement.team_names,
         ...requirement.acceptance_criteria,
-        ...requirementTasks.flatMap((task) => [task.title, task.assignee_name ?? ""])
+        ...requirementTasks.flatMap((task) => [task.title, getTaskResponsibleTitle(task)])
       ]
         .join(" ")
         .toLowerCase();
@@ -1109,7 +1137,7 @@ export function RequirementsListPage() {
 
   const visibleColumns = status === "cancelled" ? [CANCELLED_COLUMN] : STATUS_COLUMNS;
   const shouldPromptOwnerAfterStatus = (requirement: MockRequirement, nextStatus: RequirementStage) =>
-    requirement.owner_ids.length === 0 && ["review", "active", "completed"].includes(nextStatus);
+    requirement.responsible_user_ids.length === 0 && ["review", "active", "completed"].includes(nextStatus);
 
   const mutateRequirementStatus = (requirement: MockRequirement, nextStatus: RequirementStage) => {
     statusMutation.mutate({
@@ -1562,7 +1590,7 @@ function RequirementCard({
         <article
           className={`requirements-board__card is-status-${requirement.status}${snapshot.isDragging ? " is-dragging" : ""}${
             primaryRisk ? ` has-risk has-${primaryRisk.tone}` : ""
-          }`}
+          }${blockedRisk ? " has-blocked" : ""}`}
           ref={provided.innerRef}
           {...provided.draggableProps}
           {...provided.dragHandleProps}
@@ -1815,9 +1843,9 @@ function RequirementTree({
                       </div>
                       <span
                         className="requirements-tree__task-owner"
-                        title={task.assignee_name || "未分配"}
+                        title={getTaskResponsibleTitle(task)}
                       >
-                        {task.assignee_name || "未分配"}
+                        {getTaskResponsibleLabel(task)}
                       </span>
                       <div className="requirements-tree__task-status">
                         <TaskStatusPill status={task.status} />
@@ -2185,16 +2213,16 @@ export function RequirementDrawer({
       value: assignee.id,
       label: assignee.name
     }));
-    requirement?.owners.forEach((owner) => {
-      if (!options.some((item) => item.value === owner.id)) {
+    requirement?.responsible_users.forEach((responsible) => {
+      if (!options.some((item) => item.value === responsible.id)) {
         options.push({
-          value: owner.id,
-          label: owner.name || owner.id
+          value: responsible.id,
+          label: responsible.name || responsible.id
         });
       }
     });
     return options;
-  }, [assigneesQuery.data, requirement?.owners]);
+  }, [assigneesQuery.data, requirement?.responsible_users]);
   const quickTeamOptions = useMemo(() => {
     const options = (teamsQuery.data ?? []).map((team) => ({
       value: team.id,
@@ -2214,7 +2242,7 @@ export function RequirementDrawer({
   const resetQuickDraft = (target = requirement) => {
     if (!target) return;
     setDraftDeadline(target.deadline ? dayjs(target.deadline) : undefined);
-    setDraftOwnerIds(target.owner_ids);
+    setDraftOwnerIds(target.responsible_user_ids);
     setDraftTeamIds(target.team_ids);
   };
 
@@ -2333,7 +2361,7 @@ export function RequirementDrawer({
       field: RequirementQuickEditField;
       data: {
         deadline?: string;
-        owner_ids?: string[];
+        responsible_user_ids?: string[];
         team_ids?: string[];
       };
     }) =>
@@ -2362,7 +2390,7 @@ export function RequirementDrawer({
   const saveQuickOwner = () => {
     quickUpdateMutation.mutate({
       field: "owner",
-      data: { owner_ids: draftOwnerIds }
+      data: { responsible_user_ids: draftOwnerIds }
     });
   };
 
@@ -2821,8 +2849,8 @@ export function RequirementDrawer({
                                 <div className="requirements-drawer__task-state">
                                   <TaskStatusPill status={task.status} />
                                 </div>
-                                <span className="requirements-drawer__task-owner" title={task.assignee_name || "未分配"}>
-                                  {task.assignee_name || "未分配"}
+                                <span className="requirements-drawer__task-owner" title={getTaskResponsibleTitle(task)}>
+                                  {getTaskResponsibleLabel(task)}
                                 </span>
                                 <span className="requirements-drawer__task-date" title={formatDate(task.due_date)}>
                                   {formatDate(task.due_date)}
@@ -3023,7 +3051,7 @@ function RequirementEditModal({
     description: string;
     priority: RequirementPriority;
     deadline?: dayjs.Dayjs;
-    owner_ids?: string[];
+    responsible_user_ids?: string[];
     team_ids?: string[];
     feishu_doc_url?: string;
     acceptance_criteria: string[];
@@ -3045,7 +3073,7 @@ function RequirementEditModal({
       description: requirement.description,
       priority: requirement.priority,
       deadline: requirement.deadline ? dayjs(requirement.deadline) : undefined,
-      owner_ids: requirement.owner_ids,
+      responsible_user_ids: requirement.responsible_user_ids,
       team_ids: requirement.team_ids,
       feishu_doc_url: requirement.feishu_doc_url ?? "",
       acceptance_criteria: requirement.acceptance_criteria.length
@@ -3069,7 +3097,7 @@ function RequirementEditModal({
       description: string;
       priority: RequirementPriority;
       deadline?: dayjs.Dayjs;
-      owner_ids?: string[];
+      responsible_user_ids?: string[];
       team_ids?: string[];
       feishu_doc_url?: string;
       acceptance_criteria: string[];
@@ -3079,7 +3107,7 @@ function RequirementEditModal({
         description: normalizeRequiredText(values.description),
         priority: values.priority,
         deadline: values.deadline ? values.deadline.format("YYYY-MM-DD") : undefined,
-        owner_ids: values.owner_ids ?? [],
+        responsible_user_ids: values.responsible_user_ids ?? [],
         team_ids: values.team_ids ?? [],
         feishu_doc_url: normalizeOptionalText(values.feishu_doc_url),
         acceptance_criteria: normalizeCriteria(values.acceptance_criteria),
@@ -3100,16 +3128,16 @@ function RequirementEditModal({
       value: assignee.id,
       label: assignee.name
     }));
-    requirement.owners.forEach((owner) => {
-      if (!options.some((item) => item.value === owner.id)) {
+    requirement.responsible_users.forEach((responsible) => {
+      if (!options.some((item) => item.value === responsible.id)) {
         options.push({
-          value: owner.id,
-          label: owner.name || owner.id
+          value: responsible.id,
+          label: responsible.name || responsible.id
         });
       }
     });
     return options;
-  }, [assigneesQuery.data, requirement.owners]);
+  }, [assigneesQuery.data, requirement.responsible_users]);
 
   const handleCancel = () => {
     if (updateMutation.isPending) return;
@@ -3146,7 +3174,7 @@ function RequirementEditModal({
           <Form.Item label="截止日期" name="deadline">
             <DatePicker style={{ width: "100%" }} />
           </Form.Item>
-          <Form.Item label="负责人" name="owner_ids">
+          <Form.Item label="负责人" name="responsible_user_ids">
             <Select
               allowClear
               mode="multiple"
@@ -3271,7 +3299,7 @@ function TaskCreateModal({
   const queryClient = useQueryClient();
   const [form] = Form.useForm<{
     title: string;
-    assignee_id: string;
+    responsible_user_ids: string[];
     priority: MockTaskPriority;
     due_date?: dayjs.Dayjs;
     dependency_task_ids?: string[];
@@ -3287,7 +3315,7 @@ function TaskCreateModal({
   const createMutation = useMutation({
     mutationFn: (values: {
       title: string;
-      assignee_id: string;
+      responsible_user_ids: string[];
       priority: MockTaskPriority;
       due_date?: dayjs.Dayjs;
       dependency_task_ids?: string[];
@@ -3297,7 +3325,7 @@ function TaskCreateModal({
         requirement_id: requirementId,
         title: normalizeRequiredText(values.title),
         acceptance_criteria: normalizeCriteria(values.acceptance_criteria),
-        assignee_id: values.assignee_id,
+        responsible_user_ids: values.responsible_user_ids ?? [],
         priority: values.priority,
         due_date: values.due_date?.format("YYYY-MM-DD"),
         dependency_task_ids: values.dependency_task_ids
@@ -3340,7 +3368,7 @@ function TaskCreateModal({
           <div className="requirements-task-modal__grid">
             <Form.Item
               label="负责人"
-              name="assignee_id"
+              name="responsible_user_ids"
               rules={requiredSelectRules("负责人")}
             >
               <Select
@@ -3349,7 +3377,7 @@ function TaskCreateModal({
                 disabled={assigneesQuery.isLoading || assigneesQuery.isError}
                 options={(assigneesQuery.data ?? []).map((item: MockAssignee) => ({
                   value: item.id,
-                  label: `${item.name} (${item.employee_id})`
+                  label: item.name
                 }))}
               />
             </Form.Item>
@@ -3684,11 +3712,8 @@ function formatWorkItemEventValue(
   if (field === "acceptance_criteria" && Array.isArray(value)) {
     return `${value.length} 项`;
   }
-  if ((field === "owner_ids" || field === "assignee_id") && Array.isArray(value)) {
+  if (field === "responsible_user_ids" && Array.isArray(value)) {
     return formatMappedEventValues(value, userNameMap);
-  }
-  if (field === "assignee_id" && typeof value === "string") {
-    return userNameMap?.get(value) ?? value;
   }
   if (field === "team_ids" && Array.isArray(value)) {
     return formatMappedEventValues(value, teamNameMap);
@@ -3720,15 +3745,15 @@ function buildWorkItemEventUserNameMap(
   assignees.forEach((assignee) => {
     result.set(assignee.id, assignee.name || assignee.id);
   });
-  requirement?.owners.forEach((owner) => {
-    result.set(owner.id, owner.name || owner.id);
+  requirement?.responsible_users.forEach((responsible) => {
+    result.set(responsible.id, responsible.name || responsible.id);
   });
   if (requirement?.creator_id) {
     result.set(requirement.creator_id, requirement.creator_name || requirement.creator_id);
   }
-  if (task?.assignee_id) {
-    result.set(task.assignee_id, task.assignee_name || task.assignee_id);
-  }
+  task?.responsible_users.forEach((responsible) => {
+    result.set(responsible.id, responsible.name || responsible.id);
+  });
   return result;
 }
 
@@ -3757,8 +3782,7 @@ function getWorkItemEventFieldLabel(field: string) {
     status: "状态",
     deadline: "截止日期",
     due_date: "截止日期",
-    owner_ids: "负责人",
-    assignee_id: "负责人",
+    responsible_user_ids: "负责人",
     team_ids: "参与团队",
     progress: "进度",
     acceptance_criteria: "验收标准"
@@ -3813,7 +3837,7 @@ function BlockingDependencyTrace({
                     {dependencyStatusText(dependency, targetTask)}
                   </Tag>
                   <em>截止 {formatDate(targetTask?.due_date ?? dependency.due_date ?? undefined)}</em>
-                  {targetTask?.assignee_name ? <em>{targetTask.assignee_name}</em> : null}
+                  {targetTask ? <em title={getTaskResponsibleTitle(targetTask)}>{getTaskResponsibleLabel(targetTask)}</em> : null}
                 </div>
               </div>
               {canOpen ? <RightOutlined className="requirements-clickable-task-cue" /> : null}
@@ -3957,7 +3981,7 @@ type DependencyPickerTask = {
   requirementId: string;
   requirementTitle: string;
   status?: string;
-  assigneeName?: string;
+  responsibleLabel?: string;
   dueDate?: string;
   priority?: MockTaskPriority;
 };
@@ -3995,7 +4019,7 @@ function DependencyTaskPicker({
           requirementId: task.requirement_id || "unknown",
           requirementTitle: task.requirement_title || "未命名需求",
           status: task.status,
-          assigneeName: task.assignee_name,
+          responsibleLabel: getTaskResponsibleLabel(task),
           dueDate: task.due_date,
           priority: task.priority
         });
@@ -4055,7 +4079,7 @@ function DependencyTaskPicker({
         const filteredTasks = groupMatched
           ? group.tasks
           : group.tasks.filter((task) =>
-              [task.title, task.requirementTitle, task.assigneeName ?? "", task.dueDate ?? ""]
+              [task.title, task.requirementTitle, task.responsibleLabel ?? "", task.dueDate ?? ""]
                 .join(" ")
                 .toLowerCase()
                 .includes(normalizedKeyword)
@@ -4207,7 +4231,7 @@ function DependencyTaskPicker({
                           <div>
                             <strong title={task.title}>{task.title}</strong>
                             <span>
-                              {task.assigneeName || "未分配"} · 截止 {formatDate(task.dueDate)}
+                              {task.responsibleLabel || "未分配"} · 截止 {formatDate(task.dueDate)}
                             </span>
                           </div>
                           <Tag color={dependencyTone({ item_type: "task", item_id: task.id, title: task.title, status: task.status ?? "todo" })}>
@@ -4565,7 +4589,7 @@ function TaskDrawerContent({
         <div className="requirements-task-detail__meta-strip">
           <div>
             <span>负责人</span>
-            <strong title={task.assignee_name || "未分配"}>{task.assignee_name || "未分配"}</strong>
+            <strong title={getTaskResponsibleTitle(task)}>{getTaskResponsibleLabel(task)}</strong>
           </div>
           <div>
             <span>截止日期</span>
@@ -4769,7 +4793,7 @@ function TaskEditModal({
   const queryClient = useQueryClient();
   const [form] = Form.useForm<{
     title: string;
-    assignee_id?: string;
+    responsible_user_ids?: string[];
     priority: MockTaskPriority;
     due_date?: dayjs.Dayjs;
     dependency_task_ids?: string[];
@@ -4793,7 +4817,7 @@ function TaskEditModal({
   const initialValues = useMemo(
     () => ({
       title: task.title,
-      assignee_id: task.assignee_id,
+      responsible_user_ids: task.responsible_user_ids,
       priority: task.priority,
       due_date: task.due_date ? dayjs(task.due_date) : undefined,
       dependency_task_ids: currentDependencyTaskIds,
@@ -4814,7 +4838,7 @@ function TaskEditModal({
   const updateMutation = useMutation({
     mutationFn: (values: {
       title: string;
-      assignee_id?: string;
+      responsible_user_ids?: string[];
       priority: MockTaskPriority;
       due_date?: dayjs.Dayjs;
       dependency_task_ids?: string[];
@@ -4826,7 +4850,7 @@ function TaskEditModal({
         due_date: values.due_date ? values.due_date.format("YYYY-MM-DD") : undefined,
         acceptance_criteria: normalizeCriteria(values.acceptance_criteria),
         base_version: task.version,
-        ...(canReassign ? { assignee_id: values.assignee_id } : {})
+        ...(canReassign ? { responsible_user_ids: values.responsible_user_ids ?? [] } : {})
       };
       return requirementsBoardApi.updateTask(task.id, payload).then(async (updatedTask) => {
         const selectedDependencyIds = Array.from(new Set(values.dependency_task_ids ?? []))
@@ -4889,7 +4913,7 @@ function TaskEditModal({
         <Input placeholder="任务标题" />
       </Form.Item>
       <div className="requirements-task-edit-panel__grid">
-        <Form.Item label="负责人" name="assignee_id" rules={requiredSelectRules("负责人")}>
+        <Form.Item label="负责人" name="responsible_user_ids" rules={requiredSelectRules("负责人")}>
           <Select
             placeholder="选择负责人"
             loading={assigneesQuery.isLoading}
@@ -4898,7 +4922,7 @@ function TaskEditModal({
             classNames={{ popup: { root: "requirements-task-detail-popup" } }}
             options={(assigneesQuery.data ?? []).map((item: MockAssignee) => ({
               value: item.id,
-              label: `${item.name} (${item.employee_id})`
+              label: item.name
             }))}
           />
         </Form.Item>

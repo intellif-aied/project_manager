@@ -36,7 +36,7 @@ import {
 interface CreateTaskFormValues {
   title: string;
   requirement_id: string;
-  assignee_id: string;
+  responsible_user_ids: string[];
   priority: MockTaskPriority;
   due_date?: dayjs.Dayjs;
   dependency_task_ids?: string[];
@@ -90,7 +90,7 @@ export function TaskCreatePage() {
         requirement_id: values.requirement_id,
         title: normalizeRequiredText(values.title),
         acceptance_criteria: normalizeCriteria(values.acceptance_criteria),
-        assignee_id: values.assignee_id,
+        responsible_user_ids: values.responsible_user_ids ?? [],
         priority: values.priority,
         due_date: values.due_date?.format("YYYY-MM-DD"),
         dependency_task_ids: values.dependency_task_ids
@@ -106,7 +106,7 @@ export function TaskCreatePage() {
       priority: "medium",
       dependency_task_ids: [],
       requirement_id: initialRequirementId,
-      assignee_id: user?.role === "employee" ? user.id : undefined
+      responsible_user_ids: user?.role === "employee" && user.id ? [user.id] : []
     });
     markClean();
   }, [form, initialRequirementId, markClean, user?.id, user?.role]);
@@ -204,10 +204,11 @@ export function TaskCreatePage() {
                 </Form.Item>
                 <Form.Item
                   label="负责人"
-                  name="assignee_id"
+                  name="responsible_user_ids"
                   rules={requiredSelectRules("负责人")}
                 >
                   <Select
+                    mode="multiple"
                     placeholder="选择负责人"
                     loading={assigneesQuery.isLoading}
                     disabled={
@@ -217,7 +218,7 @@ export function TaskCreatePage() {
                     }
                     options={assignees.map((item) => ({
                       value: item.id,
-                      label: `${item.name} (${item.employee_id})`
+                      label: item.name
                     }))}
                   />
                 </Form.Item>

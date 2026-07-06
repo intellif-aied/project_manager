@@ -1,10 +1,6 @@
 package handler
 
-import (
-	"database/sql"
-
-	"github.com/aidashboard/api/model"
-)
+import "github.com/aidashboard/api/model"
 
 func isGlobalRequirementManager(role string) bool {
 	return role == "admin" || role == "director" || role == "pm"
@@ -39,9 +35,9 @@ func (h *RequirementHandler) canViewRequirement(u *model.User, requirementID str
 		SELECT EXISTS(
 			SELECT 1 FROM requirements r
 			WHERE r.id = $1
-			  AND (r.creator_id = CAST($2 AS bigint) OR r.owner_id = CAST($2 AS bigint) OR EXISTS (
-				SELECT 1 FROM requirement_owners ro
-				WHERE ro.requirement_id = r.id AND ro.user_id = CAST($2 AS bigint)
+			  AND (r.creator_id = CAST($2 AS bigint) OR EXISTS (
+				SELECT 1 FROM requirement_responsibles rr
+				WHERE rr.requirement_id = r.id AND rr.user_id = CAST($2 AS bigint)
 			  )`
 	args := []any{requirementID, u.ID}
 	if hasTeam(u) {
@@ -77,9 +73,9 @@ func (h *RequirementHandler) canManageRequirement(u *model.User, requirementID s
 		SELECT EXISTS(
 			SELECT 1 FROM requirements r
 			WHERE r.id = $1
-			  AND (r.creator_id = CAST($2 AS bigint) OR r.owner_id = CAST($2 AS bigint) OR EXISTS (
-				SELECT 1 FROM requirement_owners ro
-				WHERE ro.requirement_id = r.id AND ro.user_id = CAST($2 AS bigint)
+			  AND (r.creator_id = CAST($2 AS bigint) OR EXISTS (
+				SELECT 1 FROM requirement_responsibles rr
+				WHERE rr.requirement_id = r.id AND rr.user_id = CAST($2 AS bigint)
 			  )`
 	args := []any{requirementID, u.ID}
 	if u.Role == "team_leader" && hasTeam(u) {
@@ -102,24 +98,20 @@ func (h *RequirementHandler) requirementExists(requirementID string) (bool, erro
 type taskAccessRecord struct {
 	ID            string
 	RequirementID string
-	AssigneeID    sql.NullString
-	CreatorTLID   string
+	CreatorID     string
 }
 
 func (h *TaskHandler) loadTaskAccess(taskID string) (taskAccessRecord, error) {
 	var task taskAccessRecord
 	err := h.db.QueryRow(`
-		SELECT id, requirement_id, assignee_id, creator_tl_id
+		SELECT id, requirement_id, creator_id::text
 		FROM tasks
-		WHERE id = $1`, taskID).Scan(&task.ID, &task.RequirementID, &task.AssigneeID, &task.CreatorTLID)
+		WHERE id = $1`, taskID).Scan(&task.ID, &task.RequirementID, &task.CreatorID)
 	return task, err
 }
 
 func (h *TaskHandler) canViewTask(u *model.User, taskID string) (bool, error) {
 	task, err := h.loadTaskAccess(taskID)
-	if err == sql.ErrNoRows {
-		return false, nil
-	}
 	if err != nil {
 		return false, err
 	}
@@ -130,69 +122,24 @@ func (h *TaskHandler) canViewTaskRecord(u *model.User, task taskAccessRecord) (b
 	if u == nil {
 		return false, nil
 	}
-	if isGlobalTaskManager(u.Role) {
+	if isGlobalTaskManager(u.Role) || task.CreatorID == u.ID || h.taskHasResponsible(task.ID, u.ID) {
 		return true, nil
 	}
-	if !hasTeam(u) {
-		var allowed bool
-		err := h.db.QueryRow(`
-			SELECT EXISTS(
-				SELECT 1 FROM requirements r
-				WHERE r.id = $1 AND (r.owner_id = CAST($2 AS bigint) OR EXISTS (
-					SELECT 1 FROM requirement_owners ro
-					WHERE ro.requirement_id = r.id AND ro.user_id = CAST($2 AS bigint)
-				) OR r.creator_id = CAST($2 AS bigint))
-			)`, task.RequirementID, u.ID).Scan(&allowed)
-		return allowed, err
+	if hasTeam(u) && h.taskHasResponsibleInTeam(task.ID, *u.TeamID) {
+		return true, nil
 	}
-	var allowed bool
-	query := `
-		SELECT EXISTS(
-			SELECT 1
-			WHERE EXISTS (
-				SELECT 1 FROM requirement_teams rt
-				WHERE rt.requirement_id = $1 AND rt.team_id = $2
-			)
-			OR EXISTS (
-				SELECT 1 FROM users assignee
-				WHERE assignee.id = CAST($3 AS bigint) AND assignee.team_id = $2
-			)`
-	if u.Role == "team_leader" {
-		query += ` OR EXISTS (
-				SELECT 1 FROM requirements r
-				WHERE r.id = $1 AND (r.owner_id = CAST($5 AS bigint) OR EXISTS (
-					SELECT 1 FROM requirement_owners ro
-					WHERE ro.requirement_id = r.id AND ro.user_id = CAST($5 AS bigint)
-				) OR r.creator_id = CAST($5 AS bigint))
-			) OR CAST($4 AS bigint) = CAST($5 AS bigint)`
-		err := h.db.QueryRow(query+`)`, task.RequirementID, *u.TeamID, task.AssigneeID, task.CreatorTLID, u.ID).Scan(&allowed)
-		return allowed, err
-	}
-	query += ` OR EXISTS (
-			SELECT 1 FROM requirements r
-			WHERE r.id = $1 AND (r.owner_id = CAST($4 AS bigint) OR EXISTS (
-				SELECT 1 FROM requirement_owners ro
-				WHERE ro.requirement_id = r.id AND ro.user_id = CAST($4 AS bigint)
-			) OR r.creator_id = CAST($4 AS bigint))
-		)`
-	err := h.db.QueryRow(query+`)`, task.RequirementID, *u.TeamID, task.AssigneeID, u.ID).Scan(&allowed)
-	return allowed, err
+	return NewRequirementHandler(h.db, nil).canViewRequirement(u, task.RequirementID)
 }
 
-func (h *TaskHandler) canCreateTask(u *model.User, requirementID string, assigneeID *string) (bool, string, error) {
+func (h *TaskHandler) canCreateTask(u *model.User, requirementID string, responsibleUserIDs []string) (bool, string, error) {
 	if u == nil {
 		return false, "insufficient permissions to create tasks", nil
 	}
 	if requirementID == "" {
 		return false, "requirement_id and title required", nil
 	}
-	if assigneeID == nil || *assigneeID == "" {
-		return false, "assignee_id is required", nil
-	}
 	var status string
-	if err := h.db.QueryRow(`SELECT status FROM requirements WHERE id = $1`, requirementID).Scan(&status); err == sql.ErrNoRows {
-		return false, "requirement not found", nil
-	} else if err != nil {
+	if err := h.db.QueryRow(`SELECT status FROM requirements WHERE id = $1`, requirementID).Scan(&status); err != nil {
 		return false, "requirement not found", err
 	}
 	if status == "cancelled" {
@@ -200,88 +147,31 @@ func (h *TaskHandler) canCreateTask(u *model.User, requirementID string, assigne
 	}
 	switch u.Role {
 	case "admin", "director", "pm":
-		var ok bool
-		err := h.db.QueryRow(`
-			SELECT EXISTS(
-				SELECT 1 FROM users
-				WHERE id = CAST($1 AS bigint)
-				  AND local_enabled = true
-				  AND team_id IS NOT NULL
-				  AND app_role IN ('employee', 'team_leader', 'pm')
-			)`, *assigneeID).Scan(&ok)
+		ok, err := h.validateTaskResponsibleUsers(responsibleUserIDs, nil)
 		if err != nil || !ok {
-			return ok, "assignee not found", err
+			return ok, "responsible users must be enabled task responsible users in scope", err
 		}
 		return true, "", nil
 	case "team_leader":
 		if !hasTeam(u) {
 			return false, "team leader must belong to a team", nil
 		}
-		var ok bool
-		err := h.db.QueryRow(`
-			SELECT EXISTS(
-				SELECT 1
-				WHERE EXISTS (
-					SELECT 1 FROM requirement_teams
-					WHERE requirement_id = $1 AND team_id = $2
-				)
-				OR EXISTS (
-					SELECT 1 FROM requirements
-					WHERE id = $1 AND (owner_id = CAST($3 AS bigint) OR EXISTS (
-						SELECT 1 FROM requirement_owners ro
-						WHERE ro.requirement_id = requirements.id AND ro.user_id = CAST($3 AS bigint)
-					) OR creator_id = CAST($3 AS bigint))
-				)
-			)`, requirementID, *u.TeamID, u.ID).Scan(&ok)
-		if err != nil || !ok {
-			return ok, "requirement is not assigned to your team", err
+		scoped, err := NewRequirementHandler(h.db, nil).canManageRequirement(u, requirementID)
+		if err != nil || !scoped {
+			return scoped, "requirement is not assigned to your team", err
 		}
-		err = h.db.QueryRow(`
-			SELECT EXISTS(
-				SELECT 1 FROM users
-				WHERE id = CAST($1 AS bigint)
-				  AND local_enabled = true
-				  AND app_role IN ('employee', 'team_leader', 'pm')
-				  AND team_id = $2
-			)`, *assigneeID, *u.TeamID).Scan(&ok)
+		ok, err := h.validateTaskResponsibleUsers(responsibleUserIDs, u.TeamID)
 		if err != nil || !ok {
-			return ok, "assignee must be an enabled task assignee in your team", err
+			return ok, "responsible users must be enabled task responsible users in your team", err
 		}
 		return true, "", nil
 	case "employee":
-		if *assigneeID != u.ID {
+		if len(responsibleUserIDs) != 1 || responsibleUserIDs[0] != u.ID {
 			return false, "employee can only create tasks assigned to self", nil
 		}
-		var ok bool
-		var err error
-		if hasTeam(u) {
-			err = h.db.QueryRow(`
-				SELECT EXISTS(
-					SELECT 1
-					WHERE EXISTS (
-						SELECT 1 FROM requirement_teams
-						WHERE requirement_id = $1 AND team_id = $2
-					)
-					OR EXISTS (
-						SELECT 1 FROM requirements
-						WHERE id = $1 AND (owner_id = CAST($3 AS bigint) OR EXISTS (
-							SELECT 1 FROM requirement_owners ro
-							WHERE ro.requirement_id = requirements.id AND ro.user_id = CAST($3 AS bigint)
-						) OR creator_id = CAST($3 AS bigint))
-					)
-				)`, requirementID, *u.TeamID, u.ID).Scan(&ok)
-		} else {
-			err = h.db.QueryRow(`
-				SELECT EXISTS(
-					SELECT 1 FROM requirements
-					WHERE id = $1 AND (owner_id = CAST($2 AS bigint) OR EXISTS (
-						SELECT 1 FROM requirement_owners ro
-						WHERE ro.requirement_id = requirements.id AND ro.user_id = CAST($2 AS bigint)
-					) OR creator_id = CAST($2 AS bigint))
-				)`, requirementID, u.ID).Scan(&ok)
-		}
-		if err != nil || !ok {
-			return ok, "requirement is not assigned to your team", err
+		visible, err := NewRequirementHandler(h.db, nil).canViewRequirement(u, requirementID)
+		if err != nil || !visible {
+			return visible, "requirement is not assigned to your team", err
 		}
 		return true, "", nil
 	default:
@@ -293,100 +183,86 @@ func (h *TaskHandler) canManageTask(u *model.User, task taskAccessRecord) (bool,
 	if u == nil {
 		return false, nil
 	}
-	if isGlobalTaskManager(u.Role) {
+	if isGlobalTaskManager(u.Role) || task.CreatorID == u.ID || h.taskHasResponsible(task.ID, u.ID) {
 		return true, nil
 	}
 	if u.Role == "employee" {
-		if task.AssigneeID.Valid && task.AssigneeID.String == u.ID {
-			return true, nil
-		}
-		var allowed bool
-		err := h.db.QueryRow(`
-			SELECT EXISTS(
-				SELECT 1 FROM requirements
-				WHERE id = $1 AND (owner_id = CAST($2 AS bigint) OR EXISTS (
-					SELECT 1 FROM requirement_owners ro
-					WHERE ro.requirement_id = requirements.id AND ro.user_id = CAST($2 AS bigint)
-				) OR creator_id = CAST($2 AS bigint))
-			)`, task.RequirementID, u.ID).Scan(&allowed)
-		return allowed, err
+		return NewRequirementHandler(h.db, nil).canManageRequirement(u, task.RequirementID)
 	}
 	if u.Role != "team_leader" {
 		return false, nil
 	}
-	if !hasTeam(u) {
-		var allowed bool
-		err := h.db.QueryRow(`
-			SELECT EXISTS(
-				SELECT 1 FROM requirements
-				WHERE id = $1 AND (owner_id = CAST($2 AS bigint) OR EXISTS (
-					SELECT 1 FROM requirement_owners ro
-					WHERE ro.requirement_id = requirements.id AND ro.user_id = CAST($2 AS bigint)
-				) OR creator_id = CAST($2 AS bigint))
-			)`, task.RequirementID, u.ID).Scan(&allowed)
-		return allowed, err
+	if hasTeam(u) && h.taskHasResponsibleInTeam(task.ID, *u.TeamID) {
+		return true, nil
 	}
-	var allowed bool
-	err := h.db.QueryRow(`
-		SELECT EXISTS(
-			SELECT 1
-			WHERE CAST($1 AS bigint) = CAST($2 AS bigint)
-			   OR EXISTS(
-					SELECT 1 FROM users assignee
-					WHERE assignee.id = CAST($3 AS bigint) AND assignee.team_id = $4
-			   )
-			   OR EXISTS(
-					SELECT 1 FROM requirement_teams rt
-					WHERE rt.requirement_id = $5 AND rt.team_id = $4
-			   )
-			   OR EXISTS(
-					SELECT 1 FROM requirements r
-					WHERE r.id = $5 AND (r.owner_id = CAST($2 AS bigint) OR EXISTS (
-						SELECT 1 FROM requirement_owners ro
-						WHERE ro.requirement_id = r.id AND ro.user_id = CAST($2 AS bigint)
-					) OR r.creator_id = CAST($2 AS bigint))
-			   )
-		)`, task.CreatorTLID, u.ID, task.AssigneeID, *u.TeamID, task.RequirementID).Scan(&allowed)
-	return allowed, err
+	return NewRequirementHandler(h.db, nil).canManageRequirement(u, task.RequirementID)
 }
 
-func (h *TaskHandler) canReassignTask(u *model.User, assigneeID *string) (bool, string, error) {
+func (h *TaskHandler) canReassignTask(u *model.User, responsibleUserIDs []string) (bool, string, error) {
 	if u == nil {
 		return false, "insufficient permissions to reassign task", nil
 	}
 	if u.Role == "employee" {
 		return false, "employee cannot reassign tasks", nil
 	}
-	if assigneeID == nil || *assigneeID == "" {
+	if isGlobalTaskManager(u.Role) {
+		ok, err := h.validateTaskResponsibleUsers(responsibleUserIDs, nil)
+		if err != nil || !ok {
+			return ok, "responsible users must be enabled task responsible users in scope", err
+		}
 		return true, "", nil
 	}
+	if u.Role == "team_leader" && hasTeam(u) {
+		ok, err := h.validateTaskResponsibleUsers(responsibleUserIDs, u.TeamID)
+		if err != nil || !ok {
+			return ok, "responsible users must be enabled task responsible users in your team", err
+		}
+		return true, "", nil
+	}
+	return false, "insufficient permissions to reassign task", nil
+}
+
+func (h *TaskHandler) validateTaskResponsibleUsers(responsibleUserIDs []string, teamID *string) (bool, error) {
+	for _, responsibleUserID := range responsibleUserIDs {
+		var ok bool
+		query := `
+			SELECT EXISTS(
+				SELECT 1 FROM users
+				WHERE id = CAST($1 AS bigint)
+				  AND local_enabled = true
+				  AND app_role IN ('employee', 'team_leader', 'pm', 'director')`
+		args := []any{responsibleUserID}
+		if teamID != nil {
+			query += ` AND team_id = $2`
+			args = append(args, *teamID)
+		}
+		query += `)`
+		if err := h.db.QueryRow(query, args...).Scan(&ok); err != nil || !ok {
+			return ok, err
+		}
+	}
+	return true, nil
+}
+
+func (h *TaskHandler) taskHasResponsible(taskID, userID string) bool {
 	var ok bool
-	var err error
-	if isGlobalTaskManager(u.Role) {
-		err = h.db.QueryRow(`
-			SELECT EXISTS(
-				SELECT 1 FROM users
-				WHERE id = CAST($1 AS bigint)
-				  AND local_enabled = true
-				  AND team_id IS NOT NULL
-				  AND app_role IN ('employee', 'team_leader', 'pm')
-			)`, *assigneeID).Scan(&ok)
-	} else if u.Role == "team_leader" && hasTeam(u) {
-		err = h.db.QueryRow(`
-			SELECT EXISTS(
-				SELECT 1 FROM users
-				WHERE id = CAST($1 AS bigint)
-				  AND local_enabled = true
-				  AND app_role IN ('employee', 'team_leader', 'pm')
-				  AND team_id = $2
-			)`, *assigneeID, *u.TeamID).Scan(&ok)
-	} else {
-		return false, "insufficient permissions to reassign task", nil
-	}
-	if err != nil || !ok {
-		return ok, "assignee must be an enabled task assignee in scope", err
-	}
-	return true, "", nil
+	_ = h.db.QueryRow(`
+		SELECT EXISTS(
+			SELECT 1 FROM task_responsibles
+			WHERE task_id = $1 AND user_id = CAST($2 AS bigint)
+		)`, taskID, userID).Scan(&ok)
+	return ok
+}
+
+func (h *TaskHandler) taskHasResponsibleInTeam(taskID, teamID string) bool {
+	var ok bool
+	_ = h.db.QueryRow(`
+		SELECT EXISTS(
+			SELECT 1 FROM task_responsibles tr
+			JOIN users u ON u.id = tr.user_id
+			WHERE tr.task_id = $1 AND u.team_id = $2
+		)`, taskID, teamID).Scan(&ok)
+	return ok
 }
 
 func (h *RequirementHandler) applyRequirementPermissions(req *model.Requirement, u *model.User) {
@@ -396,16 +272,14 @@ func (h *RequirementHandler) applyRequirementPermissions(req *model.Requirement,
 	manageable, _ := h.canManageRequirement(u, req.ID)
 	canCreate := false
 	if req.Status != "cancelled" {
-		isOwner := containsString(req.OwnerIDs, u.ID) || (req.OwnerID != nil && *req.OwnerID == u.ID)
+		isResponsible := containsString(req.ResponsibleUserIDs, u.ID)
 		isCreator := req.CreatorID == u.ID
 		if isGlobalTaskManager(u.Role) {
 			canCreate = true
-		} else if isOwner || isCreator {
+		} else if isResponsible || isCreator {
 			canCreate = true
-		} else if u.Role == "team_leader" && hasTeam(u) {
-			canCreate = containsString(req.TeamIDs, *u.TeamID)
-		} else if u.Role == "employee" && hasTeam(u) {
-			canCreate = containsString(req.TeamIDs, *u.TeamID)
+		} else if hasTeam(u) && containsString(req.TeamIDs, *u.TeamID) {
+			canCreate = true
 		}
 	}
 	req.CanUpdate = manageable
@@ -420,10 +294,7 @@ func (h *TaskHandler) applyTaskPermissions(t *model.Task, u *model.User) {
 	if u == nil {
 		return
 	}
-	record := taskAccessRecord{ID: t.ID, RequirementID: t.RequirementID, CreatorTLID: t.CreatorTLID}
-	if t.AssigneeID != nil {
-		record.AssigneeID = sql.NullString{String: *t.AssigneeID, Valid: true}
-	}
+	record := taskAccessRecord{ID: t.ID, RequirementID: t.RequirementID, CreatorID: t.CreatorID}
 	manageable, _ := h.canManageTask(u, record)
 	reassignable := false
 	if manageable && u.Role != "employee" {

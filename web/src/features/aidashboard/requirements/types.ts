@@ -5,7 +5,7 @@ import type {
   Requirement,
   RequirementPriority as ApiRequirementPriority,
   RequirementFollowSummaryDTO,
-  RequirementOwnerDTO,
+  ResponsibleUserDTO,
   RequirementRiskSummaryDTO,
   RequirementStatus,
   Task,
@@ -46,12 +46,8 @@ export interface BoardRequirement {
   creator_id: string;
   creator_name: string;
   creator_role: string;
-  owner_ids: string[];
-  owners: RequirementOwnerDTO[];
-  owner_id?: string;
-  owner_name?: string;
-  owner_team_id?: string;
-  owner_team_name?: string;
+  responsible_user_ids: string[];
+  responsible_users: ResponsibleUserDTO[];
   status: RequirementStage;
   priority: RequirementPriority;
   progress: number;
@@ -80,10 +76,11 @@ export interface BoardTask {
   requirement_id: string;
   requirement_title: string;
   title: string;
-  creator_tl_id: string;
+  creator_id: string;
+  creator_name: string;
+  responsible_user_ids: string[];
+  responsible_users: ResponsibleUserDTO[];
   acceptance_criteria: string[];
-  assignee_id?: string;
-  assignee_name?: string;
   status: BoardTaskStatus;
   priority: BoardTaskPriority;
   progress: number;
@@ -109,8 +106,7 @@ export interface CreateBoardRequirementInput {
   description: string;
   priority: RequirementPriority;
   deadline?: string;
-  owner_ids?: string[];
-  owner_id?: string;
+  responsible_user_ids?: string[];
   team_ids?: string[];
   feishu_doc_url?: string;
   acceptance_criteria: string[];
@@ -123,9 +119,7 @@ export interface UpdateBoardRequirementInput {
   status?: RequirementStage;
   deadline?: string;
   feishu_doc_url?: string;
-  owner_ids?: string[];
-  owner_id?: string;
-  clear_owner?: boolean;
+  responsible_user_ids?: string[];
   team_ids?: string[];
   acceptance_criteria?: string[];
   base_version: number;
@@ -135,7 +129,7 @@ export interface CreateBoardTaskInput {
   requirement_id: string;
   title: string;
   acceptance_criteria: string[];
-  assignee_id?: string;
+  responsible_user_ids?: string[];
   priority: BoardTaskPriority;
   due_date?: string;
   dependency_task_ids?: string[];
@@ -143,7 +137,7 @@ export interface CreateBoardTaskInput {
 
 export interface UpdateBoardTaskInput {
   title?: string;
-  assignee_id?: string;
+  responsible_user_ids?: string[];
   status?: BoardTaskStatus;
   priority?: BoardTaskPriority;
   progress?: number;

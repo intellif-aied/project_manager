@@ -76,21 +76,17 @@ func (h *DashboardHandler) MyItems(w http.ResponseWriter, r *http.Request) {
 				WHERE f.user_id = $1 AND f.target_type = 'requirement' AND f.target_id = r.id
 			) AS followed_by_me,
 			(r.creator_id = $1) AS created_by_me,
-			(
-				COALESCE(r.owner_id = $1, false)
-				OR EXISTS (
-					SELECT 1 FROM requirement_owners ro
-					WHERE ro.requirement_id = r.id AND ro.user_id = $1
-				)
+			EXISTS (
+				SELECT 1 FROM requirement_responsibles rr
+				WHERE rr.requirement_id = r.id AND rr.user_id = $1
 			) AS assigned_to_me
 		FROM requirements r
 		WHERE r.status NOT IN ('completed', 'cancelled')
 			AND (
 				r.creator_id = $1
-				OR r.owner_id = $1
 				OR EXISTS (
-					SELECT 1 FROM requirement_owners ro
-					WHERE ro.requirement_id = r.id AND ro.user_id = $1
+					SELECT 1 FROM requirement_responsibles rr
+					WHERE rr.requirement_id = r.id AND rr.user_id = $1
 				)
 				OR EXISTS (
 					SELECT 1 FROM user_follows f
@@ -130,15 +126,21 @@ func (h *DashboardHandler) MyItems(w http.ResponseWriter, r *http.Request) {
 				SELECT 1 FROM user_follows f
 				WHERE f.user_id = $1 AND f.target_type = 'task' AND f.target_id = t.id
 			) AS followed_by_me,
-			(t.creator_tl_id = $1) AS created_by_me,
-			COALESCE(t.assignee_id = $1, false) AS assigned_to_me
+			(t.creator_id = $1) AS created_by_me,
+			EXISTS (
+				SELECT 1 FROM task_responsibles tr
+				WHERE tr.task_id = t.id AND tr.user_id = $1
+			) AS assigned_to_me
 		FROM tasks t
 		JOIN requirements r ON r.id = t.requirement_id
 		WHERE t.status <> 'done'
 			AND r.status NOT IN ('completed', 'cancelled')
 			AND (
-				t.creator_tl_id = $1
-				OR t.assignee_id = $1
+				t.creator_id = $1
+				OR EXISTS (
+					SELECT 1 FROM task_responsibles tr
+					WHERE tr.task_id = t.id AND tr.user_id = $1
+				)
 				OR EXISTS (
 					SELECT 1 FROM user_follows f
 					WHERE f.user_id = $1 AND f.target_type = 'task' AND f.target_id = t.id
@@ -216,21 +218,24 @@ func (h *DashboardHandler) requirementFollowItem(id, userID string) (model.Dashb
 	attention := h.followAttention("requirement", req.ID)
 	url := fmt.Sprintf("/requirements?requirementId=%s", req.ID)
 	return model.DashboardFollowItem{
-		Key:            "requirement:" + req.ID,
-		Type:           "需求",
-		Title:          req.Title,
-		RequirementID:  req.ID,
-		Owner:          fallback(req.CreatorName, "未分配"),
-		Status:         requirementStatusLabel(req.Status),
-		Deadline:       displayDate(req.Deadline),
-		Risk:           requirementRiskLabel(req.RiskSummary),
-		Activity:       recentUpdateLabel(updatedAt),
-		AttentionScore: attention.score,
-		AttentionLevel: attentionLevel(attention.score),
-		FollowerCount:  attention.count,
-		RiskPriority:   requirementRiskPriority(req.RiskSummary),
-		SortDueDate:    req.Deadline,
-		SortUpdatedAt:  updatedAt,
+		Key:                         "requirement:" + req.ID,
+		Type:                        "需求",
+		Title:                       req.Title,
+		RequirementID:               req.ID,
+		CreatorID:                   req.CreatorID,
+		CreatorName:                 req.CreatorName,
+		RequirementResponsibleIDs:   req.ResponsibleUserIDs,
+		RequirementResponsibleNames: responsibleUserNames(req.ResponsibleUsers),
+		Status:                      requirementStatusLabel(req.Status),
+		Deadline:                    displayDate(req.Deadline),
+		Risk:                        requirementRiskLabel(req.RiskSummary),
+		Activity:                    recentUpdateLabel(updatedAt),
+		AttentionScore:              attention.score,
+		AttentionLevel:              attentionLevel(attention.score),
+		FollowerCount:               attention.count,
+		RiskPriority:                requirementRiskPriority(req.RiskSummary),
+		SortDueDate:                 req.Deadline,
+		SortUpdatedAt:               updatedAt,
 		Navigation: model.DashboardNavigationTarget{
 			RequirementID: req.ID,
 			URL:           url,
@@ -257,24 +262,27 @@ func (h *DashboardHandler) taskFollowItem(id, userID string) (model.DashboardFol
 	}
 	attention := h.followAttention("task", task.ID)
 	return model.DashboardFollowItem{
-		Key:            "task:" + task.ID,
-		Type:           "任务",
-		Title:          task.Title,
-		Requirement:    task.RequirementTitle,
-		RequirementID:  task.RequirementID,
-		TaskID:         &task.ID,
-		Owner:          pointerFallback(task.AssigneeName, "未分配"),
-		Status:         taskStatusLabel(task.DisplayStatus),
-		Deadline:       displayDate(task.DueDate),
-		Risk:           taskRiskLabel(task.RiskTypes),
-		Dependency:     dependency,
-		Activity:       recentUpdateLabel(task.UpdatedAt),
-		AttentionScore: attention.score,
-		AttentionLevel: attentionLevel(attention.score),
-		FollowerCount:  attention.count,
-		RiskPriority:   taskRiskPriority(task.RiskTypes),
-		SortDueDate:    task.DueDate,
-		SortUpdatedAt:  task.UpdatedAt,
+		Key:                  "task:" + task.ID,
+		Type:                 "任务",
+		Title:                task.Title,
+		Requirement:          task.RequirementTitle,
+		RequirementID:        task.RequirementID,
+		TaskID:               &task.ID,
+		CreatorID:            task.CreatorID,
+		CreatorName:          task.CreatorName,
+		TaskResponsibleIDs:   task.ResponsibleUserIDs,
+		TaskResponsibleNames: responsibleUserNames(task.ResponsibleUsers),
+		Status:               taskStatusLabel(task.DisplayStatus),
+		Deadline:             displayDate(task.DueDate),
+		Risk:                 taskRiskLabel(task.RiskTypes),
+		Dependency:           dependency,
+		Activity:             recentUpdateLabel(task.UpdatedAt),
+		AttentionScore:       attention.score,
+		AttentionLevel:       attentionLevel(attention.score),
+		FollowerCount:        attention.count,
+		RiskPriority:         taskRiskPriority(task.RiskTypes),
+		SortDueDate:          task.DueDate,
+		SortUpdatedAt:        task.UpdatedAt,
 		Navigation: model.DashboardNavigationTarget{
 			RequirementID: task.RequirementID,
 			TaskID:        &task.ID,
@@ -286,12 +294,12 @@ func (h *DashboardHandler) taskFollowItem(id, userID string) (model.DashboardFol
 func (h *DashboardHandler) loadTask(id, userID string) (model.Task, error) {
 	row := h.db.QueryRow(`
 		SELECT t.id, t.requirement_id, r.title, t.title,
-			COALESCE(t.acceptance_criteria, ARRAY[]::text[]), t.assignee_id, COALESCE(COALESCE(NULLIF(a.nickname,''), a.username), ''),
-			t.creator_tl_id, t.status, t.priority, t.progress, t.due_date,
+			COALESCE(t.acceptance_criteria, ARRAY[]::text[]),
+			t.creator_id::text, COALESCE(COALESCE(NULLIF(c.nickname,''), c.username), ''), t.status, t.priority, t.progress, t.due_date,
 			t.completed_at, t.created_at, t.updated_at, t.version
 		FROM tasks t
 		JOIN requirements r ON r.id = t.requirement_id
-		LEFT JOIN users a ON a.id = t.assignee_id
+		JOIN users c ON c.id = t.creator_id
 		WHERE t.id = $1`, id)
 	task, err := scanProjectionTask(row)
 	if err != nil {
@@ -308,11 +316,11 @@ type rowScanner interface {
 func scanProjectionTask(row rowScanner) (model.Task, error) {
 	var task model.Task
 	var ac pq.StringArray
-	var assigneeID, assigneeName, dueDate sql.NullString
+	var dueDate sql.NullString
 	var completedAt sql.NullTime
 	err := row.Scan(
 		&task.ID, &task.RequirementID, &task.RequirementTitle, &task.Title,
-		&ac, &assigneeID, &assigneeName, &task.CreatorTLID,
+		&ac, &task.CreatorID, &task.CreatorName,
 		&task.Status, &task.Priority, &task.Progress, &dueDate,
 		&completedAt, &task.CreatedAt, &task.UpdatedAt, &task.Version,
 	)
@@ -320,8 +328,6 @@ func scanProjectionTask(row rowScanner) (model.Task, error) {
 		return model.Task{}, err
 	}
 	task.AcceptanceCriteria = []string(ac)
-	task.AssigneeID = nullStringPtr(assigneeID)
-	task.AssigneeName = nullStringPtr(assigneeName)
 	task.DueDate = nullStringPtr(dueDate)
 	task.CompletedAt = nullTimePtr(completedAt)
 	return task, nil
@@ -366,6 +372,10 @@ func (h *DashboardHandler) loadRequirementRiskFacts(userID string, now time.Time
 			AND (
 				r.creator_id = $1
 				OR EXISTS (
+					SELECT 1 FROM requirement_responsibles rr
+					WHERE rr.requirement_id = r.id AND rr.user_id = $1
+				)
+				OR EXISTS (
 					SELECT 1 FROM user_follows f
 					WHERE f.user_id = $1
 						AND f.target_type = 'requirement'
@@ -393,17 +403,24 @@ func (h *DashboardHandler) loadRequirementRiskFacts(userID string, now time.Time
 func (h *DashboardHandler) loadTaskRiskFacts(u *model.User, now time.Time) ([]dashboardTaskRiskFact, error) {
 	rows, err := h.db.Query(`
 		SELECT t.id, t.requirement_id, r.title, t.title,
-			COALESCE(t.acceptance_criteria, ARRAY[]::text[]), t.assignee_id, COALESCE(COALESCE(NULLIF(a.nickname,''), a.username), ''),
-			t.creator_tl_id, t.status, t.priority, t.progress, t.due_date,
+			COALESCE(t.acceptance_criteria, ARRAY[]::text[]),
+			t.creator_id::text, COALESCE(COALESCE(NULLIF(c.nickname,''), c.username), ''), t.status, t.priority, t.progress, t.due_date,
 			t.completed_at, t.created_at, t.updated_at, t.version
 		FROM tasks t
 		JOIN requirements r ON r.id = t.requirement_id
-		LEFT JOIN users a ON a.id = t.assignee_id
+		JOIN users c ON c.id = t.creator_id
 		WHERE t.status <> 'done' AND r.status NOT IN ('completed', 'cancelled')
 		AND (
-			t.assignee_id = $1
-			OR t.creator_tl_id = $1
+			EXISTS (
+				SELECT 1 FROM task_responsibles tr
+				WHERE tr.task_id = t.id AND tr.user_id = $1
+			)
+			OR t.creator_id = $1
 			OR r.creator_id = $1
+			OR EXISTS (
+				SELECT 1 FROM requirement_responsibles rr
+				WHERE rr.requirement_id = r.id AND rr.user_id = $1
+			)
 			OR EXISTS (
 				SELECT 1 FROM user_follows f
 				WHERE f.user_id = $1
@@ -912,6 +929,26 @@ func taskRiskLabel(risks []string) string {
 		}
 	}
 	return "正常推进"
+}
+
+func responsibleUserNames(users []model.ResponsibleUser) []string {
+	names := make([]string, 0, len(users))
+	for _, user := range users {
+		if strings.TrimSpace(user.Name) == "" {
+			continue
+		}
+		names = append(names, user.Name)
+	}
+	return names
+}
+
+func firstNonEmpty(values []string, fallbackValue string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return fallbackValue
 }
 
 func requirementStatusLabel(status string) string {

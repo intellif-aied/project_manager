@@ -123,8 +123,7 @@ export const createRequirement = (data: {
   description: string;
   priority: string;
   deadline?: string;
-  owner_ids?: string[];
-  owner_id?: string;
+  responsible_user_ids?: string[];
   team_ids?: string[];
   feishu_doc_url?: string;
   acceptance_criteria?: string[];
@@ -182,7 +181,7 @@ export const createTask = (data: {
   requirement_id: string;
   title: string;
   acceptance_criteria?: string[];
-  assignee_id?: string;
+  responsible_user_ids?: string[];
   priority: string;
   due_date?: string;
   depends_on_ids?: string[];

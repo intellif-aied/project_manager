@@ -49,3 +49,4 @@ aida_release_*.tar.gz
 __pycache__/
 *.pyc
 doc/db-backups/
+web/test-results/

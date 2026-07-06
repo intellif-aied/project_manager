@@ -59,7 +59,7 @@ export interface RequirementRiskSummaryDTO {
 
 export type AttentionLevel = "normal" | "notable" | "important" | "high";
 
-export interface RequirementOwnerDTO {
+export interface ResponsibleUserDTO {
   id: string;
   name: string;
   role: string;
@@ -82,12 +82,8 @@ export interface Requirement {
   creator_id: string;
   creator_name: string;
   creator_role: string;
-  owner_ids?: string[];
-  owners?: RequirementOwnerDTO[];
-  owner_id?: string;
-  owner_name?: string;
-  owner_team_id?: string;
-  owner_team_name?: string;
+  responsible_user_ids?: string[];
+  responsible_users?: ResponsibleUserDTO[];
   status: RequirementStatus;
   priority: RequirementPriority;
   progress: number;
@@ -139,9 +135,10 @@ export interface Task {
   requirement_title?: string;
   title: string;
   acceptance_criteria: string[];
-  assignee_id?: string;
-  assignee_name?: string;
-  creator_tl_id: string;
+  creator_id: string;
+  creator_name: string;
+  responsible_user_ids?: string[];
+  responsible_users?: ResponsibleUserDTO[];
   status: TaskStatus;
   display_status: TaskDisplayStatus;
   priority: TaskPriority;
@@ -225,7 +222,13 @@ export interface DashboardFollowItemDTO {
   requirement?: string;
   requirementId: string;
   taskId?: string;
-  owner: string;
+  creatorId?: string;
+  creatorName?: string;
+  requirementResponsibleIds?: string[];
+  requirementResponsibleNames?: string[];
+  taskResponsibleIds?: string[];
+  taskResponsibleNames?: string[];
+  responsibleNames?: string[];
   status: string;
   deadline: string;
   risk: string;
@@ -856,8 +859,8 @@ export interface WeeklyTaskSource {
   task_title: string;
   requirement_id: string;
   requirement_title: string;
-  assignee_id?: string;
-  assignee_name: string;
+  responsible_user_ids?: string[];
+  responsible_names?: string[];
   status: string;
   priority: string;
   due_date?: string;

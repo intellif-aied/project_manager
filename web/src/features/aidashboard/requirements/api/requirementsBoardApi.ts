@@ -45,24 +45,10 @@ import type {
 } from "../types";
 
 function normalizeRequirement(requirement: Requirement): MockRequirement {
-  const owners =
-    requirement.owners && requirement.owners.length
-      ? requirement.owners
-      : requirement.owner_id
-        ? [
-            {
-              id: requirement.owner_id,
-              name: requirement.owner_name ?? requirement.owner_id,
-              role: "",
-              team_id: requirement.owner_team_id,
-              team_name: requirement.owner_team_name
-            }
-          ]
-        : [];
-  const ownerIds =
-    requirement.owner_ids && requirement.owner_ids.length
-      ? requirement.owner_ids
-      : owners.map((owner) => owner.id);
+  const responsibles = requirement.responsible_users ?? [];
+  const responsibleIds = requirement.responsible_user_ids?.length
+    ? requirement.responsible_user_ids
+    : responsibles.map((responsible) => responsible.id);
   return {
     id: requirement.id,
     title: requirement.title,
@@ -72,12 +58,8 @@ function normalizeRequirement(requirement: Requirement): MockRequirement {
     creator_id: requirement.creator_id,
     creator_name: requirement.creator_name,
     creator_role: requirement.creator_role,
-    owner_ids: ownerIds,
-    owners,
-    owner_id: requirement.owner_id,
-    owner_name: requirement.owner_name,
-    owner_team_id: requirement.owner_team_id,
-    owner_team_name: requirement.owner_team_name,
+    responsible_user_ids: responsibleIds,
+    responsible_users: responsibles,
     status: requirement.status,
     priority: requirement.priority,
     progress: requirement.progress ?? 0,
@@ -112,15 +94,20 @@ function normalizeRequirement(requirement: Requirement): MockRequirement {
 }
 
 function normalizeTask(task: Task): MockTask {
+  const responsibles = task.responsible_users ?? [];
+  const responsibleIds = task.responsible_user_ids?.length
+    ? task.responsible_user_ids
+    : responsibles.map((responsible) => responsible.id);
   return {
     id: task.id,
     requirement_id: task.requirement_id,
     requirement_title: task.requirement_title ?? "",
     title: task.title,
-    creator_tl_id: task.creator_tl_id,
+    creator_id: task.creator_id,
+    creator_name: task.creator_name,
+    responsible_user_ids: responsibleIds,
+    responsible_users: responsibles,
     acceptance_criteria: task.acceptance_criteria ?? [],
-    assignee_id: task.assignee_id,
-    assignee_name: task.assignee_name,
     status: task.status as MockTaskStatus,
     priority: task.priority,
     progress: task.progress ?? 0,
@@ -159,6 +146,20 @@ function parseSessionTokenSourceId(sourceId: string) {
   return { sessionId, activityDate: activityDate || undefined };
 }
 
+function requirementResponsiblePayload<T extends CreateMockRequirementInput | UpdateBoardRequirementInput>(input: T) {
+  return {
+    ...input,
+    responsible_user_ids: input.responsible_user_ids ?? []
+  };
+}
+
+function taskResponsiblePayload<T extends CreateMockTaskInput | UpdateBoardTaskInput>(input: T) {
+  return {
+    ...input,
+    responsible_user_ids: input.responsible_user_ids ?? []
+  };
+}
+
 async function getNormalizedTask(taskId: string) {
   return normalizeTask(await fetchTask(taskId));
 }
@@ -177,11 +178,11 @@ export const requirementsBoardApi = {
   },
 
   async createRequirement(input: CreateMockRequirementInput) {
-    return normalizeRequirement(await createRequirement(input));
+    return normalizeRequirement(await createRequirement(requirementResponsiblePayload(input)));
   },
 
   async updateRequirement(id: string, input: UpdateBoardRequirementInput) {
-    return normalizeRequirement(await updateRequirement(id, input as unknown as Record<string, unknown>));
+    return normalizeRequirement(await updateRequirement(id, requirementResponsiblePayload(input) as unknown as Record<string, unknown>));
   },
 
   async updateRequirementStage(id: string, status: RequirementStage, baseVersion: number) {
@@ -222,20 +223,21 @@ export const requirementsBoardApi = {
   },
 
   async createTask(input: CreateMockTaskInput) {
+    const payload = taskResponsiblePayload(input);
     const created = await createTask({
-      requirement_id: input.requirement_id,
-      title: input.title,
-      acceptance_criteria: input.acceptance_criteria ?? [],
-      assignee_id: input.assignee_id,
-      priority: input.priority,
-      due_date: input.due_date,
-      depends_on_ids: input.dependency_task_ids
+      requirement_id: payload.requirement_id,
+      title: payload.title,
+      acceptance_criteria: payload.acceptance_criteria ?? [],
+      responsible_user_ids: payload.responsible_user_ids,
+      priority: payload.priority,
+      due_date: payload.due_date,
+      depends_on_ids: payload.dependency_task_ids
     });
     return getNormalizedTask(created.id);
   },
 
   async updateTask(id: string, input: UpdateBoardTaskInput) {
-    return normalizeTask(await updateTask(id, input as unknown as Record<string, unknown>));
+    return normalizeTask(await updateTask(id, taskResponsiblePayload(input) as unknown as Record<string, unknown>));
   },
 
   async deleteTask(id: string, baseVersion: number) {

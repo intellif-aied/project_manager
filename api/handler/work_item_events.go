@@ -360,25 +360,25 @@ func (h *TaskHandler) recordTaskChange(ctx context.Context, actor *model.User, t
 }
 
 var requirementEventLabels = map[string]string{
-	"title":               "标题",
-	"description":         "描述",
-	"feishu_doc_url":      "飞书文档",
-	"priority":            "优先级",
-	"status":              "阶段",
-	"deadline":            "截止日期",
-	"owner_ids":           "负责人",
-	"team_ids":            "参与团队",
-	"acceptance_criteria": "验收标准",
+	"title":                "标题",
+	"description":          "描述",
+	"feishu_doc_url":       "飞书文档",
+	"priority":             "优先级",
+	"status":               "阶段",
+	"deadline":             "截止日期",
+	"responsible_user_ids": "负责人",
+	"team_ids":             "参与团队",
+	"acceptance_criteria":  "验收标准",
 }
 
 var taskEventLabels = map[string]string{
-	"title":               "标题",
-	"priority":            "优先级",
-	"status":              "状态",
-	"progress":            "进度",
-	"due_date":            "截止日期",
-	"assignee_id":         "负责人",
-	"acceptance_criteria": "验收标准",
+	"title":                "标题",
+	"priority":             "优先级",
+	"status":               "状态",
+	"progress":             "进度",
+	"due_date":             "截止日期",
+	"responsible_user_ids": "负责人",
+	"acceptance_criteria":  "验收标准",
 }
 
 func loadRequirementEventState(db *sql.DB, requirementID string) (map[string]any, error) {
@@ -392,48 +392,56 @@ func loadRequirementEventState(db *sql.DB, requirementID string) (map[string]any
 		return nil, err
 	}
 	return map[string]any{
-		"title":               title,
-		"description":         description,
-		"feishu_doc_url":      nullStringValue(feishuURL),
-		"priority":            priority,
-		"status":              status,
-		"deadline":            nullStringValue(deadline),
-		"owner_ids":           loadRequirementOwnerIDs(db, requirementID),
-		"team_ids":            loadRequirementTeamIDs(db, requirementID),
-		"acceptance_criteria": parseTextArray(acStr),
+		"title":                title,
+		"description":          description,
+		"feishu_doc_url":       nullStringValue(feishuURL),
+		"priority":             priority,
+		"status":               status,
+		"deadline":             nullStringValue(deadline),
+		"responsible_user_ids": loadRequirementResponsibleUserIDs(db, requirementID),
+		"team_ids":             loadRequirementTeamIDs(db, requirementID),
+		"acceptance_criteria":  parseTextArray(acStr),
 	}, nil
 }
 
 func loadTaskEventState(db *sql.DB, taskID string) (map[string]any, error) {
 	var requirementID, title, status, priority string
 	var ac pq.StringArray
-	var assigneeID, dueDate sql.NullString
+	var dueDate sql.NullString
 	var progress int
 	if err := db.QueryRow(`
 		SELECT requirement_id::text, title, COALESCE(acceptance_criteria, ARRAY[]::text[]),
-			assignee_id::text, status, priority, progress, due_date::text
+			status, priority, progress, due_date::text
 		FROM tasks
-		WHERE id = $1`, taskID).Scan(&requirementID, &title, &ac, &assigneeID, &status, &priority, &progress, &dueDate); err != nil {
+		WHERE id = $1`, taskID).Scan(&requirementID, &title, &ac, &status, &priority, &progress, &dueDate); err != nil {
 		return nil, err
 	}
 	return map[string]any{
-		"requirement_id":      requirementID,
-		"title":               title,
-		"acceptance_criteria": []string(ac),
-		"assignee_id":         nullStringValue(assigneeID),
-		"status":              status,
-		"priority":            priority,
-		"progress":            progress,
-		"due_date":            nullStringValue(dueDate),
+		"requirement_id":       requirementID,
+		"title":                title,
+		"acceptance_criteria":  []string(ac),
+		"responsible_user_ids": loadTaskResponsibleUserIDs(db, taskID),
+		"status":               status,
+		"priority":             priority,
+		"progress":             progress,
+		"due_date":             nullStringValue(dueDate),
 	}, nil
 }
 
-func loadRequirementOwnerIDs(db *sql.DB, requirementID string) []string {
+func loadRequirementResponsibleUserIDs(db *sql.DB, requirementID string) []string {
 	return loadStringColumn(db, `
 		SELECT user_id::text
-		FROM requirement_owners
+		FROM requirement_responsibles
 		WHERE requirement_id = $1
 		ORDER BY created_at, user_id`, requirementID)
+}
+
+func loadTaskResponsibleUserIDs(db *sql.DB, taskID string) []string {
+	return loadStringColumn(db, `
+		SELECT user_id::text
+		FROM task_responsibles
+		WHERE task_id = $1
+		ORDER BY created_at, user_id`, taskID)
 }
 
 func loadRequirementTeamIDs(db *sql.DB, requirementID string) []string {
@@ -489,11 +497,11 @@ func changeEventTitle(prefix string, changed []string) string {
 
 func requirementChangeEventType(changed []string) string {
 	return singleFieldEventType(changed, map[string]string{
-		"status":              "requirement_status_changed",
-		"owner_ids":           "requirement_owner_changed",
-		"team_ids":            "requirement_team_changed",
-		"deadline":            "requirement_deadline_changed",
-		"acceptance_criteria": "requirement_ac_updated",
+		"status":               "requirement_status_changed",
+		"responsible_user_ids": "requirement_responsibles_changed",
+		"team_ids":             "requirement_team_changed",
+		"deadline":             "requirement_deadline_changed",
+		"acceptance_criteria":  "requirement_ac_updated",
 	}, "requirement_updated")
 }
 
@@ -513,11 +521,11 @@ func requirementChangeEvent(changed []string, beforeState map[string]any, afterS
 
 func taskChangeEventType(changed []string) string {
 	return singleFieldEventType(changed, map[string]string{
-		"status":              "task_status_changed",
-		"progress":            "task_progress_changed",
-		"assignee_id":         "task_assignee_changed",
-		"due_date":            "task_deadline_changed",
-		"acceptance_criteria": "task_ac_updated",
+		"status":               "task_status_changed",
+		"progress":             "task_progress_changed",
+		"responsible_user_ids": "task_responsibles_changed",
+		"due_date":             "task_deadline_changed",
+		"acceptance_criteria":  "task_ac_updated",
 	}, "task_updated")
 }
 
@@ -575,27 +583,27 @@ func loadWorkItemEventMetadata(db *sql.DB, itemType string, itemID string) map[s
 
 func requirementEventData(req model.Requirement) map[string]any {
 	return map[string]any{
-		"title":               req.Title,
-		"description":         req.Description,
-		"feishu_doc_url":      stringValue(req.FeishuDocURL),
-		"priority":            req.Priority,
-		"status":              req.Status,
-		"deadline":            stringValue(req.Deadline),
-		"owner_ids":           req.OwnerIDs,
-		"team_ids":            req.TeamIDs,
-		"acceptance_criteria": req.AcceptanceCriteria,
+		"title":                req.Title,
+		"description":          req.Description,
+		"feishu_doc_url":       stringValue(req.FeishuDocURL),
+		"priority":             req.Priority,
+		"status":               req.Status,
+		"deadline":             stringValue(req.Deadline),
+		"responsible_user_ids": req.ResponsibleUserIDs,
+		"team_ids":             req.TeamIDs,
+		"acceptance_criteria":  req.AcceptanceCriteria,
 	}
 }
 
 func taskEventData(task model.Task) map[string]any {
 	return map[string]any{
-		"requirement_id":      task.RequirementID,
-		"title":               task.Title,
-		"acceptance_criteria": task.AcceptanceCriteria,
-		"assignee_id":         stringValue(task.AssigneeID),
-		"status":              task.Status,
-		"priority":            task.Priority,
-		"progress":            task.Progress,
-		"due_date":            stringValue(task.DueDate),
+		"requirement_id":       task.RequirementID,
+		"title":                task.Title,
+		"acceptance_criteria":  task.AcceptanceCriteria,
+		"responsible_user_ids": task.ResponsibleUserIDs,
+		"status":               task.Status,
+		"priority":             task.Priority,
+		"progress":             task.Progress,
+		"due_date":             stringValue(task.DueDate),
 	}
 }

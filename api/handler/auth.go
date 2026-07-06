@@ -183,18 +183,17 @@ func (h *AuthHandler) ListTaskAssignees(w http.ResponseWriter, r *http.Request) 
 
 	query := userSelectSQL() + `
 		WHERE u.aida_enabled = true
-		  AND u.local_enabled = true
-		  AND u.team_id IS NOT NULL
-		  AND u.app_role IN ('employee', 'team_leader', 'pm')`
+		  AND u.local_enabled = true`
 	args := []any{}
 	switch u.Role {
 	case "admin", "director", "pm":
+		query += ` AND u.app_role IN ('employee', 'team_leader', 'pm', 'director')`
 	case "team_leader":
 		if u.TeamID == nil {
 			writeJSON(w, http.StatusOK, []model.User{})
 			return
 		}
-		query += " AND u.team_id = $1"
+		query += ` AND u.team_id = $1 AND u.app_role IN ('employee', 'team_leader', 'pm', 'director')`
 		args = append(args, *u.TeamID)
 	case "employee":
 		query += " AND u.id = $1"
