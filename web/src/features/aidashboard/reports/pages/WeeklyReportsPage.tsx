@@ -622,7 +622,15 @@ function WeeklyReportEditorModal({
                 <div className="console-report-editor-layout__main">
                   <div className="console-session-modal__section">
                     <strong>报告正文</strong>
-                    <span>暂无报告，可直接填写。</span>
+                    <span>
+                      {editorContent.trim()
+                        ? readOnly
+                          ? "已加载报告内容。"
+                          : "已加载报告，可编辑后保存。"
+                        : readOnly
+                          ? "暂无报告内容"
+                          : "暂无报告，可直接填写。"}
+                    </span>
                   </div>
                   <TextArea
                     rows={18}
