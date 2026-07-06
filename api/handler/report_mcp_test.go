@@ -534,3 +534,88 @@ func TestComputeDailyMissingNormalizesExistingReportDates(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestLoadDailyInventoryExistingRequiresSavedReportContent(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	mock.ExpectQuery("(?s)FROM daily_reports.*status IS NOT NULL.*NULLIF\\(TRIM\\(COALESCE\\(content, ''\\)\\), ''\\) IS NOT NULL").
+		WithArgs("2026-07-06", "2026-07-06", sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "report_date", "generation_mode", "edited"}).
+			AddRow("daily-1", "u-1", "2026-07-06", "managed_agent", false))
+
+	got, err := loadDailyInventoryExisting(context.Background(), db, "personal", &resolvedScope{UserIDs: []string{"u-1", "u-2"}}, "2026-07-06", "2026-07-06")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("existing len = %d, want 1: %#v", len(got), got)
+	}
+	if got[0]["report_id"] != "daily-1" || got[0]["product_status"] != "ai_generated" {
+		t.Fatalf("unexpected inventory row: %#v", got[0])
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestComputeMissingNormalizesInventoryPeriodKeys(t *testing.T) {
+	missing := computeMissing(
+		[]map[string]any{
+			{"owner_id": "u-1", "dates": []string{"2026-07-02", "2026-07-03"}},
+		},
+		[]map[string]any{
+			{"owner_id": "u-1", "date": "2026-07-02T00:00:00Z", "report_id": "daily-1"},
+		},
+	)
+	if len(missing) != 1 {
+		t.Fatalf("missing len = %d, want 1: %#v", len(missing), missing)
+	}
+	if missing[0]["date"] != "2026-07-03" {
+		t.Fatalf("missing date = %#v, want 2026-07-03", missing[0]["date"])
+	}
+}
+
+func TestComputeMissingPreservesTeamMetadata(t *testing.T) {
+	missing := computeMissing(
+		[]map[string]any{
+			{"owner_type": "team", "owner_id": "team-1", "team_name": "小组A", "dates": []string{"2026-07-02"}},
+		},
+		nil,
+	)
+	if len(missing) != 1 {
+		t.Fatalf("missing len = %d, want 1: %#v", len(missing), missing)
+	}
+	if missing[0]["owner_type"] != "team" || missing[0]["team_name"] != "小组A" {
+		t.Fatalf("team metadata was not preserved: %#v", missing[0])
+	}
+}
+
+func TestLoadDailyInventoryExpectedIncludesScopedTeams(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	mock.ExpectQuery("SELECT id::text, name FROM teams WHERE id = \\$1 ORDER BY name").
+		WithArgs("team-1").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "name"}).AddRow("team-1", "小组A"))
+
+	got, err := loadDailyInventoryExpected(context.Background(), db, "team", &resolvedScope{Type: "team", TeamID: "team-1"}, "2026-07-02", "2026-07-02")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected len = %d, want 1: %#v", len(got), got)
+	}
+	if got[0]["owner_type"] != "team" || got[0]["owner_id"] != "team-1" || got[0]["team_name"] != "小组A" {
+		t.Fatalf("unexpected expected row: %#v", got[0])
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}

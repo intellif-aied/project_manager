@@ -150,11 +150,20 @@ Do not send period to read-list tools that require date_range or week_range. Do 
 6. Call write_report_result with {"report_type": report_type, "period": period, "target": target, "run_id": run_id, "content": markdown, "summary": optional_summary}.
 7. If generation fails, call write_report_failure with {"report_type": report_type, "period": period, "target": target, "run_id": run_id, "error_message": error_message}.
 
+## Source Priority
+
+- personal_daily: sessions, tasks, and requirements are primary sources.
+- personal_weekly: saved personal daily reports returned by get_daily_reports are the primary source; sessions, tasks, and requirements are supplemental evidence.
+- team_daily / team_weekly: saved personal daily/weekly reports returned by get_daily_reports/get_weekly_reports are the primary source for member work. Sessions, tasks, and requirements are supplemental evidence only when member reports are missing or need clarification.
+- department_daily / department_weekly: saved team daily/weekly reports returned by get_daily_reports/get_weekly_reports are the primary source for team work. Lower-level personal reports and sessions are supplemental evidence only when team reports are missing or need clarification.
+- Token/session statistics are low-priority metrics. Do not make token totals, session counts, or model usage the main body of team or department reports.
+
 ## Output Rules
 
 - The final report content must be non-empty Markdown.
 - If there is insufficient context, say so in the Markdown instead of filling gaps.
 - Missing daily/weekly reports are facts; include them only when relevant to the selected report type.
+- For team and department reports, summarize concrete work content, progress, risks, blockers, and cross-team coordination first; put metrics in a short appendix only when useful.
 - Never expose run_id, MCP URLs, token, credential slots, or internal configuration in the user-facing report.
 `, formatReportTypeList(data.SupportedReportTypes), data.MCPSlug, data.CredentialSlot)
 }

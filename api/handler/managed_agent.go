@@ -1201,6 +1201,7 @@ func defaultReportAgentInstructions(credentialSlot string) string {
 		"Aida Report MCP 已通过 " + credentialSlot + " 凭据槽配置当前用户 Authorization。调用已绑定的 MCP tools，不要手工拼接管理员 token。",
 		"必须使用当前用户身份调用 Aida Report MCP，并尊重 MCP 返回的权限边界和缺失来源事实。",
 		"先调用 get_existing_report 获取已有内容，再根据 report_type 调用 get_sessions/get_daily_reports/get_weekly_reports/get_tasks/get_requirements/get_report_inventory 等原子工具取数；读取工具使用 date_range 或 week_range，写回工具使用 period。若 selected_session_slice_keys 非空，调用 get_sessions 时必须原样传入。",
+		"个人周报优先汇总已保存的个人日报；小组日报/周报优先汇总已保存的成员日报/周报；部门日报/周报优先汇总已保存的小组日报/周报。session、task、requirement 只作为补充证据，不要把 token 或 session 数量统计作为小组/部门报告主体。",
 		"生成成功后调用 write_report_result，传入相同 run_id、report_type、period、target 和 content。",
 		"生成失败时调用 write_report_failure。不要编造 Aida 上下文之外的事实；如果上下文为空，应明确说明暂无记录。",
 	}, "\n")

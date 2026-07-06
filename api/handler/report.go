@@ -1138,14 +1138,14 @@ func (h *ReportHandler) ListTeamMemberReports(w http.ResponseWriter, r *http.Req
 
 	rows, err := h.db.Query(`
 		SELECT u.id, COALESCE(NULLIF(u.nickname,''), u.username),
-			dr.id, dr.submitted_content, dr.submitted_at,
+			dr.id, COALESCE(NULLIF(dr.submitted_content, ''), dr.content, ''), COALESCE(dr.submitted_at, dr.saved_at),
 			CASE WHEN dr.id IS NOT NULL THEN true ELSE false END
 		FROM users u
 		LEFT JOIN daily_reports dr ON dr.user_id = u.id
 			AND dr.report_date = $1
-			AND dr.submitted_at IS NOT NULL
-			AND dr.submitted_content IS NOT NULL
-		WHERE u.team_id = $2 AND u.app_role = 'employee'
+			AND dr.status IS NOT NULL
+			AND NULLIF(TRIM(COALESCE(NULLIF(dr.submitted_content, ''), dr.content, '')), '') IS NOT NULL
+		WHERE u.team_id = $2 AND u.app_role IN ('team_leader', 'employee')
 		ORDER BY COALESCE(NULLIF(u.nickname,''), u.username)`, date, *teamID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -1203,14 +1203,16 @@ func (h *ReportHandler) GetTeamReportSources(w http.ResponseWriter, r *http.Requ
 	}
 
 	rows, err := h.db.Query(`
-		SELECT u.id, COALESCE(NULLIF(u.nickname,''), u.username), dr.id, dr.submitted_content, dr.submitted_at,
+		SELECT u.id, COALESCE(NULLIF(u.nickname,''), u.username), dr.id,
+			COALESCE(NULLIF(dr.submitted_content, ''), dr.content, ''),
+			COALESCE(dr.submitted_at, dr.saved_at),
 			CASE WHEN dr.id IS NOT NULL THEN true ELSE false END
 		FROM users u
 		LEFT JOIN daily_reports dr ON dr.user_id = u.id
 			AND dr.report_date = $1
-			AND dr.submitted_at IS NOT NULL
-			AND dr.submitted_content IS NOT NULL
-		WHERE u.team_id = $2 AND u.app_role = 'employee'
+			AND dr.status IS NOT NULL
+			AND NULLIF(TRIM(COALESCE(NULLIF(dr.submitted_content, ''), dr.content, '')), '') IS NOT NULL
+		WHERE u.team_id = $2 AND u.app_role IN ('team_leader', 'employee')
 		ORDER BY COALESCE(NULLIF(u.nickname,''), u.username)`, date, *teamID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -1669,10 +1671,10 @@ func (h *ReportHandler) loadSubmittedDailyReportIDsByTeam(teamID, reportDate str
 		FROM users u
 		JOIN daily_reports dr ON dr.user_id = u.id
 		WHERE u.team_id = $1
-			AND u.app_role = 'employee'
+			AND u.app_role IN ('team_leader', 'employee')
 			AND dr.report_date = $2
-			AND dr.submitted_at IS NOT NULL
-			AND dr.submitted_content IS NOT NULL
+			AND dr.status IS NOT NULL
+			AND NULLIF(TRIM(COALESCE(NULLIF(dr.submitted_content, ''), dr.content, '')), '') IS NOT NULL
 		ORDER BY COALESCE(NULLIF(u.nickname,''), u.username), dr.created_at`, teamID, reportDate)
 	if err != nil {
 		return nil, err
@@ -1746,13 +1748,14 @@ func (h *ReportHandler) GetDepartmentReportSources(w http.ResponseWriter, r *htt
 
 	rows, err := h.db.Query(`
 		SELECT t.id::text, t.name, tr.leader_id::text, COALESCE(COALESCE(NULLIF(u.nickname,''), u.username), ''),
-			tr.id::text, COALESCE(tr.submitted_content, ''), tr.submitted_at,
+			tr.id::text, COALESCE(NULLIF(tr.submitted_content, ''), tr.content, ''),
+			COALESCE(tr.submitted_at, tr.saved_at),
 			CASE WHEN tr.id IS NOT NULL THEN true ELSE false END
 		FROM teams t
 		LEFT JOIN team_reports tr ON tr.team_id = t.id
 			AND tr.report_date = $1
-			AND tr.submitted_at IS NOT NULL
-			AND tr.submitted_content IS NOT NULL
+			AND tr.status IS NOT NULL
+			AND NULLIF(TRIM(COALESCE(NULLIF(tr.submitted_content, ''), tr.content, '')), '') IS NOT NULL
 		LEFT JOIN users u ON u.id = tr.leader_id
 		ORDER BY t.name`, date)
 	if err != nil {
@@ -2029,13 +2032,14 @@ func (h *ReportHandler) getDepartmentReportByDate(reportDate string) (*model.Dep
 func (h *ReportHandler) buildDepartmentReportSources(reportDate string) (*model.DepartmentReportSources, error) {
 	rows, err := h.db.Query(`
 		SELECT t.id::text, t.name, tr.leader_id::text, COALESCE(COALESCE(NULLIF(u.nickname,''), u.username), ''),
-			tr.id::text, COALESCE(tr.submitted_content, ''), tr.submitted_at,
+			tr.id::text, COALESCE(NULLIF(tr.submitted_content, ''), tr.content, ''),
+			COALESCE(tr.submitted_at, tr.saved_at),
 			CASE WHEN tr.id IS NOT NULL THEN true ELSE false END
 		FROM teams t
 		LEFT JOIN team_reports tr ON tr.team_id = t.id
 			AND tr.report_date = $1
-			AND tr.submitted_at IS NOT NULL
-			AND tr.submitted_content IS NOT NULL
+			AND tr.status IS NOT NULL
+			AND NULLIF(TRIM(COALESCE(NULLIF(tr.submitted_content, ''), tr.content, '')), '') IS NOT NULL
 		LEFT JOIN users u ON u.id = tr.leader_id
 		ORDER BY t.name`, reportDate)
 	if err != nil {
@@ -2756,14 +2760,14 @@ func (h *ReportHandler) buildTeamWeeklyReportSources(teamID, weekStart, weekEnd 
 			WHERE u.team_id = $1 AND u.app_role IN ('team_leader', 'employee')
 		)
 		SELECT ep.id::text, ep.display_name, ep.source_role,
-			pwr.id::text, pwr.week_start, pwr.week_end, pwr.submitted_at,
+			pwr.id::text, pwr.week_start, pwr.week_end, COALESCE(pwr.submitted_at, pwr.saved_at),
 			COALESCE(pwr.submitted_content, pwr.content, '')
 		FROM eligible_people ep
 		LEFT JOIN personal_weekly_reports pwr
 			ON pwr.user_id = ep.id
 			AND pwr.week_start = $2
-			AND pwr.status = 'submitted'
-			AND pwr.submitted_at IS NOT NULL
+			AND pwr.status IS NOT NULL
+			AND NULLIF(TRIM(COALESCE(NULLIF(pwr.submitted_content, ''), pwr.content, '')), '') IS NOT NULL
 		ORDER BY CASE WHEN ep.source_role = 'leader' THEN 0 ELSE 1 END, ep.display_name`, teamID, weekStart)
 	if err != nil {
 		return nil, err
@@ -2882,10 +2886,12 @@ func (h *ReportHandler) upsertTeamWeeklyReport(teamID, leaderID, weekStart, week
 func (h *ReportHandler) buildDepartmentWeeklyReportSources(weekStart, weekEnd string) (*model.DepartmentWeeklyReportSources, error) {
 	rows, err := h.db.Query(`
 		SELECT t.id::text, t.name, twr.leader_id::text, COALESCE(COALESCE(NULLIF(u.nickname,''), u.username), ''),
-			twr.id::text, COALESCE(twr.content, ''), twr.submitted_at,
+			twr.id::text, COALESCE(twr.content, ''), COALESCE(twr.submitted_at, twr.updated_at),
 			CASE WHEN twr.id IS NOT NULL THEN true ELSE false END
 		FROM teams t
-		LEFT JOIN team_weekly_reports twr ON twr.team_id = t.id AND twr.week_start = $1 AND twr.submitted_at IS NOT NULL
+		LEFT JOIN team_weekly_reports twr ON twr.team_id = t.id
+			AND twr.week_start = $1
+			AND NULLIF(TRIM(COALESCE(twr.content, '')), '') IS NOT NULL
 		LEFT JOIN users u ON u.id = twr.leader_id
 		ORDER BY t.name`, weekStart)
 	if err != nil {

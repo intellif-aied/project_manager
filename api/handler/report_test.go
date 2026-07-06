@@ -221,6 +221,53 @@ func TestSubmitReportSavesAndPublishesSubmittedContent(t *testing.T) {
 	}
 }
 
+func TestGetTeamReportSourcesUsesSavedReportsAsSources(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	teamID := "team-1"
+	savedAt := time.Date(2026, 7, 6, 18, 0, 0, 0, time.UTC)
+	mock.ExpectQuery("SELECT name FROM teams").
+		WithArgs(teamID).
+		WillReturnRows(sqlmock.NewRows([]string{"name"}).AddRow("AI Coding平台开发组"))
+	mock.ExpectQuery("(?s)SELECT u\\.id, COALESCE.*dr\\.status IS NOT NULL.*NULLIF\\(TRIM.*u\\.app_role IN \\('team_leader', 'employee'\\)").
+		WithArgs("2026-07-06", teamID).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "report_id", "content", "submitted_at", "has_report"}).
+			AddRow("tl-1", "组长", "daily-tl", "组长保存的日报", savedAt, true).
+			AddRow("emp-1", "成员", "daily-emp", "成员保存的日报", savedAt.Add(5*time.Minute), true).
+			AddRow("emp-2", "未保存成员", nil, nil, nil, false))
+
+	h := NewReportHandler(db, "http://generator")
+	req := httptest.NewRequest(http.MethodGet, "/reports/team/sources?date=2026-07-06", nil)
+	req = requestWithUser(req, &model.User{ID: "tl-1", Role: "team_leader", TeamID: &teamID})
+	rec := httptest.NewRecorder()
+
+	h.GetTeamReportSources(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var got model.TeamReportSources
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.TotalMemberCount != 3 || got.SubmittedCount != 2 || got.MissingCount != 1 {
+		t.Fatalf("unexpected counts: total=%d submitted=%d missing=%d body=%s", got.TotalMemberCount, got.SubmittedCount, got.MissingCount, rec.Body.String())
+	}
+	if len(got.SubmittedReports) != 2 || got.SubmittedReports[0].UserID != "tl-1" || got.SubmittedReports[1].UserID != "emp-1" {
+		t.Fatalf("saved reports not returned as sources: %#v", got.SubmittedReports)
+	}
+	if got.SubmittedReports[0].Content != "组长保存的日报" || got.SubmittedReports[1].Content != "成员保存的日报" {
+		t.Fatalf("unexpected source content: %#v", got.SubmittedReports)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
 func TestGenerateTodayKeepsLegacyGeneratorEndpoint(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

@@ -299,9 +299,11 @@ func (h *ReportMCPHandler) toolGetDailyReports(ctx context.Context, r *http.Requ
 	case "personal":
 		rows, err := h.db.QueryContext(ctx, `
 			SELECT dr.id::text, dr.user_id::text, COALESCE(NULLIF(u.nickname,''),u.username), COALESCE(u.role,''), COALESCE(u.team_id::text,''),
-			       dr.report_date, dr.content, COALESCE(dr.generation_mode,'default'), dr.edited, COALESCE(dr.managed_agent_run_id::text,''), dr.updated_at
+			       dr.report_date::text, dr.content, COALESCE(dr.generation_mode,'default'), dr.edited, COALESCE(dr.managed_agent_run_id::text,''), dr.updated_at
 			FROM daily_reports dr JOIN users u ON u.id = dr.user_id
 			WHERE dr.report_date >= $1 AND dr.report_date <= $2 AND dr.user_id = ANY($3)
+			  AND dr.status IS NOT NULL
+			  AND NULLIF(TRIM(COALESCE(dr.content, '')), '') IS NOT NULL
 			ORDER BY dr.report_date DESC`, start, end, pq.Array(visible))
 		if err != nil {
 			return nil, errMCPInternal
@@ -326,9 +328,11 @@ func (h *ReportMCPHandler) toolGetDailyReports(ctx context.Context, r *http.Requ
 	case "team":
 		rows, err := h.db.QueryContext(ctx, `
 			SELECT tr.id::text, tr.team_id::text, tr.leader_id::text, COALESCE(NULLIF(u.nickname,''),u.username),
-			       tr.report_date, tr.content, COALESCE(tr.generation_mode,'default'), tr.edited, COALESCE(tr.managed_agent_run_id::text,''), tr.updated_at
+			       tr.report_date::text, tr.content, COALESCE(tr.generation_mode,'default'), tr.edited, COALESCE(tr.managed_agent_run_id::text,''), tr.updated_at
 			FROM team_reports tr LEFT JOIN users u ON u.id = tr.leader_id
 			WHERE tr.report_date >= $1 AND tr.report_date <= $2
+			  AND tr.status IS NOT NULL
+			  AND NULLIF(TRIM(COALESCE(tr.content, '')), '') IS NOT NULL
 			ORDER BY tr.report_date DESC`, start, end)
 		if err != nil {
 			return nil, errMCPInternal
@@ -352,9 +356,11 @@ func (h *ReportMCPHandler) toolGetDailyReports(ctx context.Context, r *http.Requ
 		}
 	case "department":
 		rows, err := h.db.QueryContext(ctx, `
-			SELECT dr.id::text, dr.report_date, dr.content, COALESCE(dr.generation_mode,'default'), dr.edited, COALESCE(dr.managed_agent_run_id::text,''), dr.updated_at
+			SELECT dr.id::text, dr.report_date::text, dr.content, COALESCE(dr.generation_mode,'default'), dr.edited, COALESCE(dr.managed_agent_run_id::text,''), dr.updated_at
 			FROM department_reports dr
 			WHERE dr.report_date >= $1 AND dr.report_date <= $2
+			  AND dr.status IS NOT NULL
+			  AND NULLIF(TRIM(COALESCE(dr.content, '')), '') IS NOT NULL
 			ORDER BY dr.report_date DESC`, start, end)
 		if err != nil {
 			return nil, errMCPInternal
@@ -461,6 +467,8 @@ func (h *ReportMCPHandler) toolGetWeeklyReports(ctx context.Context, r *http.Req
 			       r.week_start, r.week_end, r.content, COALESCE(r.generation_mode,'default'), r.edited, COALESCE(r.managed_agent_run_id::text,''), r.updated_at
 			FROM personal_weekly_reports r JOIN users u ON u.id = r.user_id
 			WHERE r.week_start >= $1 AND r.week_end <= $2 AND r.user_id = ANY($3)
+			  AND r.status IS NOT NULL
+			  AND NULLIF(TRIM(COALESCE(r.content, '')), '') IS NOT NULL
 			ORDER BY r.week_start DESC`, ws, we, pq.Array(visible))
 		if err != nil {
 			return nil, errMCPInternal
@@ -491,6 +499,7 @@ func (h *ReportMCPHandler) toolGetWeeklyReports(ctx context.Context, r *http.Req
 			       r.week_start, r.week_end, r.content, COALESCE(r.generation_mode,'default'), r.edited, COALESCE(r.managed_agent_run_id::text,''), r.updated_at
 			FROM team_weekly_reports r LEFT JOIN users u ON u.id = r.leader_id
 			WHERE r.week_start >= $1 AND r.week_end <= $2
+			  AND NULLIF(TRIM(COALESCE(r.content, '')), '') IS NOT NULL
 			ORDER BY r.week_start DESC`, ws, we)
 		if err != nil {
 			return nil, errMCPInternal
@@ -520,6 +529,7 @@ func (h *ReportMCPHandler) toolGetWeeklyReports(ctx context.Context, r *http.Req
 			SELECT r.id::text, r.week_start, r.week_end, r.content, COALESCE(r.generation_mode,'default'), r.edited, COALESCE(r.managed_agent_run_id::text,''), r.updated_at
 			FROM department_weekly_reports r
 			WHERE r.week_start >= $1 AND r.week_end <= $2
+			  AND NULLIF(TRIM(COALESCE(r.content, '')), '') IS NOT NULL
 			ORDER BY r.week_start DESC`, ws, we)
 		if err != nil {
 			return nil, errMCPInternal
@@ -923,22 +933,38 @@ func loadReportSnapshot(ctx context.Context, db *sql.DB, reportType, date, ws, w
 	switch reportType {
 	case reportTypePersonalDaily:
 		return loadSnapshotRow(ctx, db, `SELECT id::text, content, COALESCE(generation_mode,'default'), edited, COALESCE(managed_agent_run_id::text,''), updated_at
-			FROM daily_reports WHERE user_id = $1 AND report_date = $2`, target.UserID, date)
+			FROM daily_reports
+			WHERE user_id = $1 AND report_date = $2
+			  AND status IS NOT NULL
+			  AND NULLIF(TRIM(COALESCE(content, '')), '') IS NOT NULL`, target.UserID, date)
 	case reportTypePersonalWeekly:
 		return loadSnapshotRow(ctx, db, `SELECT id::text, content, COALESCE(generation_mode,'default'), edited, COALESCE(managed_agent_run_id::text,''), updated_at
-			FROM personal_weekly_reports WHERE user_id = $1 AND week_start = $2 AND week_end = $3`, target.UserID, ws, we)
+			FROM personal_weekly_reports
+			WHERE user_id = $1 AND week_start = $2 AND week_end = $3
+			  AND status IS NOT NULL
+			  AND NULLIF(TRIM(COALESCE(content, '')), '') IS NOT NULL`, target.UserID, ws, we)
 	case reportTypeTeamDaily:
 		return loadSnapshotRow(ctx, db, `SELECT id::text, content, COALESCE(generation_mode,'default'), edited, COALESCE(managed_agent_run_id::text,''), updated_at
-			FROM team_reports WHERE team_id = $1 AND report_date = $2`, target.TeamID, date)
+			FROM team_reports
+			WHERE team_id = $1 AND report_date = $2
+			  AND status IS NOT NULL
+			  AND NULLIF(TRIM(COALESCE(content, '')), '') IS NOT NULL`, target.TeamID, date)
 	case reportTypeTeamWeekly:
 		return loadSnapshotRow(ctx, db, `SELECT id::text, content, COALESCE(generation_mode,'default'), edited, COALESCE(managed_agent_run_id::text,''), updated_at
-			FROM team_weekly_reports WHERE team_id = $1 AND week_start = $2 AND week_end = $3`, target.TeamID, ws, we)
+			FROM team_weekly_reports
+			WHERE team_id = $1 AND week_start = $2 AND week_end = $3
+			  AND NULLIF(TRIM(COALESCE(content, '')), '') IS NOT NULL`, target.TeamID, ws, we)
 	case reportTypeDepartmentDaily:
 		return loadSnapshotRow(ctx, db, `SELECT id::text, content, COALESCE(generation_mode,'default'), edited, COALESCE(managed_agent_run_id::text,''), updated_at
-			FROM department_reports WHERE report_date = $1`, date)
+			FROM department_reports
+			WHERE report_date = $1
+			  AND status IS NOT NULL
+			  AND NULLIF(TRIM(COALESCE(content, '')), '') IS NOT NULL`, date)
 	case reportTypeDepartmentWeekly:
 		return loadSnapshotRow(ctx, db, `SELECT id::text, content, COALESCE(generation_mode,'default'), edited, COALESCE(managed_agent_run_id::text,''), updated_at
-			FROM department_weekly_reports WHERE week_start = $1 AND week_end = $2`, ws, we)
+			FROM department_weekly_reports
+			WHERE week_start = $1 AND week_end = $2
+			  AND NULLIF(TRIM(COALESCE(content, '')), '') IS NOT NULL`, ws, we)
 	}
 	return nil, nil
 }
@@ -1137,9 +1163,11 @@ func loadDailyInventoryExisting(ctx context.Context, db *sql.DB, reportScope str
 	switch reportScope {
 	case "personal":
 		rows, err := db.QueryContext(ctx, `
-			SELECT id::text, user_id::text, report_date, COALESCE(generation_mode,'default'), edited
+			SELECT id::text, user_id::text, report_date::text, COALESCE(generation_mode,'default'), edited
 			FROM daily_reports
-			WHERE report_date >= $1 AND report_date <= $2 AND user_id = ANY($3)`, start, end, pq.Array(rs.UserIDs))
+			WHERE report_date >= $1 AND report_date <= $2 AND user_id = ANY($3)
+			  AND status IS NOT NULL
+			  AND NULLIF(TRIM(COALESCE(content, '')), '') IS NOT NULL`, start, end, pq.Array(rs.UserIDs))
 		if err != nil {
 			return nil, err
 		}
@@ -1162,8 +1190,11 @@ func loadDailyInventoryExisting(ctx context.Context, db *sql.DB, reportScope str
 		return out, rows.Err()
 	case "team":
 		rows, err := db.QueryContext(ctx, `
-			SELECT id::text, team_id::text, report_date, COALESCE(generation_mode,'default'), edited
-			FROM team_reports WHERE report_date >= $1 AND report_date <= $2`, start, end)
+			SELECT id::text, team_id::text, report_date::text, COALESCE(generation_mode,'default'), edited
+			FROM team_reports
+			WHERE report_date >= $1 AND report_date <= $2
+			  AND status IS NOT NULL
+			  AND NULLIF(TRIM(COALESCE(content, '')), '') IS NOT NULL`, start, end)
 		if err != nil {
 			return nil, err
 		}
@@ -1186,8 +1217,11 @@ func loadDailyInventoryExisting(ctx context.Context, db *sql.DB, reportScope str
 		return out, rows.Err()
 	case "department":
 		rows, err := db.QueryContext(ctx, `
-			SELECT id::text, report_date, COALESCE(generation_mode,'default'), edited
-			FROM department_reports WHERE report_date >= $1 AND report_date <= $2`, start, end)
+			SELECT id::text, report_date::text, COALESCE(generation_mode,'default'), edited
+			FROM department_reports
+			WHERE report_date >= $1 AND report_date <= $2
+			  AND status IS NOT NULL
+			  AND NULLIF(TRIM(COALESCE(content, '')), '') IS NOT NULL`, start, end)
 		if err != nil {
 			return nil, err
 		}
@@ -1213,40 +1247,66 @@ func loadDailyInventoryExisting(ctx context.Context, db *sql.DB, reportScope str
 }
 
 func loadDailyInventoryExpected(ctx context.Context, db *sql.DB, reportScope string, rs *resolvedScope, start, end string) ([]map[string]any, error) {
-	if reportScope != "personal" {
-		return []map[string]any{}, nil
-	}
-	infoMap, err := loadUserInfoMap(ctx, db, rs.UserIDs)
-	if err != nil {
-		return nil, err
-	}
 	startT, _ := time.Parse("2006-01-02", start)
 	endT, _ := time.Parse("2006-01-02", end)
 	dates := []string{}
 	for d := startT; !d.After(endT); d = d.AddDate(0, 0, 1) {
 		dates = append(dates, d.Format("2006-01-02"))
 	}
-	out := []map[string]any{}
-	for _, uid := range rs.UserIDs {
-		entry := map[string]any{
-			"owner_type": "user",
-			"owner_id":   uid,
-			"dates":      dates,
+	switch reportScope {
+	case "personal":
+		infoMap, err := loadUserInfoMap(ctx, db, rs.UserIDs)
+		if err != nil {
+			return nil, err
 		}
-		if info, ok := infoMap[uid]; ok {
-			entry["username"] = info.Username
+		out := []map[string]any{}
+		for _, uid := range rs.UserIDs {
+			entry := map[string]any{
+				"owner_type": "user",
+				"owner_id":   uid,
+				"dates":      dates,
+			}
+			if info, ok := infoMap[uid]; ok {
+				entry["username"] = info.Username
+			}
+			out = append(out, entry)
 		}
-		out = append(out, entry)
+		return out, nil
+	case "team":
+		teams, err := loadInventoryTeams(ctx, db, rs)
+		if err != nil {
+			return nil, err
+		}
+		out := []map[string]any{}
+		for _, team := range teams {
+			out = append(out, map[string]any{
+				"owner_type": "team",
+				"owner_id":   team.ID,
+				"team_name":  team.Name,
+				"dates":      dates,
+			})
+		}
+		return out, nil
+	case "department":
+		return []map[string]any{{
+			"owner_type":    "department",
+			"owner_id":      rs.DepartmentID,
+			"department_id": rs.DepartmentID,
+			"dates":         dates,
+		}}, nil
 	}
-	return out, nil
+	return []map[string]any{}, nil
 }
 
 func loadWeeklyInventoryExisting(ctx context.Context, db *sql.DB, reportScope string, rs *resolvedScope, ws, we string) ([]map[string]any, error) {
 	switch reportScope {
 	case "personal":
 		rows, err := db.QueryContext(ctx, `
-			SELECT id::text, user_id::text, week_start, COALESCE(generation_mode,'default'), edited
-			FROM personal_weekly_reports WHERE week_start >= $1 AND week_end <= $2 AND user_id = ANY($3)`, ws, we, pq.Array(rs.UserIDs))
+			SELECT id::text, user_id::text, week_start::text, COALESCE(generation_mode,'default'), edited
+			FROM personal_weekly_reports
+			WHERE week_start >= $1 AND week_end <= $2 AND user_id = ANY($3)
+			  AND status IS NOT NULL
+			  AND NULLIF(TRIM(COALESCE(content, '')), '') IS NOT NULL`, ws, we, pq.Array(rs.UserIDs))
 		if err != nil {
 			return nil, err
 		}
@@ -1269,8 +1329,10 @@ func loadWeeklyInventoryExisting(ctx context.Context, db *sql.DB, reportScope st
 		return out, rows.Err()
 	case "team":
 		rows, err := db.QueryContext(ctx, `
-			SELECT id::text, team_id::text, week_start, COALESCE(generation_mode,'default'), edited
-			FROM team_weekly_reports WHERE week_start >= $1 AND week_end <= $2`, ws, we)
+			SELECT id::text, team_id::text, week_start::text, COALESCE(generation_mode,'default'), edited
+			FROM team_weekly_reports
+			WHERE week_start >= $1 AND week_end <= $2
+			  AND NULLIF(TRIM(COALESCE(content, '')), '') IS NOT NULL`, ws, we)
 		if err != nil {
 			return nil, err
 		}
@@ -1293,8 +1355,10 @@ func loadWeeklyInventoryExisting(ctx context.Context, db *sql.DB, reportScope st
 		return out, rows.Err()
 	case "department":
 		rows, err := db.QueryContext(ctx, `
-			SELECT id::text, week_start, COALESCE(generation_mode,'default'), edited
-			FROM department_weekly_reports WHERE week_start >= $1 AND week_end <= $2`, ws, we)
+			SELECT id::text, week_start::text, COALESCE(generation_mode,'default'), edited
+			FROM department_weekly_reports
+			WHERE week_start >= $1 AND week_end <= $2
+			  AND NULLIF(TRIM(COALESCE(content, '')), '') IS NOT NULL`, ws, we)
 		if err != nil {
 			return nil, err
 		}
@@ -1320,35 +1384,89 @@ func loadWeeklyInventoryExisting(ctx context.Context, db *sql.DB, reportScope st
 }
 
 func loadWeeklyInventoryExpected(ctx context.Context, db *sql.DB, reportScope string, rs *resolvedScope, ws, we string) ([]map[string]any, error) {
-	if reportScope != "personal" {
-		return []map[string]any{}, nil
+	switch reportScope {
+	case "personal":
+		infoMap, err := loadUserInfoMap(ctx, db, rs.UserIDs)
+		if err != nil {
+			return nil, err
+		}
+		out := []map[string]any{}
+		for _, uid := range rs.UserIDs {
+			entry := map[string]any{
+				"owner_type": "user",
+				"owner_id":   uid,
+				"week_start": ws,
+				"week_end":   we,
+			}
+			if info, ok := infoMap[uid]; ok {
+				entry["username"] = info.Username
+			}
+			out = append(out, entry)
+		}
+		return out, nil
+	case "team":
+		teams, err := loadInventoryTeams(ctx, db, rs)
+		if err != nil {
+			return nil, err
+		}
+		out := []map[string]any{}
+		for _, team := range teams {
+			out = append(out, map[string]any{
+				"owner_type": "team",
+				"owner_id":   team.ID,
+				"team_name":  team.Name,
+				"week_start": ws,
+				"week_end":   we,
+			})
+		}
+		return out, nil
+	case "department":
+		return []map[string]any{{
+			"owner_type":    "department",
+			"owner_id":      rs.DepartmentID,
+			"department_id": rs.DepartmentID,
+			"week_start":    ws,
+			"week_end":      we,
+		}}, nil
 	}
-	infoMap, err := loadUserInfoMap(ctx, db, rs.UserIDs)
+	return []map[string]any{}, nil
+}
+
+type inventoryTeam struct {
+	ID   string
+	Name string
+}
+
+func loadInventoryTeams(ctx context.Context, db *sql.DB, rs *resolvedScope) ([]inventoryTeam, error) {
+	query := `SELECT id::text, name FROM teams`
+	args := []any{}
+	if rs != nil && rs.TeamID != "" {
+		query += ` WHERE id = $1`
+		args = append(args, rs.TeamID)
+	}
+	query += ` ORDER BY name`
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
-	out := []map[string]any{}
-	for _, uid := range rs.UserIDs {
-		entry := map[string]any{
-			"owner_type": "user",
-			"owner_id":   uid,
-			"week_start": ws,
-			"week_end":   we,
+	defer rows.Close()
+	teams := []inventoryTeam{}
+	for rows.Next() {
+		var team inventoryTeam
+		if err := rows.Scan(&team.ID, &team.Name); err != nil {
+			return nil, err
 		}
-		if info, ok := infoMap[uid]; ok {
-			entry["username"] = info.Username
-		}
-		out = append(out, entry)
+		teams = append(teams, team)
 	}
-	return out, nil
+	return teams, rows.Err()
 }
 
 func computeMissing(expected, existing []map[string]any) []map[string]any {
 	existKeys := map[string]bool{}
 	for _, e := range existing {
-		key := fmt.Sprintf("%v|%v", e["owner_id"], e["date"])
+		key := fmt.Sprintf("%v|%s", e["owner_id"], inventoryPeriodKey(e["date"]))
 		if e["week_start"] != nil {
-			key = fmt.Sprintf("%v|%v", e["owner_id"], e["week_start"])
+			key = fmt.Sprintf("%v|%s", e["owner_id"], inventoryPeriodKey(e["week_start"]))
 		}
 		existKeys[key] = true
 	}
@@ -1356,9 +1474,9 @@ func computeMissing(expected, existing []map[string]any) []map[string]any {
 	for _, exp := range expected {
 		dates, _ := exp["dates"].([]string)
 		if dates == nil {
-			key := fmt.Sprintf("%v|%v", exp["owner_id"], exp["date"])
+			key := fmt.Sprintf("%v|%s", exp["owner_id"], inventoryPeriodKey(exp["date"]))
 			if exp["week_start"] != nil {
-				key = fmt.Sprintf("%v|%v", exp["owner_id"], exp["week_start"])
+				key = fmt.Sprintf("%v|%s", exp["owner_id"], inventoryPeriodKey(exp["week_start"]))
 			}
 			if !existKeys[key] {
 				missing = append(missing, exp)
@@ -1371,15 +1489,32 @@ func computeMissing(expected, existing []map[string]any) []map[string]any {
 				continue
 			}
 			entry := map[string]any{
-				"owner_type": "user",
+				"owner_type": exp["owner_type"],
 				"owner_id":   uid,
 				"date":       d,
 			}
-			if un, ok := exp["username"].(string); ok {
-				entry["username"] = un
-			}
+			copyInventoryOwnerMetadata(entry, exp)
 			missing = append(missing, entry)
 		}
 	}
 	return missing
+}
+
+func copyInventoryOwnerMetadata(dst, src map[string]any) {
+	for _, key := range []string{"username", "team_name", "department_id"} {
+		if value, ok := src[key]; ok {
+			dst[key] = value
+		}
+	}
+}
+
+func inventoryPeriodKey(value any) string {
+	switch v := value.(type) {
+	case time.Time:
+		return v.Format("2006-01-02")
+	case string:
+		return dailyReportDateKey(v)
+	default:
+		return fmt.Sprintf("%v", value)
+	}
 }
