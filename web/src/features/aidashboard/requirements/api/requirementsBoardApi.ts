@@ -146,17 +146,33 @@ function parseSessionTokenSourceId(sourceId: string) {
   return { sessionId, activityDate: activityDate || undefined };
 }
 
+function normalizeResponsibleUserIds(value: unknown) {
+  if (Array.isArray(value)) {
+    return value
+      .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+      .map((item) => item.trim());
+  }
+  if (typeof value === "string" && value.trim()) return [value.trim()];
+  return [];
+}
+
+function hasResponsibleUserIds(input: { responsible_user_ids?: unknown }) {
+  return Object.prototype.hasOwnProperty.call(input, "responsible_user_ids");
+}
+
 function requirementResponsiblePayload<T extends CreateMockRequirementInput | UpdateBoardRequirementInput>(input: T) {
+  if (!hasResponsibleUserIds(input)) return { ...input };
   return {
     ...input,
-    responsible_user_ids: input.responsible_user_ids ?? []
+    responsible_user_ids: normalizeResponsibleUserIds(input.responsible_user_ids)
   };
 }
 
 function taskResponsiblePayload<T extends CreateMockTaskInput | UpdateBoardTaskInput>(input: T) {
+  if (!hasResponsibleUserIds(input)) return { ...input };
   return {
     ...input,
-    responsible_user_ids: input.responsible_user_ids ?? []
+    responsible_user_ids: normalizeResponsibleUserIds(input.responsible_user_ids)
   };
 }
 
@@ -228,7 +244,7 @@ export const requirementsBoardApi = {
       requirement_id: payload.requirement_id,
       title: payload.title,
       acceptance_criteria: payload.acceptance_criteria ?? [],
-      responsible_user_ids: payload.responsible_user_ids,
+      responsible_user_ids: payload.responsible_user_ids ?? [],
       priority: payload.priority,
       due_date: payload.due_date,
       depends_on_ids: payload.dependency_task_ids

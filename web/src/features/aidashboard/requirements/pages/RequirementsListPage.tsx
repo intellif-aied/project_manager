@@ -3372,6 +3372,10 @@ function TaskCreateModal({
               rules={requiredSelectRules("负责人")}
             >
               <Select
+                mode="multiple"
+                showSearch
+                maxTagCount="responsive"
+                optionFilterProp="label"
                 placeholder="选择负责人"
                 loading={assigneesQuery.isLoading}
                 disabled={assigneesQuery.isLoading || assigneesQuery.isError}
@@ -4915,6 +4919,10 @@ function TaskEditModal({
       <div className="requirements-task-edit-panel__grid">
         <Form.Item label="负责人" name="responsible_user_ids" rules={requiredSelectRules("负责人")}>
           <Select
+            mode="multiple"
+            showSearch
+            maxTagCount="responsive"
+            optionFilterProp="label"
             placeholder="选择负责人"
             loading={assigneesQuery.isLoading}
             disabled={!canReassign || assigneesQuery.isLoading || assigneesQuery.isError}

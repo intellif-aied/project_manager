@@ -1948,11 +1948,23 @@
   white-space: nowrap;
 }
 .requirements-drawer__header-tags .ant-tag {
+  display: inline-flex;
+  height: 22px;
+  align-items: center;
   flex: 0 0 auto;
   max-width: 120px;
   overflow: hidden;
   margin: 0;
+  line-height: 20px;
   text-overflow: ellipsis;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.requirements-drawer__header-tags .ant-tag .ant-tag-content {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .requirements-drawer__header-actions {
   display: inline-flex;
@@ -3273,6 +3285,31 @@
 .requirements-task-detail__status .requirements-priority-pill,
 .requirements-task-detail__status .ant-tag {
   margin: 0;
+}
+.requirements-task-detail__status .ant-tag,
+.requirements-task-detail__summary .ant-tag,
+.requirements-task-detail__dependency-list .ant-tag,
+.requirements-task-detail__blocker-item .ant-tag,
+.requirements-blocker-popover__meta .ant-tag {
+  display: inline-flex;
+  height: 22px;
+  align-items: center;
+  max-width: 100%;
+  overflow: hidden;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.requirements-task-detail__status .ant-tag .ant-tag-content,
+.requirements-task-detail__summary .ant-tag .ant-tag-content,
+.requirements-task-detail__dependency-list .ant-tag .ant-tag-content,
+.requirements-task-detail__blocker-item .ant-tag .ant-tag-content,
+.requirements-blocker-popover__meta .ant-tag .ant-tag-content {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .requirements-task-detail__meta-strip {
   display: grid;
@@ -5353,4 +5390,60 @@
 .requirements-drawer__summary-item.is-warning {
   background: #fff7ed;
   border-color: #fdba74;
+}
+
+/* Requirement drawer risk chips should stay compact, not block-like. */
+.requirements-drawer--requirement .requirements-drawer__summary-item.is-danger,
+.requirements-drawer--requirement .requirements-drawer__summary-item.is-warning {
+  background: transparent;
+  border-color: transparent;
+}
+
+.requirements-drawer--requirement .requirements-drawer__summary-item.is-danger strong,
+.requirements-drawer--requirement .requirements-drawer__summary-item.is-warning strong {
+  display: inline-flex;
+  height: 22px;
+  align-items: center;
+  max-width: 100%;
+  padding: 0 7px;
+  border-radius: 999px;
+  line-height: 20px;
+}
+
+.requirements-drawer--requirement .requirements-drawer__summary-item.is-danger strong {
+  color: #b42318;
+  background: #fff4f2;
+}
+
+.requirements-drawer--requirement .requirements-drawer__summary-item.is-warning strong {
+  color: #b45309;
+  background: #fff8eb;
+}
+
+.requirements-drawer--requirement .requirements-drawer__task-risk.is-danger,
+.requirements-drawer--requirement .requirements-drawer__task-risk.is-warning {
+  display: inline-flex;
+  min-width: 0;
+  height: 22px;
+  align-items: center;
+  justify-self: start;
+  padding: 0 7px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.requirements-drawer--requirement .requirements-drawer__task-risk.is-danger {
+  color: #b42318;
+  background: #fff4f2;
+}
+
+.requirements-drawer--requirement .requirements-drawer__task-risk.is-warning {
+  color: #b45309;
+  background: #fff8eb;
 }
