@@ -13,7 +13,6 @@ import {
 import {
   Alert,
   App,
-  Badge,
   Button,
   Checkbox,
   Col,
@@ -203,6 +202,7 @@ interface RiskItem {
   };
   summary?: string;
   owner?: string;
+  requirementResponsibleNames?: string[];
   deadline?: string;
   reason?: string;
   level?: "高" | "中" | "低";
@@ -1201,6 +1201,14 @@ export function DashboardPage() {
     () => new Map<string, MockTokenSource>(boardTokenSources.map((source) => [source.id, source])),
     [boardTokenSources]
   );
+  const requirementById = useMemo(
+    () => new Map<string, MockRequirement>(boardRequirements.map((requirement) => [requirement.id, requirement])),
+    [boardRequirements]
+  );
+  const taskById = useMemo(
+    () => new Map<string, MockTask>(boardTasks.map((task) => [task.id, task])),
+    [boardTasks]
+  );
   const boardFavorites = useMemo(() => boardFavoritesQuery.data ?? [], [boardFavoritesQuery.data]);
   const favoriteRequirementIds = useMemo(
     () =>
@@ -1232,10 +1240,21 @@ export function DashboardPage() {
     ? (boardTasks.find((item) => item.id === dashboardTask.id) ?? dashboardTask)
     : undefined;
   const prioritizedFollowItems = useMemo(
-    () => [...followItems].sort(compareFollowItems),
+    () =>
+      followItems
+        .map((item, index) => ({ item, index }))
+        .sort((left, right) => compareDashboardMyItems(left.item, right.item) || left.index - right.index)
+        .map(({ item }) => item),
     [followItems]
   );
-  const prioritizedRiskItems = useMemo(() => [...riskItems].sort(compareRiskItems), [riskItems]);
+  const prioritizedRiskItems = useMemo(
+    () =>
+      riskItems
+        .map((item, index) => ({ item, index }))
+        .sort((left, right) => compareDashboardRisks(left.item, right.item) || left.index - right.index)
+        .map(({ item }) => item),
+    [riskItems]
+  );
   const previewFollowItems = prioritizedFollowItems.slice(0, DASHBOARD_PREVIEW_LIMIT);
   const previewRiskItems = prioritizedRiskItems.slice(0, DASHBOARD_PREVIEW_LIMIT);
   const visibleFollowItems = followExpanded ? prioritizedFollowItems : previewFollowItems;
@@ -1775,6 +1794,8 @@ export function DashboardPage() {
                   <FollowCard
                     key={item.key}
                     item={item}
+                    requirement={requirementById.get(item.requirementId)}
+                    task={item.taskId ? taskById.get(item.taskId) : undefined}
                     showAttention={dashboardRole !== "director"}
                     onView={handleFollowAction}
                   />
@@ -1813,7 +1834,12 @@ export function DashboardPage() {
             <>
               <div className={`console-risk-list console-dashboard-inline-list${riskExpanded ? " is-expanded" : ""}`}>
                 {visibleRiskItems.map((item) => (
-                  <RiskCard key={item.key} item={item} onAction={handleRiskAction} />
+                  <RiskCard
+                    key={item.key}
+                    item={item}
+                    requirement={requirementById.get(item.requirementId ?? "")}
+                    onAction={handleRiskAction}
+                  />
                 ))}
               </div>
               {riskItems.length > DASHBOARD_PREVIEW_LIMIT ? (
@@ -3831,33 +3857,106 @@ function ReportStatusTag({ status }: { status: ReportStatus }) {
 }
 
 
-function getFollowResponsibleText(item: FollowItem) {
-  const names = item.responsibleNames?.length
-    ? item.responsibleNames
-    : item.type === "任务"
-      ? item.taskResponsibleNames ?? []
-      : item.requirementResponsibleNames ?? [];
-  if (names.length) return names.slice(0, 2).join("、") + (names.length > 2 ? ` +${names.length - 2}` : "");
-  if (item.owner) return item.owner;
-  return item.creatorName ? `创建人 ${item.creatorName}` : "负责人未设置";
+function formatCompactNames(names: string[], fallback = "") {
+  const validNames = names.filter(Boolean);
+  if (!validNames.length) return fallback;
+  const visible = validNames.slice(0, 2);
+  const restCount = validNames.length - visible.length;
+  return restCount > 0 ? `${visible.join("、")} +${restCount}` : visible.join("、");
+}
+
+function getRequirementResponsibleText(
+  requirement?: Pick<MockRequirement, "responsible_users" | "responsible_user_ids">,
+  fallbackNames?: string[]
+) {
+  const names = requirement?.responsible_users.map((responsible) => responsible.name || responsible.id) ?? [];
+  return formatCompactNames(names.length ? names : fallbackNames ?? []);
+}
+
+function getTaskResponsibleText(
+  task?: Pick<MockTask, "responsible_users" | "responsible_user_ids">,
+  fallbackNames?: string[]
+) {
+  const names = task?.responsible_users.map((responsible) => responsible.name || responsible.id) ?? [];
+  return formatCompactNames(names.length ? names : fallbackNames ?? []);
+}
+
+function getMyItemPeopleLine(item: FollowItem, requirement?: MockRequirement, task?: MockTask) {
+  if (item.type === "任务") {
+    const taskResponsible = getTaskResponsibleText(
+      task,
+      item.taskResponsibleNames
+    );
+    if (taskResponsible) return `任务负责人 ${taskResponsible}`;
+    if (item.owner) return `任务负责人 ${item.owner}`;
+    if (item.creatorName) return `创建人 ${item.creatorName}`;
+    return "任务负责人未设置";
+  }
+
+  const requirementResponsible = getRequirementResponsibleText(
+    requirement,
+    item.requirementResponsibleNames
+  );
+  if (requirementResponsible) return `需求负责人 ${requirementResponsible}`;
+  if (item.creatorName) return `创建人 ${item.creatorName}`;
+  if (item.owner) return `创建人 ${item.owner}`;
+  return "";
+}
+
+function getMyItemSubline(item: FollowItem, requirement?: MockRequirement, task?: MockTask) {
+  const parts = [getMyItemPeopleLine(item, requirement, task)];
+  if (item.type === "任务" && item.requirement) {
+    parts.push(`所属需求 ${item.requirement}`);
+  }
+  if (item.activity) parts.push(item.activity);
+  return parts.filter(Boolean);
+}
+
+function normalizeFollowRiskLabel(item: FollowItem) {
+  const value = item.risk?.trim();
+  if (!value || value === "正常" || value === "正常推进" || value === "无风险") return "";
+  if (value.includes("冲突")) return "依赖冲突";
+  if (value.includes("阻塞")) return value.includes("依赖") ? "依赖阻塞" : "阻塞";
+  if (value.includes("需求") && (value.includes("逾期") || value.includes("超期"))) return "需求逾期";
+  if (value.includes("任务") && (value.includes("逾期") || value.includes("超期"))) return "任务逾期";
+  if (value.includes("逾期") || value.includes("超期")) return item.type === "需求" ? "需求逾期" : "任务逾期";
+  if (value.includes("依赖")) return "依赖风险";
+  return value;
+}
+
+function getFollowAttentionConfig(item: FollowItem) {
+  const count = item.followerCount ?? 0;
+  const level = item.attentionLevel ?? "normal";
+  if (level !== "high" && count <= 0) return null;
+  return {
+    level,
+    count,
+    label: attentionLabel(level, count)
+  };
 }
 
 function FollowCard({
   item,
+  requirement,
+  task,
   showAttention,
   onView
 }: {
   item: FollowItem;
+  requirement?: MockRequirement;
+  task?: MockTask;
   showAttention: boolean;
   onView: (item: FollowItem) => void;
 }) {
   const isTask = item.type === "任务";
   const riskHint = getFollowRiskHint(item);
+  const attention = showAttention ? getFollowAttentionConfig(item) : null;
+  const subline = getMyItemSubline(item, requirement, task);
   const tone = riskHint?.tone ?? "muted";
   const className = [
     "console-follow-card",
     `console-follow-card--${tone}`,
-    !showAttention ? "console-follow-card--no-attention" : ""
+    !attention ? "console-follow-card--no-attention" : ""
   ]
     .filter(Boolean)
     .join(" ");
@@ -3867,26 +3966,30 @@ function FollowCard({
       <span className="console-follow-card__rail" aria-hidden="true" />
       <div className="console-follow-card__main">
         <Tag color={isTask ? "geekblue" : "green"}>{item.type}</Tag>
-        <Badge status={item.status === "阻塞" ? "error" : "processing"} text={item.status} />
+        <span className="console-follow-card__status" title={item.status}>{item.status}</span>
       </div>
       <div className="console-follow-card__content">
         <strong className="console-follow-card__title" title={item.title}>
           {item.title}
         </strong>
-        <WorkRelationTags item={item} />
+        {subline.length ? (
+          <span className="console-follow-card__subline" title={subline.join(" · ")}>
+            {subline.join(" · ")}
+          </span>
+        ) : null}
       </div>
-      <div className="console-follow-card__risk">
-        {riskHint ? <Tag color={riskHint.color}>{riskHint.label}</Tag> : null}
+      <div className="console-follow-card__signals">
+        {riskHint ? <Tag color={riskHint.color} title={riskHint.label}>{riskHint.label}</Tag> : null}
+        {attention ? (
+          attention.count > 0 ? (
+            <FollowFollowersPopover item={item} />
+          ) : (
+            <Tag color={followCountTagColor(attention.level)}>{attention.label}</Tag>
+          )
+        ) : null}
       </div>
-      {showAttention ? (
-        <div className="console-follow-card__followers">
-          <FollowFollowersPopover item={item} />
-        </div>
-      ) : null}
-      <div className="console-follow-card__meta">
-        <span>
-          <ClockCircleOutlined /> {getFollowResponsibleText(item)} · {item.deadline}
-        </span>
+      <div className="console-follow-card__deadline" title={item.deadline || "未设置"}>
+        <ClockCircleOutlined /> 截止 {item.deadline || "未设置"}
       </div>
       <Button
         type="link"
@@ -3899,30 +4002,6 @@ function FollowCard({
     </article>
   );
 }
-
-function WorkRelationTags({ item }: { item: FollowItem }) {
-  const relations = getWorkRelationTags(item);
-  if (!relations.length) return null;
-  return (
-    <div className="console-follow-card__relations" aria-label="事项关系">
-      {relations.map((relation) => (
-        <span className={`console-follow-card__relation is-${relation.key}`} key={relation.key}>
-          {relation.label}
-        </span>
-      ))}
-    </div>
-  );
-}
-
-function getWorkRelationTags(item: FollowItem) {
-  const tags: Array<{ key: "followed" | "assigned" | "created"; label: string }> = [];
-  if (item.followedByMe) tags.push({ key: "followed", label: "关注" });
-  if (item.assignedToMe) tags.push({ key: "assigned", label: "负责" });
-  if (item.createdByMe) tags.push({ key: "created", label: "创建" });
-  return tags;
-}
-
-type FollowRiskHint = { label: string; color: string; tone: "red" | "orange" | "blue" };
 
 function getFollowSummaryChips(items: FollowItem[]): SummaryChipItem[] {
   const followed = items.filter((item) => item.followedByMe).length;
@@ -3960,48 +4039,57 @@ function getRiskSummaryChips(items: RiskItem[]): SummaryChipItem[] {
   return chips.filter((item) => item.label === "全部" || item.value > 0);
 }
 
-function compareFollowItems(a: FollowItem, b: FollowItem) {
+function compareDashboardMyItems(a: FollowItem, b: FollowItem) {
   const scoreDelta = getFollowPriorityScore(b) - getFollowPriorityScore(a);
   if (scoreDelta !== 0) return scoreDelta;
   return getDeadlineRank(a.deadline) - getDeadlineRank(b.deadline);
 }
 
-function compareRiskItems(a: RiskItem, b: RiskItem) {
+function compareDashboardRisks(a: RiskItem, b: RiskItem) {
   const scoreDelta = getRiskPriorityScore(b) - getRiskPriorityScore(a);
   if (scoreDelta !== 0) return scoreDelta;
   return getDeadlineRank(getRiskDeadline(a)) - getDeadlineRank(getRiskDeadline(b));
 }
 
 function getFollowPriorityScore(item: FollowItem) {
-  let score = item.riskPriority ?? 0;
-  score += item.attentionScore ?? 0;
-  score += getAttentionWeight(item.attentionLevel);
-  if (isFollowBlocked(item)) score += 300;
-  if (isFollowOverdue(item)) score += 240;
-  if (item.risk.includes("依赖")) score += 160;
-  if (item.status === "待办" || item.status === "待开始") score += 40;
+  let score = 0;
+  if (isFollowBlocked(item)) score += 1200;
+  if (isFollowOverdue(item)) score += 1000;
+  if (item.risk.includes("依赖")) score += 720;
+  if (item.assignedToMe) score += 520;
   const deadlineRank = getDeadlineRank(item.deadline);
-  if (deadlineRank <= 2) score += 60 - Math.max(deadlineRank, 0) * 10;
+  if (deadlineRank < 0) score += 430;
+  else if (deadlineRank <= 2) score += 380 - deadlineRank * 35;
+  else if (deadlineRank <= 7) score += 180 - deadlineRank * 10;
+  if (item.attentionLevel === "high") score += 260;
+  score += Math.min(item.attentionScore ?? 0, 160);
+  score += getActivityWeight(item.activity);
+  if (item.followedByMe) score += 18;
+  if (item.createdByMe) score += 10;
   return score;
 }
 
 function getRiskPriorityScore(item: RiskItem) {
-  const levelWeight = { 高: 300, 中: 190, 低: 100 }[item.level ?? "高"];
-  let score = levelWeight + getAttentionWeight(item.attentionLevel);
-  score += item.attentionScore ?? 0;
-  if (isRiskBlocker(item)) score += 220;
-  if (isRiskRequirementOverdue(item)) score += 190;
-  if (isRiskDeadline(item)) score += 150;
-  if (isRiskConflict(item)) score += 120;
+  let score = 0;
+  if (isRiskBlocker(item)) score += 1200;
+  if (isRiskConflict(item)) score += 980;
+  score += Math.min(item.deadlineTaskCount ?? 0, 20) * 36;
+  if (isRiskRequirementOverdue(item)) score += 520;
+  score += { 高: 260, 中: 150, 低: 70 }[item.level ?? "高"];
+  if (item.attentionLevel === "high") score += 130;
   const deadlineRank = getDeadlineRank(getRiskDeadline(item));
-  if (deadlineRank <= 2) score += 60 - Math.max(deadlineRank, 0) * 10;
+  if (deadlineRank < 0) score += 180;
+  else if (deadlineRank <= 2) score += 130 - deadlineRank * 25;
+  score += Math.min(item.attentionScore ?? 0, 120);
   return score;
 }
 
-function getAttentionWeight(level?: AttentionLevel) {
-  if (level === "high") return 80;
-  if (level === "important") return 50;
-  if (level === "notable") return 25;
+function getActivityWeight(activity?: string) {
+  if (!activity) return 0;
+  if (activity.includes("今天")) return 80;
+  if (activity.includes("昨天")) return 55;
+  const match = activity.match(/(\d+)\s*天前/);
+  if (match) return Math.max(0, 45 - Number(match[1]) * 6);
   return 0;
 }
 
@@ -4062,15 +4150,18 @@ function getDeadlineRank(value?: string) {
   return parsed.startOf("day").diff(dayjs().startOf("day"), "day");
 }
 
+type FollowRiskHint = { label: string; color: string; tone: "red" | "orange" | "blue" };
+
 function getFollowRiskHint(item: FollowItem): FollowRiskHint | null {
-  if (item.status === "阻塞" || item.risk.includes("阻塞"))
-    return { label: "阻塞", color: "red", tone: "red" };
-  if (item.risk.includes("超期") || item.risk.includes("逾期"))
-    return { label: "逾期", color: "red", tone: "red" };
-  if (item.risk.includes("依赖")) return { label: "有风险", color: "orange", tone: "orange" };
-  if (item.status === "待办" || item.status === "待开始")
-    return { label: "待处理", color: "blue", tone: "blue" };
-  return null;
+  const label = normalizeFollowRiskLabel(item);
+  if (!label) return null;
+  if (label.includes("阻塞") || label.includes("逾期") || label.includes("超期")) {
+    return { label, color: "red", tone: "red" };
+  }
+  if (label.includes("冲突") || label.includes("依赖")) {
+    return { label, color: "orange", tone: "orange" };
+  }
+  return { label, color: "blue", tone: "blue" };
 }
 
 function FollowFollowersPopover({ item }: { item: FollowItem }) {
@@ -4199,39 +4290,50 @@ function attentionLabel(level: AttentionLevel, count: number) {
   return "普通关注";
 }
 
-function RiskCard({ item, onAction }: { item: RiskItem; onAction: (item: RiskItem) => void }) {
+function RiskCard({
+  item,
+  requirement,
+  onAction
+}: {
+  item: RiskItem;
+  requirement?: MockRequirement;
+  onAction: (item: RiskItem) => void;
+}) {
   const tone = item.tone ?? "red";
   const level = item.level ?? "高";
   const title = getRiskTitle(item);
-  const reason = getRiskReason(item);
-  const impact = getRiskImpact(item);
+  const primaryRisk = getPrimaryRiskType(item);
+  const summary = getRiskSummaryText(item);
+  const riskTaskLine = getRepresentativeRiskTaskLine(item);
+  const ownerText = getRequirementResponsibleText(requirement, item.requirementResponsibleNames);
   const deadline = getRiskDeadline(item);
-  const tags = getRiskTagLabels(item);
   return (
     <article className={`console-risk-card console-risk-card--${tone}`}>
       <span className="console-risk-card__rail" aria-hidden="true" />
       <div className="console-risk-card__main">
         <div className="console-risk-card__primary">
-          {tags.map((tag) => (
-            <span key={tag} className={`console-risk-tag console-risk-tag--${tone}`}>
-              {level} · {tag}
-            </span>
-          ))}
+          <span className={`console-risk-tag console-risk-tag--${tone}`}>{level}</span>
+          <span className={`console-risk-tag console-risk-tag--${tone}`}>{primaryRisk.label}</span>
           <RiskAttentionPill level={item.attentionLevel ?? "normal"} />
           <strong title={title}>{title}</strong>
         </div>
-        <span className="console-risk-card__reason" title={reason}>
-          {reason}
+        <span className="console-risk-card__summary" title={summary}>
+          <em>风险摘要：</em>{summary}
         </span>
-      </div>
-      <div className="console-risk-card__impact">
-        <em>{impact.label}</em>
-        <span>{impact.value}</span>
+        {riskTaskLine ? (
+          <span className="console-risk-card__task" title={riskTaskLine}>
+            <em>风险任务：</em>{riskTaskLine}
+          </span>
+        ) : null}
+        {ownerText ? (
+          <span className="console-risk-card__owner" title={ownerText}>
+            <em>需求负责人：</em>{ownerText}
+          </span>
+        ) : null}
       </div>
       <div className="console-risk-card__meta">
-        {item.owner ? <span>{item.owner}</span> : null}
-        <span>
-          <ClockCircleOutlined /> {deadline}
+        <span title={deadline}>
+          <ClockCircleOutlined /> 截止 {deadline}
         </span>
       </div>
       <Button type="link" icon={<LinkOutlined />} onClick={() => onAction(item)}>
@@ -4241,21 +4343,51 @@ function RiskCard({ item, onAction }: { item: RiskItem; onAction: (item: RiskIte
   );
 }
 
+function getPrimaryRiskType(item: RiskItem) {
+  if (isRiskBlocker(item)) return { label: "依赖阻塞", tone: "red" as const };
+  if (isRiskConflict(item)) return { label: "依赖冲突", tone: "orange" as const };
+  if (isRiskDeadline(item)) return { label: "任务逾期", tone: "red" as const };
+  if (isRiskRequirementOverdue(item)) return { label: "需求逾期", tone: "red" as const };
+  return { label: item.source ?? "风险", tone: "orange" as const };
+}
+
+function getRiskSummaryParts(item: RiskItem) {
+  const parts: string[] = [];
+  if (item.requirementOverdue) parts.push("需求逾期");
+  if ((item.deadlineTaskCount ?? 0) > 0) parts.push(`${item.deadlineTaskCount} 个任务逾期`);
+  if ((item.dependencyBlockerCount ?? 0) > 0) parts.push(`${item.dependencyBlockerCount} 个依赖阻塞`);
+  if ((item.dependencyConflictCount ?? 0) > 0) parts.push(`${item.dependencyConflictCount} 个依赖冲突`);
+  return parts;
+}
+
+function sanitizeRiskSummary(value?: string) {
+  const legacyRiskTaskLabel = "重点" + "任务";
+  return value?.replaceAll(legacyRiskTaskLabel, "风险任务").trim() ?? "需要查看并处理";
+}
+
+function getRiskSummaryText(item: RiskItem) {
+  const parts = getRiskSummaryParts(item);
+  return parts.length ? parts.join(" · ") : sanitizeRiskSummary(item.summary ?? item.reason);
+}
+
+function getRepresentativeRiskTaskLine(item: RiskItem) {
+  const task = item.representativeTask;
+  if (!task) return "";
+  const parts = [task.title];
+  if (task.deadline) parts.push(`截止 ${task.deadline}`);
+  const riskLabels = Array.from(
+    new Set(task.riskTypes.filter((riskType) => riskType !== "requirement_overdue").map(riskTypeLabel))
+  );
+  if (riskLabels.length) parts.push(riskLabels.join(" / "));
+  if ((task.unfinishedDependencyCount ?? 0) > 0) {
+    parts.push(`未完成依赖 ${task.unfinishedDependencyCount} 个`);
+  }
+  return parts.join(" · ");
+}
+
 function getRiskTagLabels(item: RiskItem) {
-  if (!item.displayType) {
-    return [item.source ?? "风险"];
-  }
-  const labels: string[] = [];
-  if (item.requirementOverdue) labels.push("需求逾期");
-  if ((item.deadlineTaskCount ?? 0) > 0) labels.push(`${item.deadlineTaskCount} 个任务逾期`);
-  if ((item.dependencyBlockerCount ?? 0) > 0)
-    labels.push(`${item.dependencyBlockerCount} 个依赖阻塞`);
-  if ((item.dependencyConflictCount ?? 0) > 0)
-    labels.push(`${item.dependencyConflictCount} 个依赖冲突`);
-  if (labels.length === 0 && item.representativeTask) {
-    item.representativeTask.riskTypes.forEach((riskType) => labels.push(riskTypeLabel(riskType)));
-  }
-  return labels.length > 0 ? labels : ["风险"];
+  const parts = getRiskSummaryParts(item);
+  return parts.length ? parts : [getPrimaryRiskType(item).label];
 }
 
 function getRiskTitle(item: RiskItem) {
@@ -4263,22 +4395,6 @@ function getRiskTitle(item: RiskItem) {
     return item.representativeTask.title;
   }
   return item.requirementTitle ?? item.title ?? item.target ?? "风险提示";
-}
-
-function getRiskReason(item: RiskItem) {
-  if (item.summary) return item.summary;
-  if (item.reason) return item.reason;
-  if (item.displayType === "single_task" && item.representativeTask) {
-    return `${item.requirementTitle ?? "所属需求"} · ${item.representativeTask.riskTypes.map(riskTypeLabel).join(" / ")}`;
-  }
-  return "需要查看并处理";
-}
-
-function getRiskImpact(item: RiskItem) {
-  if (item.displayType === "single_task") {
-    return { label: "所属需求", value: item.requirementTitle ?? item.target ?? "未设置" };
-  }
-  return { label: "影响对象", value: item.requirementTitle ?? item.target ?? "未设置" };
 }
 
 function getRiskDeadline(item: RiskItem) {
