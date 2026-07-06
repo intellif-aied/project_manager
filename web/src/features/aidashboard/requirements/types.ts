@@ -5,6 +5,7 @@ import type {
   Requirement,
   RequirementPriority as ApiRequirementPriority,
   RequirementFollowSummaryDTO,
+  RequirementTaskSummaryDTO,
   ResponsibleUserDTO,
   RequirementRiskSummaryDTO,
   RequirementStatus,
@@ -57,6 +58,7 @@ export interface BoardRequirement {
   token_source_ids: string[];
   dependencies: BoardTaskDependency[];
   blocking: BoardTaskDependency[];
+  task_summary: RequirementTaskSummaryDTO;
   follow_summary: RequirementFollowSummaryDTO;
   risk_summary?: RequirementRiskSummaryDTO;
   can_update?: boolean;

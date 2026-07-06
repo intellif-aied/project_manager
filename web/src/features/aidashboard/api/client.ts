@@ -8,9 +8,6 @@ import type {
   AdminBatchAddUsersResponse,
   ACStatus,
   AIRun,
-  DashboardFollowFollowerDTO,
-  DashboardFollowItemDTO,
-  DashboardRiskGroupDTO,
   DailyReport,
   DailyReportAgentIntegration,
   DepartmentReport,
@@ -31,11 +28,16 @@ import type {
   ManagedSkill,
   PaginatedDailyReports,
   PaginatedDepartmentReports,
+  PaginatedDashboardFollowItems,
+  PaginatedDashboardRiskGroups,
+  PaginatedFollowFollowers,
   PaginatedWorkItemEvents,
   PaginatedPersonalWeeklyReports,
+  PaginatedRequirements,
   PaginatedSessions,
   PaginatedSessionTokens,
   PaginatedTeamReports,
+  PaginatedTasks,
   PersonalWeeklyReport,
   PersonalWeeklyReportPreview,
   PersonalWeeklyReportSources,
@@ -56,6 +58,7 @@ import type {
   Team,
   PreviewManagedAgentSchedulePayload,
   PreviewManagedAgentScheduleResponse,
+  RequirementBoardResponseDTO,
   UpsertManagedAgentPayload,
   UpsertManagedAgentSchedulePayload
 } from "./types";
@@ -117,6 +120,10 @@ export const adminBatchAddUsers = (data: {
 
 export const fetchRequirements = (params?: Record<string, string>) =>
   unwrap(api.get<Requirement[]>("/requirements", params));
+export const fetchPaginatedRequirements = (params?: Record<string, string>) =>
+  unwrap(api.get<PaginatedRequirements>("/requirements", { view: "list", ...(params ?? {}) }));
+export const fetchRequirementBoard = (params?: Record<string, string>) =>
+  unwrap(api.get<RequirementBoardResponseDTO>("/requirements", { view: "board", ...(params ?? {}) }));
 export const fetchRequirement = (id: string) => unwrap(api.get<Requirement>(`/requirements/${id}`));
 export const createRequirement = (data: {
   title: string;
@@ -155,6 +162,8 @@ export const fetchRequirementEvents = (id: string, params?: { page?: number; pag
 
 export const fetchTasks = (params?: Record<string, string>) =>
   unwrap(api.get<Task[]>("/tasks", params));
+export const fetchPaginatedTasks = (params?: Record<string, string>) =>
+  unwrap(api.get<PaginatedTasks>("/tasks", params));
 export const fetchTask = (id: string) => unwrap(api.get<Task>(`/tasks/${id}`));
 export const fetchTaskEvents = async (id: string, params?: { page?: number; page_size?: number }) => {
   const page = params?.page ?? 1;
@@ -249,17 +258,34 @@ export const unfollowTarget = (targetType: "requirement" | "task", targetId: str
   );
 export const fetchFollowFollowers = (targetType: "requirement" | "task", targetId: string) =>
   unwrap(
-    api.get<DashboardFollowFollowerDTO[]>("/follows/followers", {
+    api.get<PaginatedFollowFollowers>("/follows/followers", {
       target_type: targetType,
-      target_id: targetId
+      target_id: targetId,
+      page: "1",
+      page_size: "20"
     })
   );
-export const fetchDashboardFollows = () =>
-  unwrap(api.get<DashboardFollowItemDTO[]>("/dashboard/follows"));
-export const fetchDashboardMyItems = () =>
-  unwrap(api.get<DashboardFollowItemDTO[]>("/dashboard/my-items"));
-export const fetchDashboardRisks = () =>
-  unwrap(api.get<DashboardRiskGroupDTO[]>("/dashboard/risks"));
+export const fetchDashboardFollows = (params?: { page?: number; page_size?: number }) =>
+  unwrap(
+    api.get<PaginatedDashboardFollowItems>("/dashboard/follows", {
+      page: String(params?.page ?? 1),
+      page_size: String(params?.page_size ?? 20)
+    })
+  );
+export const fetchDashboardMyItems = (params?: { page?: number; page_size?: number }) =>
+  unwrap(
+    api.get<PaginatedDashboardFollowItems>("/dashboard/my-items", {
+      page: String(params?.page ?? 1),
+      page_size: String(params?.page_size ?? 20)
+    })
+  );
+export const fetchDashboardRisks = (params?: { page?: number; page_size?: number }) =>
+  unwrap(
+    api.get<PaginatedDashboardRiskGroups>("/dashboard/risks", {
+      page: String(params?.page ?? 1),
+      page_size: String(params?.page_size ?? 20)
+    })
+  );
 
 // ───────────────────────── Sessions ─────────────────────────
 

@@ -7,7 +7,10 @@ import {
   deleteTask,
   fetchAllSessionTokens,
   fetchFollows,
+  fetchPaginatedRequirements,
+  fetchPaginatedTasks,
   fetchRequirement,
+  fetchRequirementBoard,
   fetchRequirementEvents,
   fetchRequirements,
   fetchTask,
@@ -69,6 +72,11 @@ function normalizeRequirement(requirement: Requirement): MockRequirement {
     token_source_ids: requirement.token_source_ids ?? [],
     dependencies: requirement.dependencies ?? [],
     blocking: requirement.blocking ?? [],
+    task_summary: requirement.task_summary ?? {
+      total: 0,
+      done: 0,
+      blocked: 0
+    },
     follow_summary: requirement.follow_summary ?? {
       count: 0,
       score: 0,
@@ -138,7 +146,10 @@ function dateDaysAgo(days: number) {
 }
 
 function sessionTokenSourceId(source: SessionTokens) {
-  return source.slice_key || `${source.session_id}:${source.activity_date || source.activity_start_at || source.started_at}`;
+  return (
+    source.slice_key ||
+    `${source.session_id}:${source.activity_date || source.activity_start_at || source.started_at}`
+  );
 }
 
 function parseSessionTokenSourceId(sourceId: string) {
@@ -160,7 +171,9 @@ function hasResponsibleUserIds(input: { responsible_user_ids?: unknown }) {
   return Object.prototype.hasOwnProperty.call(input, "responsible_user_ids");
 }
 
-function requirementResponsiblePayload<T extends CreateMockRequirementInput | UpdateBoardRequirementInput>(input: T) {
+function requirementResponsiblePayload<
+  T extends CreateMockRequirementInput | UpdateBoardRequirementInput
+>(input: T) {
   if (!hasResponsibleUserIds(input)) return { ...input };
   return {
     ...input,
@@ -185,6 +198,25 @@ export const requirementsBoardApi = {
     return (await fetchRequirements()).map(normalizeRequirement);
   },
 
+  async listRequirementsPage(params?: Record<string, string>) {
+    const payload = await fetchPaginatedRequirements(params);
+    return {
+      ...payload,
+      items: payload.items.map(normalizeRequirement)
+    };
+  },
+
+  async listRequirementBoard(params?: Record<string, string>) {
+    const payload = await fetchRequirementBoard(params);
+    return {
+      ...payload,
+      columns: payload.columns.map((column) => ({
+        ...column,
+        items: column.items.map(normalizeRequirement)
+      }))
+    };
+  },
+
   async getRequirement(id: string) {
     return normalizeRequirement(await fetchRequirement(id));
   },
@@ -198,7 +230,12 @@ export const requirementsBoardApi = {
   },
 
   async updateRequirement(id: string, input: UpdateBoardRequirementInput) {
-    return normalizeRequirement(await updateRequirement(id, requirementResponsiblePayload(input) as unknown as Record<string, unknown>));
+    return normalizeRequirement(
+      await updateRequirement(
+        id,
+        requirementResponsiblePayload(input) as unknown as Record<string, unknown>
+      )
+    );
   },
 
   async updateRequirementStage(id: string, status: RequirementStage, baseVersion: number) {
@@ -230,6 +267,17 @@ export const requirementsBoardApi = {
     ).map(normalizeTask);
   },
 
+  async listTasksPage(params?: Record<string, string>) {
+    const payload = await fetchPaginatedTasks({
+      scope: "requirements",
+      ...(params ?? {})
+    });
+    return {
+      ...payload,
+      items: payload.items.map(normalizeTask)
+    };
+  },
+
   async getTask(id: string) {
     return getNormalizedTask(id);
   },
@@ -253,7 +301,9 @@ export const requirementsBoardApi = {
   },
 
   async updateTask(id: string, input: UpdateBoardTaskInput) {
-    return normalizeTask(await updateTask(id, taskResponsiblePayload(input) as unknown as Record<string, unknown>));
+    return normalizeTask(
+      await updateTask(id, taskResponsiblePayload(input) as unknown as Record<string, unknown>)
+    );
   },
 
   async deleteTask(id: string, baseVersion: number) {
@@ -283,7 +333,9 @@ export const requirementsBoardApi = {
     baseVersion: number,
     dependsOnType: "requirement" | "task" = "task"
   ) {
-    return normalizeTask(await removeTaskDependency(taskId, dependsOnId, baseVersion, dependsOnType));
+    return normalizeTask(
+      await removeTaskDependency(taskId, dependsOnId, baseVersion, dependsOnType)
+    );
   },
 
   async listTeams() {
@@ -293,11 +345,11 @@ export const requirementsBoardApi = {
   async listAssignees() {
     const users = await fetchTaskAssignees();
     return users.map((user) => ({
-        id: user.id,
-        name: user.name,
-        employee_id: user.employee_id,
-        team_id: user.team_id ?? ""
-      }));
+      id: user.id,
+      name: user.name,
+      employee_id: user.employee_id,
+      team_id: user.team_id ?? ""
+    }));
   },
 
   async listFavorites(): Promise<MockFavorite[]> {
@@ -314,9 +366,7 @@ export const requirementsBoardApi = {
     const followed = follows.some(
       (item) => item.target_type === targetType && item.target_id === targetId
     );
-    return followed
-      ? unfollowTarget(targetType, targetId)
-      : followTarget(targetType, targetId);
+    return followed ? unfollowTarget(targetType, targetId) : followTarget(targetType, targetId);
   },
 
   async listTokenSources(): Promise<MockTokenSource[]> {
@@ -383,7 +433,11 @@ export const requirementsBoardApi = {
     return normalizeRequirement(await fetchRequirement(requirementId));
   },
 
-  async setRequirementTokenSources(requirementId: string, nextSourceIds: string[], currentSourceIds: string[]) {
+  async setRequirementTokenSources(
+    requirementId: string,
+    nextSourceIds: string[],
+    currentSourceIds: string[]
+  ) {
     const nextSet = new Set(nextSourceIds);
     const currentSet = new Set(currentSourceIds);
     const toAdd = nextSourceIds.filter((sourceId) => !currentSet.has(sourceId));

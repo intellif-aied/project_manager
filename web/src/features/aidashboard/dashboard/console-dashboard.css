@@ -1732,7 +1732,6 @@
   gap: 8px;
 }
 
-
 /* Dashboard inline expansion keeps the page layout stable and scrolls inside the list. */
 .console-dashboard-inline-list {
   min-height: 0;
@@ -2146,6 +2145,12 @@
   white-space: nowrap;
 }
 
+.console-follow-followers__more {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .console-follow-card__content {
   display: grid;
   min-width: 0;
@@ -2317,7 +2322,6 @@
   grid-template-columns: 3px minmax(280px, 1.35fr) minmax(132px, 0.8fr) 104px 76px;
   gap: 8px;
 }
-
 
 /* Dashboard work-list readability pass */
 .console-follow-card {

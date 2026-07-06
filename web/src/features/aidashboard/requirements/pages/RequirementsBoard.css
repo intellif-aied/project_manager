@@ -504,7 +504,6 @@
   white-space: nowrap;
 }
 
-
 /* Board page visual polish: keep the existing grid background while reducing visual noise. */
 .requirements-board__workspace-head {
   gap: 10px;
@@ -880,7 +879,6 @@
   border-radius: 8px;
 }
 
-
 .requirements-board__card.has-risk::before,
 .requirements-board__card.has-blocked::before {
   width: 2px;
@@ -915,7 +913,6 @@
   height: 4px !important;
   background: linear-gradient(90deg, #7da3d8 0%, #69aaa2 100%) !important;
 }
-
 
 /* Requirement card structure rewrite: compact progress card with inline risk chips. */
 .requirements-board__card {
@@ -1099,7 +1096,6 @@
   color: #8a96a8;
 }
 
-
 .requirements-board__card-progress-line {
   display: block;
   height: 3px;
@@ -1156,7 +1152,6 @@
 .requirements-board__card-meta {
   grid-template-columns: minmax(0, 1fr) minmax(72px, 0.82fr);
 }
-
 
 /* Toolbar-integrated count/refresh: no standalone board meta row. */
 .requirements-board__filter-controls {
@@ -1233,7 +1228,6 @@
   padding-bottom: 6px;
 }
 
-
 .requirements-tree {
   min-width: 1040px;
 }
@@ -1265,7 +1259,10 @@
 .requirements-tree .ant-table-tbody > tr.requirements-tree__table-row:hover > td {
   background: #f6f9ff;
 }
-.requirements-tree .ant-table-tbody > tr.requirements-tree__table-row:hover .requirements-tree__title {
+.requirements-tree
+  .ant-table-tbody
+  > tr.requirements-tree__table-row:hover
+  .requirements-tree__title {
   color: #1d4ed8;
 }
 .requirements-tree .ant-table-row-expand-icon {
@@ -1599,6 +1596,12 @@
   font-style: normal;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.requirements-attention-followers__more {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .requirements-tree__action-follow.ant-btn,
@@ -2633,8 +2636,7 @@
   gap: 12px;
   padding: 14px;
   margin-bottom: 12px;
-  background:
-    linear-gradient(180deg, rgba(248, 251, 255, 0.98) 0%, #ffffff 100%);
+  background: linear-gradient(180deg, rgba(248, 251, 255, 0.98) 0%, #ffffff 100%);
   border: 1px solid #dbe7f6;
   border-radius: 10px;
   box-shadow: 0 8px 20px rgba(15, 23, 42, 0.05);
@@ -2777,7 +2779,10 @@
   color: #2f3a4d;
   border-bottom-color: #edf2f7;
 }
-.requirements-session-modal__table.tokens-table-card .ant-table-tbody > tr.ant-table-row:hover > td {
+.requirements-session-modal__table.tokens-table-card
+  .ant-table-tbody
+  > tr.ant-table-row:hover
+  > td {
   background: #f8fbff;
 }
 .requirements-session-modal__table.tokens-table-card .ant-table-pagination {
@@ -3905,7 +3910,8 @@
   max-height: none;
   overflow: visible;
 }
-.requirements-task-detail__dependency-stack.is-scrollable .requirements-task-detail__dependency-list {
+.requirements-task-detail__dependency-stack.is-scrollable
+  .requirements-task-detail__dependency-list {
   max-height: 260px;
   overflow-y: auto;
 }
@@ -4332,6 +4338,37 @@
 .requirements-dependency-picker > .ant-input-search {
   width: 100%;
 }
+.requirements-dependency-picker__pool-status {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 10px 6px 12px;
+  color: #475569;
+  font-size: 12px;
+  background: #f8fafc;
+  border: 1px solid #e4ebf5;
+  border-radius: 8px;
+}
+.requirements-dependency-picker__pool-status span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.requirements-dependency-picker__pool-status em {
+  flex: none;
+  color: #64748b;
+  font-style: normal;
+}
+.requirements-dependency-picker__pool-status .ant-btn {
+  flex: none;
+  height: 24px;
+  padding: 0 8px;
+  color: #1d4ed8;
+  font-size: 12px;
+}
 .requirements-dependency-picker__body {
   display: grid;
   grid-template-columns: minmax(220px, 0.9fr) minmax(0, 1.6fr);
@@ -4389,7 +4426,7 @@
 }
 .requirements-dependency-picker__tasks {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
   overflow: hidden;
   background: #ffffff;
 }
@@ -4471,6 +4508,9 @@
 }
 .requirements-dependency-picker__task .ant-tag {
   margin: 0;
+}
+.requirements-dependency-picker__loading {
+  padding: 14px;
 }
 .requirements-dependency-picker__selected {
   display: grid;
@@ -4571,7 +4611,6 @@
   }
 }
 
-
 /* Requirement board visual depth: restrained status color and hover polish. */
 .requirements-board__column {
   position: relative;
@@ -4579,19 +4618,39 @@
 }
 
 .requirements-board__column.is-gray {
-  background: linear-gradient(180deg, rgba(148, 163, 184, 0.075), rgba(248, 250, 252, 0.02) 34%, transparent 70%);
+  background: linear-gradient(
+    180deg,
+    rgba(148, 163, 184, 0.075),
+    rgba(248, 250, 252, 0.02) 34%,
+    transparent 70%
+  );
 }
 
 .requirements-board__column.is-purple {
-  background: linear-gradient(180deg, rgba(124, 58, 237, 0.06), rgba(248, 250, 252, 0.02) 34%, transparent 70%);
+  background: linear-gradient(
+    180deg,
+    rgba(124, 58, 237, 0.06),
+    rgba(248, 250, 252, 0.02) 34%,
+    transparent 70%
+  );
 }
 
 .requirements-board__column.is-blue {
-  background: linear-gradient(180deg, rgba(37, 99, 235, 0.06), rgba(248, 250, 252, 0.02) 34%, transparent 70%);
+  background: linear-gradient(
+    180deg,
+    rgba(37, 99, 235, 0.06),
+    rgba(248, 250, 252, 0.02) 34%,
+    transparent 70%
+  );
 }
 
 .requirements-board__column.is-green {
-  background: linear-gradient(180deg, rgba(16, 185, 129, 0.06), rgba(248, 250, 252, 0.02) 34%, transparent 70%);
+  background: linear-gradient(
+    180deg,
+    rgba(16, 185, 129, 0.06),
+    rgba(248, 250, 252, 0.02) 34%,
+    transparent 70%
+  );
 }
 
 .requirements-board__column > header {
@@ -4615,11 +4674,11 @@
 }
 
 .requirements-board__column.is-blue > header::before {
-  background: rgba(37, 99, 235, 0.30);
+  background: rgba(37, 99, 235, 0.3);
 }
 
 .requirements-board__column.is-green > header::before {
-  background: rgba(16, 185, 129, 0.30);
+  background: rgba(16, 185, 129, 0.3);
 }
 
 .requirements-board__column-head-left strong {
@@ -4702,9 +4761,10 @@
 }
 
 .requirements-board__view-switch.ant-segmented {
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 1px 2px rgba(15, 23, 42, 0.035);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 1px 2px rgba(15, 23, 42, 0.035);
 }
-
 
 /* Requirement board favorite icon: keep focus lower until hover. */
 .requirements-board__favorite.is-active {
@@ -4716,22 +4776,41 @@
   opacity: 0.96;
 }
 
-
 /* Requirement board finishing pass: cleaner structure over extra color. */
 .requirements-board__column.is-gray {
-  background: linear-gradient(180deg, rgba(148, 163, 184, 0.04), rgba(248, 250, 252, 0.012) 96px, transparent 210px);
+  background: linear-gradient(
+    180deg,
+    rgba(148, 163, 184, 0.04),
+    rgba(248, 250, 252, 0.012) 96px,
+    transparent 210px
+  );
 }
 
 .requirements-board__column.is-purple {
-  background: linear-gradient(180deg, rgba(124, 58, 237, 0.034), rgba(248, 250, 252, 0.012) 96px, transparent 210px);
+  background: linear-gradient(
+    180deg,
+    rgba(124, 58, 237, 0.034),
+    rgba(248, 250, 252, 0.012) 96px,
+    transparent 210px
+  );
 }
 
 .requirements-board__column.is-blue {
-  background: linear-gradient(180deg, rgba(37, 99, 235, 0.035), rgba(248, 250, 252, 0.012) 96px, transparent 210px);
+  background: linear-gradient(
+    180deg,
+    rgba(37, 99, 235, 0.035),
+    rgba(248, 250, 252, 0.012) 96px,
+    transparent 210px
+  );
 }
 
 .requirements-board__column.is-green {
-  background: linear-gradient(180deg, rgba(16, 185, 129, 0.035), rgba(248, 250, 252, 0.012) 96px, transparent 210px);
+  background: linear-gradient(
+    180deg,
+    rgba(16, 185, 129, 0.035),
+    rgba(248, 250, 252, 0.012) 96px,
+    transparent 210px
+  );
 }
 
 .requirements-board__column > header {
@@ -4778,7 +4857,9 @@
   padding: 12px 13px 11px;
   background: rgba(255, 255, 255, 0.99);
   border-color: rgba(217, 226, 238, 0.98);
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.035), 0 6px 18px rgba(15, 23, 42, 0.025);
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.035),
+    0 6px 18px rgba(15, 23, 42, 0.025);
 }
 
 .requirements-board__card:hover {
@@ -4976,9 +5057,10 @@
 .requirements-board__view-switch.ant-segmented,
 .requirements-board__scope-filter.ant-segmented {
   border-color: rgba(214, 224, 238, 0.88);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 1px 2px rgba(15, 23, 42, 0.025);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.94),
+    0 1px 2px rgba(15, 23, 42, 0.025);
 }
-
 
 /* Requirement board final density repair: keep the refined skeleton compact. */
 .requirements-board__card {
@@ -5017,7 +5099,6 @@
   line-height: 17px;
 }
 
-
 /* Requirement board restraint pass: reduce repeated status color on cards. */
 .requirements-board__column.is-gray {
   background: linear-gradient(180deg, rgba(148, 163, 184, 0.026), rgba(255, 255, 255, 0) 118px);
@@ -5050,7 +5131,9 @@
   padding-left: 13px;
   background: rgba(255, 255, 255, 0.992);
   border-color: rgba(219, 228, 239, 0.98);
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03), 0 6px 16px rgba(15, 23, 42, 0.022);
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.03),
+    0 6px 16px rgba(15, 23, 42, 0.022);
 }
 
 .requirements-board__card::before,
@@ -5070,7 +5153,9 @@
 .requirements-board__card.has-danger,
 .requirements-board__card.has-warning {
   border-color: rgba(219, 228, 239, 0.98);
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03), 0 6px 16px rgba(15, 23, 42, 0.022);
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.03),
+    0 6px 16px rgba(15, 23, 42, 0.022);
 }
 
 .requirements-board__card:hover,
@@ -5164,7 +5249,6 @@
   color: #bac4d0;
 }
 
-
 /* Requirement board post-screenshot refinement: quieter progress and favorite state. */
 .requirements-board__favorite.is-active .anticon,
 .requirements-board__favorite.is-active svg {
@@ -5181,7 +5265,6 @@
   background: #9ec2ac;
 }
 
-
 /* Requirement board main polish: lighter column headers and steadier card affordance. */
 .requirements-board__column > header::before {
   height: 1px;
@@ -5195,7 +5278,9 @@
 
 .requirements-board__card {
   border-color: rgba(219, 228, 239, 0.92);
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.026), 0 5px 14px rgba(15, 23, 42, 0.018);
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.026),
+    0 5px 14px rgba(15, 23, 42, 0.018);
 }
 
 .requirements-board__card:hover,
@@ -5268,7 +5353,9 @@
   border-color: #fca5a5;
 }
 
-.requirements-board__card.has-blocked .requirements-board__card-risk-line.is-danger .requirements-board__card-risk-chip {
+.requirements-board__card.has-blocked
+  .requirements-board__card-risk-line.is-danger
+  .requirements-board__card-risk-chip {
   color: #991b1b;
   background: #fee2e2;
   border-color: #f87171;
@@ -5446,4 +5533,20 @@
 .requirements-drawer--requirement .requirements-drawer__task-risk.is-warning {
   color: #b45309;
   background: #fff8eb;
+}
+
+.requirements-board__column-load-more {
+  width: 100%;
+  height: 32px;
+  margin-top: 2px;
+  border: 1px dashed rgba(88, 116, 150, 0.26);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.62);
+  color: #4b6686;
+}
+
+.requirements-board__column-load-more:hover {
+  border-color: rgba(15, 99, 255, 0.28);
+  background: rgba(240, 247, 255, 0.86);
+  color: #0f63ff;
 }

@@ -110,6 +110,28 @@ export interface Requirement {
   version: number;
 }
 
+export interface PaginatedRequirements {
+  items: Requirement[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface RequirementBoardColumnDTO {
+  status: RequirementStatus;
+  items: Requirement[];
+  total: number;
+  page: number;
+  page_size: number;
+  has_more: boolean;
+}
+
+export interface RequirementBoardResponseDTO {
+  columns: RequirementBoardColumnDTO[];
+  total: number;
+  column_page_size: number;
+}
+
 export interface ACStatus {
   index: number;
   text: string;
@@ -160,6 +182,13 @@ export interface Task {
   created_at: string;
   updated_at: string;
   version: number;
+}
+
+export interface PaginatedTasks {
+  items: Task[];
+  total: number;
+  page: number;
+  page_size: number;
 }
 
 export type RequirementListItemDTO = Requirement;
@@ -215,6 +244,13 @@ export interface DashboardFollowFollowerDTO {
   followedAt: string;
 }
 
+export interface PaginatedFollowFollowers {
+  items: DashboardFollowFollowerDTO[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
 export interface DashboardFollowItemDTO {
   key: string;
   type: "需求" | "任务";
@@ -242,6 +278,13 @@ export interface DashboardFollowItemDTO {
   followerCount: number;
   riskPriority: number;
   navigation: DashboardNavigationTargetDTO;
+}
+
+export interface PaginatedDashboardFollowItems {
+  items: DashboardFollowItemDTO[];
+  total: number;
+  page: number;
+  page_size: number;
 }
 
 export type DashboardRiskType =
@@ -278,6 +321,13 @@ export interface DashboardRiskGroupDTO {
   actionText: string;
   targetUrl: string;
   navigation?: DashboardNavigationTargetDTO;
+}
+
+export interface PaginatedDashboardRiskGroups {
+  items: DashboardRiskGroupDTO[];
+  total: number;
+  page: number;
+  page_size: number;
 }
 
 export interface Session {
