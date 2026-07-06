@@ -941,18 +941,17 @@ export function RequirementsListPage() {
     return result;
   }, [tasks]);
 
-  const navigationTask = tasks.find((item) => item.id === searchParams.get("taskId"));
-  const navigationRequirement = requirements.find((item) => item.id === searchParams.get("requirementId"));
   const selectedRequirementFromLatest = selectedRequirement
     ? (requirements.find((item) => item.id === selectedRequirement.id) ?? selectedRequirement)
     : undefined;
   const selectedTaskFromLatest = selectedTask
     ? (tasks.find((item) => item.id === selectedTask.id) ?? selectedTask)
     : undefined;
-  const activeRequirement = selectedRequirementFromLatest ?? navigationRequirement;
-  const activeTask = selectedTaskFromLatest ?? navigationTask;
+  const activeRequirement = selectedRequirementFromLatest;
+  const activeTask = selectedTaskFromLatest;
 
-  const clearNavigationTarget = () => {
+  useEffect(() => {
+    if (!searchParams.has("requirementId") && !searchParams.has("taskId")) return;
     setSearchParams(
       (previous) => {
         const next = new URLSearchParams(previous);
@@ -962,41 +961,15 @@ export function RequirementsListPage() {
       },
       { replace: true }
     );
-  };
-  const clearTaskTarget = () => {
-    setSearchParams(
-      (previous) => {
-        const next = new URLSearchParams(previous);
-        next.delete("taskId");
-        return next;
-      },
-      { replace: true }
-    );
-  };
+  }, [searchParams, setSearchParams]);
+
   const openRequirementDetail = (requirement: MockRequirement) => {
     setSelectedRequirement(requirement);
     setCreatorOpen(false);
-    setSearchParams(
-      (previous) => {
-        const next = new URLSearchParams(previous);
-        next.set("requirementId", requirement.id);
-        next.delete("taskId");
-        return next;
-      },
-      { replace: false }
-    );
   };
   const openTaskDetail = (task: MockTask) => {
     setTaskHistory([]);
     setSelectedTask(task);
-    setSearchParams(
-      (previous) => {
-        const next = new URLSearchParams(previous);
-        next.set("taskId", task.id);
-        return next;
-      },
-      { replace: false }
-    );
   };
   const openRelatedTaskDetail = (task: MockTask) => {
     if (activeTask?.id === task.id) return;
@@ -1004,14 +977,6 @@ export function RequirementsListPage() {
       setTaskHistory((current) => [...current, activeTask].slice(-12));
     }
     setSelectedTask(task);
-    setSearchParams(
-      (previous) => {
-        const next = new URLSearchParams(previous);
-        next.set("taskId", task.id);
-        return next;
-      },
-      { replace: false }
-    );
   };
   const returnPreviousTask = () => {
     const previousTask = taskHistory[taskHistory.length - 1];
@@ -1019,14 +984,6 @@ export function RequirementsListPage() {
     const latestTask = tasks.find((item) => item.id === previousTask.id) ?? previousTask;
     setTaskHistory((current) => current.slice(0, -1));
     setSelectedTask(latestTask);
-    setSearchParams(
-      (previous) => {
-        const next = new URLSearchParams(previous);
-        next.set("taskId", latestTask.id);
-        return next;
-      },
-      { replace: false }
-    );
   };
 
   const filteredRequirements = useMemo(() => {
@@ -1471,7 +1428,6 @@ export function RequirementsListPage() {
         onClose={() => {
           setSelectedRequirement(undefined);
           setCreatorOpen(false);
-          clearNavigationTarget();
         }}
         onSaved={(updated) => setSelectedRequirement(updated)}
         onOpenTask={openTaskDetail}
@@ -1489,13 +1445,11 @@ export function RequirementsListPage() {
         onClose={() => {
           setSelectedTask(undefined);
           setTaskHistory([]);
-          clearTaskTarget();
         }}
         onSaved={(updated) => setSelectedTask(updated)}
         onDeleted={() => {
           setSelectedTask(undefined);
           setTaskHistory([]);
-          clearTaskTarget();
         }}
       />
       <Modal
