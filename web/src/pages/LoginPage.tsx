@@ -51,7 +51,7 @@ export function LoginPage() {
       <section className="login-page__shell login-page__shell--login" aria-labelledby="login-title">
         <div className="login-page__intro">
           <div className="login-page__brand-row">
-            <img className="login-page__brand-logo" src="/logo.svg" alt="" aria-hidden="true" />
+            <img className="login-page__brand-logo" src="/brand-logo.png" alt="" aria-hidden="true" />
             <span>
               <strong>{runtimeConfig.appTitle}</strong>
               <em>内部协作控制台</em>

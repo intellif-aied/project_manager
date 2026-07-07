@@ -61,6 +61,7 @@
   width: 38px;
   height: 38px;
   object-fit: contain;
+  border-radius: 9px;
 }
 
 .app-sidebar__brand-copy {
