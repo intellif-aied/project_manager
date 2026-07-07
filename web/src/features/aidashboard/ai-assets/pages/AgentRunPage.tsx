@@ -437,7 +437,6 @@ function SessionSliceSelector({
           dataSource={sessions}
           loading={sessionsQuery.isLoading || sessionsQuery.isFetching}
           size="middle"
-          scroll={{ x: 820 }}
           rowSelection={{
             selectedRowKeys: selectedKeys,
             preserveSelectedRowKeys: true,
@@ -468,7 +467,7 @@ function SessionSliceSelector({
             {
               title: "真实 Session ID",
               key: "session",
-              width: 300,
+              width: "36%",
               render: (_: unknown, session) => (
                 <span className="ai-assets-session-id">{realSessionId(session)}</span>
               )
@@ -476,7 +475,7 @@ function SessionSliceSelector({
             {
               title: "摘要",
               dataIndex: "summary",
-              width: 260,
+              width: "30%",
               render: (summary?: string) =>
                 summary ? (
                   <span className="ai-assets-session-summary" title={summary}>
@@ -489,14 +488,14 @@ function SessionSliceSelector({
             {
               title: "活动时间",
               key: "activity",
-              width: 190,
+              width: "22%",
               render: (_: unknown, session) => formatActivityRange(session)
             },
             {
               title: "Total",
               dataIndex: "total_tokens",
               align: "right" as const,
-              width: 90,
+              width: "12%",
               render: (value: number) => formatTokens(value)
             }
           ]}
