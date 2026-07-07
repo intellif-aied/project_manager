@@ -130,8 +130,17 @@ func (s *ManagedAgentRunStatusSyncer) refreshRun(ctx context.Context, run manage
 		if !reportWritebackGraceElapsed(task, now) {
 			status = "running"
 		} else {
-			status = "failed"
-			errMsg = reportWritebackMissingErrorMessage
+			reportID, fallbackErr := s.fallbackReportWriteback(ctx, run, externalRunID, task)
+			if fallbackErr != nil {
+				status = "failed"
+				errMsg = reportWritebackMissingErrorMessage + ": " + fallbackErr.Error()
+			} else if reportID != "" {
+				status = "succeeded"
+				run.BusinessID = reportID
+			} else {
+				status = "failed"
+				errMsg = reportWritebackMissingErrorMessage
+			}
 		}
 	}
 	if !IsTerminalManagedRunStatus(status) && s.isTimedOut(run, now) {
@@ -210,6 +219,9 @@ func (s *ManagedAgentRunStatusSyncer) updateRunStatus(ctx context.Context, run m
 	if errorMessage != "" {
 		output["error"] = errorMessage
 	}
+	if reportID := strings.TrimSpace(run.BusinessID); reportID != "" {
+		output["report_id"] = reportID
+	}
 	outputJSON, _ := json.Marshal(output)
 
 	sets := []string{"status = $1", "output_ref_json = $2", "agent_version_id = $3"}
@@ -225,6 +237,11 @@ func (s *ManagedAgentRunStatusSyncer) updateRunStatus(ctx context.Context, run m
 		args = append(args, errorMessage)
 		argIdx++
 	}
+	if strings.TrimSpace(run.BusinessID) != "" {
+		sets = append(sets, fmt.Sprintf("business_id = $%d", argIdx))
+		args = append(args, run.BusinessID)
+		argIdx++
+	}
 	if IsTerminalManagedRunStatus(status) {
 		sets = append(sets, fmt.Sprintf("finished_at = $%d", argIdx))
 		args = append(args, now)
@@ -233,6 +250,212 @@ func (s *ManagedAgentRunStatusSyncer) updateRunStatus(ctx context.Context, run m
 	args = append(args, run.ID)
 	_, err := s.db.ExecContext(ctx, fmt.Sprintf("UPDATE ai_runs SET %s WHERE id = $%d AND status IN ('pending', 'running')", strings.Join(sets, ", "), argIdx), args...)
 	return err
+}
+
+type reportWritebackFallbackRun struct {
+	UserID       string
+	AgentID      string
+	InputRefJSON []byte
+}
+
+type reportWritebackFallbackInput struct {
+	ReportType string         `json:"report_type"`
+	Period     map[string]any `json:"period"`
+	Target     map[string]any `json:"target"`
+}
+
+func (s *ManagedAgentRunStatusSyncer) fallbackReportWriteback(ctx context.Context, run managedAgentRunStatusRow, externalRunID string, task *ManagedTaskStatus) (string, error) {
+	if task == nil || strings.TrimSpace(task.Result) == "" {
+		if strings.TrimSpace(externalRunID) == "" {
+			return "", nil
+		}
+		resultTask, err := s.client.GetTaskResult(ctx, externalRunID)
+		if err != nil {
+			return "", err
+		}
+		task = resultTask
+	}
+	content := strings.TrimSpace(task.Result)
+	if content == "" {
+		return "", nil
+	}
+
+	var fallbackRun reportWritebackFallbackRun
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT user_id::text, agent_id, COALESCE(input_ref_json, '{}'::jsonb)
+		FROM ai_runs
+		WHERE id::text = $1`, run.ID).Scan(&fallbackRun.UserID, &fallbackRun.AgentID, &fallbackRun.InputRefJSON); err != nil {
+		return "", err
+	}
+
+	var input reportWritebackFallbackInput
+	if err := json.Unmarshal(fallbackRun.InputRefJSON, &input); err != nil {
+		return "", err
+	}
+	reportType := strings.TrimSpace(input.ReportType)
+	date := strings.TrimSpace(managedStringFromAny(input.Period["date"]))
+	weekStart := strings.TrimSpace(managedStringFromAny(input.Period["week_start"]))
+	weekEnd := strings.TrimSpace(managedStringFromAny(input.Period["week_end"]))
+	targetUserID := strings.TrimSpace(managedStringFromAny(input.Target["user_id"]))
+	targetTeamID := strings.TrimSpace(managedStringFromAny(input.Target["team_id"]))
+	if targetUserID == "" {
+		targetUserID = fallbackRun.UserID
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+
+	reportID, err := fallbackUpsertReportContent(ctx, tx, reportType, date, weekStart, weekEnd, targetUserID, targetTeamID, fallbackRun.UserID, content, run.ID, fallbackRun.AgentID, nullableManagedInt(task.AgentVersionID), strings.TrimSpace(task.ModelID))
+	if err != nil {
+		return "", err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+	return reportID, nil
+}
+
+func fallbackUpsertReportContent(ctx context.Context, tx *sql.Tx, reportType, date, weekStart, weekEnd, targetUserID, targetTeamID, leaderID, content, runID, agentID string, agentVersionID any, modelID string) (string, error) {
+	switch reportType {
+	case "personal_daily":
+		if targetUserID == "" || date == "" {
+			return "", fmt.Errorf("missing personal_daily target user or date")
+		}
+		var reportID string
+		err := tx.QueryRowContext(ctx, `
+			INSERT INTO daily_reports (user_id, report_date, content, edited, generation_mode, managed_agent_run_id, agent_id, agent_version_id, model_id, status, saved_at)
+			VALUES ($1, $2, $3, false, 'managed_agent', $4, $5, $6, $7, 'saved', now())
+			ON CONFLICT (user_id, report_date) DO UPDATE
+			SET content = EXCLUDED.content,
+			    edited = false,
+			    generation_mode = 'managed_agent',
+			    managed_agent_run_id = EXCLUDED.managed_agent_run_id,
+			    agent_id = EXCLUDED.agent_id,
+			    agent_version_id = EXCLUDED.agent_version_id,
+			    model_id = EXCLUDED.model_id,
+			    status = 'saved',
+			    saved_at = now(),
+			    updated_at = now()
+			WHERE daily_reports.edited = false
+			RETURNING id::text`, targetUserID, date, content, runID, nullableManagedString(agentID), agentVersionID, nullableManagedString(modelID)).Scan(&reportID)
+		return reportID, err
+	case "personal_weekly":
+		if targetUserID == "" || weekStart == "" || weekEnd == "" {
+			return "", fmt.Errorf("missing personal_weekly target user or week range")
+		}
+		var reportID string
+		err := tx.QueryRowContext(ctx, `
+			INSERT INTO personal_weekly_reports (user_id, week_start, week_end, content, status, generation_mode, managed_agent_run_id, agent_id, agent_version_id, model_id, edited, saved_at)
+			VALUES ($1, $2, $3, $4, 'saved', 'managed_agent', $5, $6, $7, $8, false, now())
+			ON CONFLICT (user_id, week_start) DO UPDATE
+			SET content = EXCLUDED.content,
+			    week_end = EXCLUDED.week_end,
+			    status = 'saved',
+			    generation_mode = 'managed_agent',
+			    managed_agent_run_id = EXCLUDED.managed_agent_run_id,
+			    agent_id = EXCLUDED.agent_id,
+			    agent_version_id = EXCLUDED.agent_version_id,
+			    model_id = EXCLUDED.model_id,
+			    edited = false,
+			    saved_at = now(),
+			    updated_at = now()
+			WHERE personal_weekly_reports.edited = false
+			RETURNING id::text`, targetUserID, weekStart, weekEnd, content, runID, nullableManagedString(agentID), agentVersionID, nullableManagedString(modelID)).Scan(&reportID)
+		return reportID, err
+	case "team_daily":
+		if targetTeamID == "" || leaderID == "" || date == "" {
+			return "", fmt.Errorf("missing team_daily target team, leader, or date")
+		}
+		var reportID string
+		err := tx.QueryRowContext(ctx, `
+			INSERT INTO team_reports (team_id, leader_id, report_date, content, generation_mode, managed_agent_run_id, agent_id, agent_version_id, model_id, edited, status, saved_at)
+			VALUES ($1, $2, $3, $4, 'managed_agent', $5, $6, $7, $8, false, 'saved', now())
+			ON CONFLICT (team_id, report_date) DO UPDATE
+			SET content = EXCLUDED.content,
+			    leader_id = EXCLUDED.leader_id,
+			    generation_mode = 'managed_agent',
+			    managed_agent_run_id = EXCLUDED.managed_agent_run_id,
+			    agent_id = EXCLUDED.agent_id,
+			    agent_version_id = EXCLUDED.agent_version_id,
+			    model_id = EXCLUDED.model_id,
+			    edited = false,
+			    status = 'saved',
+			    saved_at = now(),
+			    updated_at = now()
+			WHERE team_reports.edited = false
+			RETURNING id::text`, targetTeamID, leaderID, date, content, runID, nullableManagedString(agentID), agentVersionID, nullableManagedString(modelID)).Scan(&reportID)
+		return reportID, err
+	case "team_weekly":
+		if targetTeamID == "" || leaderID == "" || weekStart == "" || weekEnd == "" {
+			return "", fmt.Errorf("missing team_weekly target team, leader, or week range")
+		}
+		var reportID string
+		err := tx.QueryRowContext(ctx, `
+			INSERT INTO team_weekly_reports (team_id, leader_id, week_start, week_end, content, generation_mode, managed_agent_run_id, agent_id, agent_version_id, model_id, edited)
+			VALUES ($1, $2, $3, $4, $5, 'managed_agent', $6, $7, $8, $9, false)
+			ON CONFLICT (team_id, week_start) DO UPDATE
+			SET content = EXCLUDED.content,
+			    leader_id = EXCLUDED.leader_id,
+			    week_end = EXCLUDED.week_end,
+			    generation_mode = 'managed_agent',
+			    managed_agent_run_id = EXCLUDED.managed_agent_run_id,
+			    agent_id = EXCLUDED.agent_id,
+			    agent_version_id = EXCLUDED.agent_version_id,
+			    model_id = EXCLUDED.model_id,
+			    edited = false,
+			    updated_at = now()
+			WHERE team_weekly_reports.edited = false
+			RETURNING id::text`, targetTeamID, leaderID, weekStart, weekEnd, content, runID, nullableManagedString(agentID), agentVersionID, nullableManagedString(modelID)).Scan(&reportID)
+		return reportID, err
+	case "department_daily":
+		if date == "" {
+			return "", fmt.Errorf("missing department_daily date")
+		}
+		var reportID string
+		err := tx.QueryRowContext(ctx, `
+			INSERT INTO department_reports (report_date, content, generation_mode, managed_agent_run_id, agent_id, agent_version_id, model_id, edited, status, saved_at)
+			VALUES ($1, $2, 'managed_agent', $3, $4, $5, $6, false, 'saved', now())
+			ON CONFLICT (report_date) DO UPDATE
+			SET content = EXCLUDED.content,
+			    generation_mode = 'managed_agent',
+			    managed_agent_run_id = EXCLUDED.managed_agent_run_id,
+			    agent_id = EXCLUDED.agent_id,
+			    agent_version_id = EXCLUDED.agent_version_id,
+			    model_id = EXCLUDED.model_id,
+			    edited = false,
+			    status = 'saved',
+			    saved_at = now(),
+			    updated_at = now()
+			WHERE department_reports.edited = false
+			RETURNING id::text`, date, content, runID, nullableManagedString(agentID), agentVersionID, nullableManagedString(modelID)).Scan(&reportID)
+		return reportID, err
+	case "department_weekly":
+		if weekStart == "" || weekEnd == "" {
+			return "", fmt.Errorf("missing department_weekly week range")
+		}
+		var reportID string
+		err := tx.QueryRowContext(ctx, `
+			INSERT INTO department_weekly_reports (week_start, week_end, content, generation_mode, managed_agent_run_id, agent_id, agent_version_id, model_id, edited)
+			VALUES ($1, $2, $3, 'managed_agent', $4, $5, $6, $7, false)
+			ON CONFLICT (week_start) DO UPDATE
+			SET content = EXCLUDED.content,
+			    week_end = EXCLUDED.week_end,
+			    generation_mode = 'managed_agent',
+			    managed_agent_run_id = EXCLUDED.managed_agent_run_id,
+			    agent_id = EXCLUDED.agent_id,
+			    agent_version_id = EXCLUDED.agent_version_id,
+			    model_id = EXCLUDED.model_id,
+			    edited = false,
+			    updated_at = now()
+			WHERE department_weekly_reports.edited = false
+			RETURNING id::text`, weekStart, weekEnd, content, runID, nullableManagedString(agentID), agentVersionID, nullableManagedString(modelID)).Scan(&reportID)
+		return reportID, err
+	default:
+		return "", fmt.Errorf("unsupported report_type: %s", reportType)
+	}
 }
 
 func NormalizeManagedRunStatus(status string) string {
@@ -256,6 +479,14 @@ func IsTerminalManagedRunStatus(status string) bool {
 
 func nullableManagedInt(value int) any {
 	if value == 0 {
+		return nil
+	}
+	return value
+}
+
+func nullableManagedString(value string) any {
+	value = strings.TrimSpace(value)
+	if value == "" {
 		return nil
 	}
 	return value
