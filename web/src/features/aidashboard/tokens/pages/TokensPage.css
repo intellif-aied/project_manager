@@ -50,6 +50,13 @@
   max-width: 100%;
 }
 
+.tokens-range-hint {
+  margin-top: -6px;
+  color: #6b778a;
+  font-size: 12px;
+  line-height: 18px;
+}
+
 .tokens-table-card {
   overflow: hidden;
   background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);

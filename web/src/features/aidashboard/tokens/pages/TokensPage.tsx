@@ -58,24 +58,34 @@ function formatActivityRange(session: SessionTokens) {
   return `${formatDateTime(start)} ~ ${formatDateTime(end)}`;
 }
 
+const DEFAULT_RANGE_DAYS = 7;
+
+type TokenDateRange = [dayjs.Dayjs, dayjs.Dayjs];
+
+function defaultTokenDateRange(): TokenDateRange {
+  const end = dayjs();
+  return [end.subtract(DEFAULT_RANGE_DAYS - 1, "day"), end];
+}
+
 export function TokensPage() {
   const { user } = useAuth();
-  const [range, setRange] = useState<[dayjs.Dayjs, dayjs.Dayjs] | null>(null);
+  const [range, setRange] = useState<TokenDateRange>(() => defaultTokenDateRange());
   const canViewTeam = Boolean(user && (user.role === "team_leader" || user.role === "director" || user.role === "admin"));
   const [scope, setScope] = useState<"mine" | "team">("mine");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const effectiveScope = canViewTeam ? scope : "mine";
 
-  const from = range?.[0].format("YYYY-MM-DD");
-  const to = range?.[1].format("YYYY-MM-DD");
-  const hasDateRange = Boolean(from && to);
+  const from = range[0].format("YYYY-MM-DD");
+  const to = range[1].format("YYYY-MM-DD");
+  const dateLabel = `${from} ~ ${to}`;
 
   const tokensQuery = useQuery({
     queryKey: ["session-tokens", from, to, effectiveScope, page, pageSize],
     queryFn: () =>
       fetchSessionTokens({
-        ...(hasDateRange ? { from, to } : {}),
+        from,
+        to,
         scope: effectiveScope,
         page: String(page),
         page_size: String(pageSize)
@@ -87,8 +97,9 @@ export function TokensPage() {
     queryKey: ["token-aggregation", from, to, effectiveScope],
     queryFn: () =>
       fetchTokens({
-        period: hasDateRange ? "range" : "month",
-        ...(hasDateRange ? { from, to } : {}),
+        period: "range",
+        from,
+        to,
         group_by: "model",
         scope: effectiveScope
       }),
@@ -112,27 +123,22 @@ export function TokensPage() {
 
   const teamLabel = user?.role === "director" || user?.role === "admin" ? "全团队" : "团队";
   const scopeLabel = effectiveScope === "mine" ? "我的 Token 明细" : `${teamLabel} Token 明细`;
-  const dateLabel = hasDateRange ? `${from} ~ ${to}` : "";
 
   return (
     <PagePanel
       title="Token 明细"
       className="tokens-page"
-      description={`${scopeLabel} · 按 AI 工作记录查看 Input / Output / Cache / Total`}
+      description={`${scopeLabel} · 按所选时间范围查看 Input / Output / Cache / Total`}
       breadcrumbs={[{ title: "Token 明细" }]}
       showNav={false}
     >
       <div className="tokens-toolbar">
         <div className="tokens-toolbar__left">
           <span>{scopeLabel}</span>
-          {dateLabel ? (
-            <>
-              <span>·</span>
-              <span>{dateLabel}</span>
-            </>
-          ) : null}
           <span>·</span>
-          <span>{total} 条工作记录</span>
+          <span>{dateLabel}</span>
+          <span>·</span>
+          <span>{total} 条 session</span>
         </div>
         <div className="tokens-toolbar__right">
           {canViewTeam ? (
@@ -150,9 +156,10 @@ export function TokensPage() {
           ) : null}
           <DatePicker.RangePicker
             value={range}
+            allowClear={false}
             onChange={(v) => {
               if (!v || !v[0] || !v[1]) {
-                setRange(null);
+                setRange(defaultTokenDateRange());
                 setPage(1);
                 return;
               }
@@ -161,6 +168,10 @@ export function TokensPage() {
             }}
           />
         </div>
+      </div>
+
+      <div className="tokens-range-hint">
+        默认最近 7 天，统计与明细同步按所选时间范围计算。
       </div>
 
       {tokensQuery.isError ? (
@@ -192,7 +203,7 @@ export function TokensPage() {
             key: "total",
             title: "总 Token",
             value: formatTokens(totals.total),
-            description: `${total} 条工作记录合计`
+            description: `${dateLabel} · ${total} 条 session 合计`
           }}
         />
         <RequirementMetricCard
@@ -254,7 +265,7 @@ export function TokensPage() {
             pageSize: tokensQuery.data?.page_size ?? pageSize,
             total,
             showSizeChanger: true,
-            showTotal: (value) => `共 ${value} 条工作记录`,
+            showTotal: (value) => `共 ${value} 条 session`,
             onChange: (nextPage, nextPageSize) => {
               setPage(nextPage);
               setPageSize(nextPageSize);
