@@ -18,16 +18,16 @@ import "./LoginPage.css";
 const DASHBOARD_PATH = "/dashboard";
 
 const accessSignals = [
-  { label: "身份验证", status: "已加密", tone: "cyan" },
-  { label: "权限校验", status: "已校验", tone: "amber" },
-  { label: "安全连接", status: "内部专线", tone: "green" },
+  { label: "身份识别", status: "账号验证", tone: "cyan" },
+  { label: "访问范围", status: "按角色开放", tone: "amber" },
+  { label: "工作台", status: "登录后进入", tone: "green" },
 ];
 
 const operationLines = [
-  "已建立安全连接",
-  "已加载身份校验策略",
-  "已完成访问范围校验",
-  "工作台环境准备就绪",
+  "准备工作台入口",
+  "加载登录表单",
+  "等待账号验证",
+  "登录后进入工作台",
 ];
 
 export function LoginPage() {
@@ -62,7 +62,7 @@ export function LoginPage() {
             <p className="login-page__eyebrow">Aida 内部工作台</p>
             <h1>进入 Aida 内部工作台</h1>
             <p>
-              使用授权账号访问团队协作环境，保持入口清晰、安全、专注。
+              使用授权账号访问团队协作环境，保持入口清晰、专注。
             </p>
           </div>
 
@@ -174,11 +174,11 @@ export function LoginPage() {
           <div className="login-page__card-footer">
             <span>
               <ApiOutlined />
-              私有访问
+              平台入口
             </span>
             <span>
               <ClockCircleOutlined />
-              安全连接
+              工作台入口
             </span>
           </div>
 

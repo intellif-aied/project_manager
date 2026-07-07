@@ -1,4 +1,4 @@
-import { DeploymentUnitOutlined, SettingOutlined } from "@ant-design/icons";
+import { DatabaseOutlined, DeploymentUnitOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { App, Button, Modal, Space, Table } from "antd";
 import type { ColumnsType } from "antd/es/table";
@@ -257,12 +257,16 @@ export function ReportAIGenerateControls({
         </Button>
         {allowSessionSelection ? (
           <Button
-            icon={<SettingOutlined />}
+            icon={<DatabaseOutlined />}
             className={settingsOpen ? "is-active" : undefined}
             disabled={disabled || generating}
-            title="生成设置"
+            title="选择参与生成的 session"
             onClick={onToggleSettings}
-          />
+          >
+            {selectedSessionSliceKeys.length > 0
+              ? `已选 ${selectedSessionSliceKeys.length} 个 session`
+              : "选择 session"}
+          </Button>
         ) : null}
       </Space.Compact>
     </>
@@ -301,7 +305,7 @@ export function ReportAISettingsPanel({
   const columns = useMemo<ColumnsType<SessionTokens>>(
     () => [
       {
-        title: "Session / 摘要",
+        title: "session / 摘要",
         key: "session",
         render: (_, record) => (
           <span className="report-ai-session-cell">
@@ -327,9 +331,12 @@ export function ReportAISettingsPanel({
     <aside className="report-ai-settings-panel">
       <div className="report-ai-settings-panel__head">
         <span>
-          <strong>生成上下文</strong>
+          <strong>选择参与生成的 session</strong>
           <em>
-            {from} 至 {to} · 已选择 {selectedKeys.length} 个
+            {from} 至 {to} ·{" "}
+            {selectedKeys.length > 0
+              ? `已选 ${selectedKeys.length} 个 session`
+              : "默认全部 session"}
           </em>
         </span>
         <Button size="small" type="text" onClick={onClose}>

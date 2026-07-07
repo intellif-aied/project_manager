@@ -112,7 +112,7 @@ export function TokensPage() {
 
   const teamLabel = user?.role === "director" || user?.role === "admin" ? "全团队" : "团队";
   const scopeLabel = effectiveScope === "mine" ? "我的 Token 明细" : `${teamLabel} Token 明细`;
-  const dateLabel = hasDateRange ? `${from} ~ ${to}` : "默认本月";
+  const dateLabel = hasDateRange ? `${from} ~ ${to}` : "";
 
   return (
     <PagePanel
@@ -125,8 +125,12 @@ export function TokensPage() {
       <div className="tokens-toolbar">
         <div className="tokens-toolbar__left">
           <span>{scopeLabel}</span>
-          <span>·</span>
-          <span>{dateLabel}</span>
+          {dateLabel ? (
+            <>
+              <span>·</span>
+              <span>{dateLabel}</span>
+            </>
+          ) : null}
           <span>·</span>
           <span>{total} 条工作记录</span>
         </div>

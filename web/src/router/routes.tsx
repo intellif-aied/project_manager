@@ -222,14 +222,14 @@ export const appRoutes: AppRoute[] = [
   },
   {
     path: "/ai-assets/agent-schedules/new",
-    title: "新建定时任务",
+    title: "新建定时报告任务",
     hideInMenu: true,
     roles: ["admin", "director", "pm", "team_leader", "employee"],
     element: <AgentScheduleFormPage />
   },
   {
     path: "/ai-assets/agent-schedules/:scheduleId/edit",
-    title: "编辑定时任务",
+    title: "编辑定时报告任务",
     hideInMenu: true,
     roles: ["admin", "director", "pm", "team_leader", "employee"],
     element: <AgentScheduleFormPage />

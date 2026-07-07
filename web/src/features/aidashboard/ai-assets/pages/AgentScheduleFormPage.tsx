@@ -264,7 +264,9 @@ export function AgentScheduleFormPage() {
       return saved;
     },
     onSuccess: (_saved, variables) => {
-      message.success(variables.runNow ? "定时任务已保存并提交运行" : "定时任务已保存");
+      message.success(
+        variables.runNow ? "定时报告任务已保存并提交生成" : "定时报告任务已保存"
+      );
       void queryClient.invalidateQueries({ queryKey: ["managed-agent-schedules"] });
       void queryClient.invalidateQueries({ queryKey: ["managed-agent-runs"] });
       navigate(AI_ASSETS_RETURN_PATH);
@@ -282,17 +284,17 @@ export function AgentScheduleFormPage() {
   if (editing && !schedulesQuery.isLoading && !schedule) {
     return (
       <PagePanel
-        title="编辑定时任务"
+        title="编辑定时报告任务"
         backTo={AI_ASSETS_RETURN_PATH}
         onBack={() => navigate(AI_ASSETS_RETURN_PATH)}
         onNavigate={(path) => navigate(path)}
         breadcrumbs={[
           { title: "系统" },
           { title: "我的 AI 资产", path: AI_ASSETS_HOME },
-          { title: "编辑定时任务" }
+          { title: "编辑定时报告任务" }
         ]}
       >
-        <Empty description="定时任务不存在或已删除" />
+        <Empty description="定时报告任务不存在或已删除" />
       </PagePanel>
     );
   }
@@ -304,14 +306,14 @@ export function AgentScheduleFormPage() {
 
   return (
     <PagePanel
-      title={editing ? "编辑定时任务" : "新建定时任务"}
+      title={editing ? "编辑定时报告任务" : "新建定时报告任务"}
       backTo={AI_ASSETS_RETURN_PATH}
       onBack={() => navigate(AI_ASSETS_RETURN_PATH)}
       onNavigate={(path) => navigate(path)}
       breadcrumbs={[
         { title: "系统" },
         { title: "我的 AI 资产", path: AI_ASSETS_HOME },
-        { title: "定时任务" },
+        { title: "定时报告任务" },
         { title: editing ? "编辑" : "新建" }
       ]}
     >
@@ -321,12 +323,12 @@ export function AgentScheduleFormPage() {
           layout="vertical"
           className="ai-assets-agent-editor ai-assets-schedule-form"
         >
-          <Card title="任务设置" className="ai-assets-editor-section">
+          <Card title="报告任务设置" className="ai-assets-editor-section">
             <div className="ai-assets-schedule-form__grid">
               <Form.Item
                 name="name"
-                label="任务名称"
-                rules={[{ required: true, message: "请输入任务名称" }]}
+                label="报告任务名称"
+                rules={[{ required: true, message: "请输入报告任务名称" }]}
               >
                 <Input placeholder="例如：每日个人日报" />
               </Form.Item>
@@ -350,7 +352,7 @@ export function AgentScheduleFormPage() {
                   loading={agentsQuery.isLoading}
                   options={agentOptions}
                   optionFilterProp="label"
-                  placeholder="选择要定时运行的 Agent"
+                  placeholder="选择要定时生成报告的 Agent"
                 />
               </Form.Item>
 
@@ -362,7 +364,7 @@ export function AgentScheduleFormPage() {
                 )}
               </Form.Item>
 
-              <Form.Item name="schedule_type" label="触发频率" rules={[{ required: true }]}>
+              <Form.Item name="schedule_type" label="报告频率" rules={[{ required: true }]}>
                 <Select
                   options={[
                     { label: "每天", value: "daily" },
@@ -374,8 +376,8 @@ export function AgentScheduleFormPage() {
               {scheduleType === "weekly" ? (
                 <Form.Item
                   name="weekdays"
-                  label="周几执行"
-                  rules={[{ required: true, message: "请选择周几" }]}
+                  label="周几生成"
+                  rules={[{ required: true, message: "请选择周几生成" }]}
                 >
                   <Select mode="multiple" options={WEEKDAY_OPTIONS} />
                 </Form.Item>
@@ -383,18 +385,18 @@ export function AgentScheduleFormPage() {
 
               <Form.Item
                 name="time_of_day"
-                label="执行时间"
+                label="生成时间"
                 getValueProps={(value?: string) => ({ value: timeStringToDayjs(value) })}
                 normalize={normalizeTimeOfDay}
                 rules={[
-                  { required: true, message: "请选择执行时间" },
+                  { required: true, message: "请选择生成时间" },
                   { pattern: /^([01]\d|2[0-3]):[0-5]\d$/, message: "格式应为 HH:mm" }
                 ]}
               >
                 <TimePicker
                   format={TIME_OF_DAY_FORMAT}
                   inputReadOnly
-                  placeholder="选择时间"
+                  placeholder="选择生成时间"
                   showNow={false}
                 />
               </Form.Item>
@@ -436,10 +438,10 @@ export function AgentScheduleFormPage() {
             </div>
           </Card>
 
-          <Card title="运行预览" className="ai-assets-editor-section">
+          <Card title="定时报告预览" className="ai-assets-editor-section">
             <dl className="ai-assets-schedule-preview">
               <div>
-                <dt>触发规则</dt>
+                <dt>生成规则</dt>
                 <dd>
                   {scheduleRuleText({
                     schedule_type: scheduleType,
@@ -449,7 +451,7 @@ export function AgentScheduleFormPage() {
                 </dd>
               </div>
               <div>
-                <dt>下次触发时间</dt>
+                <dt>下次生成时间</dt>
                 <dd>{formatDateTime(previewQuery.data?.next_run_at)}</dd>
               </div>
               <div>
@@ -497,7 +499,7 @@ export function AgentScheduleFormPage() {
                 loading={saveMutation.isPending}
                 onClick={() => void submit(true)}
               >
-                保存并立即运行
+                保存并立即生成报告
               </Button>
             </Space>
           </div>

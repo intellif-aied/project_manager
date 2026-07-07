@@ -118,7 +118,7 @@ function formatDateTime(value?: string | number) {
 function runTypeLabel(value: string) {
   if (value === "report_agent_run") return "报告运行";
   if (value === "manual_agent_run") return "手动运行";
-  if (value === "scheduled_agent_run") return "定时任务";
+  if (value === "scheduled_agent_run") return "定时报告任务";
   return value || "-";
 }
 
@@ -359,7 +359,7 @@ export function AIAssetsPage() {
         schedulePayloadFromRecord(payload.schedule, payload.enabled)
       ),
     onSuccess: (_data, variables) => {
-      message.success(variables.enabled ? "定时任务已启用" : "定时任务已停用");
+      message.success(variables.enabled ? "定时报告任务已启用" : "定时报告任务已停用");
       void queryClient.invalidateQueries({ queryKey: ["managed-agent-schedules"] });
     },
     onError: (err: unknown) => message.error(errorMessage(err))
@@ -368,7 +368,7 @@ export function AIAssetsPage() {
   const deleteScheduleMutation = useMutation({
     mutationFn: (scheduleId: string) => deleteManagedAgentSchedule(scheduleId),
     onSuccess: () => {
-      message.success("定时任务已删除");
+      message.success("定时报告任务已删除");
       void queryClient.invalidateQueries({ queryKey: ["managed-agent-schedules"] });
     },
     onError: (err: unknown) => message.error(errorMessage(err))
@@ -377,7 +377,7 @@ export function AIAssetsPage() {
   const runScheduleMutation = useMutation({
     mutationFn: (scheduleId: string) => runManagedAgentScheduleNow(scheduleId),
     onSuccess: () => {
-      message.success("定时任务已提交运行");
+      message.success("定时报告任务已提交生成");
       void queryClient.invalidateQueries({ queryKey: ["managed-agent-runs"] });
       void queryClient.invalidateQueries({ queryKey: ["managed-agent-schedules"] });
     },
@@ -386,12 +386,11 @@ export function AIAssetsPage() {
 
   const createDefaultReportAgentMutation = useMutation({
     mutationFn: createDefaultReportAgent,
-    onSuccess: (agent) => {
+    onSuccess: () => {
       message.success("默认报告 Agent 已创建");
       void queryClient.invalidateQueries({ queryKey: ["managed-agents"] });
       void queryClient.invalidateQueries({ queryKey: ["managed-skills"] });
       void queryClient.invalidateQueries({ queryKey: ["managed-mcp"] });
-      navigate(aiAssetsChildPath(`${AGENTS_PATH}/${agent.agent_id}/run`, "agents"));
     },
     onError: (err: unknown) => message.error(errorMessage(err))
   });
@@ -472,7 +471,7 @@ export function AIAssetsPage() {
     {
       key: "schedule",
       icon: <ClockCircleOutlined />,
-      label: "新建定时任务"
+      label: "新建定时报告任务"
     }
   ];
 
@@ -869,7 +868,7 @@ export function AIAssetsPage() {
 
   const scheduleColumns: TableProps<ManagedAgentSchedule>["columns"] = [
     {
-      title: "任务名称",
+      title: "报告任务名称",
       dataIndex: "name",
       render: (_: string, record) => (
         <span className="ai-assets-name">
@@ -890,19 +889,19 @@ export function AIAssetsPage() {
         value === "report_agent" ? <Tag color="purple">报告 Agent</Tag> : <Tag>普通 Agent</Tag>
     },
     {
-      title: "触发规则",
+      title: "生成规则",
       dataIndex: "schedule_type",
       width: 180,
       render: (_: string, record) => scheduleRuleText(record)
     },
     {
-      title: "下次运行时间",
+      title: "下次生成时间",
       dataIndex: "next_run_at",
       width: 180,
       render: (value?: string) => formatDateTime(value)
     },
     {
-      title: "最近运行结果",
+      title: "最近生成结果",
       dataIndex: "last_run_status",
       width: 140,
       render: (_: string, record) => {
@@ -959,8 +958,8 @@ export function AIAssetsPage() {
             {record.enabled ? "停用" : "启用"}
           </Button>
           <Popconfirm
-            title="删除定时任务"
-            description="删除后不会再自动触发该 Agent。"
+            title="删除定时报告任务"
+            description="删除后不会再自动生成对应报告。"
             okText="删除"
             cancelText="取消"
             onConfirm={() => deleteScheduleMutation.mutate(record.id)}
@@ -1049,14 +1048,14 @@ export function AIAssetsPage() {
   );
 
   const scheduleEmptyState = renderAssetEmpty(
-    "暂无定时任务",
+    "暂无定时报告任务",
     <ClockCircleOutlined />,
     <Button
       type="primary"
       icon={<PlusOutlined />}
       onClick={() => navigate(aiAssetsChildPath("/ai-assets/agent-schedules/new", "schedules"))}
     >
-      新建定时任务
+      新建定时报告任务
     </Button>
   );
 
@@ -1352,8 +1351,8 @@ export function AIAssetsPage() {
                 label="类型"
                 value={schedule.run_kind === "report_agent" ? "报告 Agent" : "普通 Agent"}
               />
-              <MobileMeta label="触发" value={scheduleRuleText(schedule)} />
-              <MobileMeta label="下次" value={formatDateTime(schedule.next_run_at)} />
+              <MobileMeta label="生成规则" value={scheduleRuleText(schedule)} />
+              <MobileMeta label="下次生成" value={formatDateTime(schedule.next_run_at)} />
               <MobileMeta
                 label="最近"
                 value={
@@ -1400,8 +1399,8 @@ export function AIAssetsPage() {
                 {schedule.enabled ? "停用" : "启用"}
               </Button>
               <Popconfirm
-                title="删除定时任务"
-                description="删除后不会再自动触发该 Agent。"
+                title="删除定时报告任务"
+                description="删除后不会再自动生成对应报告。"
                 okText="删除"
                 cancelText="取消"
                 onConfirm={() => deleteScheduleMutation.mutate(schedule.id)}
@@ -1459,7 +1458,7 @@ export function AIAssetsPage() {
           loading={schedulesQuery.isLoading}
           metric={{
             key: "schedules",
-            title: "定时任务",
+            title: "定时报告任务",
             value: schedules.length,
             description: `${schedules.filter((item) => item.enabled).length} 个启用`
           }}
@@ -1544,7 +1543,7 @@ export function AIAssetsPage() {
           },
           {
             key: "schedules",
-            label: "定时任务",
+            label: "定时报告任务",
             children: (
               <>
                 <div className="ai-assets-table-card ai-assets-table-card--desktop">
