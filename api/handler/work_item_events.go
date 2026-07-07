@@ -28,6 +28,13 @@ func (h *RequirementHandler) ListEvents(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if !allowed {
+		allowed, err = h.canViewRequirementEventHistory(u, id)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+	if !allowed {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 		return
 	}
@@ -94,6 +101,90 @@ func (h *TaskHandler) loadTaskEventRequirementID(taskID string) (string, error) 
 		ORDER BY created_at DESC, id DESC
 		LIMIT 1`, taskID).Scan(&requirementID)
 	return requirementID, err
+}
+
+func (h *RequirementHandler) canViewRequirementEventHistory(u *model.User, requirementID string) (bool, error) {
+	if u == nil {
+		return false, nil
+	}
+	if isGlobalRequirementManager(u.Role) {
+		return h.requirementHasEventHistory(requirementID)
+	}
+
+	var beforeJSON, afterJSON []byte
+	var actorID sql.NullString
+	err := h.db.QueryRow(`
+		SELECT before_data, after_data, actor_id::text
+		FROM work_item_events
+		WHERE requirement_id = $1
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1`, requirementID).Scan(&beforeJSON, &afterJSON, &actorID)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if actorID.Valid && actorID.String == u.ID {
+		return true, nil
+	}
+	return requirementEventSnapshotAllowsUser(u, decodeEventJSON(beforeJSON)) ||
+		requirementEventSnapshotAllowsUser(u, decodeEventJSON(afterJSON)), nil
+}
+
+func (h *RequirementHandler) requirementHasEventHistory(requirementID string) (bool, error) {
+	var exists bool
+	err := h.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM work_item_events WHERE requirement_id = $1)`, requirementID).Scan(&exists)
+	return exists, err
+}
+
+func requirementEventSnapshotAllowsUser(u *model.User, snapshot map[string]any) bool {
+	if u == nil || len(snapshot) == 0 {
+		return false
+	}
+	if eventStringValue(snapshot["creator_id"]) == u.ID {
+		return true
+	}
+	if eventStringSliceContains(snapshot["responsible_user_ids"], u.ID) {
+		return true
+	}
+	if hasTeam(u) && eventStringSliceContains(snapshot["team_ids"], *u.TeamID) {
+		return true
+	}
+	return false
+}
+
+func eventStringValue(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case float64:
+		return strings.TrimSpace(fmt.Sprintf("%.0f", typed))
+	case json.Number:
+		return strings.TrimSpace(typed.String())
+	default:
+		return strings.TrimSpace(fmt.Sprint(value))
+	}
+}
+
+func eventStringSliceContains(value any, target string) bool {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return false
+	}
+	switch typed := value.(type) {
+	case []any:
+		for _, item := range typed {
+			if eventStringValue(item) == target {
+				return true
+			}
+		}
+	case []string:
+		return containsString(typed, target)
+	case string:
+		return typed == target
+	}
+	return false
 }
 
 func writeTaskEvents(w http.ResponseWriter, r *http.Request, db *sql.DB, taskID string) {
@@ -383,15 +474,16 @@ var taskEventLabels = map[string]string{
 
 func loadRequirementEventState(db *sql.DB, requirementID string) (map[string]any, error) {
 	var title, description, priority, status string
-	var feishuURL, deadline sql.NullString
+	var creatorID, feishuURL, deadline sql.NullString
 	var acStr string
 	if err := db.QueryRow(`
-		SELECT title, description, feishu_doc_url, priority, status, deadline::text, acceptance_criteria
+		SELECT creator_id::text, title, description, feishu_doc_url, priority, status, deadline::text, acceptance_criteria
 		FROM requirements
-		WHERE id = $1`, requirementID).Scan(&title, &description, &feishuURL, &priority, &status, &deadline, &acStr); err != nil {
+		WHERE id = $1`, requirementID).Scan(&creatorID, &title, &description, &feishuURL, &priority, &status, &deadline, &acStr); err != nil {
 		return nil, err
 	}
 	return map[string]any{
+		"creator_id":           nullStringValue(creatorID),
 		"title":                title,
 		"description":          description,
 		"feishu_doc_url":       nullStringValue(feishuURL),
@@ -583,6 +675,7 @@ func loadWorkItemEventMetadata(db *sql.DB, itemType string, itemID string) map[s
 
 func requirementEventData(req model.Requirement) map[string]any {
 	return map[string]any{
+		"creator_id":           req.CreatorID,
 		"title":                req.Title,
 		"description":          req.Description,
 		"feishu_doc_url":       stringValue(req.FeishuDocURL),

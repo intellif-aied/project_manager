@@ -1235,7 +1235,6 @@ func (h *RequirementHandler) loadProjection(req *model.Requirement, u *model.Use
 					WHERE (source_type = 'requirement' AND source_id = $1)
 					   OR (target_type = 'requirement' AND target_id = $1)
 				)`, req.ID).Scan(&hasAssociations)
-	req.CanDelete = !hasAssociations
 	h.applyRequirementPermissions(req, u)
 	req.CanDelete = req.CanDelete && !hasAssociations
 

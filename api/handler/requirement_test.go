@@ -3,7 +3,33 @@ package handler
 import (
 	"strings"
 	"testing"
+
+	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/aidashboard/api/model"
 )
+
+func TestApplyRequirementPermissionsSetsCanDeleteForCreator(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	mock.ExpectQuery(`SELECT EXISTS\(`).
+		WithArgs(testRequirementID, "303").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+
+	h := NewRequirementHandler(db, nil)
+	req := &model.Requirement{ID: testRequirementID, CreatorID: "303", Status: "todo"}
+	h.applyRequirementPermissions(req, &model.User{ID: "303", Role: "employee"})
+
+	if !req.CanDelete {
+		t.Fatalf("CanDelete = false, want true for manageable creator")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
 
 func TestAppendRequirementRiskFilterDependencyConflictDoesNotAddUnusedDateArg(t *testing.T) {
 	h := &RequirementHandler{}

@@ -232,6 +232,52 @@ func TestDeleteTaskClearsSessionActivitySlicesBeforeDeletingTask(t *testing.T) {
 	}
 }
 
+func TestListRequirementEventsFallsBackToEventHistoryWhenRequirementWasDeleted(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	mock.ExpectQuery(`SELECT EXISTS\(SELECT 1 FROM requirements WHERE id = \$1\)`).
+		WithArgs(testRequirementID).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	mock.ExpectQuery(`SELECT EXISTS\(SELECT 1 FROM work_item_events WHERE requirement_id = \$1\)`).
+		WithArgs(testRequirementID).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM work_item_events WHERE requirement_id = \$1`).
+		WithArgs(testRequirementID).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+	mock.ExpectQuery(`SELECT id::text, target_type, target_id::text,`).
+		WithArgs(testRequirementID, 20, 0).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "target_type", "target_id", "requirement_id", "task_id", "actor_id",
+			"actor_name", "actor_role", "event_type", "event_title",
+			"before_data", "after_data", "metadata", "created_at",
+		}).AddRow(
+			"44444444-4444-4444-4444-444444444444", "requirement", testRequirementID,
+			testRequirementID, nil, "303", "测试01", "pm", "requirement_deleted", "删除了需求",
+			[]byte(`{"title":"测试需求"}`), []byte(`{}`), []byte(`{}`), time.Now(),
+		))
+
+	h := NewRequirementHandler(db, nil)
+	req := httptest.NewRequest(http.MethodGet, "/requirements/"+testRequirementID+"/events", nil)
+	req = requestWithUser(requestWithReportID(req, testRequirementID), &model.User{ID: "303", Role: "pm"})
+	rec := httptest.NewRecorder()
+
+	h.ListEvents(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte(`"event_type":"requirement_deleted"`)) {
+		t.Fatalf("expected deleted requirement event in response, body=%s", rec.Body.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
 func TestListTaskEventsFallsBackToEventHistoryWhenTaskWasDeleted(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

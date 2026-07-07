@@ -2,13 +2,19 @@ import type { QueryClient } from "@tanstack/react-query";
 
 export function invalidateRequirementTaskWorkspace(
   queryClient: QueryClient,
-  options: { requirementId?: string; taskId?: string } = {}
+  options: { requirementId?: string; taskId?: string; skipRequirementEvents?: boolean } = {}
 ) {
   const invalidations = [
     queryClient.invalidateQueries({
       predicate: (query) => {
         const [scope, resource] = query.queryKey;
-        return scope === "requirements-board" && resource !== "task-events";
+        if (scope !== "requirements-board" || resource === "task-events") {
+          return false;
+        }
+        if (options.skipRequirementEvents && resource === "requirement-events") {
+          return false;
+        }
+        return true;
       }
     }),
     queryClient.invalidateQueries({ queryKey: ["dashboard"] }),

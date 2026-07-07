@@ -286,6 +286,7 @@ func (h *RequirementHandler) applyRequirementPermissions(req *model.Requirement,
 	req.CanChangeStatus = manageable
 	req.CanCancel = manageable && req.Status != "cancelled"
 	req.CanRestore = manageable && req.Status == "cancelled"
+	req.CanDelete = manageable
 	req.CanManageAC = manageable
 	req.CanCreateTask = canCreate
 }

@@ -2430,10 +2430,16 @@ export function RequirementDrawer({
   const deleteMutation = useMutation({
     mutationFn: (target: MockRequirement) =>
       requirementsBoardApi.deleteRequirement(target.id, target.version),
-    onSuccess: () => {
-      message.success("需求已删除");
-      void invalidateBoard();
+    onSuccess: (_deleted, deletedRequirement) => {
       onClose();
+      message.success("需求已删除");
+      queryClient.removeQueries({
+        queryKey: ["requirements-board", "requirement-events", deletedRequirement.id]
+      });
+      void invalidateRequirementTaskWorkspace(queryClient, {
+        requirementId: deletedRequirement.id,
+        skipRequirementEvents: true
+      });
     },
     onError: (error) => {
       if (handleEditConflict(error, message, queryClient)) return;
