@@ -9,6 +9,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/aidashboard/api/model"
+	"github.com/lib/pq"
 )
 
 func TestDashboardRisksUsesMyRiskScopeForAllRolesAndMergesTaskRisks(t *testing.T) {
@@ -339,6 +340,60 @@ func TestDashboardRisksExcludesUnrelatedTasksThroughScopedCandidateQuery(t *test
 	}
 }
 
+func TestDashboardTaskRiskEvidenceIncludesBlockingSourcesWhenOverdueAndBlocked(t *testing.T) {
+	dueDate := "2000-01-01"
+	blockingTasks := []model.TaskDep{{
+		ItemType:         "task",
+		ItemID:           "upstream-task",
+		Title:            "上游阻塞任务",
+		TaskID:           "upstream-task",
+		TaskTitle:        "上游阻塞任务",
+		RequirementID:    "upstream-req",
+		RequirementTitle: "上游需求",
+		Status:           "in_progress",
+		ResponsibleNames: []string{"测试06"},
+	}}
+	task := model.Task{
+		ID:      "blocked-task",
+		Title:   "逾期且依赖未完成的任务",
+		DueDate: &dueDate,
+	}
+	riskTypes := []string{dashboardRiskTypeDeadline, dashboardRiskTypeDependencyBlocker}
+
+	evidence := dashboardTaskRiskEvidence(task, riskTypes, blockingTasks)
+
+	if evidence == nil {
+		t.Fatal("risk evidence is nil")
+	}
+	if evidence.PrimaryRisk != dashboardRiskTypeDependencyBlocker {
+		t.Fatalf("primaryRisk = %q, want %q", evidence.PrimaryRisk, dashboardRiskTypeDependencyBlocker)
+	}
+	if evidence.AffectedTaskCount != 1 || evidence.TotalRiskCount != 2 {
+		t.Fatalf("counts affected/total = %d/%d, want 1/2", evidence.AffectedTaskCount, evidence.TotalRiskCount)
+	}
+	if len(evidence.Samples) != 1 {
+		t.Fatalf("sample count = %d, want 1", len(evidence.Samples))
+	}
+	sample := evidence.Samples[0]
+	if sample.TaskID != task.ID || sample.TaskTitle != task.Title {
+		t.Fatalf("sample task = %s/%s, want %s/%s", sample.TaskID, sample.TaskTitle, task.ID, task.Title)
+	}
+	assertRiskTypes(t, sample.RiskTypes, riskTypes)
+	if len(sample.BlockingSources) != 1 {
+		t.Fatalf("blocking source count = %d, want 1", len(sample.BlockingSources))
+	}
+	if sample.BlockingSources[0].TaskID != "upstream-task" {
+		t.Fatalf("blocking source task = %q, want upstream-task", sample.BlockingSources[0].TaskID)
+	}
+}
+
+func TestDashboardTaskRiskEvidenceReturnsNilWithoutRisks(t *testing.T) {
+	evidence := dashboardTaskRiskEvidence(model.Task{ID: "task"}, nil, nil)
+	if evidence != nil {
+		t.Fatalf("risk evidence = %#v, want nil", evidence)
+	}
+}
+
 func expectDashboardRequirementRiskQuery(mock sqlmock.Sqlmock, userID string) *sqlmock.ExpectedQuery {
 	return mock.ExpectQuery(`(?s)SELECT r\.id, r\.title, r\.deadline, r\.updated_at.*FROM requirements r.*r\.status NOT IN \('completed', 'cancelled'\).*r\.deadline IS NOT NULL.*r\.deadline < \$2.*r\.creator_id = \$1.*f\.user_id = \$1.*f\.target_type = 'requirement'`).
 		WithArgs(userID, sqlmock.AnyArg())
@@ -353,9 +408,22 @@ func expectTaskDependencies(mock sqlmock.Sqlmock, taskID string, unfinishedCount
 	depRows := sqlmock.NewRows([]string{
 		"item_type", "item_id", "title", "task_id", "task_title",
 		"requirement_id", "requirement_title", "status", "due_date",
+		"responsible_user_ids", "responsible_names",
 	})
 	for i := 0; i < unfinishedCount; i++ {
-		depRows.AddRow("task", "dependency-"+taskID, "上游任务", "dependency-"+taskID, "上游任务", "req-upstream", "上游需求", "todo", nil)
+		depRows.AddRow(
+			"task",
+			"dependency-"+taskID,
+			"上游任务",
+			"dependency-"+taskID,
+			"上游任务",
+			"req-upstream",
+			"上游需求",
+			"todo",
+			nil,
+			pq.StringArray{},
+			pq.StringArray{},
+		)
 	}
 	mock.ExpectQuery(`(?s)SELECT rel\.target_type.*FROM work_item_relations rel.*WHERE rel\.source_type = \$1 AND rel\.source_id = \$2`).
 		WithArgs("task", taskID).
@@ -365,6 +433,7 @@ func expectTaskDependencies(mock sqlmock.Sqlmock, taskID string, unfinishedCount
 		WillReturnRows(sqlmock.NewRows([]string{
 			"item_type", "item_id", "title", "task_id", "task_title",
 			"requirement_id", "requirement_title", "status", "due_date",
+			"responsible_user_ids", "responsible_names",
 		}))
 }
 

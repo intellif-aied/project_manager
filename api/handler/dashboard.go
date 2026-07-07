@@ -348,9 +348,10 @@ func (h *DashboardHandler) taskFollowItem(id, userID string) (model.DashboardFol
 		return model.DashboardFollowItem{}, false
 	}
 	url := fmt.Sprintf("/requirements?requirementId=%s&taskId=%s", task.RequirementID, task.ID)
+	riskTypes := dashboardTaskRiskTypes(task.RiskTypes)
 	dependency := ""
 	blockingTasks := []model.TaskDep{}
-	if task.DisplayStatus == "blocked" {
+	if containsRiskType(riskTypes, dashboardRiskTypeDependencyBlocker) {
 		blockingTasks = unfinishedDependencies(task)
 		dependency = unfinishedDependencyNames(blockingTasks)
 	}
@@ -369,6 +370,7 @@ func (h *DashboardHandler) taskFollowItem(id, userID string) (model.DashboardFol
 		Status:               taskStatusLabel(task.DisplayStatus),
 		Deadline:             displayDate(task.DueDate),
 		Risk:                 taskRiskLabel(task.RiskTypes),
+		RiskEvidence:         dashboardTaskRiskEvidence(task, riskTypes, blockingTasks),
 		Dependency:           dependency,
 		BlockingTasks:        blockingTasks,
 		Activity:             recentUpdateLabel(task.UpdatedAt),
@@ -840,6 +842,40 @@ func dashboardRequirementRiskEvidence(req model.Requirement, tasks []model.Task,
 		TotalRiskCount:    totalRiskCount,
 		Samples:           samples,
 	}
+}
+
+func dashboardTaskRiskEvidence(task model.Task, riskTypes []string, blockingTasks []model.TaskDep) *model.DashboardRiskEvidence {
+	if len(riskTypes) == 0 {
+		return nil
+	}
+	sample := model.DashboardRiskEvidenceSample{
+		TaskID:    task.ID,
+		TaskTitle: task.Title,
+		RiskTypes: append([]string{}, riskTypes...),
+		Deadline:  displayDate(task.DueDate),
+	}
+	if containsRiskType(riskTypes, dashboardRiskTypeDependencyBlocker) {
+		sample.BlockingSources = append([]model.TaskDep{}, blockingTasks...)
+	}
+	return &model.DashboardRiskEvidence{
+		PrimaryRisk:       primaryDashboardTaskRiskType(riskTypes),
+		AffectedTaskCount: 1,
+		TotalRiskCount:    len(riskTypes),
+		Samples:           []model.DashboardRiskEvidenceSample{sample},
+	}
+}
+
+func primaryDashboardTaskRiskType(riskTypes []string) string {
+	for _, riskType := range []string{
+		dashboardRiskTypeDependencyBlocker,
+		dashboardRiskTypeDependencyConflict,
+		dashboardRiskTypeDeadline,
+	} {
+		if containsRiskType(riskTypes, riskType) {
+			return riskType
+		}
+	}
+	return riskTypes[0]
 }
 
 func primaryRequirementRiskType(risk model.RequirementRiskSummary) string {

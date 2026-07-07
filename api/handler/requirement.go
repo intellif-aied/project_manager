@@ -362,11 +362,12 @@ func (h *RequirementHandler) appendRequirementRiskFilter(where *[]string, args *
 		*args = append(*args, value)
 		return fmt.Sprintf("$%d", len(*args))
 	}
-	today := addArg(biztime.Date(biztime.Now()))
 	switch risk {
 	case "requirement_overdue":
+		today := addArg(biztime.Date(biztime.Now()))
 		*where = append(*where, fmt.Sprintf("(r.status NOT IN ('completed', 'cancelled') AND r.deadline IS NOT NULL AND r.deadline < %s)", today))
 	case "task_overdue":
+		today := addArg(biztime.Date(biztime.Now()))
 		*where = append(*where, fmt.Sprintf(`EXISTS (
 			SELECT 1 FROM tasks task
 			WHERE task.requirement_id = r.id
@@ -375,6 +376,7 @@ func (h *RequirementHandler) appendRequirementRiskFilter(where *[]string, args *
 			  AND task.due_date < %s
 		)`, today))
 	case "blocked":
+		today := addArg(biztime.Date(biztime.Now()))
 		*where = append(*where, requirementBlockedRiskSQL(today))
 	case "dependency_conflict":
 		*where = append(*where, requirementDependencyConflictRiskSQL())
