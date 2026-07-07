@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/aidashboard/api/internal/biztime"
@@ -106,8 +107,8 @@ func (h *TokenHandler) Aggregate(w http.ResponseWriter, r *http.Request) {
 
 // ListSessionTokens returns per-activity-slice token breakdown for the requesting user
 // (or their team / whole org depending on role). Filters: ?from=&to= (YYYY-MM-DD),
-// default = current month. A single local session can appear multiple times when it
-// has activity on multiple dates.
+// no date filter is applied when both bounds are omitted. A single local session can
+// appear multiple times when it has activity on multiple dates.
 func (h *TokenHandler) ListSessionTokens(w http.ResponseWriter, r *http.Request) {
 	u := getUser(r)
 	if u == nil {
@@ -118,23 +119,25 @@ func (h *TokenHandler) ListSessionTokens(w http.ResponseWriter, r *http.Request)
 
 	from := r.URL.Query().Get("from")
 	to := r.URL.Query().Get("to")
-	if from == "" || to == "" {
-		now := biztime.Now()
-		from = biztime.MonthStart(now).Format("2006-01-02")
-		to = biztime.Date(now)
-	}
 
 	scope, scopeArgs, _ := buildActivityScope(u, r.URL.Query().Get("scope"))
 	args := append([]any{}, scopeArgs...)
-	args = append(args, from)
-	fromIdx := len(args)
-	args = append(args, to)
-	toIdx := len(args)
-
-	where := "WHERE sas.activity_date >= $" + strconv.Itoa(fromIdx) + "::date" +
-		" AND sas.activity_date <= $" + strconv.Itoa(toIdx) + "::date"
+	whereParts := []string{}
 	if scope != "" {
-		where += " AND " + scope
+		whereParts = append(whereParts, scope)
+	}
+	if from != "" {
+		args = append(args, from)
+		whereParts = append(whereParts, "sas.activity_date >= $"+strconv.Itoa(len(args))+"::date")
+	}
+	if to != "" {
+		args = append(args, to)
+		whereParts = append(whereParts, "sas.activity_date <= $"+strconv.Itoa(len(args))+"::date")
+	}
+
+	where := ""
+	if len(whereParts) > 0 {
+		where = "WHERE " + strings.Join(whereParts, " AND ")
 	}
 
 	var total int
