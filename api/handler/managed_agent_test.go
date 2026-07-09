@@ -1282,6 +1282,46 @@ func TestRepairedReportAgentDependencyMovesReportMCPToInlineServer(t *testing.T)
 	}
 }
 
+func TestReportSkillRefOwnerOmitsOwnerWhenPlatformOmitsOwner(t *testing.T) {
+	got := reportSkillRefOwner(model.ManagedSkill{SkillID: "skill-1", Slug: service.ReportSkillSlug, Version: service.ReportSkillVersion}, "001898")
+	if got != "" {
+		t.Fatalf("owner = %q, want empty owner for platform mine skill", got)
+	}
+	got = reportSkillRefOwner(model.ManagedSkill{SkillID: "skill-1", Owner: "1066", Slug: service.ReportSkillSlug, Version: service.ReportSkillVersion}, "001898")
+	if got != "1066" {
+		t.Fatalf("owner = %q, want platform owner", got)
+	}
+}
+
+func TestRepairedReportAgentDependencyClearsStaleReportSkillOwner(t *testing.T) {
+	h := NewManagedAgentHandlerWithDefaults(nil, nil, testManagedAgentDefaults())
+	agent := model.ManagedAgent{
+		AgentID: "agent-report",
+		Skills: []model.ManagedSkillRef{
+			{Owner: "001898", Slug: service.ReportSkillSlug, Version: service.ReportSkillVersion},
+		},
+		MCPServers: []model.ManagedMCPServer{{
+			Name:           service.ReportMCPSlug,
+			URL:            h.reportMCPURL(),
+			CredentialSlot: reportMCPCredentialSlot,
+			AuthHeader:     "Authorization",
+			AuthScheme:     "Bearer",
+		}},
+		CredentialSlots: []model.ManagedCredentialSlot{{Name: reportMCPCredentialSlot, Required: true}},
+	}
+
+	req, changed := h.repairedReportAgentDependencyRequest(agent, "")
+	if !changed {
+		t.Fatal("expected stale report skill owner to be cleared")
+	}
+	if len(req.Skills) != 1 {
+		t.Fatalf("skills = %#v", req.Skills)
+	}
+	if req.Skills[0].Owner != "" || req.Skills[0].Slug != service.ReportSkillSlug || req.Skills[0].Version != service.ReportSkillVersion {
+		t.Fatalf("report skill = %#v", req.Skills[0])
+	}
+}
+
 func TestCreateDefaultReportAgentReturnsExistingReportAgent(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -1303,6 +1343,7 @@ func TestCreateDefaultReportAgentReturnsExistingReportAgent(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/skill/list":
 			writeJSON(w, http.StatusOK, model.ListManagedSkillsResponse{Skills: []model.ManagedSkill{{
 				SkillID: "skill-1",
+				Owner:   "t03",
 				Slug:    service.ReportSkillSlug,
 				Version: service.ReportSkillVersion,
 				Name:    service.ReportSkillName,
@@ -1591,6 +1632,7 @@ func TestStartReportAgentRunFallsBackToMessageWhenTemplateMissing(t *testing.T) 
 		case r.Method == http.MethodGet && r.URL.Path == "/api/skill/list":
 			writeJSON(w, http.StatusOK, model.ListManagedSkillsResponse{Skills: []model.ManagedSkill{{
 				SkillID: "skill-1",
+				Owner:   "t03",
 				Slug:    service.ReportSkillSlug,
 				Version: service.ReportSkillVersion,
 				Name:    service.ReportSkillName,

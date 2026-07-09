@@ -975,12 +975,13 @@ func (h *ManagedAgentHandler) CreateDefaultReportAgent(w http.ResponseWriter, r 
 		return
 	}
 	if found {
-		if _, _, _, err := h.ensureUserReportSkill(r.Context(), client); err != nil {
+		_, reportSkill, _, err := h.ensureUserReportSkill(r.Context(), client)
+		if err != nil {
 			writeManagedAgentError(w, err)
 			return
 		}
 		if h.defaults.ReportAssetRepair && isMarkedDefaultReportAgent(existing) {
-			patch, needsRepair := h.repairedDefaultReportAgentRequest(existing, owner)
+			patch, needsRepair := h.repairedDefaultReportAgentRequest(existing, reportSkillRefOwner(reportSkill, owner))
 			if needsRepair {
 				if _, err := client.UpdateMyAgent(r.Context(), existing.AgentID, platformManagedAgentRequest(patch)); err != nil {
 					writeManagedAgentError(w, err)
@@ -1000,11 +1001,12 @@ func (h *ManagedAgentHandler) CreateDefaultReportAgent(w http.ResponseWriter, r 
 		return
 	}
 
-	if _, _, _, err := h.ensureUserReportSkill(r.Context(), client); err != nil {
+	_, reportSkill, _, err := h.ensureUserReportSkill(r.Context(), client)
+	if err != nil {
 		writeManagedAgentError(w, err)
 		return
 	}
-	req := h.defaultReportAgentRequest(owner)
+	req := h.defaultReportAgentRequest(reportSkillRefOwner(reportSkill, owner))
 	req.AgentID = generateManagedAgentID(h.defaults.ReportAgentName)
 	created, err := client.CreateMyAgent(r.Context(), req)
 	if err != nil {
@@ -1150,6 +1152,17 @@ func currentManagedOwner(user *model.User) string {
 		owner = strings.TrimSpace(user.ID)
 	}
 	return owner
+}
+
+func reportSkillRefOwner(skill model.ManagedSkill, fallbackOwner string) string {
+	owner := strings.TrimSpace(skill.Owner)
+	if owner != "" {
+		return owner
+	}
+	if strings.TrimSpace(skill.SkillID) != "" {
+		return ""
+	}
+	return strings.TrimSpace(fallbackOwner)
 }
 
 func (h *ManagedAgentHandler) defaultReportMCPBinding(owner string) model.ManagedMCPBinding {
@@ -1564,6 +1577,7 @@ func (h *ManagedAgentHandler) removeReportMCPBindings(bindings []model.ManagedMC
 func (h *ManagedAgentHandler) ensureCurrentReportSkillRef(skills []model.ManagedSkillRef, owner string) ([]model.ManagedSkillRef, bool) {
 	changed := false
 	foundCurrent := false
+	expectedOwner := strings.TrimSpace(owner)
 	out := make([]model.ManagedSkillRef, 0, len(skills)+1)
 	for _, skill := range skills {
 		if skill.Slug != h.defaults.ReportSkillSlug {
@@ -1578,8 +1592,8 @@ func (h *ManagedAgentHandler) ensureCurrentReportSkillRef(skills []model.Managed
 			changed = true
 			continue
 		}
-		if strings.TrimSpace(skill.Owner) == "" && strings.TrimSpace(owner) != "" {
-			skill.Owner = owner
+		if strings.TrimSpace(skill.Owner) != expectedOwner {
+			skill.Owner = expectedOwner
 			changed = true
 		}
 		foundCurrent = true
@@ -2290,12 +2304,13 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 		writeJSON(w, http.StatusBadRequest, map[string]string{"code": "REPORT_TYPE_NOT_SUPPORTED", "error": "unsupported report_type"})
 		return
 	}
-	if _, _, _, err := h.ensureUserReportSkill(r.Context(), client); err != nil {
+	_, reportSkill, _, err := h.ensureUserReportSkill(r.Context(), client)
+	if err != nil {
 		writeManagedAgentError(w, err)
 		return
 	}
 	if h.defaults.ReportAssetRepair {
-		patch, needsRepair := h.repairedReportAgentDependencyRequest(*agent, currentManagedOwner(u))
+		patch, needsRepair := h.repairedReportAgentDependencyRequest(*agent, reportSkillRefOwner(reportSkill, currentManagedOwner(u)))
 		if needsRepair {
 			if _, err := client.UpdateMyAgent(r.Context(), agent.AgentID, platformManagedAgentRequest(patch)); err != nil {
 				writeManagedAgentError(w, err)
