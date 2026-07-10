@@ -17,7 +17,6 @@ type Config struct {
 	AIModel                             string
 	CORSOrigin                          string
 	Port                                string
-	ReportGeneratorURL                  string
 	ManagedAgentURL                     string
 	ManagedAgentToken                   string
 	ManagedAgentDefaultEngine           string
@@ -62,7 +61,6 @@ func Load() *Config {
 		AIModel:                             getEnv("AI_MODEL", ""),
 		CORSOrigin:                          getEnv("CORS_ORIGIN", "http://localhost:3000"),
 		Port:                                getEnv("PORT", "8080"),
-		ReportGeneratorURL:                  getEnv("REPORT_GENERATOR_URL", ""),
 		ManagedAgentURL:                     getEnv("MANAGED_AGENT_URL", ""),
 		ManagedAgentToken:                   getEnv("MANAGED_AGENT_TOKEN", ""),
 		ManagedAgentDefaultEngine:           getEnv("MANAGED_AGENT_DEFAULT_ENGINE", "claude-code"),

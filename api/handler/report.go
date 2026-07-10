@@ -1,29 +1,25 @@
 package handler
 
 import (
-	"bytes"
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/aidashboard/api/internal/biztime"
 	"github.com/aidashboard/api/model"
-	"github.com/aidashboard/api/service"
 	"github.com/go-chi/chi/v5"
 	"github.com/lib/pq"
 )
 
 type ReportHandler struct {
-	db                 *sql.DB
-	reportGeneratorURL string
+	db *sql.DB
 }
 
-func NewReportHandler(db *sql.DB, reportGeneratorURL string) *ReportHandler {
-	return &ReportHandler{db: db, reportGeneratorURL: reportGeneratorURL}
+func NewReportHandler(db *sql.DB) *ReportHandler {
+	return &ReportHandler{db: db}
 }
 
 func (h *ReportHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -434,138 +430,6 @@ func fillDepartmentWeeklyReportProductFields(report *model.DepartmentWeeklyRepor
 	report.UpdatedByUser = fields.UpdatedByUser
 }
 
-func (h *ReportHandler) GenerateToday(w http.ResponseWriter, r *http.Request) {
-	if h.reportGeneratorURL == "" {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "report generator is not configured"})
-		return
-	}
-
-	u := getUser(r)
-	reportDate := reportDateFromRequest(r)
-
-	body, _ := json.Marshal(map[string]string{
-		"user_id":     u.ID,
-		"report_date": reportDate,
-	})
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, h.reportGeneratorURL+"/reports/generate", bytes.NewReader(body))
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "report generator request failed: " + err.Error()})
-		return
-	}
-	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= 300 {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("report generator returned HTTP %d: %s", resp.StatusCode, truncateForError(string(respBody), 200))})
-		return
-	}
-
-	dr, err := h.getReportByUserDate(u.ID, reportDate)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, dr)
-}
-
-func (h *ReportHandler) GenerateTodayDraft(w http.ResponseWriter, r *http.Request) {
-	var req model.GenerateReportDraftRequest
-	if err := readJSON(r, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
-		return
-	}
-
-	sessionIDs := uniqueStringsPreserveOrder(req.SessionIDs)
-	if len(sessionIDs) == 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "session_ids is required"})
-		return
-	}
-	if err := service.ValidateDraftSkillID(req.SkillID); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	if h.reportGeneratorURL == "" {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "report generator is not configured"})
-		return
-	}
-
-	u := getUser(r)
-	reportDate := req.ReportDate
-	if reportDate == "" {
-		reportDate = service.TodayInLocalDate()
-	}
-	skillID := req.SkillID
-	if skillID == "" {
-		skillID = service.DefaultDailyReportSkillID
-	}
-
-	sessions, err := h.loadDraftSessions(u.ID, sessionIDs)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	if len(sessions) != len(sessionIDs) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "one or more sessions are not accessible"})
-		return
-	}
-
-	tasks, err := h.loadDraftTaskCandidates(u.ID)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-
-	generatorReq := model.ReportDraftGeneratorRequest{
-		UserID:              u.ID,
-		UserName:            u.Name,
-		ReportDate:          reportDate,
-		Sessions:            orderDraftSessions(sessions, sessionIDs),
-		TaskCandidates:      tasks,
-		SkillID:             skillID,
-		SkillContent:        req.SkillContent,
-		IncludeTaskProgress: req.IncludeTaskProgress,
-	}
-
-	body, _ := json.Marshal(generatorReq)
-	httpReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, h.reportGeneratorURL+"/reports/draft", bytes.NewReader(body))
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(httpReq)
-	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "report generator request failed: " + err.Error()})
-		return
-	}
-	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= 300 {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("report generator returned HTTP %d: %s", resp.StatusCode, truncateForError(string(respBody), 300))})
-		return
-	}
-
-	var draftResp model.GenerateReportDraftResponse
-	if err := json.Unmarshal(respBody, &draftResp); err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "report generator returned invalid response"})
-		return
-	}
-	if draftResp.ReportMarkdown == "" {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "report generator returned empty report_markdown"})
-		return
-	}
-
-	draftResp = service.NormalizeDraftResponse(draftResp, generatorReq.Sessions, tasks, req.IncludeTaskProgress)
-	writeJSON(w, http.StatusOK, draftResp)
-}
-
 func (h *ReportHandler) loadDraftSessions(userID string, sessionIDs []string) ([]model.ReportDraftSession, error) {
 	rows, err := h.db.Query(`
 		SELECT s.id::text, s.session_ref, s.agent_type, s.started_at, s.ended_at, s.duration_secs,
@@ -939,70 +803,6 @@ func (h *ReportHandler) GetPersonalWeeklyReportSources(w http.ResponseWriter, r 
 	writeJSON(w, http.StatusOK, sources)
 }
 
-func (h *ReportHandler) GeneratePersonalWeeklyReportPreview(w http.ResponseWriter, r *http.Request) {
-	if h.reportGeneratorURL == "" {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "report generator is not configured"})
-		return
-	}
-	u := getUser(r)
-	var req model.GeneratePersonalWeeklyReportRequest
-	if r.Body != nil {
-		if err := readJSON(r, &req); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
-			return
-		}
-	}
-	weekStart, weekEnd, ok := weeklyRangeFromValue(w, req.WeekStart)
-	if !ok {
-		return
-	}
-	sources, err := h.buildPersonalWeeklyReportSources(u.ID, u.Name, weekStart, weekEnd)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	dailyIDs := personalWeeklyDailySourceIDs(sources, req.SourceDailyReportIDs)
-	if len(dailyIDs) == 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "source_daily_report_ids is required"})
-		return
-	}
-	body, _ := json.Marshal(map[string]any{
-		"user_id":                 u.ID,
-		"week_start":              weekStart,
-		"source_daily_report_ids": dailyIDs,
-	})
-	httpReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, h.reportGeneratorURL+"/reports/weekly/generate", bytes.NewReader(body))
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(httpReq)
-	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "report generator request failed: " + err.Error()})
-		return
-	}
-	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= 300 {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("report generator returned HTTP %d: %s", resp.StatusCode, truncateForError(string(respBody), 200))})
-		return
-	}
-	var genResp struct {
-		ReportMarkdown string `json:"report_markdown"`
-	}
-	if err := json.Unmarshal(respBody, &genResp); err != nil || genResp.ReportMarkdown == "" {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "report generator returned invalid response"})
-		return
-	}
-	writeJSON(w, http.StatusOK, model.PersonalWeeklyReportPreview{
-		ReportMarkdown:       genResp.ReportMarkdown,
-		WeekStart:            weekStart,
-		WeekEnd:              weekEnd,
-		SourceDailyReportIDs: dailyIDs,
-	})
-}
-
 func (h *ReportHandler) SavePersonalWeeklyReportCurrent(w http.ResponseWriter, r *http.Request) {
 	u := getUser(r)
 	var req model.SavePersonalWeeklyReportRequest
@@ -1270,59 +1070,6 @@ func (h *ReportHandler) GetTeamReportToday(w http.ResponseWriter, r *http.Reques
 	tr, err := h.getTeamReportByTeamDate(*u.TeamID, reportDate)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
-		return
-	}
-	writeJSON(w, http.StatusOK, tr)
-}
-
-func (h *ReportHandler) GenerateTeamReport(w http.ResponseWriter, r *http.Request) {
-	if h.reportGeneratorURL == "" {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "report generator is not configured"})
-		return
-	}
-
-	u := getUser(r)
-	if (u.Role != "team_leader" && u.Role != "pm") || u.TeamID == nil {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "only team leaders can generate team reports"})
-		return
-	}
-	reportDate := reportDateFromRequest(r)
-
-	body, _ := json.Marshal(map[string]string{
-		"team_id":     *u.TeamID,
-		"leader_id":   u.ID,
-		"report_date": reportDate,
-	})
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, h.reportGeneratorURL+"/reports/team/generate", bytes.NewReader(body))
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "report generator request failed: " + err.Error()})
-		return
-	}
-	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= 300 {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("report generator returned HTTP %d: %s", resp.StatusCode, truncateForError(string(respBody), 200))})
-		return
-	}
-
-	var genResp struct {
-		ReportID string `json:"report_id"`
-	}
-	if err := json.Unmarshal(respBody, &genResp); err != nil || genResp.ReportID == "" {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "report generator returned invalid response"})
-		return
-	}
-
-	tr, err := h.getTeamReportByID(genResp.ReportID)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, tr)
@@ -1831,52 +1578,6 @@ func (h *ReportHandler) GetDepartmentReportToday(w http.ResponseWriter, r *http.
 	writeJSON(w, http.StatusOK, dr)
 }
 
-func (h *ReportHandler) GenerateDepartmentReport(w http.ResponseWriter, r *http.Request) {
-	if h.reportGeneratorURL == "" {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "report generator is not configured"})
-		return
-	}
-	u := getUser(r)
-	if u.Role != "director" && u.Role != "admin" {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "only directors can generate department reports"})
-		return
-	}
-	reportDate := reportDateFromRequest(r)
-	body, _ := json.Marshal(map[string]string{"report_date": reportDate})
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, h.reportGeneratorURL+"/reports/department/generate", bytes.NewReader(body))
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "report generator request failed: " + err.Error()})
-		return
-	}
-	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= 300 {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("report generator returned HTTP %d: %s", resp.StatusCode, truncateForError(string(respBody), 200))})
-		return
-	}
-
-	var genResp struct {
-		ReportID string `json:"report_id"`
-	}
-	if err := json.Unmarshal(respBody, &genResp); err != nil || genResp.ReportID == "" {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "report generator returned invalid response"})
-		return
-	}
-	dr, err := h.getDepartmentReportByID(genResp.ReportID)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, dr)
-}
-
 func (h *ReportHandler) SaveDepartmentReportToday(w http.ResponseWriter, r *http.Request) {
 	u := getUser(r)
 	if u.Role != "director" && u.Role != "admin" {
@@ -2220,79 +1921,6 @@ func (h *ReportHandler) GetTeamWeeklyReportCurrent(w http.ResponseWriter, r *htt
 	writeJSON(w, http.StatusOK, report)
 }
 
-func (h *ReportHandler) GenerateTeamWeeklyReport(w http.ResponseWriter, r *http.Request) {
-	if h.reportGeneratorURL == "" {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "report generator is not configured"})
-		return
-	}
-	u := getUser(r)
-	if (u.Role != "team_leader" && u.Role != "pm") || u.TeamID == nil {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "only team leaders can generate team weekly reports"})
-		return
-	}
-	var req model.GenerateTeamWeeklyReportRequest
-	if r.Body != nil {
-		if err := readJSON(r, &req); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
-			return
-		}
-	}
-	if req.WeekStart == "" {
-		req.WeekStart = r.URL.Query().Get("week_start")
-	}
-	weekStart, weekEnd, ok := weeklyRangeFromValue(w, req.WeekStart)
-	if !ok {
-		return
-	}
-	sources, err := h.buildTeamWeeklyReportSources(*u.TeamID, weekStart, weekEnd)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	sourceIDs := teamWeeklyPersonalSourceIDs(sources, req.SourcePersonalWeeklyReportIDs)
-	if len(sourceIDs) == 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "source_personal_weekly_report_ids is required"})
-		return
-	}
-
-	body, _ := json.Marshal(map[string]any{
-		"team_id":                           *u.TeamID,
-		"leader_id":                         u.ID,
-		"week_start":                        weekStart,
-		"source_personal_weekly_report_ids": sourceIDs,
-	})
-	httpReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, h.reportGeneratorURL+"/reports/team/weekly/generate", bytes.NewReader(body))
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(httpReq)
-	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "report generator request failed: " + err.Error()})
-		return
-	}
-	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= 300 {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("report generator returned HTTP %d: %s", resp.StatusCode, truncateForError(string(respBody), 200))})
-		return
-	}
-	var genResp struct {
-		ReportMarkdown string `json:"report_markdown"`
-	}
-	if err := json.Unmarshal(respBody, &genResp); err != nil || genResp.ReportMarkdown == "" {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "report generator returned invalid response"})
-		return
-	}
-	writeJSON(w, http.StatusOK, model.TeamWeeklyReportPreview{
-		ReportMarkdown:                genResp.ReportMarkdown,
-		WeekStart:                     weekStart,
-		WeekEnd:                       weekEnd,
-		SourcePersonalWeeklyReportIDs: sourceIDs,
-	})
-}
-
 func (h *ReportHandler) SaveTeamWeeklyReportCurrent(w http.ResponseWriter, r *http.Request) {
 	u := getUser(r)
 	if (u.Role != "team_leader" && u.Role != "pm") || u.TeamID == nil {
@@ -2513,53 +2141,6 @@ func (h *ReportHandler) GetDepartmentWeeklyReportCurrent(w http.ResponseWriter, 
 	report, err := h.getDepartmentWeeklyReportByWeek(weekStart)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
-		return
-	}
-	writeJSON(w, http.StatusOK, report)
-}
-
-func (h *ReportHandler) GenerateDepartmentWeeklyReport(w http.ResponseWriter, r *http.Request) {
-	if h.reportGeneratorURL == "" {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "report generator is not configured"})
-		return
-	}
-	u := getUser(r)
-	if u.Role != "director" && u.Role != "admin" {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "only directors can generate department weekly reports"})
-		return
-	}
-	weekStart, _, ok := weeklyRangeFromRequest(w, r)
-	if !ok {
-		return
-	}
-	body, _ := json.Marshal(map[string]string{"week_start": weekStart})
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, h.reportGeneratorURL+"/reports/department/weekly/generate", bytes.NewReader(body))
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "report generator request failed: " + err.Error()})
-		return
-	}
-	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= 300 {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("report generator returned HTTP %d: %s", resp.StatusCode, truncateForError(string(respBody), 200))})
-		return
-	}
-	var genResp struct {
-		ReportID string `json:"report_id"`
-	}
-	if err := json.Unmarshal(respBody, &genResp); err != nil || genResp.ReportID == "" {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "report generator returned invalid response"})
-		return
-	}
-	report, err := h.getDepartmentWeeklyReportByID(genResp.ReportID)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, report)

@@ -88,6 +88,7 @@ func scanCodexSessions(codexDir string, showAll bool) []*SessionInfo {
 			return nil
 		}
 		s.FilePath = path
+		s.FileModifiedAt = info.ModTime()
 		sessions = append(sessions, s)
 		return nil
 	})
@@ -117,6 +118,7 @@ func parseCodexJSONL(path string) *SessionInfo {
 	var sawTokens bool
 	var prevTokens codexTokenInfo
 	var hasPrevTokens bool
+	var tokenCountersReset bool
 	var firstSummary string
 	activitySlices := map[string]*ActivitySlice{}
 
@@ -182,8 +184,9 @@ func parseCodexJSONL(path string) *SessionInfo {
 						var ti codexTokenInfo
 						if err := json.Unmarshal(ev.Info, &ti); err == nil {
 							if currentSlice != nil {
-								addCodexTokenDelta(currentSlice, ti, prevTokens, hasPrevTokens)
-								currentSlice.TokenSliceStrategy = "delta"
+								if addCodexTokenDelta(currentSlice, ti, prevTokens, hasPrevTokens) {
+									tokenCountersReset = true
+								}
 							}
 							prevTokens = ti
 							hasPrevTokens = true
@@ -228,6 +231,30 @@ func parseCodexJSONL(path string) *SessionInfo {
 			s.TotalTok = s.InputTok + s.OutputTok
 		}
 	}
+	if sawTokens {
+		if tokenCountersReset {
+			for _, slice := range activitySlices {
+				slice.InputTokens = 0
+				slice.OutputTokens = 0
+				slice.CacheCreationTokens = 0
+				slice.CacheReadTokens = 0
+				slice.TotalTokens = 0
+				slice.TokenSliceStrategy = "session_total_last_activity"
+				slice.IsEstimated = true
+			}
+			fallback := ensureActivitySlice(activitySlices, s.EndedAt, "codex")
+			if fallback != nil {
+				fallback.InputTokens = s.InputTok
+				fallback.OutputTokens = s.OutputTok
+				fallback.CacheReadTokens = s.CacheReadTok
+				fallback.TotalTokens = s.TotalTok
+			}
+		} else {
+			for _, slice := range activitySlices {
+				slice.TokenSliceStrategy = "delta"
+			}
+		}
+	}
 
 	if firstSummary != "" {
 		s.Summary = truncate(firstSummary, 200)
@@ -237,9 +264,9 @@ func parseCodexJSONL(path string) *SessionInfo {
 	return s
 }
 
-func addCodexTokenDelta(slice *ActivitySlice, current, previous codexTokenInfo, hasPrevious bool) {
+func addCodexTokenDelta(slice *ActivitySlice, current, previous codexTokenInfo, hasPrevious bool) bool {
 	if slice == nil {
-		return
+		return false
 	}
 	input := current.Total.InputTokens
 	cacheRead := current.Total.CachedInputTokens
@@ -252,9 +279,7 @@ func addCodexTokenDelta(slice *ActivitySlice, current, previous codexTokenInfo, 
 		total -= previous.Total.TotalTokens
 	}
 	if input < 0 || cacheRead < 0 || output < 0 || total < 0 {
-		slice.TokenSliceStrategy = "unknown"
-		slice.IsEstimated = true
-		return
+		return true
 	}
 	slice.InputTokens += input
 	slice.CacheReadTokens += cacheRead
@@ -263,4 +288,5 @@ func addCodexTokenDelta(slice *ActivitySlice, current, previous codexTokenInfo, 
 		total = input + cacheRead + output
 	}
 	slice.TotalTokens += total
+	return false
 }

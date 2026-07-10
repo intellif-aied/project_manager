@@ -55,7 +55,6 @@ services:
       MINIO_BUCKET: "aidashboard"
       MINIO_USE_SSL: "false"
       MINIO_EXTERNAL_ENDPOINT: "http://localhost:9000"
-      REPORT_GENERATOR_URL: "http://consumer:8090"
       MANAGED_AGENT_URL: "${MANAGED_AGENT_URL:-}"
       MANAGED_AGENT_TOKEN: "${MANAGED_AGENT_TOKEN:-}"
       MANAGED_AGENT_DEFAULT_ENGINE: "${MANAGED_AGENT_DEFAULT_ENGINE:-claude-code}"
@@ -85,21 +84,6 @@ services:
       AIHUB_RUNTIME_CONFIG_appTitle: "AIDashboard"
     depends_on:
       - api
-
-  consumer:
-    build:
-      context: ./daemon
-      dockerfile: Dockerfile
-    environment:
-      DATABASE_URL: "postgres://aidashboard:devpassword@db:5432/aidashboard?sslmode=disable"
-      AIDA_CLAUDE_TIMEOUT: "${AIDA_CLAUDE_TIMEOUT:-10m}"
-      PORT: "8090"
-      TZ: "${TZ:-Asia/Shanghai}"
-    volumes:
-      - ${HOME}/.claude:/root/.claude
-    depends_on:
-      db:
-        condition: service_healthy
 
 volumes:
   pgdata:

@@ -4,9 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
-	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -17,19 +15,6 @@ type Config struct {
 	APIURL     string `yaml:"api_url"`
 	Token      string `yaml:"token"`
 	ServerInfo string `yaml:"server_info,omitempty"`
-}
-
-type ConsumerConfig struct {
-	ClaudeDir     string
-	DatabaseURL   string
-	ProjectFilter string
-	TimeZone      string
-	Port          string
-	DailyAt       string
-	RunOnStart    bool
-	ReportOffset  int
-	ClaudeBin     string
-	ClaudeTimeout time.Duration
 }
 
 const (
@@ -104,10 +89,6 @@ func main() {
 		cmdSessions(os.Args[2:])
 	case "upload", "push":
 		cmdUpload(os.Args[2:])
-	case "consume":
-		cmdConsume(os.Args[2:])
-	case "serve":
-		cmdServeReports(os.Args[2:])
 	case "status":
 		cmdStatus()
 	case "version", "--version", "-v":
@@ -131,8 +112,6 @@ Commands:
   login    --server <url> --token <token>   Login with server URL and API token
   sessions [--all] [--project <dir>]        List local Claude Code sessions
   upload   [numbers...] [--all]             Upload sessions to server
-  consume  [--once]                         Upload sessions and generate daily report
-  serve                                      Run report generator HTTP service
   status                                     Show current login status
   version                                    Show CLI version
 
@@ -158,9 +137,6 @@ Examples:
   # Upload all recent sessions
   aida upload --all
 
-  # Run the server-side report generator
-  DATABASE_URL=postgres://... PORT=8090 aida serve
-
   # Interactive upload (shows picker)
   aida upload
 
@@ -177,47 +153,6 @@ Documentation:
 `)
 }
 
-func loadConsumerConfig() ConsumerConfig {
-	home, _ := os.UserHomeDir()
-	cfg := ConsumerConfig{
-		ClaudeDir:     filepath.Join(home, ".claude", "projects"),
-		DatabaseURL:   os.Getenv("DATABASE_URL"),
-		DailyAt:       "18:00",
-		TimeZone:      firstNonEmpty(os.Getenv("TZ"), "Asia/Shanghai"),
-		Port:          firstNonEmpty(os.Getenv("PORT"), "8090"),
-		RunOnStart:    true,
-		ReportOffset:  0,
-		ClaudeBin:     "claude",
-		ClaudeTimeout: 10 * time.Minute,
-	}
-	if v := envFirst("AIDA_CLAUDE_DIR", "AIDASHBOARD_CLAUDE_DIR"); v != "" {
-		cfg.ClaudeDir = v
-	}
-	if v := envFirst("AIDA_PROJECT", "AIDASHBOARD_PROJECT"); v != "" {
-		cfg.ProjectFilter = v
-	}
-	if v := envFirst("AIDA_DAILY_AT", "AIDASHBOARD_DAILY_AT"); v != "" {
-		cfg.DailyAt = v
-	}
-	if v := envFirst("AIDA_RUN_ON_START", "AIDASHBOARD_RUN_ON_START"); v != "" {
-		cfg.RunOnStart = v != "0" && strings.ToLower(v) != "false"
-	}
-	if v := envFirst("AIDA_REPORT_DATE_OFFSET", "AIDASHBOARD_REPORT_DATE_OFFSET"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			cfg.ReportOffset = n
-		}
-	}
-	if v := envFirst("AIDA_CLAUDE_BIN", "AIDASHBOARD_CLAUDE_BIN"); v != "" {
-		cfg.ClaudeBin = v
-	}
-	if v := envFirst("AIDA_CLAUDE_TIMEOUT", "AIDASHBOARD_CLAUDE_TIMEOUT"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			cfg.ClaudeTimeout = d
-		}
-	}
-	return cfg
-}
-
 func firstNonEmpty(values ...string) string {
 	for _, v := range values {
 		if v != "" {
@@ -225,32 +160,6 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
-}
-
-func envFirst(keys ...string) string {
-	for _, key := range keys {
-		if v := os.Getenv(key); v != "" {
-			return v
-		}
-	}
-	return ""
-}
-func nextDailyRun(now time.Time, hhmm string) time.Time {
-	parts := strings.Split(hhmm, ":")
-	hour, minute := 18, 0
-	if len(parts) >= 2 {
-		if h, err := strconv.Atoi(parts[0]); err == nil && h >= 0 && h <= 23 {
-			hour = h
-		}
-		if m, err := strconv.Atoi(parts[1]); err == nil && m >= 0 && m <= 59 {
-			minute = m
-		}
-	}
-	next := time.Date(now.Year(), now.Month(), now.Day(), hour, minute, 0, 0, now.Location())
-	if !next.After(now) {
-		next = next.Add(24 * time.Hour)
-	}
-	return next
 }
 
 // ---- status ----

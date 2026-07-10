@@ -2,7 +2,4 @@ module github.com/aidashboard/daemon
 
 go 1.26.3
 
-require (
-	github.com/lib/pq v1.12.3
-	gopkg.in/yaml.v3 v3.0.1
-)
+require gopkg.in/yaml.v3 v3.0.1

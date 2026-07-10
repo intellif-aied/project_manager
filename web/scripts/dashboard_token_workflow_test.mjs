@@ -23,7 +23,7 @@ assert.doesNotMatch(dashboard, /ROLE_OPTIONS/, "Dashboard should not keep protot
 assert.doesNotMatch(dashboard, /原型角色/, "Dashboard should not render prototype role switcher");
 assert.match(dashboard, /const dashboardRole = getDashboardRole\(user\?\.role\)/, "Dashboard should derive modules from current user role");
 assert.match(dashboard, /if \(role === "admin"\) return "director"/, "Admin should use director dashboard modules");
-assert.match(dashboard, /fetchSessionTokens\(\{ from: tokenDateRange\.from, to: tokenDateRange\.to/, "Dashboard should call /tokens/sessions with from/to");
+assert.match(dashboard, /fetchAllSessionTokens\(\{[\s\S]*from: tokenDateRange\.from,[\s\S]*to: tokenDateRange\.to/, "Dashboard should load all /tokens/sessions pages with from/to");
 assert.match(dashboard, /fetchTokens\(\{[\s\S]*group_by: "team"/, "Director group tokens should use /tokens group_by=team");
 assert.match(dashboard, /Token 数据加载失败/, "Dashboard should show a token-only error state");
 assert.doesNotMatch(dashboard, /group\.sessions/, "Token group UI should not show unsupported group session_count");

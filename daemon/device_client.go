@@ -53,6 +53,7 @@ type SessionInfo struct {
 	SessionRef     string
 	AgentType      string // "" (== claude_code, default) or "codex"
 	FilePath       string
+	FileModifiedAt time.Time
 	ProjectDir     string
 	Cwd            string
 	GitBranch      string
@@ -112,6 +113,26 @@ func (s *SessionInfo) Duration() time.Duration {
 
 func (s *SessionInfo) FormatTokens() string {
 	return formatTokens(s.TotalTok)
+}
+
+func (s *SessionInfo) LastActiveAt() time.Time {
+	if s == nil {
+		return time.Time{}
+	}
+	if !s.EndedAt.IsZero() {
+		return s.EndedAt
+	}
+	if !s.StartedAt.IsZero() {
+		return s.StartedAt
+	}
+	return s.FileModifiedAt
+}
+
+func formatLastActiveTime(s *SessionInfo, layout string) string {
+	if activeAt := s.LastActiveAt(); !activeAt.IsZero() {
+		return activeAt.Format(layout)
+	}
+	return "-"
 }
 
 func activityLocation() *time.Location {
@@ -228,7 +249,7 @@ func formatTokens(n int64) string {
 
 func printSessionListHeader() {
 	fmt.Printf("  %-4s  %-6s  %-19s  %-9s  %-9s  %-10s  %-22s  %-36s  %s\n",
-		"#", "Agent", "Started", "Tokens", "Duration", "Model", "Project/CWD", "Session", "Summary")
+		"#", "Agent", "最近活动", "Tokens", "Duration", "Model", "Project/CWD", "Session", "Summary")
 	fmt.Println("  " + strings.Repeat("-", 156))
 }
 
@@ -236,9 +257,9 @@ func formatSessionListRow(index int, s *SessionInfo) string {
 	if s == nil {
 		return ""
 	}
-	started := "-"
-	if !s.StartedAt.IsZero() {
-		started = s.StartedAt.Format("2006-01-02 15:04")
+	lastActive := "-"
+	if activeAt := s.LastActiveAt(); !activeAt.IsZero() {
+		lastActive = activeAt.Format("2006-01-02 15:04")
 	}
 	dur := "-"
 	if d := s.Duration(); d > 0 {
@@ -251,7 +272,7 @@ func formatSessionListRow(index int, s *SessionInfo) string {
 	return fmt.Sprintf("  %-4d  %-6s  %-19s  %-9s  %-9s  %-10s  %-22s  %-36s  %s",
 		index,
 		truncate(agent, 6),
-		started,
+		lastActive,
 		s.FormatTokens(),
 		dur,
 		truncateMiddle(firstNonEmpty(s.Model, "-"), 10),
@@ -522,7 +543,7 @@ func cmdUpload(args []string) {
 
 		req, err := http.NewRequest("POST", cfg.APIURL+"/sessions/batch", &buf)
 		if err != nil {
-			fmt.Printf("  [FAIL]  %-14s  %s  %v\n", s.SessionRef[:12], s.StartedAt.Format("15:04"), err)
+			fmt.Printf("  [FAIL]  %-14s  %s  %v\n", s.SessionRef[:12], formatLastActiveTime(s, "01-02 15:04"), err)
 			continue
 		}
 		req.Header.Set("Content-Type", writer.FormDataContentType())
@@ -530,7 +551,7 @@ func cmdUpload(args []string) {
 
 		respBody, err := doRequest(req)
 		if err != nil {
-			fmt.Printf("  [FAIL]  %-14s  %s  %v\n", s.SessionRef[:12], s.StartedAt.Format("15:04"), err)
+			fmt.Printf("  [FAIL]  %-14s  %s  %v\n", s.SessionRef[:12], formatLastActiveTime(s, "01-02 15:04"), err)
 			continue
 		}
 
@@ -543,7 +564,7 @@ func cmdUpload(args []string) {
 			} `json:"results"`
 		}
 		if err := json.Unmarshal(respBody, &result); err != nil {
-			fmt.Printf("  [FAIL]  %-14s  %s  invalid response: %v\n", s.SessionRef[:12], s.StartedAt.Format("15:04"), err)
+			fmt.Printf("  [FAIL]  %-14s  %s  invalid response: %v\n", s.SessionRef[:12], formatLastActiveTime(s, "01-02 15:04"), err)
 			continue
 		}
 
@@ -569,17 +590,17 @@ func cmdUpload(args []string) {
 		switch mainStatus {
 		case "created":
 			fmt.Printf("  [OK]    %-14s  %s  %8s  %s\n",
-				s.SessionRef[:12], s.StartedAt.Format("15:04"), s.FormatTokens(), trunc(s.Summary, 40))
+				s.SessionRef[:12], formatLastActiveTime(s, "01-02 15:04"), s.FormatTokens(), trunc(s.Summary, 40))
 			totalUploaded++
 		case "updated":
 			fmt.Printf("  [OK]    %-14s  %s  updated existing session\n",
-				s.SessionRef[:12], s.StartedAt.Format("15:04"))
+				s.SessionRef[:12], formatLastActiveTime(s, "01-02 15:04"))
 			totalUploaded++
 		case "duplicate":
 			fmt.Printf("  [SKIP]  %-14s  %s  (already uploaded)\n",
-				s.SessionRef[:12], s.StartedAt.Format("15:04"))
+				s.SessionRef[:12], formatLastActiveTime(s, "01-02 15:04"))
 		default:
-			fmt.Printf("  [%s]  %-14s  %s\n", mainStatus, s.SessionRef[:12], s.StartedAt.Format("15:04"))
+			fmt.Printf("  [%s]  %-14s  %s\n", mainStatus, s.SessionRef[:12], formatLastActiveTime(s, "01-02 15:04"))
 		}
 
 		if subSuccess > 0 {
@@ -598,113 +619,6 @@ func cmdUpload(args []string) {
 }
 
 // ---- consume ----
-
-func cmdConsume(args []string) {
-	cfg := loadConfig()
-
-	once := false
-	for _, a := range args {
-		if a == "--once" {
-			once = true
-		}
-	}
-
-	consumerCfg := loadConsumerConfig()
-	if consumerCfg.DatabaseURL == "" {
-		requireAuth(cfg)
-	}
-	if once || consumerCfg.RunOnStart {
-		if err := runConsumerOnce(cfg, consumerCfg); err != nil {
-			fmt.Printf("[consumer] failed: %v\n", err)
-			if once {
-				os.Exit(1)
-			}
-		}
-	}
-	if once {
-		return
-	}
-
-	mode := "server-db"
-	if consumerCfg.DatabaseURL == "" {
-		mode = "local-files"
-	}
-	fmt.Printf("[consumer] started. mode=%s daily_at=%s tz=%s\n",
-		mode, consumerCfg.DailyAt, consumerCfg.TimeZone)
-	for {
-		next := nextDailyRun(time.Now(), consumerCfg.DailyAt)
-		fmt.Printf("[consumer] next run at %s\n", next.Format(time.RFC3339))
-		time.Sleep(time.Until(next))
-		if err := runConsumerOnce(cfg, consumerCfg); err != nil {
-			fmt.Printf("[consumer] failed: %v\n", err)
-		}
-	}
-}
-
-func runConsumerOnce(cfg *Config, consumerCfg ConsumerConfig) error {
-	now := time.Now().In(activityLocation())
-	targetDate := now.AddDate(0, 0, consumerCfg.ReportOffset).Format("2006-01-02")
-	if targetDate != activityDate(now) {
-		return fmt.Errorf("AIDA_REPORT_DATE_OFFSET is not supported by the current API; use 0 for today's report")
-	}
-	if consumerCfg.DatabaseURL != "" {
-		return runServerConsumerOnce(consumerCfg, targetDate)
-	}
-	fmt.Printf("[consumer] processing report_date=%s\n", targetDate)
-
-	sessions := scanSessions(consumerCfg.ClaudeDir, true)
-	home, _ := os.UserHomeDir()
-	sessions = append(sessions, scanCodexSessions(filepath.Join(home, ".codex", "sessions"), true)...)
-	sortSessionsNewestFirst(sessions)
-	sessions = filterSessionsForReport(sessions, targetDate, consumerCfg.ProjectFilter)
-	if len(sessions) == 0 {
-		fmt.Printf("[consumer] no sessions found for %s\n", targetDate)
-	} else {
-		fmt.Printf("[consumer] uploading %d session(s)\n", len(sessions))
-		for _, s := range sessions {
-			if err := uploadOneSession(cfg, s); err != nil {
-				fmt.Printf("[consumer] upload failed %s: %v\n", shortRef(s.SessionRef), err)
-			}
-		}
-	}
-
-	report, err := getTodayReport(cfg)
-	if err != nil {
-		return err
-	}
-	prompt := buildDailyReportPrompt(targetDate, sessions)
-	content, err := generateDailyReportWithClaude(consumerCfg, prompt)
-	if err != nil {
-		return err
-	}
-	if strings.TrimSpace(content) == "" {
-		return fmt.Errorf("claude returned empty report")
-	}
-	if err := updateReportContent(cfg, report.ID, content); err != nil {
-		return err
-	}
-	fmt.Printf("[consumer] report updated: %s (%d chars)\n", report.ID, len(content))
-	return nil
-}
-
-func filterSessionsForReport(sessions []*SessionInfo, reportDate, projectFilter string) []*SessionInfo {
-	var filtered []*SessionInfo
-	for _, s := range sessions {
-		if s.StartedAt.Format("2006-01-02") != reportDate {
-			continue
-		}
-		if projectFilter != "" && !strings.Contains(s.ProjectDir, projectFilter) && !strings.Contains(s.Cwd, projectFilter) {
-			continue
-		}
-		filtered = append(filtered, s)
-	}
-	return filtered
-}
-
-func uploadOneSession(cfg *Config, s *SessionInfo) error {
-	allSessions := collectSessionsWithFiles(s)
-	return uploadBatchMultipart(cfg, allSessions)
-}
 
 type sessionWithFile struct {
 	info     *SessionInfo
@@ -727,62 +641,6 @@ func collectSessionsWithFiles(s *SessionInfo) []sessionWithFile {
 		items = append(items, sessionWithFile{info: sub, filePath: subFile})
 	}
 	return items
-}
-
-func uploadBatchMultipart(cfg *Config, items []sessionWithFile) error {
-	var buf bytes.Buffer
-	writer := multipart.NewWriter(&buf)
-
-	metadata := make([]map[string]any, 0, len(items))
-	for _, item := range items {
-		metadata = append(metadata, buildUploadPayload(item.info))
-	}
-	metadataJSON, _ := json.Marshal(map[string]any{"sessions": metadata})
-	writer.WriteField("metadata", string(metadataJSON))
-
-	for _, item := range items {
-		f, err := os.Open(item.filePath)
-		if err != nil {
-			continue
-		}
-		part, err := writer.CreateFormFile("file_"+item.info.SessionRef, filepath.Base(item.filePath))
-		if err != nil {
-			f.Close()
-			continue
-		}
-		io.Copy(part, f)
-		f.Close()
-	}
-
-	writer.Close()
-
-	req, err := http.NewRequest("POST", cfg.APIURL+"/sessions/batch", &buf)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-	req.Header.Set("Authorization", "Bearer "+cfg.Token)
-
-	respBody, err := doRequest(req)
-	if err != nil {
-		return err
-	}
-
-	var result struct {
-		Results []struct {
-			SessionRef string `json:"session_ref"`
-			Status     string `json:"status"`
-		} `json:"results"`
-	}
-	if err := json.Unmarshal(respBody, &result); err != nil {
-		return err
-	}
-	for _, r := range result.Results {
-		if strings.HasPrefix(r.Status, "error:") {
-			return fmt.Errorf("%s: %s", shortRef(r.SessionRef), r.Status)
-		}
-	}
-	return nil
 }
 
 type reportResponse struct {
@@ -810,28 +668,6 @@ func updateReportContent(cfg *Config, reportID, content string) error {
 	body, _ := json.Marshal(map[string]string{"content": content})
 	_, err := apiPut(cfg, "/reports/"+reportID, body)
 	return err
-}
-
-func buildDailyReportPrompt(reportDate string, sessions []*SessionInfo) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "请根据下面的 Claude Code session log 摘要生成 %s 的个人工作日报。\n", reportDate)
-	b.WriteString("要求：只输出 Markdown；使用中文；结构包含“今日完成”“问题与风险”“明日计划”“Session 明细”；内容要具体，避免夸大；没有信息时写“暂无”。\n\n")
-	if len(sessions) == 0 {
-		b.WriteString("当天没有扫描到 session log。\n")
-		return b.String()
-	}
-	for i, s := range sessions {
-		fmt.Fprintf(&b, "Session %d\n", i+1)
-		fmt.Fprintf(&b, "- ID: %s\n", s.SessionRef)
-		fmt.Fprintf(&b, "- Project: %s\n", firstNonEmpty(s.ProjectDir, s.Cwd))
-		fmt.Fprintf(&b, "- Time: %s - %s\n", s.StartedAt.Format(time.RFC3339), s.EndedAt.Format(time.RFC3339))
-		fmt.Fprintf(&b, "- Duration: %s\n", s.Duration())
-		fmt.Fprintf(&b, "- Model: %s\n", firstNonEmpty(s.Model, "unknown"))
-		fmt.Fprintf(&b, "- Tokens: input=%d output=%d total=%d\n", s.InputTok, s.OutputTok, s.TotalTok)
-		fmt.Fprintf(&b, "- Tools: %s\n", formatToolCalls(s.ToolCalls))
-		fmt.Fprintf(&b, "- First user request: %s\n\n", s.Summary)
-	}
-	return b.String()
 }
 
 func formatToolCalls(toolCalls map[string]int) string {
@@ -914,6 +750,7 @@ func scanSessions(claudeDir string, showAll bool) []*SessionInfo {
 		parts := strings.SplitN(rel, string(filepath.Separator), 2)
 		session.ProjectDir = decodeProjectDir(parts[0])
 		session.FilePath = path
+		session.FileModifiedAt = info.ModTime()
 
 		// Collect subagent sessions from <session-id>/subagents/*.jsonl
 		sessionDir := strings.TrimSuffix(path, ".jsonl")
@@ -939,7 +776,7 @@ func scanSessions(claudeDir string, showAll bool) []*SessionInfo {
 func sortSessionsNewestFirst(sessions []*SessionInfo) {
 	for i := 0; i < len(sessions); i++ {
 		for j := i + 1; j < len(sessions); j++ {
-			if sessions[j].StartedAt.After(sessions[i].StartedAt) {
+			if sessions[j].LastActiveAt().After(sessions[i].LastActiveAt()) {
 				sessions[i], sessions[j] = sessions[j], sessions[i]
 			}
 		}

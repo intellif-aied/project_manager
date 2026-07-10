@@ -24,7 +24,7 @@ func TestFormatSessionListRowIncludesIdentifyingFields(t *testing.T) {
 	row := formatSessionListRow(1, s)
 	for _, want := range []string{
 		"codex",
-		"2026-07-02 14:21",
+		"2026-07-02 14:39",
 		"42.3K",
 		"18m",
 		"project-manager",
@@ -34,6 +34,18 @@ func TestFormatSessionListRowIncludesIdentifyingFields(t *testing.T) {
 		if !strings.Contains(row, want) {
 			t.Fatalf("formatSessionListRow() missing %q in %q", want, row)
 		}
+	}
+}
+
+func TestSortSessionsNewestFirstUsesLastActivity(t *testing.T) {
+	now := time.Date(2026, 7, 10, 9, 0, 0, 0, time.UTC)
+	longRunning := &SessionInfo{SessionRef: "old-start-recent-activity", StartedAt: now.Add(-48 * time.Hour), EndedAt: now}
+	newerStart := &SessionInfo{SessionRef: "new-start-old-activity", StartedAt: now.Add(-time.Hour), EndedAt: now.Add(-30 * time.Minute)}
+	sessions := []*SessionInfo{newerStart, longRunning}
+
+	sortSessionsNewestFirst(sessions)
+	if sessions[0] != longRunning {
+		t.Fatalf("first session = %s, want %s", sessions[0].SessionRef, longRunning.SessionRef)
 	}
 }
 

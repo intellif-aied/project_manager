@@ -58,9 +58,6 @@ import {
   fetchTeamReportTodayOrNull,
   fetchTodayReport,
   fetchTokens,
-  generateDepartmentReport,
-  generateTeamReport,
-  generateTodayReportDraft,
   updateDepartmentReport,
   updateReport as updateDailyReport,
   submitTeamReport,
@@ -71,7 +68,6 @@ import type {
   DailyReport,
   DepartmentReport,
   DepartmentReportSources,
-  GenerateReportDraftPayload,
   AttentionLevel,
   DashboardFollowFollowerDTO,
   PersonalWeeklyReport,
@@ -1425,77 +1421,6 @@ export function DashboardPage() {
     // Dashboard 状态只来自接口；旧弹窗分支保留时不再写本地假状态。
   };
 
-  const draftMutation = useMutation({
-    mutationFn: (payload: GenerateReportDraftPayload) => generateTodayReportDraft(payload),
-    onSuccess: (draft) => {
-      setDraftMarkdown(draft.report_markdown);
-      setDraftMarkdownTouched(false);
-      setSelectedSessionIds(draft.selected_session_ids);
-      setValidatedDraftSessionIds(draft.selected_session_ids);
-      setTaskSuggestions(draft.task_progress_suggestions.map(mapDraftTaskSuggestion));
-      updateReport(activeReport.id, {
-        status: "草稿待确认",
-        sessionCount: draft.selected_session_ids.length,
-        skill: draft.skill_name,
-        updatedAt: "刚刚",
-        nextAt: "19:00"
-      });
-      setReportModalStep("editor");
-      void queryClient.invalidateQueries({ queryKey: ["reports"] });
-    },
-    onError: (error: unknown) => {
-      const text = error instanceof Error ? error.message : "日报生成失败";
-      setDraftError(text);
-      message.error(text);
-    }
-  });
-
-  const departmentGenerateMutation = useMutation({
-    mutationFn: () => generateDepartmentReport(),
-    onSuccess: (report) => {
-      setDepartmentDraft(report);
-      setDraftMarkdown(report.content);
-      updateReport(activeReport.id, {
-        status: "草稿待确认",
-        sessionCount: report.source_team_report_ids.length,
-        skill: "部门日报 Agent",
-        updatedAt: "刚刚"
-      });
-      setReportModalStep("editor");
-      void queryClient.invalidateQueries({ queryKey: ["department-report-today"] });
-    },
-    onError: (error: unknown) => {
-      const text = error instanceof Error ? error.message : "部门日报生成失败";
-      setDraftError(text);
-      message.error(text);
-    }
-  });
-
-  const teamGenerateMutation = useMutation({
-    mutationFn: () => generateTeamReport(),
-    onSuccess: (report) => {
-      setTeamDraft(report);
-      setDraftMarkdown(report.content);
-      setDraftMarkdownTouched(false);
-      updateReport(activeReport.id, {
-        status: "草稿待确认",
-        sessionCount: report.source_daily_report_ids.length || report.member_report_ids.length,
-        skill: "小组日报 Agent",
-        updatedAt: "刚刚"
-      });
-      queryClient.setQueryData(["team-report-today", reportDate], report);
-      queryClient.setQueryData(["team-report-today"], report);
-      setReportModalStep("editor");
-      void queryClient.invalidateQueries({ queryKey: ["team-report-today"] });
-      void queryClient.invalidateQueries({ queryKey: ["team-report-sources"] });
-    },
-    onError: (error: unknown) => {
-      const text = error instanceof Error ? error.message : "小组日报生成失败";
-      setDraftError(text);
-      message.error(text);
-    }
-  });
-
   const saveTeamMutation = useMutation({
     mutationFn: async ({ submit }: { submit: boolean }) => {
       const current = teamDraft ?? teamReportQuery.data;
@@ -1688,43 +1613,6 @@ export function DashboardPage() {
     return false;
   };
 
-  const startGenerateDraft = () => {
-    if (!activeReport) return;
-
-    if (activeReport.kind === "personal_daily") {
-      setDraftError(null);
-      const payload: GenerateReportDraftPayload = {
-        report_date: reportDate,
-        session_ids: effectiveSelectedSessionIds,
-        skill_id: "default_daily",
-        skill_content: selectedSkill?.source === "upload" ? selectedSkill.content : undefined,
-        include_task_progress: true
-      };
-      draftMutation.mutate(payload);
-      return;
-    }
-
-    if (activeReport.kind === "department_daily") {
-      setDraftError(null);
-      departmentGenerateMutation.mutate();
-      return;
-    }
-
-    if (activeReport.kind === "team_daily") {
-      setDraftError(null);
-      teamGenerateMutation.mutate();
-      return;
-    }
-
-    updateReport(activeReport.id, {
-      status: "草稿待确认",
-      sessionCount: activeReport.sessionCount,
-      skill: reportSkillDraft,
-      updatedAt: "刚刚"
-    });
-    setReportModalStep("editor");
-  };
-
   const saveDraft = () => {
     if (!activeReport) return;
     if (activeReport.kind === "personal_daily") {
@@ -1777,7 +1665,6 @@ export function DashboardPage() {
   void handleSelectedSessionIdsChange;
   void handleDraftMarkdownChange;
   void uploadReportSkill;
-  void startGenerateDraft;
   void saveDraft;
   void goBackReportModalStep;
   void sendReport;

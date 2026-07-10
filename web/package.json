@@ -12,7 +12,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "test": "node scripts/dashboard_report_workflow_test.mjs && node scripts/dashboard_token_workflow_test.mjs",
+    "test": "node scripts/report_agent_workflow_test.mjs && node scripts/dashboard_token_workflow_test.mjs",
     "lint": "eslint .",
     "typecheck": "tsc -b --pretty false",
     "format": "prettier --write .",

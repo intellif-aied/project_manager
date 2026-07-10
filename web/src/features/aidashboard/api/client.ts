@@ -15,8 +15,6 @@ import type {
   DepartmentWeeklyReport,
   DepartmentWeeklyReportSources,
   Document,
-  GenerateReportDraftPayload,
-  GenerateReportDraftResponse,
   CreateManagedSkillPayload,
   ManagedAgent,
   ManagedAgentManualRunPayload,
@@ -39,7 +37,6 @@ import type {
   PaginatedTeamReports,
   PaginatedTasks,
   PersonalWeeklyReport,
-  PersonalWeeklyReportPreview,
   PersonalWeeklyReportSources,
   Requirement,
   RequirementFollowStateDTO,
@@ -50,7 +47,6 @@ import type {
   TeamReport,
   TeamReportSources,
   TeamWeeklyReport,
-  TeamWeeklyReportPreview,
   TeamWeeklyReportSources,
   TokenAggregation,
   TokenGroupBy,
@@ -380,16 +376,6 @@ export const fetchTodayReport = (reportDate?: string) =>
       reportDate ? { report_date: reportDate } : undefined
     )
   );
-export const generateTodayReportDraft = (payload: GenerateReportDraftPayload) =>
-  unwrap(api.post<GenerateReportDraftResponse>("/reports/today/draft", payload));
-export const generateTodayReport = (reportDate?: string) =>
-  unwrap(
-    api.post<DailyReport>(
-      "/reports/today/generate",
-      undefined,
-      reportDate ? { params: { report_date: reportDate } } : undefined
-    )
-  );
 export const fetchReport = (id: string) => unwrap(api.get<DailyReport>(`/reports/${id}`));
 export const updateReport = (
   id: string,
@@ -432,14 +418,6 @@ export const saveTeamReportCurrent = (data: {
   report_date: string;
   content?: string;
 }) => unwrap(api.put<TeamReport>("/reports/team/today", data));
-export const generateTeamReport = (reportDate?: string) =>
-  unwrap(
-    api.post<TeamReport>(
-      "/reports/team/today/generate",
-      undefined,
-      reportDate ? { params: { report_date: reportDate } } : undefined
-    )
-  );
 export const fetchTeamReports = (params?: Record<string, string>) =>
   unwrap(api.get<PaginatedTeamReports>("/reports/team", params));
 export const fetchTeamReport = (id: string) => unwrap(api.get<TeamReport>(`/reports/team/${id}`));
@@ -472,14 +450,6 @@ export async function fetchDepartmentReportTodayOrNull(reportDate?: string) {
     throw error;
   }
 }
-export const generateDepartmentReport = (reportDate?: string) =>
-  unwrap(
-    api.post<DepartmentReport>(
-      "/reports/department/today/generate",
-      undefined,
-      reportDate ? { params: { report_date: reportDate } } : undefined
-    )
-  );
 export const saveDepartmentReportCurrent = (data: {
   report_date: string;
   content?: string;
@@ -518,10 +488,6 @@ export async function fetchPersonalWeeklyReportCurrentOrNull(weekStart: string) 
     throw error;
   }
 }
-export const generatePersonalWeeklyReport = (data: {
-  week_start: string;
-  source_daily_report_ids?: string[];
-}) => unwrap(api.post<PersonalWeeklyReportPreview>("/reports/weekly/mine/current/generate", data));
 export const savePersonalWeeklyReport = (data: {
   week_start: string;
   content: string;
@@ -563,10 +529,6 @@ export async function fetchTeamWeeklyReportCurrentOrNull(weekStart: string, team
     throw error;
   }
 }
-export const generateTeamWeeklyReport = (data: {
-  week_start: string;
-  source_personal_weekly_report_ids?: string[];
-}) => unwrap(api.post<TeamWeeklyReportPreview>("/reports/team/weekly/current/generate", data));
 export const saveTeamWeeklyReport = (data: {
   week_start: string;
   content: string;
@@ -610,12 +572,6 @@ export async function fetchDepartmentWeeklyReportCurrentOrNull(weekStart: string
     throw error;
   }
 }
-export const generateDepartmentWeeklyReport = (weekStart: string) =>
-  unwrap(
-    api.post<DepartmentWeeklyReport>("/reports/department/weekly/current/generate", undefined, {
-      params: { week_start: weekStart }
-    })
-  );
 export const saveDepartmentWeeklyReportCurrent = (data: {
   week_start: string;
   content: string;
