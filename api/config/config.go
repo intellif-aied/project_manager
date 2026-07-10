@@ -21,6 +21,7 @@ type Config struct {
 	ManagedAgentToken                   string
 	ManagedAgentDefaultEngine           string
 	ManagedAgentDefaultModelID          string
+	ManagedAgentReportSkillOwner        string
 	ManagedAgentReportSkillSlug         string
 	ManagedAgentReportSkillVersion      string
 	ManagedAgentReportSkillName         string
@@ -65,6 +66,7 @@ func Load() *Config {
 		ManagedAgentToken:                   getEnv("MANAGED_AGENT_TOKEN", ""),
 		ManagedAgentDefaultEngine:           getEnv("MANAGED_AGENT_DEFAULT_ENGINE", "claude-code"),
 		ManagedAgentDefaultModelID:          getEnv("MANAGED_AGENT_DEFAULT_MODEL_ID", "MiniMax-M2.5"),
+		ManagedAgentReportSkillOwner:        getEnv("MANAGED_AGENT_REPORT_SKILL_OWNER", ""),
 		ManagedAgentReportSkillSlug:         getEnv("MANAGED_AGENT_REPORT_SKILL_SLUG", "aida-report"),
 		ManagedAgentReportSkillVersion:      getEnv("MANAGED_AGENT_REPORT_SKILL_VERSION", "1.0.0"),
 		ManagedAgentReportSkillName:         getEnv("MANAGED_AGENT_REPORT_SKILL_NAME", "Aida Report Skill"),

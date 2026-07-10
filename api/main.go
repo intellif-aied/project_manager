@@ -53,6 +53,7 @@ func main() {
 	managedAgentH := handler.NewManagedAgentHandlerWithDefaults(database, managedAgentClient, handler.ManagedAgentDefaults{
 		Engine:                         cfg.ManagedAgentDefaultEngine,
 		ModelID:                        cfg.ManagedAgentDefaultModelID,
+		ReportSkillOwner:               cfg.ManagedAgentReportSkillOwner,
 		ReportSkillSlug:                cfg.ManagedAgentReportSkillSlug,
 		ReportSkillVersion:             cfg.ManagedAgentReportSkillVersion,
 		ReportSkillName:                cfg.ManagedAgentReportSkillName,
