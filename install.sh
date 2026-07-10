@@ -193,7 +193,11 @@ if [ -n "$PATH_RC_FILE" ]; then
     echo "  ${step}. Reload your shell: source $PATH_RC_FILE"
     step=$((step + 1))
 fi
-if [ -z "$TOKEN" ]; then
+HAS_CONFIG_TOKEN=0
+if [ -f "$CONFIG_FILE" ] && grep -Eq '^[[:space:]]*token:[[:space:]]*[^[:space:]]' "$CONFIG_FILE"; then
+    HAS_CONFIG_TOKEN=1
+fi
+if [ "$HAS_CONFIG_TOKEN" -eq 0 ]; then
     echo "  ${step}. Login: aida login --server ${API_URL%/} --token <jwt>"
     step=$((step + 1))
 fi

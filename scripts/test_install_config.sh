@@ -41,6 +41,12 @@ run_installer "$existing_home" "http://new.example/api/v1"
 grep -qx 'api_url: http://new.example/api/v1' "$existing_home/.aida.yaml"
 grep -qx 'token: keep-me' "$existing_home/.aida.yaml"
 grep -qx 'server_info: Example User' "$existing_home/.aida.yaml"
+if HOME="$existing_home" PATH="$BIN_DIR:$PATH" AIDA_FORCE=1 \
+    AIDA_RELEASE_URL="file://$RELEASE_DIR" AIDA_API_URL="http://new.example/api/v1" \
+    AIDA_INSTALL_DIR="$BIN_DIR" bash "$ROOT_DIR/install.sh" | grep -q 'Login:'; then
+    echo "existing login must not be requested again" >&2
+    exit 1
+fi
 
 run_installer "$existing_home" "http://newer.example/api/v1" "replace-me"
 grep -qx 'api_url: http://newer.example/api/v1' "$existing_home/.aida.yaml"

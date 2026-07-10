@@ -189,7 +189,11 @@ if (Get-Command aida -ErrorAction SilentlyContinue) {
     Write-Host "Run in the current PowerShell session:"
     Write-Host '  $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [Environment]::GetEnvironmentVariable("Path", "User")'
 }
-if ([string]::IsNullOrWhiteSpace($token)) {
+$hasConfigToken = $false
+if (Test-Path $configFile) {
+    $hasConfigToken = Select-String -Path $configFile -Pattern '^\s*token\s*:\s*\S+' -Quiet
+}
+if (-not $hasConfigToken) {
     Write-Host "Login: aida login --server $apiUrl --token <jwt>"
 }
 Write-Host "List local sessions: aida sessions"
