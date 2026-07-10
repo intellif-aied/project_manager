@@ -47,12 +47,14 @@ fetch_text() {
 
 ask_confirm() {
     local prompt="$1"
+    local answer=""
     if [ "${AIDA_FORCE:-}" = "1" ]; then
         return 0
     fi
-    if [ -e /dev/tty ]; then
-        printf "%s [Y/n] " "$prompt" > /dev/tty
-        read -r answer < /dev/tty
+    if { exec 3<>/dev/tty; } 2>/dev/null; then
+        printf "%s [Y/n] " "$prompt" >&3
+        read -r answer <&3 || true
+        exec 3>&-
         case "$answer" in
             ""|[yY]|[yY][eE][sS]) return 0 ;;
             *) return 1 ;;
@@ -127,9 +129,34 @@ if [ "$NEED_INSTALL" -eq 1 ]; then
     echo "installed aida v$VERSION -> $INSTALL_DIR/aida"
 fi
 
-if [ -n "$API_URL" ] || [ -n "$TOKEN" ]; then
-    CONFIG_FILE="$HOME/.aida.yaml"
-    API_URL="${API_URL%/}"
+upsert_config_value() {
+    local file="$1" key="$2" value="$3" tmp
+    tmp="$(mktemp "${TMPDIR:-/tmp}/aida-config.XXXXXX")"
+    awk -v key="$key" -v value="$value" '
+        BEGIN { replaced = 0 }
+        $0 ~ "^[[:space:]]*" key ":[[:space:]]*" {
+            if (!replaced) {
+                print key ": " value
+                replaced = 1
+            }
+            next
+        }
+        { print }
+        END {
+            if (!replaced) print key ": " value
+        }
+    ' "$file" > "$tmp"
+    mv "$tmp" "$file"
+}
+
+CONFIG_FILE="$HOME/.aida.yaml"
+API_URL="${API_URL%/}"
+if [ -f "$CONFIG_FILE" ]; then
+    [ -n "$API_URL" ] && upsert_config_value "$CONFIG_FILE" api_url "$API_URL"
+    [ -n "$TOKEN" ] && upsert_config_value "$CONFIG_FILE" token "$TOKEN"
+    chmod 600 "$CONFIG_FILE"
+    echo "updated config -> $CONFIG_FILE"
+elif [ -n "$API_URL" ] || [ -n "$TOKEN" ]; then
     {
         [ -n "$API_URL" ] && printf 'api_url: %s\n' "$API_URL"
         [ -n "$TOKEN" ] && printf 'token: %s\n' "$TOKEN"

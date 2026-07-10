@@ -138,8 +138,37 @@ if ($pathChanged) {
     Write-Host "added $installDir to the current user's PATH"
 }
 
-if (-not [string]::IsNullOrWhiteSpace($apiUrl) -or -not [string]::IsNullOrWhiteSpace($token)) {
-    $configFile = Join-Path $env:USERPROFILE ".aida.yaml"
+function Set-AidaConfigValue($Lines, $Key, $Value) {
+    $result = New-Object System.Collections.Generic.List[string]
+    $replaced = $false
+    foreach ($line in $Lines) {
+        if ($line -match "^\s*$([regex]::Escape($Key))\s*:") {
+            if (-not $replaced) {
+                $result.Add("${Key}: $Value")
+                $replaced = $true
+            }
+            continue
+        }
+        $result.Add($line)
+    }
+    if (-not $replaced) {
+        $result.Add("${Key}: $Value")
+    }
+    return $result.ToArray()
+}
+
+$configFile = Join-Path $env:USERPROFILE ".aida.yaml"
+if (Test-Path $configFile) {
+    $lines = @(Get-Content -Path $configFile)
+    if (-not [string]::IsNullOrWhiteSpace($apiUrl)) {
+        $lines = @(Set-AidaConfigValue $lines "api_url" $apiUrl)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($token)) {
+        $lines = @(Set-AidaConfigValue $lines "token" $token)
+    }
+    Set-Content -Path $configFile -Value $lines -Encoding UTF8
+    Write-Host "updated config -> $configFile"
+} elseif (-not [string]::IsNullOrWhiteSpace($apiUrl) -or -not [string]::IsNullOrWhiteSpace($token)) {
     $lines = @()
     if (-not [string]::IsNullOrWhiteSpace($apiUrl)) {
         $lines += "api_url: $apiUrl"
