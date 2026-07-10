@@ -18,6 +18,8 @@ import (
 	"github.com/lib/pq"
 )
 
+const sessionRawLogUploadTimeout = 5 * time.Minute
+
 type SessionHandler struct {
 	db            *sql.DB
 	store         *storage.MinioStorage
@@ -315,7 +317,7 @@ func (h *SessionHandler) BatchUpload(w http.ResponseWriter, r *http.Request) {
 				file.Close()
 			} else {
 				objectName := fmt.Sprintf("sessions/%s/%s.jsonl", u.ID, su.SessionRef)
-				ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+				ctx, cancel := context.WithTimeout(r.Context(), sessionRawLogUploadTimeout)
 				uploadErr := h.store.Upload(ctx, objectName, file, header.Size, "application/x-jsonlines")
 				cancel()
 				file.Close()
