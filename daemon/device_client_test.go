@@ -1,12 +1,45 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestSessionUploadRequestTimeoutIsLongerThanDefault(t *testing.T) {
+	if sessionUploadRequestTimeout <= defaultRequestTimeout {
+		t.Fatalf("session upload timeout = %s, want longer than %s", sessionUploadRequestTimeout, defaultRequestTimeout)
+	}
+}
+
+func TestDoRequestWithTimeoutUsesRequestedLimit(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(80 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer server.Close()
+
+	shortReq, err := http.NewRequest(http.MethodGet, server.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := doRequestWithTimeout(shortReq, 20*time.Millisecond); err == nil {
+		t.Fatal("short request unexpectedly succeeded")
+	}
+
+	longReq, err := http.NewRequest(http.MethodGet, server.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := doRequestWithTimeout(longReq, time.Second); err != nil {
+		t.Fatalf("long request failed: %v", err)
+	}
+}
 
 func TestFormatSessionListRowIncludesIdentifyingFields(t *testing.T) {
 	start := time.Date(2026, 7, 2, 14, 21, 0, 0, time.UTC)

@@ -549,7 +549,7 @@ func cmdUpload(args []string) {
 		req.Header.Set("Content-Type", writer.FormDataContentType())
 		req.Header.Set("Authorization", "Bearer "+cfg.Token)
 
-		respBody, err := doRequest(req)
+		respBody, err := doRequestWithTimeout(req, sessionUploadRequestTimeout)
 		if err != nil {
 			fmt.Printf("  [FAIL]  %-14s  %s  %v\n", s.SessionRef[:12], formatLastActiveTime(s, "01-02 15:04"), err)
 			continue
@@ -959,8 +959,17 @@ func apiPut(cfg *Config, path string, body []byte) (json.RawMessage, error) {
 	return doRequest(req)
 }
 
+const (
+	defaultRequestTimeout       = 60 * time.Second
+	sessionUploadRequestTimeout = 30 * time.Minute
+)
+
 func doRequest(req *http.Request) (json.RawMessage, error) {
-	client := &http.Client{Timeout: 60 * time.Second}
+	return doRequestWithTimeout(req, defaultRequestTimeout)
+}
+
+func doRequestWithTimeout(req *http.Request, timeout time.Duration) (json.RawMessage, error) {
+	client := &http.Client{Timeout: timeout}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
