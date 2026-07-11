@@ -77,10 +77,10 @@ func reportMCPTools() []map[string]any {
 		},
 		{
 			"name":        toolGetDailyReports,
-			"description": "List daily reports within scope, optionally filtered by report_scope.",
+			"description": "List daily reports within scope, optionally filtered by report_scope. Set include_content=true for report aggregation; omitted values default to true.",
 			"inputSchema": map[string]any{
 				"type":     "object",
-				"required": []string{"scope", "date_range"},
+				"required": []string{"scope", "date_range", "include_content"},
 				"properties": map[string]any{
 					"scope":           scopeSchema,
 					"target":          targetSchema,
@@ -93,10 +93,10 @@ func reportMCPTools() []map[string]any {
 		},
 		{
 			"name":        toolGetWeeklyReports,
-			"description": "List weekly reports within scope, optionally filtered by report_scope.",
+			"description": "List weekly reports within scope, optionally filtered by report_scope. Set include_content=true for report aggregation; omitted values default to true.",
 			"inputSchema": map[string]any{
 				"type":     "object",
-				"required": []string{"scope", "week_range"},
+				"required": []string{"scope", "week_range", "include_content"},
 				"properties": map[string]any{
 					"scope":           scopeSchema,
 					"target":          targetSchema,

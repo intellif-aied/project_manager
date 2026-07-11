@@ -180,6 +180,47 @@ func TestReportMCPInventorySchemaUsesRangeForSelectedKind(t *testing.T) {
 	t.Fatal("get_report_inventory schema missing")
 }
 
+func TestReportMCPReportSchemasRequireContentDecision(t *testing.T) {
+	wanted := map[string]string{
+		toolGetDailyReports:  "date_range",
+		toolGetWeeklyReports: "week_range",
+	}
+	for _, tool := range reportMCPTools() {
+		name, _ := tool["name"].(string)
+		rangeField, ok := wanted[name]
+		if !ok {
+			continue
+		}
+		description, _ := tool["description"].(string)
+		requireContainsAll(t, description, "include_content=true", "omitted values default to true")
+		schema := tool["inputSchema"].(map[string]any)
+		required := schema["required"].([]string)
+		for _, field := range []string{"scope", rangeField, "include_content"} {
+			if !containsString(required, field) {
+				t.Fatalf("%s required=%#v, missing %s", name, required, field)
+			}
+		}
+		delete(wanted, name)
+	}
+	if len(wanted) != 0 {
+		t.Fatalf("report tools missing from schema: %#v", wanted)
+	}
+}
+
+func TestReportContentDefaultsToIncludedUnlessExplicitlyDisabled(t *testing.T) {
+	if !reportContentIncluded(nil) {
+		t.Fatal("omitted include_content must default to true")
+	}
+	trueValue := true
+	if !reportContentIncluded(&trueValue) {
+		t.Fatal("include_content=true must include content")
+	}
+	falseValue := false
+	if reportContentIncluded(&falseValue) {
+		t.Fatal("include_content=false must omit content")
+	}
+}
+
 func TestReportMCPInitializeReturnsServerInfo(t *testing.T) {
 	db, _, _ := sqlmock.New()
 	defer db.Close()

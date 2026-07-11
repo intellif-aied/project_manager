@@ -412,7 +412,7 @@ type dailyReportsArgs struct {
 	DateRange      dateRangeArgs `json:"date_range"`
 	ReportScope    string        `json:"report_scope,omitempty"`
 	UserIDs        []string      `json:"user_ids,omitempty"`
-	IncludeContent bool          `json:"include_content,omitempty"`
+	IncludeContent *bool         `json:"include_content,omitempty"`
 }
 
 type dailyReportItem struct {
@@ -426,6 +426,10 @@ type dailyReportItem struct {
 	Edited            bool        `json:"edited"`
 	ManagedAgentRunID string      `json:"managed_agent_run_id,omitempty"`
 	UpdatedAt         time.Time   `json:"updated_at"`
+}
+
+func reportContentIncluded(value *bool) bool {
+	return value == nil || *value
 }
 
 func (h *ReportMCPHandler) toolGetDailyReports(ctx context.Context, r *http.Request, rawArgs json.RawMessage) (any, error) {
@@ -459,6 +463,7 @@ func (h *ReportMCPHandler) toolGetDailyReports(ctx context.Context, r *http.Requ
 	if reportScope != "personal" && reportScope != "team" && reportScope != "department" {
 		return nil, errInvalidScope
 	}
+	includeContent := reportContentIncluded(args.IncludeContent)
 	visible := rs.UserIDs
 	if len(args.UserIDs) > 0 {
 		visible = intersectIDs(visible, args.UserIDs)
@@ -497,7 +502,7 @@ func (h *ReportMCPHandler) toolGetDailyReports(ctx context.Context, r *http.Requ
 			}
 			it.ReportScope = "personal"
 			it.ProductStatus = dailyProductStatus(it.GenerationMode, it.Edited)
-			if !args.IncludeContent {
+			if !includeContent {
 				it.Content = ""
 			}
 			reports = append(reports, it)
@@ -529,7 +534,7 @@ func (h *ReportMCPHandler) toolGetDailyReports(ctx context.Context, r *http.Requ
 			}
 			it.ReportScope = "team"
 			it.ProductStatus = dailyProductStatus(it.GenerationMode, it.Edited)
-			if !args.IncludeContent {
+			if !includeContent {
 				it.Content = ""
 			}
 			reports = append(reports, it)
@@ -557,7 +562,7 @@ func (h *ReportMCPHandler) toolGetDailyReports(ctx context.Context, r *http.Requ
 			it.ReportScope = "department"
 			it.Owner = reportOwner{Scope: "department"}
 			it.ProductStatus = dailyProductStatus(it.GenerationMode, it.Edited)
-			if !args.IncludeContent {
+			if !includeContent {
 				it.Content = ""
 			}
 			reports = append(reports, it)
@@ -588,7 +593,7 @@ type weeklyReportsArgs struct {
 	WeekRange      weekRangeArgs `json:"week_range"`
 	ReportScope    string        `json:"report_scope,omitempty"`
 	UserIDs        []string      `json:"user_ids,omitempty"`
-	IncludeContent bool          `json:"include_content,omitempty"`
+	IncludeContent *bool         `json:"include_content,omitempty"`
 }
 
 type weeklyReportItem struct {
@@ -636,6 +641,7 @@ func (h *ReportMCPHandler) toolGetWeeklyReports(ctx context.Context, r *http.Req
 	if reportScope != "personal" && reportScope != "team" && reportScope != "department" {
 		return nil, errInvalidScope
 	}
+	includeContent := reportContentIncluded(args.IncludeContent)
 	visible := rs.UserIDs
 	if len(args.UserIDs) > 0 {
 		visible = intersectIDs(visible, args.UserIDs)
@@ -677,7 +683,7 @@ func (h *ReportMCPHandler) toolGetWeeklyReports(ctx context.Context, r *http.Req
 			it.WeekStart = ws2.Format("2006-01-02")
 			it.WeekEnd = we2.Format("2006-01-02")
 			it.ProductStatus = dailyProductStatus(it.GenerationMode, it.Edited)
-			if !args.IncludeContent {
+			if !includeContent {
 				it.Content = ""
 			}
 			reports = append(reports, it)
@@ -711,7 +717,7 @@ func (h *ReportMCPHandler) toolGetWeeklyReports(ctx context.Context, r *http.Req
 			it.WeekStart = ws2.Format("2006-01-02")
 			it.WeekEnd = we2.Format("2006-01-02")
 			it.ProductStatus = dailyProductStatus(it.GenerationMode, it.Edited)
-			if !args.IncludeContent {
+			if !includeContent {
 				it.Content = ""
 			}
 			reports = append(reports, it)
@@ -741,7 +747,7 @@ func (h *ReportMCPHandler) toolGetWeeklyReports(ctx context.Context, r *http.Req
 			it.WeekEnd = we2.Format("2006-01-02")
 			it.Owner = reportOwner{Scope: "department"}
 			it.ProductStatus = dailyProductStatus(it.GenerationMode, it.Edited)
-			if !args.IncludeContent {
+			if !includeContent {
 				it.Content = ""
 			}
 			reports = append(reports, it)
