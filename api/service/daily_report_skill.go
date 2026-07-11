@@ -104,6 +104,7 @@ Derive these shared values from run input:
 
 - daily period: {"date":"YYYY-MM-DD"}
 - weekly period: {"week_start":"YYYY-MM-DD","week_end":"YYYY-MM-DD"}
+- calendar_context: authoritative date, weekday, and date_label values computed by Aida. Copy weekday labels from this object only; never calculate weekdays yourself. If it is absent, omit weekday labels.
 - date_range for daily reports or sessions: {"start": date, "end": date}
 - date_range for weekly context: {"start": week_start, "end": week_end}
 - week_range for weekly reports: {"week_start": week_start, "week_end": week_end}
@@ -126,13 +127,17 @@ Use report_scope by source:
 - Treat run input target, scope_context, inventory owner metadata, and source report owner metadata as the only authoritative identity sources.
 - For personal reports, the report owner is the current self user or explicit owner metadata returned by MCP.
 - For team reports, team name and team leader/负责人 must come from scope_context.teams[].team_leader_name or explicit team metadata. Never use user_id, team_id, leader_id, director_user_id, the first member, most active member, or first personal report owner as team leader/负责人.
-- For department reports, department/director identity must come from scope_context.teams[].department_director_name, target, or explicit department metadata. Never use user_id, team_id, leader_id, a team leader, first team, first member, or first source report owner as department负责人.
+- For department reports, use scope_context.department_name as the department display name and scope_context.teams[].department_director_name as the director identity. If department_name is absent, write the literal "部门". Never infer a department name from an id, director, team, member, or report content.
 - Prefer role_label, is_team_leader, team_leader_name, and department_director_name over raw role/id fields. Raw ids are internal references only.
 - If leader/owner identity is not returned by MCP, omit that field or write "未提供"; do not guess from report content.
 - For team reports, aggregate across every expected member in scope_context.members or get_report_inventory. For department reports, aggregate across every expected team in scope_context.teams or get_report_inventory.
 - Coverage numerators and denominators must come from get_report_inventory expected/submitted counts or roster counts. Session counts and token counts are not report submission coverage.
 - Department weekly coverage must clearly say whether it is team weekly report coverage or personal weekly report coverage. Do not label personal weekly report counts as the department/team weekly coverage.
 - When quoting saved reports, preserve the source owner as the contributor only. A source personal report owner is not the team leader unless MCP explicitly says so.
+- total_members is roster size only. Never describe total_members as active, present, participating, working, or having output unless every counted member has explicit source-report or activity evidence.
+- A submitted team report proves only that the team report exists. It does not prove every member of that team was active or submitted an individual report.
+- Department reports must preserve missing_names and every no-report/no-activity member stated by source team reports. If member-level evidence is absent, omit the active-member count instead of deriving it from roster size.
+- If any member or team is missing, never write 全员参与, 全部在岗, 所有成员完成, or 全部有记录. You may state that all team reports were submitted only when clearly labeling that statement as team-report coverage.
 
 Use this exact tool argument contract:
 
@@ -142,7 +147,8 @@ Use this exact tool argument contract:
 - get_tasks: {"scope": scope, "target": target, "date_range": date_range, "include_requirement": true}.
 - get_requirements: {"scope": scope, "target": target, "date_range": date_range, "include_tasks": true, "include_risks": true}.
 - get_existing_report: {"report_type": report_type, "period": period, "target": target}.
-- get_report_inventory: {"scope": scope, "target": target, "report_scope": report_scope, "report_kind": "daily|weekly", "date_range": date_range, "week_range": optional_week_range}.
+- get_report_inventory for daily: {"scope": scope, "target": target, "report_scope": report_scope, "report_kind": "daily", "date_range": date_range}. Do not send week_range.
+- get_report_inventory for weekly: {"scope": scope, "target": target, "report_scope": report_scope, "report_kind": "weekly", "week_range": week_range}. Do not send date_range.
 - write_report_result: {"report_type": report_type, "period": period, "target": target, "run_id": run_id, "content": markdown, "summary": optional_summary}.
 - write_report_failure: {"report_type": report_type, "period": period, "target": target, "run_id": run_id, "error_message": error_message}.
 
@@ -174,6 +180,7 @@ Do not send period to read-list tools that require date_range or week_range. Do 
 - Always distinguish total members, active members, and inactive/no-session members when scope_context is available.
 - If a member has no sessions or no saved report in the selected period, list them as no activity/no saved report instead of omitting them.
 - Use team_name, team_leader_name, department_director_name, and role_label from scope_context before any raw id field. Never show user_id, team_id, report_id, session_id, or run_id in the report body.
+- Keep report coverage and member activity as separate facts. For example, 2/2 team reports submitted must not be rewritten as all department members active.
 
 ## Source Priority
 
@@ -186,11 +193,14 @@ Do not send period to read-list tools that require date_range or week_range. Do 
 ## Output Rules
 
 - The final report content must be non-empty Markdown.
+- Weekday labels must exactly match calendar_context. Never calculate or guess a weekday. If calendar_context is unavailable, omit weekday labels.
 - If there is insufficient context, say so in the Markdown instead of filling gaps.
 - Missing daily/weekly reports are facts; include them only when relevant to the selected report type.
 - For team and department reports, summarize concrete work content, progress, risks, blockers, and cross-team coordination first; put metrics in a short appendix only when useful.
 - For team and department reports, never report active session users as the total roster. If scope_context shows inactive members, include a short inactive/no-activity row.
 - Never expose run_id, MCP URLs, token, credential slots, or internal configuration in the user-facing report.
+- Never expose raw identifiers in the report body. This includes user_id, team_id, department_id, leader_id, director_user_id, report_id, session_id, run_id, labels such as "用户ID"/"团队ID"/"部门编号", and UUID values. Use display names only.
+- write_report_result validates weekday correctness and internal-ID leakage. If it returns REPORT_CONTENT_INVALID, correct or remove the rejected text and call write_report_result again with the same run_id.
 `, formatReportTypeList(data.SupportedReportTypes), data.MCPSlug, data.CredentialSlot)
 }
 

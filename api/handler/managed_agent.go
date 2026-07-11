@@ -48,6 +48,7 @@ const (
 var reportSystemPromptKeys = map[string]struct{}{
 	"report_type":                      {},
 	"period_json":                      {},
+	"calendar_context_json":            {},
 	"target_json":                      {},
 	"selected_session_slice_keys":      {},
 	"selected_session_slice_keys_json": {},
@@ -1239,11 +1240,13 @@ func defaultReportAgentInstructions(credentialSlot string) string {
 		defaultManagedAgentMarker,
 		"AIDA_REPORT_DEPLOYMENT:{{aida_deployment}}",
 		"你是 Aida 报告生成 Agent。根据 report_type 生成个人、小组或部门的日报/周报。",
-		"运行参数由 Aida 后端注入，包含 run_id、report_type、period、target，以及可选的 selected_session_slice_keys。不要要求用户提供 session ids、urls、token 或 credential。",
+		"运行参数由 Aida 后端注入，包含 run_id、report_type、period、calendar_context、target，以及可选的 selected_session_slice_keys。不要要求用户提供 session ids、urls、token 或 credential。",
 		"Aida Report MCP 已通过 " + credentialSlot + " 凭据槽配置当前用户 Authorization。调用已绑定的 MCP tools，不要手工拼接管理员 token。",
 		"必须使用当前用户身份调用 Aida Report MCP，并尊重 MCP 返回的权限边界和缺失来源事实。",
 		"先调用 get_existing_report 获取已有内容，再根据 report_type 调用 get_sessions/get_daily_reports/get_weekly_reports/get_tasks/get_requirements/get_report_inventory 等原子工具取数；读取工具使用 date_range 或 week_range，写回工具使用 period。若 selected_session_slice_keys 非空，调用 get_sessions 时必须原样传入。",
 		"个人周报优先汇总已保存的个人日报；小组日报/周报优先汇总已保存的成员日报/周报；部门日报/周报优先汇总已保存的小组日报/周报。session、task、requirement 只作为补充证据，不要把 token 或 session 数量统计作为小组/部门报告主体。",
+		"成员总数仅表示名册范围，不代表出勤、参与或有工作产出。小组报告已提交仅证明该小组报告存在，不代表小组全员有活动。部门报告必须保留下级报告中的缺失成员和无报告事实；缺少成员级证据时禁止输出活跃人数，也禁止使用“全员参与”“全部在岗”“所有成员完成”“全部有记录”等结论。",
+		"日期对应的星期只能复制 calendar_context，禁止自行推算。报告正文不得展示 user_id、team_id、department_id、report_id、session_id、run_id、任何 ID/编号标签或 UUID。部门名称只能使用 MCP 返回的 department_name；为空时统一写“部门”，禁止猜测。",
 		"生成成功后调用 write_report_result，传入相同 run_id、report_type、period、target 和 content。",
 		"生成失败时调用 write_report_failure。不要编造 Aida 上下文之外的事实；如果上下文为空，应明确说明暂无记录。",
 	}, "\n")
@@ -1254,6 +1257,7 @@ func defaultReportAgentStartPromptTemplate(credentialSlot string) string {
 		"请根据以下业务参数生成 Aida 报告。",
 		"report_type={{ report_type }}",
 		"period={{ period_json }}",
+		"calendar_context={{ calendar_context_json }}",
 		"target={{ target_json }}",
 		"selected_session_slice_keys={{ selected_session_slice_keys_json }}",
 		"run_id={{ run_id }}",
@@ -1449,11 +1453,23 @@ func (h *ManagedAgentHandler) repairedDefaultReportAgentRequest(agent model.Mana
 			changed = true
 		}
 	}
-	if strings.TrimSpace(req.StartPromptTemplate) == "" {
-		req.StartPromptTemplate = h.reportAgentStartPromptTemplate()
-		changed = true
+	startPromptTemplate := strings.TrimSpace(req.StartPromptTemplate)
+	if startPromptTemplate == "" || isDefaultLikeStartPromptTemplate(startPromptTemplate) {
+		defaultStartPromptTemplate := h.reportAgentStartPromptTemplate()
+		if req.StartPromptTemplate != defaultStartPromptTemplate {
+			req.StartPromptTemplate = defaultStartPromptTemplate
+			changed = true
+		}
 	}
 	return req, changed
+}
+
+func isDefaultLikeStartPromptTemplate(text string) bool {
+	return strings.Contains(text, "report_type={{ report_type }}") &&
+		strings.Contains(text, "period={{ period_json }}") &&
+		strings.Contains(text, "target={{ target_json }}") &&
+		strings.Contains(text, "run_id={{ run_id }}") &&
+		strings.Contains(text, "Aida Report MCP")
 }
 
 func (h *ManagedAgentHandler) repairedReportAgentDependencyRequest(agent model.ManagedAgent, reportSkill model.ManagedSkillRef) (model.UpsertManagedAgentRequest, bool) {
@@ -1822,6 +1838,56 @@ func reportPeriodInputRef(reportType, date, weekStart, weekEnd string) map[strin
 	return map[string]string{"date": date}
 }
 
+func reportWeekdayLabel(day time.Time) string {
+	labels := [...]string{"周日", "周一", "周二", "周三", "周四", "周五", "周六"}
+	return labels[day.Weekday()]
+}
+
+func reportCalendarContextJSON(reportType, date, weekStart, weekEnd string) string {
+	dayPayload := func(day time.Time) map[string]string {
+		dateValue := day.Format("2006-01-02")
+		weekday := reportWeekdayLabel(day)
+		return map[string]string{
+			"date":       dateValue,
+			"weekday":    weekday,
+			"date_label": dateValue + "（" + weekday + "）",
+		}
+	}
+
+	payload := map[string]any{}
+	if reportType == reportTypePersonalWeekly || reportType == reportTypeTeamWeekly || reportType == reportTypeDepartmentWeekly {
+		start, startErr := time.Parse("2006-01-02", weekStart)
+		end, endErr := time.Parse("2006-01-02", weekEnd)
+		if startErr != nil || endErr != nil || end.Before(start) {
+			return "{}"
+		}
+		days := make([]map[string]string, 0, 7)
+		for day := start; !day.After(end) && len(days) < 31; day = day.AddDate(0, 0, 1) {
+			days = append(days, dayPayload(day))
+		}
+		payload = map[string]any{
+			"type":       "weekly",
+			"week_start": weekStart,
+			"week_end":   weekEnd,
+			"days":       days,
+		}
+	} else {
+		day, err := time.Parse("2006-01-02", date)
+		if err != nil {
+			return "{}"
+		}
+		payload = map[string]any{
+			"type": "daily",
+			"day":  dayPayload(day),
+		}
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return "{}"
+	}
+	return string(raw)
+}
+
 func reportAgentStartPromptValues(runID, reportType, date, weekStart, weekEnd string, target reportTarget, selectedSessionSliceKeys []string, mcpURL string) map[string]string {
 	_ = mcpURL
 	if selectedSessionSliceKeys == nil {
@@ -1834,6 +1900,7 @@ func reportAgentStartPromptValues(runID, reportType, date, weekStart, weekEnd st
 		"run_id":                           runID,
 		"report_type":                      reportType,
 		"period_json":                      string(periodJSON),
+		"calendar_context_json":            reportCalendarContextJSON(reportType, date, weekStart, weekEnd),
 		"target_json":                      string(targetJSON),
 		"selected_session_slice_keys_json": string(selectedKeysJSON),
 	}
@@ -1885,6 +1952,7 @@ func buildReportRunMessage(startPromptValues map[string]string, message string, 
 		"请根据以下业务参数生成 Aida 报告。",
 		"report_type=" + strings.TrimSpace(startPromptValues["report_type"]),
 		"period=" + strings.TrimSpace(startPromptValues["period_json"]),
+		"calendar_context=" + strings.TrimSpace(startPromptValues["calendar_context_json"]),
 		"target=" + strings.TrimSpace(startPromptValues["target_json"]),
 		"selected_session_slice_keys=" + strings.TrimSpace(startPromptValues["selected_session_slice_keys_json"]),
 		"run_id=" + strings.TrimSpace(startPromptValues["run_id"]),

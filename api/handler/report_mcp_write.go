@@ -71,6 +71,15 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 	if content == "" {
 		return nil, mcpErr("INVALID_ARGUMENT", "content is required")
 	}
+	validationIssues := reportContentValidationIssues(content, date, ws, we)
+	if summary := strings.TrimSpace(args.Summary); summary != "" {
+		for _, issue := range reportContentValidationIssues(summary, date, ws, we) {
+			validationIssues = append(validationIssues, "摘要："+issue)
+		}
+	}
+	if len(validationIssues) > 0 {
+		return nil, mcpErr("REPORT_CONTENT_INVALID", strings.Join(validationIssues, "；"))
+	}
 	resultHash := reportResultHash(content)
 	if idempotent, reportID, err := validateReportWriteAllowed(run, args.ReportType, date, ws, we, target, resultHash); err != nil {
 		return nil, err

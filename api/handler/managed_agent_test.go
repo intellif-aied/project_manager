@@ -83,16 +83,18 @@ func requireContainsAll(t *testing.T, value string, expected ...string) {
 
 func TestBuildReportRunMessageIncludesSystemParams(t *testing.T) {
 	message := buildReportRunMessage(map[string]string{
-		"report_type": "personal_daily",
-		"period_json": `{"date":"2026-07-01"}`,
-		"target_json": `{"type":"self","user_id":"305"}`,
-		"run_id":      "run-report",
-		"mcp_url":     "https://aida.example.com/api/v1/mcp/reports",
+		"report_type":           "personal_daily",
+		"period_json":           `{"date":"2026-07-01"}`,
+		"calendar_context_json": `{"type":"daily","day":{"date":"2026-07-01","weekday":"周三"}}`,
+		"target_json":           `{"type":"self","user_id":"305"}`,
+		"run_id":                "run-report",
+		"mcp_url":               "https://aida.example.com/api/v1/mcp/reports",
 	}, "请重点关注风险", reportMCPCredentialSlot)
 
 	requireContainsAll(t, message,
 		"report_type=personal_daily",
 		`period={"date":"2026-07-01"}`,
+		`calendar_context={"type":"daily","day":{"date":"2026-07-01","weekday":"周三"}}`,
 		`target={"type":"self","user_id":"305"}`,
 		"run_id=run-report",
 		reportMCPCredentialSlot,
@@ -101,6 +103,32 @@ func TestBuildReportRunMessageIncludesSystemParams(t *testing.T) {
 	if strings.Contains(message, "mcp_url=") {
 		t.Fatalf("message should not expose mcp_url: %q", message)
 	}
+}
+
+func TestReportCalendarContextJSONUsesDeterministicWeekdays(t *testing.T) {
+	daily := reportCalendarContextJSON(reportTypePersonalDaily, "2026-06-08", "", "")
+	requireContainsAll(t, daily, `"date":"2026-06-08"`, `"weekday":"周一"`)
+
+	weekly := reportCalendarContextJSON(reportTypePersonalWeekly, "", "2026-06-08", "2026-06-14")
+	requireContainsAll(t, weekly,
+		`"week_start":"2026-06-08"`,
+		`"week_end":"2026-06-14"`,
+		`"date":"2026-06-08"`,
+		`"weekday":"周一"`,
+		`"date":"2026-06-14"`,
+		`"weekday":"周日"`,
+	)
+}
+
+func TestDefaultReportAgentInstructionsSeparateRosterFromActivity(t *testing.T) {
+	instructions := defaultReportAgentInstructions(reportMCPCredentialSlot)
+	requireContainsAll(t, instructions,
+		"成员总数仅表示名册范围",
+		"小组报告已提交仅证明该小组报告存在",
+		"缺少成员级证据时禁止输出活跃人数",
+		"全员参与",
+		"全部在岗",
+	)
 }
 
 func TestReportMCPURLUsesExplicitOverride(t *testing.T) {
@@ -1520,12 +1548,14 @@ func TestCreateDefaultReportAgentReturnsExistingReportAgent(t *testing.T) {
 
 func TestReportAgentRepairRequestDoesNotOverwriteCustomInstructions(t *testing.T) {
 	customInstructions := defaultReportAgentMarker + "\n" + defaultReportAgentTypesPrefix + strings.Join(supportedReportTypes, ",") + "\n" + defaultManagedAgentMarker + "\n" + "用户自定义报告写作风格"
+	customStartPrompt := "请用表格输出 {{ report_type }}"
 	existing := model.ManagedAgent{
-		AgentID:      "agent-custom",
-		Name:         defaultReportAgentName,
-		Description:  defaultReportAgentMarker + "\n" + defaultReportAgentTypesPrefix + strings.Join(supportedReportTypes, ",") + "\n" + defaultManagedAgentMarker,
-		Engine:       "codex",
-		Instructions: customInstructions,
+		AgentID:             "agent-custom",
+		Name:                defaultReportAgentName,
+		Description:         defaultReportAgentMarker + "\n" + defaultReportAgentTypesPrefix + strings.Join(supportedReportTypes, ",") + "\n" + defaultManagedAgentMarker,
+		Engine:              "codex",
+		Instructions:        customInstructions,
+		StartPromptTemplate: customStartPrompt,
 	}
 	h := NewManagedAgentHandlerWithDefaults(nil, nil, testManagedAgentDefaults())
 	repairReq, changed := h.repairedDefaultReportAgentRequest(existing, model.ManagedSkillRef{Owner: "100866", Slug: service.ReportSkillSlug, Version: service.ReportSkillVersion})
@@ -1537,6 +1567,38 @@ func TestReportAgentRepairRequestDoesNotOverwriteCustomInstructions(t *testing.T
 	}
 	if repairReq.Instructions != customInstructions {
 		t.Fatalf("custom instructions overwritten: %q", repairReq.Instructions)
+	}
+	if repairReq.StartPromptTemplate != customStartPrompt {
+		t.Fatalf("custom start prompt overwritten: %q", repairReq.StartPromptTemplate)
+	}
+}
+
+func TestReportAgentRepairRequestRefreshesManagedStartPromptTemplate(t *testing.T) {
+	defaults := testManagedAgentDefaults()
+	h := NewManagedAgentHandlerWithDefaults(nil, nil, defaults)
+	oldTemplate := strings.Replace(defaultReportAgentStartPromptTemplate(reportMCPCredentialSlot), "calendar_context={{ calendar_context_json }}\n", "", 1)
+	existing := model.ManagedAgent{
+		AgentID:             "agent-default",
+		Name:                defaultReportAgentName,
+		Description:         defaultReportAgentDescription,
+		Engine:              "claude-code",
+		DefaultModelID:      defaults.ModelID,
+		Instructions:        defaultReportAgentInstructions(reportMCPCredentialSlot),
+		StartPromptTemplate: oldTemplate,
+		CredentialSlots:     []model.ManagedCredentialSlot{{Name: reportMCPCredentialSlot, Required: true}},
+		Skills:              []model.ManagedSkillRef{{Owner: "100866", Slug: service.ReportSkillSlug, Version: service.ReportSkillVersion}},
+		MCPServers:          []model.ManagedMCPServer{h.defaultReportMCPServer()},
+	}
+
+	repairReq, changed := h.repairedDefaultReportAgentRequest(existing, model.ManagedSkillRef{Owner: "100866", Slug: service.ReportSkillSlug, Version: service.ReportSkillVersion})
+	if !changed {
+		t.Fatal("managed default start prompt should be refreshed")
+	}
+	if repairReq.StartPromptTemplate != h.reportAgentStartPromptTemplate() {
+		t.Fatalf("start prompt = %q", repairReq.StartPromptTemplate)
+	}
+	if !strings.Contains(repairReq.StartPromptTemplate, "calendar_context={{ calendar_context_json }}") {
+		t.Fatalf("calendar context missing from refreshed start prompt: %q", repairReq.StartPromptTemplate)
 	}
 }
 
@@ -1846,6 +1908,9 @@ func TestStartReportAgentRunFallsBackToMessageWhenTemplateMissing(t *testing.T) 
 	}
 	if createdSession.StartPromptValues["report_type"] != "personal_daily" {
 		t.Fatalf("start prompt values = %#v", createdSession.StartPromptValues)
+	}
+	if !strings.Contains(createdSession.StartPromptValues["calendar_context_json"], `"weekday":"周三"`) {
+		t.Fatalf("calendar context missing from start prompt values = %#v", createdSession.StartPromptValues)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)

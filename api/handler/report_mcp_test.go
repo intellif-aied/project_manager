@@ -162,6 +162,24 @@ func TestReportMCPToolsListReturns9AtomicTools(t *testing.T) {
 	}
 }
 
+func TestReportMCPInventorySchemaUsesRangeForSelectedKind(t *testing.T) {
+	tools := reportMCPTools()
+	for _, tool := range tools {
+		if tool["name"] != toolGetReportInventory {
+			continue
+		}
+		description, _ := tool["description"].(string)
+		requireContainsAll(t, description, "report_kind=daily", "date_range only", "report_kind=weekly", "week_range only")
+		schema := tool["inputSchema"].(map[string]any)
+		required := schema["required"].([]string)
+		if containsString(required, "date_range") || containsString(required, "week_range") {
+			t.Fatalf("range must be conditionally selected by report_kind, required=%#v", required)
+		}
+		return
+	}
+	t.Fatal("get_report_inventory schema missing")
+}
+
 func TestReportMCPInitializeReturnsServerInfo(t *testing.T) {
 	db, _, _ := sqlmock.New()
 	defer db.Close()
@@ -252,6 +270,71 @@ func TestReportMCPWriteReportResultUnsupportedType(t *testing.T) {
 	h.Serve(rec, req)
 	if code := reportMCPError(t, rec); code != "REPORT_TYPE_NOT_SUPPORTED" {
 		t.Fatalf("expected REPORT_TYPE_NOT_SUPPORTED, got %s body=%s", code, rec.Body.String())
+	}
+}
+
+func TestReportContentValidationRejectsWrongWeekdayAndInternalIDs(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    int
+	}{
+		{name: "valid weekday", content: "# 周报\n- 2026-06-08（周一）：完成回归\n- 部门共 4 位成员", want: 0},
+		{name: "valid range with later weekday", content: "本周（2026-06-08 至 2026-06-14）有 1 天活动，周一（2026-06-08）完成回归", want: 0},
+		{name: "wrong ISO weekday", content: "# 周报\n- 2026-06-08（周日）：完成回归", want: 1},
+		{name: "wrong ISO weekday without brackets", content: "# 周报\n- 2026-06-08 周日：完成回归", want: 1},
+		{name: "wrong partial weekday", content: "# 周报\n- 6 月 8 日（周日）：完成回归", want: 1},
+		{name: "internal ID label", content: "# 日报\n- 用户ID：310", want: 1},
+		{name: "director ID label", content: "# 部门日报\n- 总监ID：304", want: 1},
+		{name: "raw ID field", content: "# 日报\n- user_id: 310", want: 1},
+		{name: "UUID", content: "# 小组日报\n- 团队：b44b1277-db0f-4bd3-bc53-0a24160704c6", want: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			issues := reportContentValidationIssues(tt.content, "", "2026-06-08", "2026-06-14")
+			if len(issues) != tt.want {
+				t.Fatalf("issues=%#v, want count=%d", issues, tt.want)
+			}
+		})
+	}
+}
+
+func TestReportMCPWriteReportResultRejectsInvalidContentBeforeWrite(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	h := NewReportMCPHandler(db)
+	now := time.Date(2026, 6, 8, 8, 0, 0, 0, time.UTC)
+	mock.ExpectQuery("SELECT id::text, business_type").
+		WithArgs("run-1", "310").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "business_type", "agent_id", "model_id", "status", "input_ref_json", "output_ref_json", "created_at"}).
+			AddRow("run-1", reportAgentRunBusinessType, "agent-1", "MiniMax-M2.5", "running", []byte(`{}`), []byte(`{}`), now))
+
+	req := newReportMCPRequest("tools/call", map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "write_report_result",
+			"arguments": map[string]any{
+				"report_type": "personal_weekly",
+				"period":      map[string]any{"week_start": "2026-06-08", "week_end": "2026-06-14"},
+				"target":      map[string]any{"type": "self"},
+				"run_id":      "run-1",
+				"content":     "# 周报\n6 月 8 日（周日）完成回归，用户ID：310",
+			},
+		},
+	})
+	req = requestWithUser(req, &model.User{ID: "310", Role: "employee"})
+	rec := httptest.NewRecorder()
+	h.Serve(rec, req)
+	if code := reportMCPError(t, rec); code != "REPORT_CONTENT_INVALID" {
+		t.Fatalf("expected REPORT_CONTENT_INVALID, got %s body=%s", code, rec.Body.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -789,6 +872,10 @@ func TestReportMCPInventoryTeamsRespectDepartmentScope(t *testing.T) {
 	}
 	if len(missing) != 1 || missing[0].(map[string]any)["owner_id"] != "team-b" {
 		t.Fatalf("missing=%#v, want only team-b", missing)
+	}
+	scopeContext := payload["scope_context"].(map[string]any)
+	if scopeContext["department_name"] != "部门" {
+		t.Fatalf("department display name = %#v, want 部门", scopeContext["department_name"])
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

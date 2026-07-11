@@ -100,6 +100,7 @@ type scopeContextPayload struct {
 	TeamID           string        `json:"team_id,omitempty"`
 	TeamName         string        `json:"team_name,omitempty"`
 	DepartmentID     string        `json:"department_id,omitempty"`
+	DepartmentName   string        `json:"department_name,omitempty"`
 	Members          []scopeMember `json:"members"`
 	Teams            []scopeTeam   `json:"teams,omitempty"`
 	TotalMembers     int           `json:"total_members"`
@@ -116,6 +117,12 @@ func loadScopeContext(ctx context.Context, db *sql.DB, rs *resolvedScope, active
 	payload.Type = rs.Type
 	payload.TeamID = rs.TeamID
 	payload.DepartmentID = rs.DepartmentID
+	if rs.Type == "department" {
+		// The current product models a department as the teams managed by one
+		// director and has no canonical department-name entity. Expose a stable
+		// display value so report content never has to infer a name from an ID.
+		payload.DepartmentName = "部门"
+	}
 	payload.HasActivityStats = activeByUser != nil
 	if len(rs.UserIDs) == 0 {
 		return payload, nil
@@ -1498,10 +1505,11 @@ func loadDailyInventoryExpected(ctx context.Context, db *sql.DB, reportScope str
 		return out, nil
 	case "department":
 		return []map[string]any{{
-			"owner_type":    "department",
-			"owner_id":      rs.DepartmentID,
-			"department_id": rs.DepartmentID,
-			"dates":         dates,
+			"owner_type":      "department",
+			"owner_id":        rs.DepartmentID,
+			"department_id":   rs.DepartmentID,
+			"department_name": "部门",
+			"dates":           dates,
 		}}, nil
 	}
 	return []map[string]any{}, nil
@@ -1632,11 +1640,12 @@ func loadWeeklyInventoryExpected(ctx context.Context, db *sql.DB, reportScope st
 		return out, nil
 	case "department":
 		return []map[string]any{{
-			"owner_type":    "department",
-			"owner_id":      rs.DepartmentID,
-			"department_id": rs.DepartmentID,
-			"week_start":    ws,
-			"week_end":      we,
+			"owner_type":      "department",
+			"owner_id":        rs.DepartmentID,
+			"department_id":   rs.DepartmentID,
+			"department_name": "部门",
+			"week_start":      ws,
+			"week_end":        we,
 		}}, nil
 	}
 	return []map[string]any{}, nil
@@ -1781,7 +1790,7 @@ func displayNameFromInventoryItem(item map[string]any) string {
 }
 
 func copyInventoryOwnerMetadata(dst, src map[string]any) {
-	for _, key := range []string{"username", "team_name", "department_id"} {
+	for _, key := range []string{"username", "team_name", "department_id", "department_name"} {
 		if value, ok := src[key]; ok {
 			dst[key] = value
 		}

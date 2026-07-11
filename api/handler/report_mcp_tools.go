@@ -152,10 +152,10 @@ func reportMCPTools() []map[string]any {
 		},
 		{
 			"name":        toolGetReportInventory,
-			"description": "Compute expected/existing/missing report coverage for a scope and date range.",
+			"description": "Compute expected/existing/missing report coverage. For report_kind=daily, send date_range only. For report_kind=weekly, send week_range only.",
 			"inputSchema": map[string]any{
 				"type":     "object",
-				"required": []string{"scope", "report_scope", "report_kind", "date_range"},
+				"required": []string{"scope", "report_scope", "report_kind"},
 				"properties": map[string]any{
 					"scope":        scopeSchema,
 					"target":       targetSchema,
