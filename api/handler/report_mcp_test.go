@@ -267,6 +267,57 @@ func TestReportSourceConsistencySkipsContentWithoutZeroClaim(t *testing.T) {
 	}
 }
 
+func TestReportSourceConsistencyRejectsUnsupportedFullParticipation(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\)").
+		WithArgs("2026-05-18", "312").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(3))
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM users").
+		WithArgs("312").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(4))
+
+	issues, err := reportSourceConsistencyIssues(
+		context.Background(), db, reportTypeDepartmentDaily, "2026-05-18", "", "",
+		reportTarget{Type: "department", DepartmentID: "312"},
+		"小组全员参与生产发布回归测试。个人日报提交 3 人，缺失 1 人（测试09）。",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 1 || !strings.Contains(issues[0], "名册共有 4 人") {
+		t.Fatalf("issues=%#v", issues)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReportSourceConsistencyRejectsWeeklyCoverageInDailyReport(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	issues, err := reportSourceConsistencyIssues(
+		context.Background(), db, reportTypeDepartmentDaily, "2026-05-18", "", "",
+		reportTarget{Type: "department", DepartmentID: "312"},
+		"个人日报提交 3 人，缺失 1 人（测试09）。个人周报：缺失 4 人。",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 1 || !strings.Contains(issues[0], "日报正文不应统计") {
+		t.Fatalf("issues=%#v", issues)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestReportMCPInitializeReturnsServerInfo(t *testing.T) {
 	db, _, _ := sqlmock.New()
 	defer db.Close()
