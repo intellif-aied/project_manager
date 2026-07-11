@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"context"
+	"database/sql"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -9,11 +11,13 @@ import (
 )
 
 var (
-	reportUUIDPattern           = regexp.MustCompile(`(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`)
-	reportRawIDFieldPattern     = regexp.MustCompile(`(?i)\b(?:user_id|team_id|department_id|leader_id|director_user_id|report_id|session_id|run_id|uuid)\b`)
-	reportIDLabelPattern        = regexp.MustCompile(`(?i)(?:用户|成员|团队|小组|部门|负责人|总监|报告|会话|运行)\s*(?:id|编号)`)
-	reportISOWeekdayPattern     = regexp.MustCompile(`(20[0-9]{2})-([0-9]{1,2})-([0-9]{1,2})\s*(?:[（(]\s*)?(?:周|星期)([一二三四五六日天])\s*[）)]?`)
-	reportChineseWeekdayPattern = regexp.MustCompile(`(?:(20[0-9]{2})\s*年\s*)?([0-9]{1,2})\s*月\s*([0-9]{1,2})\s*日\s*(?:[（(]\s*)?(?:周|星期)([一二三四五六日天])\s*[）)]?`)
+	reportUUIDPattern             = regexp.MustCompile(`(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`)
+	reportRawIDFieldPattern       = regexp.MustCompile(`(?i)\b(?:user_id|team_id|department_id|leader_id|director_user_id|report_id|session_id|run_id|uuid)\b`)
+	reportIDLabelPattern          = regexp.MustCompile(`(?i)(?:用户|成员|团队|小组|部门|负责人|总监|报告|会话|运行)\s*(?:id|编号)`)
+	reportISOWeekdayPattern       = regexp.MustCompile(`(20[0-9]{2})-([0-9]{1,2})-([0-9]{1,2})\s*(?:[（(]\s*)?(?:周|星期)([一二三四五六日天])\s*[）)]?`)
+	reportChineseWeekdayPattern   = regexp.MustCompile(`(?:(20[0-9]{2})\s*年\s*)?([0-9]{1,2})\s*月\s*([0-9]{1,2})\s*日\s*(?:[（(]\s*)?(?:周|星期)([一二三四五六日天])\s*[）)]?`)
+	reportNoPersonalDailyPattern  = regexp.MustCompile(`(?:无(?:任何)?个人日报(?:记录)?|个人日报\s*[:：]?\s*(?:0\s*份|零份|无人提交|均未提交))`)
+	reportNoPersonalWeeklyPattern = regexp.MustCompile(`(?:无(?:任何)?个人周报(?:记录)?|个人周报\s*[:：]?\s*(?:0\s*份|零份|无人提交|均未提交))`)
 )
 
 func reportContentValidationIssues(content, date, weekStart, weekEnd string) []string {
@@ -118,4 +122,61 @@ func addWeekdayValidationIssue(add func(string), value time.Time, shown string) 
 		return
 	}
 	add(fmt.Sprintf("日期 %s 的星期应为%s，正文写成了%s；请修正或删除星期", value.Format("2006-01-02"), want, shown))
+}
+
+func reportSourceConsistencyIssues(ctx context.Context, db *sql.DB, reportType, date, weekStart, weekEnd string, target reportTarget, content string) ([]string, error) {
+	var table, periodColumn, periodValue, scopeClause, scopeID, sourceLabel string
+	switch reportType {
+	case reportTypeTeamDaily:
+		if !reportNoPersonalDailyPattern.MatchString(content) {
+			return nil, nil
+		}
+		table, periodColumn, periodValue = "daily_reports", "report_date", date
+		scopeClause, scopeID, sourceLabel = "u.team_id::text = $2", target.TeamID, "个人日报"
+	case reportTypeDepartmentDaily:
+		if !reportNoPersonalDailyPattern.MatchString(content) {
+			return nil, nil
+		}
+		table, periodColumn, periodValue = "daily_reports", "report_date", date
+		scopeClause, scopeID, sourceLabel = "t.director_user_id::text = $2", target.DepartmentID, "个人日报"
+	case reportTypeTeamWeekly:
+		if !reportNoPersonalWeeklyPattern.MatchString(content) {
+			return nil, nil
+		}
+		table, periodColumn, periodValue = "personal_weekly_reports", "week_start", weekStart
+		scopeClause, scopeID, sourceLabel = "u.team_id::text = $2", target.TeamID, "个人周报"
+	case reportTypeDepartmentWeekly:
+		if !reportNoPersonalWeeklyPattern.MatchString(content) {
+			return nil, nil
+		}
+		table, periodColumn, periodValue = "personal_weekly_reports", "week_start", weekStart
+		scopeClause, scopeID, sourceLabel = "t.director_user_id::text = $2", target.DepartmentID, "个人周报"
+	default:
+		return nil, nil
+	}
+	if scopeID == "" || periodValue == "" {
+		return nil, nil
+	}
+
+	query := fmt.Sprintf(`
+		SELECT COUNT(*)
+		FROM %s r
+		JOIN users u ON u.id = r.user_id
+		LEFT JOIN teams t ON t.id = u.team_id
+		WHERE r.%s = $1
+		  AND %s
+		  AND r.status IS NOT NULL
+		  AND NULLIF(TRIM(COALESCE(r.content, '')), '') IS NOT NULL`, table, periodColumn, scopeClause)
+	var count int
+	if err := db.QueryRowContext(ctx, query, periodValue, scopeID).Scan(&count); err != nil {
+		return nil, err
+	}
+	if count == 0 {
+		return nil, nil
+	}
+	period := periodValue
+	if weekEnd != "" {
+		period += " 至 " + weekEnd
+	}
+	return []string{fmt.Sprintf("数据源在 %s 实际包含 %d 份%s，正文却声称没有或为 0 份；请按下级报告正文修正覆盖情况", period, count, sourceLabel)}, nil
 }

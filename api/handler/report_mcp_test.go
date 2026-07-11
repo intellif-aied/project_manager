@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -218,6 +219,51 @@ func TestReportContentDefaultsToIncludedUnlessExplicitlyDisabled(t *testing.T) {
 	falseValue := false
 	if reportContentIncluded(&falseValue) {
 		t.Fatal("include_content=false must omit content")
+	}
+}
+
+func TestReportSourceConsistencyRejectsFalseZeroCoverage(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\)").
+		WithArgs("2026-05-18", "312").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(3))
+
+	issues, err := reportSourceConsistencyIssues(
+		context.Background(), db, reportTypeDepartmentDaily, "2026-05-18", "", "",
+		reportTarget{Type: "department", DepartmentID: "312"},
+		"本部门当日无个人日报记录。个人日报：缺失 1 人（测试09）。",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 1 || !strings.Contains(issues[0], "实际包含 3 份个人日报") {
+		t.Fatalf("issues=%#v", issues)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReportSourceConsistencySkipsContentWithoutZeroClaim(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	issues, err := reportSourceConsistencyIssues(
+		context.Background(), db, reportTypeDepartmentDaily, "2026-05-18", "", "",
+		reportTarget{Type: "department", DepartmentID: "312"},
+		"个人日报已提交 3 份，缺失 1 人（测试09）。",
+	)
+	if err != nil || len(issues) != 0 {
+		t.Fatalf("issues=%#v err=%v", issues, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 

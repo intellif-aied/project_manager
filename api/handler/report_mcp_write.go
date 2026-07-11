@@ -77,6 +77,15 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 			validationIssues = append(validationIssues, "摘要："+issue)
 		}
 	}
+	consistencyText := content
+	if summary := strings.TrimSpace(args.Summary); summary != "" {
+		consistencyText += "\n" + summary
+	}
+	sourceIssues, err := reportSourceConsistencyIssues(r.Context(), h.db, args.ReportType, date, ws, we, target, consistencyText)
+	if err != nil {
+		return nil, errMCPInternal
+	}
+	validationIssues = append(validationIssues, sourceIssues...)
 	if len(validationIssues) > 0 {
 		return nil, mcpErr("REPORT_CONTENT_INVALID", strings.Join(validationIssues, "；"))
 	}
