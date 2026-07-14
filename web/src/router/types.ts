@@ -12,6 +12,7 @@ export interface AppRoute {
   hideInMenu?: boolean;
   menuGroup?: string;
   menuOrder?: number;
+  feature?: "token_analytics" | "pricing_management";
   layout?: boolean;
   children?: AppRoute[];
 }

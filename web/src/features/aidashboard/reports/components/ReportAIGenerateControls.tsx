@@ -7,15 +7,17 @@ import {
   LoadingOutlined
 } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { App, Button, DatePicker, Modal, Space, Table, Tooltip } from "antd";
+import { App, Button, DatePicker, Input, Modal, Space, Table, Tooltip } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import type { Dayjs } from "dayjs";
+import dayjs from "dayjs";
 import { useEffect, useMemo, useState } from "react";
 
 import {
   createDefaultReportAgent,
+  createReportSourceSelection,
   fetchManagedAgentRun,
-  fetchSessionTokens,
+  fetchReportSourceCandidates,
   startReportAgentRun
 } from "../../api/client";
 import type {
@@ -23,8 +25,9 @@ import type {
   ManagedReportAgentUnavailable,
   ManagedReportAgentRunResponse,
   ManagedReportAgentRunPayload,
-  ReportType,
-  SessionTokens
+  ReportSourceCandidate,
+  ReportSourceInput,
+  ReportType
 } from "../../api/types";
 import { errorMessage } from "../../ai-assets/utils/agentAssets";
 import { useAuth } from "@/shared/auth/authContext";
@@ -42,38 +45,37 @@ interface ReportAIGenerateControlsProps {
   disabled?: boolean;
   allowSessionSelection?: boolean;
   settingsOpen?: boolean;
-  selectedSessionSliceKeys?: string[];
+  selectedSessionSources?: ReportSourceInput[];
   onToggleSettings?: () => void;
   onBeforeGenerate?: () => boolean | Promise<boolean>;
   onGenerated?: (run: AIRun) => void;
 }
 
+interface ReportAIGenerateControlsStateProps extends ReportAIGenerateControlsProps {
+  storageKey: string;
+}
+
 interface ReportAISettingsPanelProps {
   open: boolean;
-  selectedKeys: string[];
-  onSelectedKeysChange: (keys: string[]) => void;
+  reportType: "personal_daily" | "personal_weekly";
+  period: ReportPeriodPayload;
+  selectedSources: ReportSourceInput[];
+  onSelectedSourcesChange: (sources: ReportSourceInput[]) => void;
   onClose: () => void;
 }
 
-const MAX_SELECTED_SESSION_SLICES = 200;
+const MAX_SELECTED_SESSION_RANGES = 200;
 
-function formatNumber(value?: number) {
-  return typeof value === "number" ? value.toLocaleString() : "-";
+function candidateKey(record: Pick<ReportSourceCandidate, "agent_type" | "session_ref">) {
+  return `${record.agent_type}:${record.session_ref}`;
 }
 
-function sessionSliceKey(record: SessionTokens) {
-  if (record.slice_key) return record.slice_key;
-  if (record.activity_date) return `${record.session_id}:${record.activity_date}`;
-  return record.session_id;
+function sourceKey(record: Pick<ReportSourceInput, "agent_type" | "session_ref">) {
+  return `${record.agent_type}:${record.session_ref}`;
 }
 
-function sessionActivityDate(record: SessionTokens) {
-  return (
-    record.activity_date ||
-    record.activity_start_at?.slice(0, 10) ||
-    record.started_at?.slice(0, 10) ||
-    "-"
-  );
+function sourceRangeLabel(source: ReportSourceInput) {
+  return `${dayjs(source.activity_start_at).format("MM-DD HH:mm")} 至 ${dayjs(source.activity_end_at).format("MM-DD HH:mm")}`;
 }
 
 function reportRunStorageKey(
@@ -144,44 +146,44 @@ function clearStoredRunId(key: string, runId?: string) {
   }
 }
 
-export function ReportAIGenerateControls({
+export function ReportAIGenerateControls(props: ReportAIGenerateControlsProps) {
+  const { user } = useAuth();
+  const currentUserId = user?.id ?? "anonymous";
+  const storageKey = useMemo(
+    () => reportRunStorageKey(currentUserId, props.reportType, props.period, props.target),
+    [currentUserId, props.period, props.reportType, props.target]
+  );
+  return <ReportAIGenerateControlsState key={storageKey} {...props} storageKey={storageKey} />;
+}
+
+function ReportAIGenerateControlsState({
   reportType,
   period,
   target,
   disabled,
   allowSessionSelection = false,
   settingsOpen = false,
-  selectedSessionSliceKeys = [],
+  selectedSessionSources = [],
   onToggleSettings,
   onBeforeGenerate,
-  onGenerated
-}: ReportAIGenerateControlsProps) {
-  const { user } = useAuth();
+  onGenerated,
+  storageKey
+}: ReportAIGenerateControlsStateProps) {
   const queryClient = useQueryClient();
-  const [activeRunId, setActiveRunId] = useState<string>();
+  const [activeRunId, setActiveRunId] = useState<string | undefined>(() =>
+    readStoredRunId(storageKey)
+  );
   const [handledRunId, setHandledRunId] = useState<string>();
-  const [runStartedAt, setRunStartedAt] = useState<number>();
+  const [runStartedAt, setRunStartedAt] = useState<number | undefined>(() =>
+    activeRunId ? Date.now() : undefined
+  );
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [initializingDefault, setInitializingDefault] = useState(false);
   const [lastOutcome, setLastOutcome] = useState<
     { type: "success" | "error"; text: string } | undefined
   >();
 
-  const currentUserId = user?.id ?? "anonymous";
-  const storageKey = useMemo(
-    () => reportRunStorageKey(currentUserId, reportType, period, target),
-    [currentUserId, period, reportType, target]
-  );
   const periodLabel = useMemo(() => reportPeriodLabel(period), [period]);
-
-  useEffect(() => {
-    const storedRunId = readStoredRunId(storageKey);
-    setActiveRunId(storedRunId);
-    setHandledRunId(undefined);
-    setLastOutcome(undefined);
-    setRunStartedAt(storedRunId ? Date.now() : undefined);
-    setElapsedSeconds(0);
-  }, [storageKey]);
 
   const activeRunQuery = useQuery<AIRun>({
     queryKey: ["managed-agent-run", activeRunId],
@@ -189,6 +191,7 @@ export function ReportAIGenerateControls({
     enabled: Boolean(activeRunId),
     retry: (failureCount, err) => {
       if (err instanceof HttpError && (err.status === 403 || err.status === 404)) {
+        clearStoredRunId(storageKey, activeRunId);
         return false;
       }
       return failureCount < 2;
@@ -199,15 +202,6 @@ export function ReportAIGenerateControls({
     }
   });
 
-  useEffect(() => {
-    const err = activeRunQuery.error;
-    if (!activeRunId || !(err instanceof HttpError)) return;
-    if (err.status !== 403 && err.status !== 404) return;
-    clearStoredRunId(storageKey, activeRunId);
-    setActiveRunId(undefined);
-    setHandledRunId(undefined);
-  }, [activeRunId, activeRunQuery.error, storageKey]);
-
   const runMutation = useMutation({
     mutationFn: async () => {
       if (onBeforeGenerate) {
@@ -216,14 +210,20 @@ export function ReportAIGenerateControls({
           throw new Error("__AIDA_REPORT_AI_CANCELLED__");
         }
       }
+      let reportSourceSelectionId: string | undefined;
+      if (allowSessionSelection && selectedSessionSources.length > 0) {
+        const selection = await createReportSourceSelection({
+          report_type: reportType as "personal_daily" | "personal_weekly",
+          period,
+          selected_session_sources: selectedSessionSources
+        });
+        reportSourceSelectionId = selection.selection_id;
+      }
       const payload: ManagedReportAgentRunPayload = {
         report_type: reportType,
         period,
         target,
-        selected_session_slice_keys:
-          allowSessionSelection && selectedSessionSliceKeys.length > 0
-            ? selectedSessionSliceKeys
-            : undefined
+        report_source_selection_id: reportSourceSelectionId
       };
       let run = await startReportAgentRun("default", payload, { skipErrorHandler: true });
       if (!isReportAgentUnavailable(run)) return run;
@@ -280,41 +280,37 @@ export function ReportAIGenerateControls({
   useEffect(() => {
     const run = activeRunQuery.data;
     if (!run || handledRunId === run.id) return;
-    if (run.status === "succeeded") {
-      setHandledRunId(run.id);
-      clearStoredRunId(storageKey, run.id);
-      setActiveRunId(undefined);
-      setLastOutcome({ type: "success", text: `${periodLabel} 生成完成，报告正文已刷新` });
-      void queryClient.invalidateQueries({ queryKey: ["reports"] });
-      void queryClient.invalidateQueries({ queryKey: ["managed-agent-runs"] });
-      onGenerated?.(run);
-      return;
-    }
-    if (run.status === "failed" || run.status === "timeout") {
-      setHandledRunId(run.id);
-      clearStoredRunId(storageKey, run.id);
-      setActiveRunId(undefined);
-      const text = run.error_message || `${periodLabel} AI 生成失败`;
-      setLastOutcome({ type: "error", text });
-    }
-  }, [
-    activeRunQuery.data,
-    handledRunId,
-    onGenerated,
-    periodLabel,
-    queryClient,
-    storageKey
-  ]);
+    const timer = window.setTimeout(() => {
+      if (run.status === "succeeded") {
+        setHandledRunId(run.id);
+        clearStoredRunId(storageKey, run.id);
+        setActiveRunId(undefined);
+        setLastOutcome({ type: "success", text: `${periodLabel} 生成完成，报告正文已刷新` });
+        void queryClient.invalidateQueries({ queryKey: ["reports"] });
+        void queryClient.invalidateQueries({ queryKey: ["managed-agent-runs"] });
+        onGenerated?.(run);
+        return;
+      }
+      if (run.status === "failed" || run.status === "timeout") {
+        setHandledRunId(run.id);
+        clearStoredRunId(storageKey, run.id);
+        setActiveRunId(undefined);
+        const text = run.error_message || `${periodLabel} AI 生成失败`;
+        setLastOutcome({ type: "error", text });
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [activeRunQuery.data, handledRunId, onGenerated, periodLabel, queryClient, storageKey]);
 
   const runningTitle = initializingDefault
     ? "正在初始化日报生成能力"
     : runMutation.isPending
       ? "正在提交生成任务"
-    : activeStatus === "pending"
-      ? "任务已提交，等待模型开始"
-      : elapsedSeconds >= 45
-        ? "AI 正在处理报告上下文，请继续等待"
-        : "AI 正在读取数据并生成报告";
+      : activeStatus === "pending"
+        ? "任务已提交，等待模型开始"
+        : elapsedSeconds >= 45
+          ? "AI 正在处理报告上下文，请继续等待"
+          : "AI 正在读取数据并生成报告";
   const runningDetail = initializingDefault
     ? "初始化完成后将自动开始生成"
     : `已等待 ${elapsedLabel(elapsedSeconds)}，完成后正文会自动刷新`;
@@ -359,8 +355,8 @@ export function ReportAIGenerateControls({
             title="选择参与生成的 session"
             onClick={onToggleSettings}
           >
-            {selectedSessionSliceKeys.length > 0
-              ? `已选 ${selectedSessionSliceKeys.length} 个 session`
+            {selectedSessionSources.length > 0
+              ? `已选 ${selectedSessionSources.length} 个范围`
               : "选择 session"}
           </Button>
         ) : null}
@@ -369,56 +365,80 @@ export function ReportAIGenerateControls({
   );
 }
 
-export function ReportAISettingsPanel({
+export function ReportAISettingsPanel(props: ReportAISettingsPanelProps) {
+  return <SnapshotReportAISettingsPanel {...props} />;
+}
+
+function SnapshotReportAISettingsPanel({
   open,
-  selectedKeys,
-  onSelectedKeysChange,
+  reportType,
+  period,
+  selectedSources,
+  onSelectedSourcesChange,
   onClose
 }: ReportAISettingsPanelProps) {
   const { message } = App.useApp();
+  const periodStart = period.date ?? period.week_start ?? "";
+  const periodEnd = period.date ?? period.week_end ?? periodStart;
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(5);
-  const [queryRange, setQueryRange] = useState<[Dayjs, Dayjs] | null>(null);
+  const [queryRange, setQueryRange] = useState<[Dayjs, Dayjs] | null>(() =>
+    periodStart && periodEnd ? [dayjs(periodStart), dayjs(periodEnd)] : null
+  );
+  const [search, setSearch] = useState("");
   const queryFrom = queryRange?.[0].format("YYYY-MM-DD");
   const queryTo = queryRange?.[1].format("YYYY-MM-DD");
-  const rangeParams = queryFrom && queryTo ? { from: queryFrom, to: queryTo } : {};
 
   const sessionsQuery = useQuery({
-    queryKey: ["report-ai-session-slices", queryFrom, queryTo, page, pageSize],
+    queryKey: [
+      "report-ai-session-sources",
+      reportType,
+      periodStart,
+      periodEnd,
+      search,
+      queryFrom,
+      queryTo,
+      page,
+      pageSize
+    ],
     queryFn: () =>
-      fetchSessionTokens({
-        ...rangeParams,
-        scope: "mine",
+      fetchReportSourceCandidates({
+        report_type: reportType,
+        period_start: periodStart,
+        period_end: periodEnd,
+        q: search || undefined,
+        activity_from: queryFrom,
+        activity_to: queryTo,
         page: String(page),
         page_size: String(pageSize)
       }),
     enabled: open,
     staleTime: 15_000
   });
-  const columns = useMemo<ColumnsType<SessionTokens>>(
+  const columns = useMemo<ColumnsType<ReportSourceCandidate>>(
     () => [
       {
-        title: "日期",
-        key: "activity_date",
-        width: 104,
-        render: (_, record) => sessionActivityDate(record)
+        title: "活动范围",
+        key: "activity_range",
+        width: 168,
+        render: (_, record) =>
+          `${dayjs(record.activity_start_at).format("MM-DD HH:mm")} - ${dayjs(record.activity_end_at).format("MM-DD HH:mm")}`
       },
       {
         title: "session / 摘要",
         key: "session",
         render: (_, record) => (
           <span className="report-ai-session-cell">
-            <span className="report-ai-session-id">{record.session_id}</span>
+            <span className="report-ai-session-id">{record.session_ref}</span>
             <span className="report-ai-session-summary">{record.summary || "暂无摘要"}</span>
           </span>
         )
       },
       {
-        title: "Token",
-        dataIndex: "total_tokens",
-        width: 88,
-        align: "right",
-        render: formatNumber
+        title: "项目 / 模型",
+        key: "context",
+        width: 180,
+        render: (_, record) => `${record.cwd || "-"} · ${record.models?.join(", ") || "-"}`
       }
     ],
     []
@@ -432,8 +452,8 @@ export function ReportAISettingsPanel({
         <span>
           <strong>选择参与生成的 session</strong>
           <em>
-            {selectedKeys.length > 0
-              ? `已选 ${selectedKeys.length} 个 session`
+            {selectedSources.length > 0
+              ? `已选 ${selectedSources.length} 个活动范围`
               : "未选择时按报告周期自动取数"}
           </em>
         </span>
@@ -442,6 +462,15 @@ export function ReportAISettingsPanel({
         </Button>
       </div>
       <div className="report-ai-settings-panel__toolbar">
+        <Input.Search
+          size="small"
+          allowClear
+          placeholder="搜索 Session ID 或摘要"
+          onSearch={(value) => {
+            setSearch(value.trim());
+            setPage(1);
+          }}
+        />
         <DatePicker.RangePicker
           size="small"
           allowClear
@@ -458,27 +487,112 @@ export function ReportAISettingsPanel({
             className="report-ai-settings-panel__clear"
             type="text"
             icon={<ClearOutlined />}
-            disabled={selectedKeys.length === 0}
+            disabled={selectedSources.length === 0}
             aria-label="清空已选 Session"
-            onClick={() => onSelectedKeysChange([])}
+            onClick={() => onSelectedSourcesChange([])}
           />
         </Tooltip>
       </div>
-      <Table<SessionTokens>
-        rowKey={sessionSliceKey}
+      <Table<ReportSourceCandidate>
+        rowKey={candidateKey}
         size="small"
         columns={columns}
         dataSource={sessionsQuery.data?.items ?? []}
         loading={sessionsQuery.isLoading}
         rowSelection={{
           preserveSelectedRowKeys: true,
-          selectedRowKeys: selectedKeys,
-          onChange: (keys) => {
-            const normalized = keys.map(String);
-            if (normalized.length > MAX_SELECTED_SESSION_SLICES) {
-              message.warning(`最多选择 ${MAX_SELECTED_SESSION_SLICES} 个 Session`);
+          selectedRowKeys: Array.from(new Set(selectedSources.map(sourceKey))),
+          onSelect: (record, selected) => {
+            const key = candidateKey(record);
+            const retained = selectedSources.filter((source) => sourceKey(source) !== key);
+            if (!selected) {
+              onSelectedSourcesChange(retained);
+              return;
             }
-            onSelectedKeysChange(normalized.slice(0, MAX_SELECTED_SESSION_SLICES));
+            const next = [
+              ...retained,
+              {
+                session_ref: record.session_ref,
+                agent_type: record.agent_type,
+                activity_start_at: record.activity_start_at,
+                activity_end_at: record.activity_end_at
+              }
+            ];
+            if (next.length > MAX_SELECTED_SESSION_RANGES) {
+              message.warning(`最多选择 ${MAX_SELECTED_SESSION_RANGES} 个 Session`);
+            }
+            onSelectedSourcesChange(next.slice(0, MAX_SELECTED_SESSION_RANGES));
+          }
+        }}
+        expandable={{
+          expandedRowRender: (record) => {
+            const key = candidateKey(record);
+            const ranges = selectedSources
+              .map((source, sourceIndex) => ({ source, sourceIndex }))
+              .filter(({ source }) => sourceKey(source) === key);
+            return (
+              <div className="report-ai-source-ranges">
+                <DatePicker.RangePicker
+                  size="small"
+                  showTime
+                  allowClear
+                  minDate={dayjs(record.activity_start_at)}
+                  maxDate={dayjs(record.activity_end_at)}
+                  placeholder={["范围开始", "范围结束"]}
+                  onChange={(value) => {
+                    if (!value?.[0] || !value[1]) return;
+                    const availableStart = dayjs(record.activity_start_at);
+                    const availableEnd = dayjs(record.activity_end_at);
+                    if (
+                      value[0].isBefore(availableStart) ||
+                      value[1].isAfter(availableEnd) ||
+                      value[1].isBefore(value[0])
+                    ) {
+                      message.warning("选择范围必须位于该 Session 的可用活动范围内");
+                      return;
+                    }
+                    const nextRange: ReportSourceInput = {
+                      session_ref: record.session_ref,
+                      agent_type: record.agent_type,
+                      activity_start_at: value[0].toISOString(),
+                      activity_end_at: value[1].toISOString()
+                    };
+                    const withoutFullRange = selectedSources.filter(
+                      (source) =>
+                        sourceKey(source) !== key ||
+                        source.activity_start_at !== record.activity_start_at ||
+                        source.activity_end_at !== record.activity_end_at
+                    );
+                    if (withoutFullRange.length >= MAX_SELECTED_SESSION_RANGES) {
+                      message.warning(`最多选择 ${MAX_SELECTED_SESSION_RANGES} 个活动范围`);
+                      return;
+                    }
+                    onSelectedSourcesChange([...withoutFullRange, nextRange]);
+                  }}
+                />
+                <div className="report-ai-source-ranges__list">
+                  {ranges.map(({ source, sourceIndex }) => (
+                    <span
+                      key={`${source.activity_start_at}:${source.activity_end_at}:${sourceIndex}`}
+                    >
+                      {sourceRangeLabel(source)}
+                      <Button
+                        type="text"
+                        size="small"
+                        aria-label="删除活动范围"
+                        onClick={() =>
+                          onSelectedSourcesChange(
+                            selectedSources.filter((_, index) => index !== sourceIndex)
+                          )
+                        }
+                      >
+                        删除
+                      </Button>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            );
           }
         }}
         pagination={{

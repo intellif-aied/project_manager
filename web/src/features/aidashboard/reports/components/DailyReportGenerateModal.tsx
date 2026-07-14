@@ -21,13 +21,11 @@ import {
 import type {
   DailyReport,
   DepartmentReport,
+  ReportSourceInput,
   ReportType,
   TeamReport
 } from "../../api/types";
-import {
-  ReportAIGenerateControls,
-  ReportAISettingsPanel
-} from "./ReportAIGenerateControls";
+import { ReportAIGenerateControls, ReportAISettingsPanel } from "./ReportAIGenerateControls";
 
 import "./DailyReportGenerateModal.css";
 
@@ -112,7 +110,7 @@ export function DailyReportGenerateModal({
   const [nextDayPlanTouched, setNextDayPlanTouched] = useState(false);
   const [manualMode, setManualMode] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [selectedSessionSliceKeys, setSelectedSessionSliceKeys] = useState<string[]>([]);
+  const [selectedSessionSources, setSelectedSessionSources] = useState<ReportSourceInput[]>([]);
 
   const existingPersonalListQuery = useQuery({
     queryKey: ["reports", "daily", "manage-modal", "personal-existing", date],
@@ -127,7 +125,8 @@ export function DailyReportGenerateModal({
     staleTime: 0
   });
 
-  const personalReportId = scope === "personal" ? reportId ?? existingPersonalListQuery.data?.items[0]?.id : undefined;
+  const personalReportId =
+    scope === "personal" ? (reportId ?? existingPersonalListQuery.data?.items[0]?.id) : undefined;
   const personalReportQuery = useQuery({
     queryKey: ["reports", "daily", "manage-modal", "personal-report", personalReportId],
     queryFn: () => fetchReport(personalReportId ?? ""),
@@ -144,7 +143,8 @@ export function DailyReportGenerateModal({
 
   const departmentReportQuery = useQuery({
     queryKey: ["reports", "daily", "manage-modal", "department-report", reportId, date],
-    queryFn: () => (reportId ? fetchDepartmentReport(reportId) : fetchDepartmentReportTodayOrNull(date)),
+    queryFn: () =>
+      reportId ? fetchDepartmentReport(reportId) : fetchDepartmentReportTodayOrNull(date),
     enabled: open && scope === "department",
     staleTime: 0
   });
@@ -156,7 +156,8 @@ export function DailyReportGenerateModal({
   }, [departmentReportQuery.data, personalReportQuery.data, scope, teamReportQuery.data]);
 
   const loading =
-    (scope === "personal" && (existingPersonalListQuery.isLoading || personalReportQuery.isLoading)) ||
+    (scope === "personal" &&
+      (existingPersonalListQuery.isLoading || personalReportQuery.isLoading)) ||
     (scope === "team" && teamReportQuery.isLoading) ||
     (scope === "department" && departmentReportQuery.isLoading);
 
@@ -167,9 +168,9 @@ export function DailyReportGenerateModal({
 
   const hasContent = Boolean(currentReport?.content?.trim());
   const showEditor = hasContent || manualMode;
-  const editorContent = contentTouched ? content : currentReport?.content ?? "";
-  const editorNextDayPlan = nextDayPlanTouched ? nextDayPlan : currentReport?.next_day_plan ?? "";
-  const personalReport = scope === "personal" ? personalReportQuery.data ?? null : null;
+  const editorContent = contentTouched ? content : (currentReport?.content ?? "");
+  const editorNextDayPlan = nextDayPlanTouched ? nextDayPlan : (currentReport?.next_day_plan ?? "");
+  const personalReport = scope === "personal" ? (personalReportQuery.data ?? null) : null;
   const hasUnsavedContentChange =
     (contentTouched && editorContent !== (currentReport?.content ?? "")) ||
     (nextDayPlanTouched && editorNextDayPlan !== (currentReport?.next_day_plan ?? ""));
@@ -178,11 +179,6 @@ export function DailyReportGenerateModal({
   const showSessionSettings = allowSessionSettings && settingsOpen;
   const canEditContent = !readOnly;
   const shouldShowEditor = readOnly ? hasContent : showEditor;
-
-  useEffect(() => {
-    if (!open) return;
-    setSelectedDate(normalizedDate(reportDate));
-  }, [open, reportDate]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -195,7 +191,7 @@ export function DailyReportGenerateModal({
       setNextDayPlan("");
       setNextDayPlanTouched(false);
       setSettingsOpen(false);
-      setSelectedSessionSliceKeys([]);
+      setSelectedSessionSources([]);
     }, 0);
     return () => window.clearTimeout(timer);
   }, [date, open, reportId, scope]);
@@ -229,7 +225,7 @@ export function DailyReportGenerateModal({
       }
 
       if (scope === "personal") {
-        const report = personalReport ?? await fetchTodayReport(date);
+        const report = personalReport ?? (await fetchTodayReport(date));
         return saveReport(report.id, {
           content: nextContent,
           next_day_plan: editorNextDayPlan.trim(),
@@ -239,15 +235,29 @@ export function DailyReportGenerateModal({
 
       if (scope === "team") {
         if (currentReport?.id) {
-          return updateTeamReport(currentReport.id, { content: nextContent, next_day_plan: editorNextDayPlan.trim() });
+          return updateTeamReport(currentReport.id, {
+            content: nextContent,
+            next_day_plan: editorNextDayPlan.trim()
+          });
         }
-        return saveTeamReportCurrent({ report_date: date, content: nextContent, next_day_plan: editorNextDayPlan.trim() });
+        return saveTeamReportCurrent({
+          report_date: date,
+          content: nextContent,
+          next_day_plan: editorNextDayPlan.trim()
+        });
       }
 
       if (currentReport?.id) {
-        return updateDepartmentReport(currentReport.id, { content: nextContent, next_day_plan: editorNextDayPlan.trim() });
+        return updateDepartmentReport(currentReport.id, {
+          content: nextContent,
+          next_day_plan: editorNextDayPlan.trim()
+        });
       }
-      return saveDepartmentReportCurrent({ report_date: date, content: nextContent, next_day_plan: editorNextDayPlan.trim() });
+      return saveDepartmentReportCurrent({
+        report_date: date,
+        content: nextContent,
+        next_day_plan: editorNextDayPlan.trim()
+      });
     },
     onSuccess: (result) => {
       setContentTouched(false);
@@ -303,6 +313,9 @@ export function DailyReportGenerateModal({
       open={open}
       width={showSessionSettings ? 1180 : 860}
       onCancel={handleClose}
+      afterOpenChange={(opened) => {
+        if (opened) setSelectedDate(normalizedDate(reportDate));
+      }}
       footer={
         <Space>
           {canEditContent ? (
@@ -312,7 +325,7 @@ export function DailyReportGenerateModal({
               target={dailyReportTarget(scope)}
               allowSessionSelection={allowSessionSettings}
               settingsOpen={showSessionSettings}
-              selectedSessionSliceKeys={selectedSessionSliceKeys}
+              selectedSessionSources={selectedSessionSources}
               onToggleSettings={() => setSettingsOpen((value) => !value)}
               disabled={loading || saveMutation.isPending}
               onBeforeGenerate={confirmBeforeAIGenerate}
@@ -350,7 +363,9 @@ export function DailyReportGenerateModal({
       }
     >
       <div className="console-report-modal console-report-management">
-        {loadError ? <Alert type="error" showIcon message="报告加载失败" description="请稍后重试" /> : null}
+        {loadError ? (
+          <Alert type="error" showIcon message="报告加载失败" description="请稍后重试" />
+        ) : null}
         <div className="console-report-management__summary">
           <span>
             <strong>{date}</strong>
@@ -368,7 +383,9 @@ export function DailyReportGenerateModal({
           </span>
           {reportStatus(currentReport)}
         </div>
-        <div className={`console-report-management__content${showSessionSettings ? " has-settings" : ""}`}>
+        <div
+          className={`console-report-management__content${showSessionSettings ? " has-settings" : ""}`}
+        >
           <div className="console-report-management__main">
             {loading ? (
               <div className="console-session-empty">正在加载报告内容...</div>
@@ -392,7 +409,9 @@ export function DailyReportGenerateModal({
                   />
                   <div className="console-session-modal__section">
                     <strong>明日计划（可选）</strong>
-                    <span>{readOnly ? "查看填写的明日计划。" : "可手写或直接粘贴，最多两行。"}</span>
+                    <span>
+                      {readOnly ? "查看填写的明日计划。" : "可手写或直接粘贴，最多两行。"}
+                    </span>
                   </div>
                   <TextArea
                     rows={2}
@@ -408,18 +427,17 @@ export function DailyReportGenerateModal({
                 </div>
               </div>
             ) : (
-              <Empty
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description="暂无日报，可直接填写。"
-              />
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无日报，可直接填写。" />
             )}
           </div>
           {allowSessionSettings ? (
             <ReportAISettingsPanel
               key={`daily:${date}`}
               open={settingsOpen}
-              selectedKeys={selectedSessionSliceKeys}
-              onSelectedKeysChange={setSelectedSessionSliceKeys}
+              reportType="personal_daily"
+              period={{ date }}
+              selectedSources={selectedSessionSources}
+              onSelectedSourcesChange={setSelectedSessionSources}
               onClose={() => setSettingsOpen(false)}
             />
           ) : null}

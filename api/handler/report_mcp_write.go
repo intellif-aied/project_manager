@@ -5,11 +5,13 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/aidashboard/api/internal/reportsource"
 	"github.com/lib/pq"
 )
 
@@ -108,6 +110,27 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 		return nil, errMCPInternal
 	}
 	defer tx.Rollback()
+	if selectionID := strings.TrimSpace(stringFromAny(run.InputRef["report_source_selection_id"])); selectionID != "" {
+		if h.reportSource == nil {
+			return nil, mcpErr("REPORT_SOURCE_MISMATCH", "report source selection is unavailable")
+		}
+		period, periodErr := reportsource.ReportPeriod(args.ReportType, date, ws, we)
+		if periodErr != nil {
+			return nil, mcpErr("REPORT_SOURCE_MISMATCH", "report source period is invalid")
+		}
+		if err := h.reportSource.ValidateAttachedSelectionTx(
+			ctx, tx, u.ID, selectionID, run.ID, args.ReportType, period,
+		); err != nil {
+			switch {
+			case errors.Is(err, reportsource.ErrSourceUnavailable):
+				return nil, mcpErr("CONTENT_CLEARED", "report source content is no longer available")
+			case errors.Is(err, reportsource.ErrSelectionMismatch), errors.Is(err, reportsource.ErrSelectionNotFound):
+				return nil, mcpErr("REPORT_SOURCE_MISMATCH", "report source selection does not match this run")
+			default:
+				return nil, errMCPInternal
+			}
+		}
+	}
 
 	existing, err := selectReportForUpdate(ctx, tx, args.ReportType, date, ws, we, target)
 	if err != nil {

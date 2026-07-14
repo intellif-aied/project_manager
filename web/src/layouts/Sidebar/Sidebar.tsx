@@ -1,6 +1,7 @@
 import { LeftOutlined, RightOutlined } from "@ant-design/icons";
 import { Layout, Menu } from "antd";
 import type { MenuProps } from "antd";
+import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
@@ -9,6 +10,7 @@ import { appRoutes } from "@/router/routes";
 import { findBestMenuMatch } from "@/router/routeAccess";
 import type { AppRoute } from "@/router/types";
 import { useAuth } from "@/shared/auth/authContext";
+import { fetchTokenAnalyticsCapability } from "@/features/aidashboard/api/client";
 import { useLayoutStore } from "@/stores/layoutStore";
 
 import "./Sidebar.css";
@@ -22,9 +24,18 @@ export function SidebarContent({ collapsed = false, onNavigate }: SidebarContent
   const navigate = useNavigate();
   const location = useLocation();
   const { user } = useAuth();
+  const tokenAnalyticsCapability = useQuery({
+    queryKey: ["token-analytics-capability", user?.id],
+    queryFn: fetchTokenAnalyticsCapability,
+    enabled: Boolean(user),
+    staleTime: 60_000
+  });
 
   const items = useMemo<MenuProps["items"]>(() => {
-    const routes = getMenuRoutesForUser(appRoutes, user);
+    const routes = getMenuRoutesForUser(appRoutes, user, {
+      token_analytics: Boolean(tokenAnalyticsCapability.data?.can_manage),
+      pricing_management: Boolean(tokenAnalyticsCapability.data?.can_manage_pricing)
+    });
     type MenuItem = NonNullable<MenuProps["items"]>[number];
     type MenuGroup = {
       key: string;
@@ -77,7 +88,7 @@ export function SidebarContent({ collapsed = false, onNavigate }: SidebarContent
         children: group.children
       }))
       .filter((group) => group.children.length > 0);
-  }, [user]);
+  }, [tokenAnalyticsCapability.data, user]);
 
   const selectedKey = findBestMenuMatch(location.pathname, appRoutes)?.path;
 

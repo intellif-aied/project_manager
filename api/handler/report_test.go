@@ -41,7 +41,7 @@ func TestUpdateReportPersistsSessionIDsOnSave(t *testing.T) {
 	mock.ExpectQuery("SELECT dr.id").
 		WithArgs("report-1").
 		WillReturnRows(sqlmock.NewRows(dailyReportGetColumns()).
-			AddRow("report-1", "user-1", "张三", nil, "2026-06-24", "最终日报", true, nil, "{session-1,session-2}", "saved", nil, now, nil, nil, "default", nil, nil, nil, nil, nil, now, now))
+			AddRow("report-1", "user-1", "张三", nil, "2026-06-24", "最终日报", "", true, nil, "{session-1,session-2}", "saved", nil, now, nil, nil, "default", nil, nil, nil, nil, nil, now, now))
 
 	h := NewReportHandler(db)
 	req := httptest.NewRequest(http.MethodPut, "/reports/report-1", bytes.NewBufferString(`{"content":"最终日报","session_ids":["session-1","session-2"]}`))
@@ -77,7 +77,7 @@ func TestSubmitReportSavesAndPublishesSubmittedContent(t *testing.T) {
 	mock.ExpectQuery("SELECT dr.id").
 		WithArgs("report-1").
 		WillReturnRows(sqlmock.NewRows(dailyReportGetColumns()).
-			AddRow("report-1", "user-1", "张三", nil, "2026-06-24", "发送版本", true, nil, "{session-1,session-2}", "submitted", "发送版本", now, now, "team_leader", "default", nil, nil, nil, nil, nil, now, now))
+			AddRow("report-1", "user-1", "张三", nil, "2026-06-24", "发送版本", "", true, nil, "{session-1,session-2}", "submitted", "发送版本", now, now, "team_leader", "default", nil, nil, nil, nil, nil, now, now))
 
 	h := NewReportHandler(db)
 	req := httptest.NewRequest(http.MethodPost, "/reports/report-1/submit", bytes.NewBufferString(`{"content":"发送版本","session_ids":["session-1","session-2"]}`))
@@ -208,7 +208,7 @@ func TestGetReportRejectsDirectorOutsideManagedTeam(t *testing.T) {
 	mock.ExpectQuery("SELECT dr.id").
 		WithArgs("report-1").
 		WillReturnRows(sqlmock.NewRows(dailyReportGetColumns()).
-			AddRow("report-1", "emp-1", "成员", "team-2", "2026-07-14", "日报正文", false, nil, "{}", "saved", nil, now, nil, nil, "default", nil, nil, nil, nil, nil, now, now))
+			AddRow("report-1", "emp-1", "成员", "team-2", "2026-07-14", "日报正文", "", false, nil, "{}", "saved", nil, now, nil, nil, "default", nil, nil, nil, nil, nil, now, now))
 	mock.ExpectQuery("(?s)SELECT EXISTS.*departments").
 		WithArgs("emp-1", "director-1").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
@@ -239,7 +239,7 @@ func draftSessionColumns() []string {
 
 func dailyReportGetColumns() []string {
 	return []string{
-		"id", "user_id", "name", "team_id", "report_date", "content", "edited",
+		"id", "user_id", "name", "team_id", "report_date", "content", "next_day_plan", "edited",
 		"feishu_doc_url", "session_ids", "status", "submitted_content", "saved_at", "submitted_at", "submitted_to",
 		"generation_mode", "managed_agent_run_id", "agent_id", "agent_version_id", "model_id", "finished_at",
 		"created_at", "updated_at",
@@ -248,7 +248,7 @@ func dailyReportGetColumns() []string {
 
 func dailyReportByUserDateColumns() []string {
 	return []string{
-		"id", "user_id", "name", "report_date", "content", "edited",
+		"id", "user_id", "name", "report_date", "content", "next_day_plan", "edited",
 		"feishu_doc_url", "session_ids", "status", "submitted_content", "saved_at", "submitted_at", "submitted_to",
 		"created_at", "updated_at",
 	}

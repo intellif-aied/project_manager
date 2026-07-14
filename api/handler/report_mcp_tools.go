@@ -56,15 +56,23 @@ func reportMCPTools() []map[string]any {
 	return []map[string]any{
 		{
 			"name":        toolGetSessions,
-			"description": "List sessions visible to the current user within a date range.",
+			"description": "Read an attached personal-report source snapshot, or list sessions for an authenticated ad-hoc date query.",
 			"inputSchema": map[string]any{
 				"type":     "object",
-				"required": []string{"scope", "date_range"},
+				"required": []string{"scope"},
 				"properties": map[string]any{
-					"scope":      scopeSchema,
-					"target":     targetSchema,
-					"date_range": dateRangeSchema,
-					"user_ids":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+					"scope":       scopeSchema,
+					"target":      targetSchema,
+					"date_range":  dateRangeSchema,
+					"report_type": reportTypeSchema,
+					"period":      periodSchema,
+					"run_id":      map[string]any{"type": "string"},
+					"report_source_selection_id": map[string]any{
+						"type":        "string",
+						"description": "Attached source snapshot id injected by Aida for managed personal reports.",
+					},
+					"page_cursor": map[string]any{"type": "string"},
+					"user_ids":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 					"selected_session_slice_keys": map[string]any{
 						"type":        "array",
 						"items":       map[string]any{"type": "string"},

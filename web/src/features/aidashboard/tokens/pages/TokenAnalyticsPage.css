@@ -1,0 +1,91 @@
+.token-analytics-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.token-analytics-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.token-analytics-charts {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+}
+
+.token-analytics-charts section,
+.token-analytics-section {
+  min-width: 0;
+  border: 1px solid #e6e9ee;
+  background: #fff;
+  border-radius: 6px;
+}
+
+.token-analytics-charts header,
+.token-analytics-section > header {
+  min-height: 46px;
+  padding: 0 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid #edf0f3;
+}
+
+.token-analytics-charts h3,
+.token-analytics-section h3 {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.4;
+  font-weight: 600;
+}
+
+.token-analytics-section > header span {
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.token-analytics-section .ant-table-wrapper {
+  padding: 0 1px 1px;
+}
+
+.token-analytics-clickable-row {
+  cursor: pointer;
+}
+
+.token-analytics-session-cell {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.token-analytics-session-cell strong {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.token-analytics-session-cell span {
+  max-width: 310px;
+  overflow: hidden;
+  color: #6b7280;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 960px) {
+  .token-analytics-charts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .token-analytics-toolbar .ant-picker,
+  .token-analytics-toolbar .ant-input-search {
+    width: 100% !important;
+  }
+}

@@ -1,0 +1,147 @@
+package handler
+
+import (
+	"errors"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/aidashboard/api/internal/reportsource"
+)
+
+type ReportSourceHandler struct {
+	service *reportsource.Service
+}
+
+func NewReportSourceHandler(service *reportsource.Service) *ReportSourceHandler {
+	return &ReportSourceHandler{service: service}
+}
+
+func (h *ReportSourceHandler) Capability(w http.ResponseWriter, r *http.Request) {
+	u := getUser(r)
+	if u == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{
+		"enabled": h.service != nil,
+	})
+}
+
+func (h *ReportSourceHandler) ListCandidates(w http.ResponseWriter, r *http.Request) {
+	u := getUser(r)
+	if u == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	if h.service == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"code": "REPORT_SOURCE_UNAVAILABLE", "error": "report source service is unavailable"})
+		return
+	}
+	reportType := strings.TrimSpace(r.URL.Query().Get("report_type"))
+	if reportType != reportTypePersonalDaily && reportType != reportTypePersonalWeekly {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REPORT_SOURCE", "error": "personal report_type is required"})
+		return
+	}
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
+	activityFrom, err := parseOptionalActivityTime(r.URL.Query().Get("activity_from"), false)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REPORT_SOURCE", "error": err.Error()})
+		return
+	}
+	activityTo, err := parseOptionalActivityTime(r.URL.Query().Get("activity_to"), true)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REPORT_SOURCE", "error": err.Error()})
+		return
+	}
+	result, err := h.service.ListCandidates(r.Context(), u.ID, reportsource.CandidateQuery{
+		Query: r.URL.Query().Get("q"), ActivityFrom: activityFrom, ActivityTo: activityTo,
+		Page: page, PageSize: pageSize,
+	})
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "REPORT_SOURCE_QUERY_FAILED", "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *ReportSourceHandler) CreateSelection(w http.ResponseWriter, r *http.Request) {
+	u := getUser(r)
+	if u == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	if h.service == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"code": "REPORT_SOURCE_UNAVAILABLE", "error": "report source service is unavailable"})
+		return
+	}
+	var request struct {
+		ReportType string `json:"report_type"`
+		Period     struct {
+			Date      string `json:"date,omitempty"`
+			WeekStart string `json:"week_start,omitempty"`
+			WeekEnd   string `json:"week_end,omitempty"`
+		} `json:"period"`
+		Selected []struct {
+			SessionRef    string    `json:"session_ref"`
+			AgentType     string    `json:"agent_type"`
+			ActivityStart time.Time `json:"activity_start_at"`
+			ActivityEnd   time.Time `json:"activity_end_at"`
+		} `json:"selected_session_sources"`
+	}
+	if err := readJSON(r, &request); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REPORT_SOURCE", "error": "invalid request"})
+		return
+	}
+	period, err := reportsource.ReportPeriod(strings.TrimSpace(request.ReportType), request.Period.Date, request.Period.WeekStart, request.Period.WeekEnd)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REPORT_SOURCE", "error": err.Error()})
+		return
+	}
+	inputs := make([]reportsource.SourceInput, 0, len(request.Selected))
+	for _, selected := range request.Selected {
+		inputs = append(inputs, reportsource.SourceInput{
+			SessionRef: selected.SessionRef, AgentType: selected.AgentType,
+			ActivityStart: selected.ActivityStart, ActivityEnd: selected.ActivityEnd,
+		})
+	}
+	selection, err := h.service.CreateExplicit(r.Context(), u.ID, request.ReportType, period, inputs)
+	if err != nil {
+		writeReportSourceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, selection)
+}
+
+func parseOptionalActivityTime(value string, endOfDay bool) (*time.Time, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
+	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+		return &parsed, nil
+	}
+	day, err := time.ParseInLocation("2006-01-02", value, time.FixedZone("Asia/Shanghai", 8*60*60))
+	if err != nil {
+		return nil, errors.New("activity time must be RFC3339 or YYYY-MM-DD")
+	}
+	if endOfDay {
+		day = day.Add(24*time.Hour - time.Nanosecond)
+	}
+	return &day, nil
+}
+
+func writeReportSourceError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, reportsource.ErrInvalidRequest):
+		writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REPORT_SOURCE", "error": err.Error()})
+	case errors.Is(err, reportsource.ErrSelectionNotFound):
+		writeJSON(w, http.StatusNotFound, map[string]string{"code": "REPORT_SOURCE_SELECTION_NOT_FOUND", "error": "selection not found"})
+	case errors.Is(err, reportsource.ErrSourceUnavailable), errors.Is(err, reportsource.ErrSelectionConflict):
+		writeJSON(w, http.StatusConflict, map[string]string{"code": "REPORT_SOURCE_UNAVAILABLE", "error": err.Error()})
+	default:
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "REPORT_SOURCE_FAILED", "error": err.Error()})
+	}
+}

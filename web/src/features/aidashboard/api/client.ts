@@ -51,12 +51,27 @@ import type {
   TeamWeeklyReport,
   TeamWeeklyReportSources,
   TokenAggregation,
+  TokenAnalyticsCapability,
+  TokenAnalyticsFilters,
+  TokenAnalyticsRankingItem,
+  TokenAnalyticsSessionItem,
+  TokenAnalyticsSummary,
+  TokenAnalyticsTrendPoint,
   TokenGroupBy,
   TokenPeriod,
+  ExchangeRateVersion,
+  ModelAlias,
+  ModelPriceVersion,
+  PriceBook,
+  PricingRecalculationRun,
+  UnpricedModel,
   Team,
   PreviewManagedAgentSchedulePayload,
   PreviewManagedAgentScheduleResponse,
   RequirementBoardResponseDTO,
+  ReportSourceCandidatePage,
+  ReportSourceInput,
+  ReportSourceSelection,
   UpsertManagedAgentPayload,
   UpsertManagedAgentSchedulePayload
 } from "./types";
@@ -115,12 +130,15 @@ export const adminCreateDepartment = (data: {
   team_ids: string[];
   pm_user_ids: string[];
 }) => unwrap(api.post<{ id: string }>("/admin/departments", data));
-export const adminUpdateDepartment = (id: string, data: {
-  name: string;
-  director_user_id?: string;
-  team_ids: string[];
-  pm_user_ids: string[];
-}) => unwrap(api.put<{ id: string }>(`/admin/departments/${id}`, data));
+export const adminUpdateDepartment = (
+  id: string,
+  data: {
+    name: string;
+    director_user_id?: string;
+    team_ids: string[];
+    pm_user_ids: string[];
+  }
+) => unwrap(api.put<{ id: string }>(`/admin/departments/${id}`, data));
 
 export const adminUpdateUser = (
   id: string,
@@ -411,6 +429,7 @@ export const fetchReports = async (params?: Record<string, string>) => {
     user_name: item.user_name,
     report_date: item.report_date,
     content: "",
+    next_day_plan: item.next_day_plan,
     status: item.status,
     submitted_to: item.submitted_to,
     edited: item.edited,
@@ -428,7 +447,12 @@ export const fetchTodayReport = (reportDate?: string) =>
 export const fetchReport = (id: string) => unwrap(api.get<DailyReport>(`/reports/${id}`));
 export const updateReport = (
   id: string,
-  data: { content?: string; next_day_plan?: string; feishu_doc_url?: string; session_ids?: string[] }
+  data: {
+    content?: string;
+    next_day_plan?: string;
+    feishu_doc_url?: string;
+    session_ids?: string[];
+  }
 ) => unwrap(api.put<DailyReport>(`/reports/${id}`, data));
 export const saveReport = updateReport;
 export const submitReport = (id: string, data: { content?: string; session_ids?: string[] }) =>
@@ -442,17 +466,21 @@ export const fetchTeamMemberReports = (date: string, teamId?: string) =>
     )
   );
 export const fetchMemberDailyReports = (date: string, departmentId?: string) =>
-  unwrap(api.get<MemberPersonalReport[]>("/reports/members/daily", {
-    date,
-    ...(departmentId ? { department_id: departmentId } : {})
-  }));
+  unwrap(
+    api.get<MemberPersonalReport[]>("/reports/members/daily", {
+      date,
+      ...(departmentId ? { department_id: departmentId } : {})
+    })
+  );
 export const fetchMemberDailyReport = (id: string) =>
   unwrap(api.get<DailyReport>(`/reports/members/daily/${id}`));
 export const fetchMemberWeeklyReports = (weekStart: string, departmentId?: string) =>
-  unwrap(api.get<MemberPersonalReport[]>("/reports/members/weekly", {
-    week_start: weekStart,
-    ...(departmentId ? { department_id: departmentId } : {})
-  }));
+  unwrap(
+    api.get<MemberPersonalReport[]>("/reports/members/weekly", {
+      week_start: weekStart,
+      ...(departmentId ? { department_id: departmentId } : {})
+    })
+  );
 export const fetchMemberWeeklyReport = (id: string) =>
   unwrap(api.get<PersonalWeeklyReport>(`/reports/members/weekly/${id}`));
 export const fetchTeamReportSources = (date: string, teamId?: string) =>
@@ -482,13 +510,18 @@ export async function fetchTeamReportTodayOrNull(reportDate?: string) {
     throw error;
   }
 }
-export const saveTeamReportCurrent = (data: { report_date: string; content?: string; next_day_plan?: string }) =>
-  unwrap(api.put<TeamReport>("/reports/team/today", data));
+export const saveTeamReportCurrent = (data: {
+  report_date: string;
+  content?: string;
+  next_day_plan?: string;
+}) => unwrap(api.put<TeamReport>("/reports/team/today", data));
 export const fetchTeamReports = (params?: Record<string, string>) =>
   unwrap(api.get<PaginatedTeamReports>("/reports/team", params));
 export const fetchTeamReport = (id: string) => unwrap(api.get<TeamReport>(`/reports/team/${id}`));
-export const updateTeamReport = (id: string, data: { content?: string; next_day_plan?: string; feishu_doc_url?: string }) =>
-  unwrap(api.put<TeamReport>(`/reports/team/${id}`, data));
+export const updateTeamReport = (
+  id: string,
+  data: { content?: string; next_day_plan?: string; feishu_doc_url?: string }
+) => unwrap(api.put<TeamReport>(`/reports/team/${id}`, data));
 export const submitTeamReport = (id: string, data?: { content?: string }) =>
   unwrap(api.post<TeamReport>(`/reports/team/${id}/submit`, data));
 export const fetchDepartmentReportSources = (date: string) =>
@@ -526,8 +559,10 @@ export const fetchDepartmentReports = (params?: Record<string, string>) =>
   unwrap(api.get<PaginatedDepartmentReports>("/reports/department", params));
 export const fetchDepartmentReport = (id: string) =>
   unwrap(api.get<DepartmentReport>(`/reports/department/${id}`));
-export const updateDepartmentReport = (id: string, data: { content?: string; next_day_plan?: string; archive?: boolean }) =>
-  unwrap(api.put<DepartmentReport>(`/reports/department/${id}`, data));
+export const updateDepartmentReport = (
+  id: string,
+  data: { content?: string; next_day_plan?: string; archive?: boolean }
+) => unwrap(api.put<DepartmentReport>(`/reports/department/${id}`, data));
 
 export const fetchPersonalWeeklyReports = (params?: Record<string, string>) =>
   unwrap(api.get<PaginatedPersonalWeeklyReports>("/reports/weekly/mine", params));
@@ -763,6 +798,23 @@ export const startReportAgentRun = (
       options
     )
   );
+export const fetchReportSourceCandidates = (params: {
+  report_type: "personal_daily" | "personal_weekly";
+  period_start: string;
+  period_end: string;
+  q?: string;
+  activity_from?: string;
+  activity_to?: string;
+  page?: string;
+  page_size?: string;
+}) => unwrap(api.get<ReportSourceCandidatePage>("/report-source-sessions", params));
+export const fetchReportSourceCapability = () =>
+  unwrap(api.get<{ enabled: boolean }>("/report-source-capability"));
+export const createReportSourceSelection = (payload: {
+  report_type: "personal_daily" | "personal_weekly";
+  period: { date?: string; week_start?: string; week_end?: string };
+  selected_session_sources: ReportSourceInput[];
+}) => unwrap(api.post<ReportSourceSelection>("/report-source-selections", payload));
 export const fetchManagedAgentRuns = (params?: {
   agent_id?: string;
   business_type?: string;
@@ -840,3 +892,113 @@ export async function fetchAllSessionTokens(params: {
 
   return items;
 }
+
+export const fetchTokenAnalyticsCapability = () =>
+  unwrap(api.get<TokenAnalyticsCapability>("/token-analytics/capability"));
+
+export const fetchTokenAnalyticsSummary = (params: TokenAnalyticsFilters) =>
+  unwrap(api.get<TokenAnalyticsSummary>("/token-analytics/summary", params));
+
+export const fetchTokenAnalyticsTrends = (
+  params: TokenAnalyticsFilters & { query_snapshot_token: string }
+) =>
+  unwrap(
+    api.get<{ query_snapshot_token: string; items: TokenAnalyticsTrendPoint[] }>(
+      "/token-analytics/trends",
+      params
+    )
+  );
+
+export const fetchTokenAnalyticsRankings = (
+  params: TokenAnalyticsFilters & {
+    query_snapshot_token: string;
+    group_by: "department" | "team" | "user" | "model";
+  }
+) =>
+  unwrap(
+    api.get<{
+      query_snapshot_token: string;
+      group_by: string;
+      items: TokenAnalyticsRankingItem[];
+    }>("/token-analytics/rankings", params)
+  );
+
+export const fetchTokenAnalyticsSessions = (
+  params: TokenAnalyticsFilters & {
+    query_snapshot_token: string;
+    page: string;
+    page_size: string;
+  }
+) =>
+  unwrap(
+    api.get<{
+      query_snapshot_token: string;
+      search_mode: "filtered" | "exact_session_ref";
+      items: TokenAnalyticsSessionItem[];
+      total: number;
+      page: number;
+      page_size: number;
+    }>("/token-analytics/sessions", params)
+  );
+
+export const fetchPriceBooks = () => unwrap(api.get<PriceBook[]>("/admin/price-books"));
+export const savePriceBook = (payload: {
+  id?: string;
+  name: string;
+  status: PriceBook["status"];
+}) => unwrap(api.post<{ id: string }>("/admin/price-books", payload));
+
+export const fetchModelAliases = () => unwrap(api.get<ModelAlias[]>("/admin/model-aliases"));
+export const saveModelAlias = (payload: {
+  provider: string;
+  raw_model_pattern: string;
+  canonical_model: string;
+  status: ModelAlias["status"];
+}) => unwrap(api.post<{ id: string }>("/admin/model-aliases", payload));
+
+export const fetchModelPriceVersions = () =>
+  unwrap(api.get<ModelPriceVersion[]>("/admin/model-price-versions"));
+export const saveModelPriceVersion = (payload: Record<string, string | undefined>) =>
+  unwrap(api.post<{ id: string }>("/admin/model-price-versions", payload));
+
+export const fetchExchangeRateVersions = () =>
+  unwrap(api.get<ExchangeRateVersion[]>("/admin/exchange-rate-versions"));
+export const saveExchangeRateVersion = (payload: Record<string, string | undefined>) =>
+  unwrap(api.post<{ id: string }>("/admin/exchange-rate-versions", payload));
+
+export const fetchUnpricedModels = () =>
+  unwrap(api.get<UnpricedModel[]>("/admin/pricing/unpriced-models"));
+
+export const fetchPricingRecalculationRuns = () =>
+  unwrap(api.get<PricingRecalculationRun[]>("/admin/pricing/recalculation-runs"));
+
+export const previewPricingRecalculation = (payload: {
+  from?: string;
+  to?: string;
+  model?: string;
+}) =>
+  unwrap(
+    api.post<{
+      eligible_components: number;
+      priced_components: number;
+      unpriced_components: number;
+      changed_components: number;
+      unchanged_components: number;
+    }>("/admin/pricing/recalculate/preview", payload)
+  );
+
+export const applyPricingRecalculation = (payload: {
+  from?: string;
+  to?: string;
+  model?: string;
+  reason: string;
+}) =>
+  unwrap(
+    api.post<{
+      eligible_components: number;
+      priced_components: number;
+      unpriced_components: number;
+      changed_components: number;
+      unchanged_components: number;
+    }>("/admin/pricing/recalculate/apply", payload)
+  );

@@ -4,10 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
+	"github.com/aidashboard/api/internal/reportsource"
 	"github.com/aidashboard/api/model"
 	"github.com/lib/pq"
 )
@@ -209,6 +212,11 @@ type sessionsArgs struct {
 	Scope                    reportScope   `json:"scope"`
 	Target                   reportTarget  `json:"target,omitempty"`
 	DateRange                dateRangeArgs `json:"date_range"`
+	ReportType               string        `json:"report_type,omitempty"`
+	Period                   periodArgs    `json:"period,omitempty"`
+	RunID                    string        `json:"run_id,omitempty"`
+	ReportSourceSelectionID  string        `json:"report_source_selection_id,omitempty"`
+	PageCursor               string        `json:"page_cursor,omitempty"`
 	UserIDs                  []string      `json:"user_ids,omitempty"`
 	SelectedSessionSliceKeys []string      `json:"selected_session_slice_keys,omitempty"`
 	Limit                    int           `json:"limit,omitempty"`
@@ -261,6 +269,38 @@ func (h *ReportMCPHandler) toolGetSessions(ctx context.Context, r *http.Request,
 	var args sessionsArgs
 	if err := decodeArguments(rawArgs, &args); err != nil {
 		return nil, err
+	}
+	if strings.TrimSpace(args.ReportSourceSelectionID) != "" {
+		if h.reportSource == nil {
+			return nil, mcpErr("REPORT_SOURCE_MISMATCH", "report source selection is unavailable")
+		}
+		if args.DateRange.Start != "" || args.DateRange.End != "" || len(args.SelectedSessionSliceKeys) > 0 {
+			return nil, mcpErr("AMBIGUOUS_REPORT_SOURCE", "snapshot mode cannot be combined with date_range or selected_session_slice_keys")
+		}
+		if args.Scope.Type != "self" || (args.Target.Type != "" && args.Target.Type != "self") || len(args.UserIDs) > 0 {
+			return nil, mcpErr("REPORT_SOURCE_MISMATCH", "personal report source requires self scope")
+		}
+		period, err := reportsource.ReportPeriod(args.ReportType, args.Period.Date, args.Period.WeekStart, args.Period.WeekEnd)
+		if err != nil {
+			return nil, mcpErr("REPORT_SOURCE_MISMATCH", "report period does not match selection")
+		}
+		page, err := h.reportSource.ReadAttachedSelection(
+			ctx, u.ID, strings.TrimSpace(args.ReportSourceSelectionID), strings.TrimSpace(args.RunID),
+			strings.TrimSpace(args.ReportType), period, strings.TrimSpace(args.PageCursor),
+		)
+		if err != nil {
+			switch {
+			case errors.Is(err, reportsource.ErrSourceUnavailable):
+				return nil, mcpErr("CONTENT_CLEARED", "report source content is no longer available")
+			case errors.Is(err, reportsource.ErrContentItemTooLarge):
+				return nil, mcpErr("CONTENT_ITEM_TOO_LARGE", err.Error())
+			case errors.Is(err, reportsource.ErrSelectionMismatch), errors.Is(err, reportsource.ErrSelectionNotFound):
+				return nil, mcpErr("REPORT_SOURCE_MISMATCH", "report source selection does not match this run")
+			default:
+				return nil, errMCPInternal
+			}
+		}
+		return mcpTextResult(page), nil
 	}
 	start, end, err := parseDateRange(args.DateRange)
 	if err != nil {

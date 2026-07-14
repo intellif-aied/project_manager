@@ -4,11 +4,17 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/aidashboard/api/config"
 	"github.com/aidashboard/api/db"
 	"github.com/aidashboard/api/handler"
+	"github.com/aidashboard/api/internal/pricing"
+	"github.com/aidashboard/api/internal/reportsource"
+	"github.com/aidashboard/api/internal/sessionsync"
+	"github.com/aidashboard/api/internal/tokenanalytics"
+	"github.com/aidashboard/api/internal/usage"
 	"github.com/aidashboard/api/service"
 	"github.com/aidashboard/api/storage"
 	"github.com/go-chi/chi/v5"
@@ -49,7 +55,16 @@ func main() {
 	reqH := handler.NewRequirementHandlerWithRecorder(database, aiClient, workItemEventRecorder)
 	taskH := handler.NewTaskHandlerWithRecorder(database, workItemEventRecorder)
 	sessionH := handler.NewSessionHandlerWithRecorder(database, minioStore, aiClient, workItemEventRecorder)
+	sessionSyncH, err := handler.NewSessionSyncHandler(database, minioStore)
+	if err != nil {
+		log.Fatalf("Failed to init session sync handler: %v", err)
+	}
 	reportH := handler.NewReportHandler(database)
+	reportSourceService, err := reportsource.NewService(database)
+	if err != nil {
+		log.Fatalf("Failed to init report source service: %v", err)
+	}
+	reportSourceH := handler.NewReportSourceHandler(reportSourceService)
 	managedAgentH := handler.NewManagedAgentHandlerWithDefaults(database, managedAgentClient, handler.ManagedAgentDefaults{
 		Engine:                         cfg.ManagedAgentDefaultEngine,
 		ModelID:                        cfg.ManagedAgentDefaultModelID,
@@ -74,13 +89,68 @@ func main() {
 		AIDAPublicBaseURL:              cfg.AIDAPublicBaseURL,
 		AIHubSecret:                    cfg.AIHubSecret,
 	})
+	managedAgentH.ConfigureReportSourceSelection(reportSourceService)
 	dailyReportMCPH := handler.NewReportMCPHandler(database)
+	dailyReportMCPH.ConfigureReportSourceSelection(reportSourceService)
 	schedulerCtx, stopScheduler := context.WithCancel(context.Background())
 	defer stopScheduler()
 	handler.NewManagedAgentScheduleRunner(managedAgentH).Start(schedulerCtx)
 	service.NewManagedAgentRunStatusSyncer(database, managedAgentClient).Start(schedulerCtx)
+	if cfg.SessionSyncContentWorkerEnabled {
+		if minioStore == nil {
+			log.Fatal("Session content projection worker requires MinIO")
+		}
+		jobRepository, err := sessionsync.NewPostgresJobRepository(database)
+		if err != nil {
+			log.Fatalf("Failed to init session content job repository: %v", err)
+		}
+		contentProcessor, err := sessionsync.NewContentProjectionProcessor(database, minioStore)
+		if err != nil {
+			log.Fatalf("Failed to init session content processor: %v", err)
+		}
+		hostname, _ := os.Hostname()
+		contentWorker, err := sessionsync.NewContentProjectionWorker(jobRepository, contentProcessor, "api:"+hostname)
+		if err != nil {
+			log.Fatalf("Failed to init session content worker: %v", err)
+		}
+		contentWorker.Start(schedulerCtx)
+		log.Println("Session content projection worker started")
+	}
+	if cfg.SessionSyncUsageWorkerEnabled {
+		if minioStore == nil {
+			log.Fatal("Session usage projection worker requires MinIO")
+		}
+		jobRepository, err := sessionsync.NewPostgresJobRepository(database)
+		if err != nil {
+			log.Fatalf("Failed to init session usage job repository: %v", err)
+		}
+		usageProcessor, err := usage.NewProcessor(database, minioStore, cfg.ClaudeCacheWriteVariant)
+		if err != nil {
+			log.Fatalf("Failed to init session usage processor: %v", err)
+		}
+		hostname, _ := os.Hostname()
+		usageWorker, err := usage.NewWorker(jobRepository, usageProcessor, "api:"+hostname+":usage")
+		if err != nil {
+			log.Fatalf("Failed to init session usage worker: %v", err)
+		}
+		usageWorker.Start(schedulerCtx)
+		log.Println("Session usage projection worker started")
+		meteringProcessor, err := usage.NewMeteringProcessor(database, minioStore)
+		if err != nil {
+			log.Fatalf("Failed to init session metering processor: %v", err)
+		}
+		meteringWorker, err := usage.NewMeteringWorker(jobRepository, meteringProcessor, "api:"+hostname+":metering")
+		if err != nil {
+			log.Fatalf("Failed to init session metering worker: %v", err)
+		}
+		meteringWorker.Start(schedulerCtx)
+		log.Println("Session metering lifecycle worker started")
+	}
 	docH := handler.NewDocumentHandler(database)
 	tokenH := handler.NewTokenHandler(database)
+	pricingService := pricing.NewService(database)
+	tokenAnalyticsH := handler.NewTokenAnalyticsHandler(tokenanalytics.NewService(database))
+	pricingAdminH := handler.NewPricingAdminHandler(database, pricingService)
 	teamH := handler.NewTeamHandler(database)
 	departmentH := handler.NewDepartmentHandler(database)
 	followH := handler.NewFollowHandler(database)
@@ -98,6 +168,9 @@ func main() {
 
 	r.Post("/api/v1/auth/login", authH.Login)
 	r.Post("/api/v1/auth/register", authH.Register)
+	r.With(handler.CLIAuthMiddleware(database, cfg.AIHubSecret, aihubClient)).Post("/api/v1/session-syncs/prepare", sessionSyncH.Prepare)
+	r.With(handler.CLIAuthMiddleware(database, cfg.AIHubSecret, aihubClient)).Post("/api/v1/session-chunks/batch", sessionSyncH.UploadChunks)
+	r.With(handler.CLIAuthMiddleware(database, cfg.AIHubSecret, aihubClient)).Post("/api/v1/session-syncs/{generationId}/finalize", sessionSyncH.Finalize)
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(handler.AuthMiddleware(database, cfg.AIHubSecret, aihubClient))
@@ -119,6 +192,19 @@ func main() {
 			r.Delete("/teams/{id}", authH.AdminDeleteTeam)
 			r.Post("/departments", departmentH.Create)
 			r.Put("/departments/{id}", departmentH.Update)
+			r.Get("/price-books", pricingAdminH.ListPriceBooks)
+			r.Post("/price-books", pricingAdminH.SavePriceBook)
+			r.Get("/model-aliases", pricingAdminH.ListModelAliases)
+			r.Post("/model-aliases", pricingAdminH.SaveModelAlias)
+			r.Get("/model-price-versions", pricingAdminH.ListModelPrices)
+			r.Post("/model-price-versions", pricingAdminH.SaveModelPrice)
+			r.Get("/exchange-rate-versions", pricingAdminH.ListExchangeRates)
+			r.Post("/exchange-rate-versions", pricingAdminH.SaveExchangeRate)
+			r.Post("/pricing/import-suggestions", pricingAdminH.ImportSuggestions)
+			r.Get("/pricing/unpriced-models", pricingAdminH.ListUnpricedModels)
+			r.Get("/pricing/recalculation-runs", pricingAdminH.ListRecalculationRuns)
+			r.Post("/pricing/recalculate/preview", pricingAdminH.RecalculatePreview)
+			r.Post("/pricing/recalculate/apply", pricingAdminH.RecalculateApply)
 		})
 
 		r.Get("/requirements", reqH.List)
@@ -156,6 +242,8 @@ func main() {
 		r.Get("/sessions", sessionH.List)
 		r.Get("/sessions/{id}", sessionH.Get)
 		r.Get("/sessions/{id}/log", sessionH.DownloadLog)
+		r.Post("/sessions/{id}/clear-content", sessionSyncH.ClearContent)
+		r.Post("/sessions/{id}/restore-content", sessionSyncH.RestoreContent)
 		r.Put("/sessions/{id}/task", sessionH.UpdateTask)
 		r.Put("/sessions/{id}/requirement", sessionH.UpdateRequirement)
 		r.Delete("/sessions/{id}", sessionH.Withdraw)
@@ -212,9 +300,17 @@ func main() {
 
 		r.Get("/tokens", tokenH.Aggregate)
 		r.Get("/tokens/sessions", tokenH.ListSessionTokens)
+		r.Get("/token-analytics/capability", tokenAnalyticsH.Capability)
+		r.Get("/token-analytics/summary", tokenAnalyticsH.Summary)
+		r.Get("/token-analytics/trends", tokenAnalyticsH.Trends)
+		r.Get("/token-analytics/rankings", tokenAnalyticsH.Rankings)
+		r.Get("/token-analytics/sessions", tokenAnalyticsH.Sessions)
 		r.Get("/teams/activity", teamH.Activity)
 
 		r.Post("/mcp/reports", dailyReportMCPH.Serve)
+		r.Get("/report-source-capability", reportSourceH.Capability)
+		r.Get("/report-source-sessions", reportSourceH.ListCandidates)
+		r.Post("/report-source-selections", reportSourceH.CreateSelection)
 
 		r.Get("/ai-assets/skills", managedAgentH.ListSkills)
 		r.Post("/ai-assets/skills", managedAgentH.CreateSkill)

@@ -5,6 +5,7 @@ import {
   DashboardOutlined,
   FileDoneOutlined,
   RobotOutlined,
+  SettingOutlined,
   ProjectOutlined,
   SolutionOutlined,
   TeamOutlined
@@ -38,6 +39,8 @@ import { TaskCreatePage } from "@/features/aidashboard/tasks/pages/TaskCreatePag
 import { TaskDetailPage } from "@/features/aidashboard/tasks/pages/TaskDetailPage";
 import { TasksListPage } from "@/features/aidashboard/tasks/pages/TasksListPage";
 import { TokensPage } from "@/features/aidashboard/tokens/pages/TokensPage";
+import { TokenAnalyticsPage } from "@/features/aidashboard/tokens/pages/TokenAnalyticsPage";
+import { PricingManagementPage } from "@/features/aidashboard/tokens/pages/PricingManagementPage";
 
 import { PagePlaceholder } from "./PagePlaceholder";
 import type { AppRoute } from "./types";
@@ -182,6 +185,26 @@ export const appRoutes: AppRoute[] = [
     menuGroup: "AI 管理",
     menuOrder: 60,
     element: <TokensPage />
+  },
+  {
+    path: "/token-analytics",
+    title: "Token 使用分析",
+    icon: <BarChartOutlined />,
+    menuGroup: "AI 管理",
+    menuOrder: 61,
+    roles: ["admin", "director", "team_leader"],
+    feature: "token_analytics",
+    element: <TokenAnalyticsPage scope="management" />
+  },
+  {
+    path: "/admin/pricing",
+    title: "价格管理",
+    icon: <SettingOutlined />,
+    menuGroup: "AI 管理",
+    menuOrder: 62,
+    roles: ["admin"],
+    feature: "pricing_management",
+    element: <PricingManagementPage />
   },
   {
     path: "/ai-assets",

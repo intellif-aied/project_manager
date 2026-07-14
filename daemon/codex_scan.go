@@ -258,6 +258,12 @@ func parseCodexJSONL(path string) *SessionInfo {
 
 	if firstSummary != "" {
 		s.Summary = truncate(firstSummary, 200)
+		s.SummaryStatus = "ok"
+		s.SummarySource = "event_msg.user_message"
+	} else if scanner.Err() != nil {
+		s.SummaryStatus = "parse_error"
+	} else {
+		s.SummaryStatus = "empty"
 	}
 	finalizeActivitySlices(s, activitySlices)
 

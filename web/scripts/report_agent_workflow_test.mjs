@@ -22,6 +22,14 @@ const requirementsPage = readFileSync(
   resolve(root, "src/features/aidashboard/requirements/pages/RequirementsListPage.tsx"),
   "utf8"
 );
+const dailyReportModal = readFileSync(
+  resolve(root, "src/features/aidashboard/reports/components/DailyReportGenerateModal.tsx"),
+  "utf8"
+);
+const weeklyReportsPage = readFileSync(
+  resolve(root, "src/features/aidashboard/reports/pages/WeeklyReportsPage.tsx"),
+  "utf8"
+);
 
 assert.match(
   controls,
@@ -32,6 +40,21 @@ assert.match(
   controls,
   /createDefaultReportAgent\(\)/,
   "missing default Report Agent must be initialized in place"
+);
+assert.match(
+  controls,
+  /createReportSourceSelection\(/,
+  "personal reports must create an immutable source selection"
+);
+assert.doesNotMatch(
+  controls,
+  /reportSourceSelectionEnabled|selected_session_slice_keys/,
+  "current report controls must not branch back to legacy session slices"
+);
+assert.doesNotMatch(
+  `${dailyReportModal}\n${weeklyReportsPage}`,
+  /fetchReportSourceCapability|reportSourceSelectionEnabled|selectedSessionSliceKeys/,
+  "daily and weekly report entry points must use one source-selection path for every user"
 );
 assert.match(
   controls,

@@ -110,8 +110,10 @@ Usage:
 
 Commands:
   login    --server <url> --token <token>   Login with server URL and API token
-  sessions [--all] [--project <dir>]        List local Claude Code sessions
-  upload   [numbers...] [--all]             Upload sessions to server
+  sessions [--all] [--project <dir>] [--page N] [--page-size N] [--json]
+                                            List local Claude Code sessions
+  upload   [numbers...] [--all] [--page-size N]
+                                            Upload sessions to server
   status                                     Show current login status
   version                                    Show CLI version
 
@@ -128,6 +130,9 @@ Examples:
   # List all sessions
   aida sessions --all
 
+  # Show page 2 with 50 sessions per page
+  aida sessions --all --page 2 --page-size 50
+
   # Filter by project directory
   aida sessions --project project-manager
 
@@ -137,7 +142,7 @@ Examples:
   # Upload all recent sessions
   aida upload --all
 
-  # Interactive upload (shows picker)
+  # Interactive upload (supports paging and cross-page selection)
   aida upload
 
   # Check login status

@@ -373,6 +373,7 @@ type Session struct {
 	RequirementID   *string    `json:"requirement_id,omitempty"`
 	MatchConfidence *float64   `json:"match_confidence,omitempty"`
 	RawLogURL       *string    `json:"raw_log_url,omitempty"`
+	ContentStatus   string     `json:"content_status"`
 	UploadedAt      time.Time  `json:"uploaded_at"`
 }
 
@@ -1016,6 +1017,7 @@ type ManagedReportAgentRunRequest struct {
 	Target                   ManagedReportRunTarget `json:"target,omitempty"`
 	ModelID                  string                 `json:"model_id,omitempty"`
 	SelectedSessionSliceKeys []string               `json:"selected_session_slice_keys,omitempty"`
+	ReportSourceSelectionID  string                 `json:"report_source_selection_id,omitempty"`
 	StartPromptValues        map[string]string      `json:"start_prompt_values,omitempty"`
 	Message                  string                 `json:"message,omitempty"`
 	CredentialOverrides      map[string]string      `json:"credential_overrides,omitempty"`

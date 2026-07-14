@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -62,6 +63,8 @@ type SessionInfo struct {
 	Model          string
 	Models         []string // distinct models seen, in insertion order
 	Summary        string
+	SummaryStatus  string
+	SummarySource  string
 	ToolCalls      map[string]int
 	InputTok       int64
 	OutputTok      int64
@@ -248,9 +251,13 @@ func formatTokens(n int64) string {
 }
 
 func printSessionListHeader() {
-	fmt.Printf("  %-4s  %-6s  %-19s  %-9s  %-9s  %-10s  %-22s  %-36s  %s\n",
+	writeSessionListHeader(os.Stdout)
+}
+
+func writeSessionListHeader(output io.Writer) {
+	fmt.Fprintf(output, "  %-4s  %-6s  %-19s  %-9s  %-9s  %-10s  %-22s  %-36s  %s\n",
 		"#", "Agent", "最近活动", "Tokens", "Duration", "Model", "Project/CWD", "Session", "Summary")
-	fmt.Println("  " + strings.Repeat("-", 156))
+	fmt.Fprintln(output, "  "+strings.Repeat("-", 156))
 }
 
 func formatSessionListRow(index int, s *SessionInfo) string {
@@ -278,7 +285,7 @@ func formatSessionListRow(index int, s *SessionInfo) string {
 		truncateMiddle(firstNonEmpty(s.Model, "-"), 10),
 		truncateMiddle(sessionProjectDisplay(s), 22),
 		firstNonEmpty(s.SessionRef, "-"),
-		truncate(firstNonEmpty(s.Summary, "-"), 48),
+		truncate(firstNonEmpty(s.Summary, "暂无摘要"), 48),
 	)
 }
 
@@ -375,14 +382,29 @@ func cmdLogin(args []string) {
 
 func cmdSessions(args []string) {
 	showAll := false
+	jsonOutput := false
 	projectFilter := ""
+	pageNumber := 1
+	pageSize := defaultSessionPageSize
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--all", "-a":
 			showAll = true
+		case "--json":
+			jsonOutput = true
 		case "--project", "-p":
 			if i+1 < len(args) {
 				projectFilter = args[i+1]
+				i++
+			}
+		case "--page":
+			if i+1 < len(args) {
+				pageNumber, _ = strconv.Atoi(args[i+1])
+				i++
+			}
+		case "--page-size":
+			if i+1 < len(args) {
+				pageSize, _ = strconv.Atoi(args[i+1])
 				i++
 			}
 		}
@@ -406,6 +428,10 @@ func cmdSessions(args []string) {
 	}
 
 	if len(sessions) == 0 {
+		if jsonOutput {
+			writeSessionsJSON(os.Stdout, sessions, 1, pageSize)
+			return
+		}
 		fmt.Println("No sessions found.")
 		fmt.Println()
 		fmt.Println("Claude Code session logs are stored at:")
@@ -415,16 +441,17 @@ func cmdSessions(args []string) {
 		return
 	}
 
-	printSessionListHeader()
-
-	for i, s := range sessions {
-		fmt.Println(formatSessionListRow(i+1, s))
-		if len(s.SubFiles) > 0 {
-			fmt.Printf("        %-38s %d sub-agent(s)\n", "", len(s.SubFiles))
-		}
+	page, err := paginateSessions(sessions, pageNumber, pageSize)
+	if err != nil {
+		fmt.Printf("Invalid pagination: %v\n", err)
+		return
 	}
+	if jsonOutput {
+		writeSessionsJSON(os.Stdout, sessions, pageNumber, pageSize)
+		return
+	}
+	writeSessionPage(os.Stdout, "Session 列表", page, nil)
 
-	fmt.Printf("\n  Total: %d sessions\n", len(sessions))
 	fmt.Printf("  Claude logs: %s/\n", claudeDir)
 	fmt.Printf("  Codex logs:  %s/\n\n", codexDir)
 }
@@ -436,14 +463,23 @@ func cmdUpload(args []string) {
 	requireAuth(cfg)
 
 	uploadAll := false
+	pageSize := defaultSessionPageSize
 	var selectedIdx []int
 
-	for _, a := range args {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
 		if a == "--all" || a == "-a" {
 			uploadAll = true
+		} else if a == "--page-size" && i+1 < len(args) {
+			pageSize, _ = strconv.Atoi(args[i+1])
+			i++
 		} else if n, err := strconv.Atoi(a); err == nil {
 			selectedIdx = append(selectedIdx, n)
 		}
+	}
+	if !allowedSessionPageSizes[pageSize] {
+		fmt.Println("Invalid page size: use 10, 20, 50, or 100")
+		return
 	}
 
 	home, _ := os.UserHomeDir()
@@ -469,38 +505,17 @@ func cmdUpload(args []string) {
 			toUpload = append(toUpload, sessions[idx-1])
 		}
 	} else {
-		// Interactive picker
-		fmt.Println("\nSelect sessions to upload:")
-		fmt.Println()
-		printSessionListHeader()
-		for i, s := range sessions {
-			fmt.Println(formatSessionListRow(i+1, s))
-		}
-		fmt.Println()
-		fmt.Print("Enter session numbers (e.g. 1,3,5 or 'all'): ")
-
 		reader := bufio.NewReader(os.Stdin)
-		input, _ := reader.ReadString('\n')
-		input = strings.TrimSpace(input)
-
-		if input == "all" || input == "a" {
-			toUpload = sessions
-		} else {
-			for _, part := range strings.Split(input, ",") {
-				part = strings.TrimSpace(part)
-				if n, err := strconv.Atoi(part); err == nil && n >= 1 && n <= len(sessions) {
-					toUpload = append(toUpload, sessions[n-1])
-				}
-			}
+		var err error
+		toUpload, err = selectSessionsInteractively(sessions, pageSize, reader, os.Stdout)
+		if err != nil {
+			fmt.Printf("Session selection failed: %v\n", err)
+			return
 		}
 	}
 
 	if uploadAll {
-		fmt.Println("\nSessions selected by --all:")
-		printSessionListHeader()
-		for i, s := range toUpload {
-			fmt.Println(formatSessionListRow(i+1, s))
-		}
+		fmt.Printf("\n--all selected all %d locally discoverable sessions; unchanged sessions will be skipped.\n", len(toUpload))
 	}
 
 	if len(toUpload) == 0 {
@@ -515,6 +530,35 @@ func cmdUpload(args []string) {
 
 	for _, s := range toUpload {
 		allSessions := collectSessionsWithFiles(s)
+		incrementalResults, incrementalErr := uploadSessionGroupIncremental(cfg, allSessions, s.SessionRef)
+		if !errors.Is(incrementalErr, errSessionSyncNotEnabled) {
+			for index, result := range incrementalResults {
+				label := "OK"
+				switch result.Status {
+				case "unchanged":
+					label = "SKIP"
+				case "content_cleared":
+					label = "BLOCKED"
+				}
+				fmt.Printf("  [%-7s] %-14s  incremental=%s chunks=%d",
+					label, shortRef(result.SessionRef), result.Status, result.UploadedChunks)
+				if result.PendingTail {
+					fmt.Print(" pending-half-line")
+				}
+				fmt.Println()
+				if result.Status == "uploaded" {
+					if index == 0 {
+						totalUploaded++
+					} else {
+						totalSubs++
+					}
+				}
+			}
+			if incrementalErr != nil {
+				fmt.Printf("  [FAIL]  %-14s  %v\n", shortRef(s.SessionRef), incrementalErr)
+			}
+			continue
+		}
 
 		var buf bytes.Buffer
 		writer := multipart.NewWriter(&buf)
@@ -855,6 +899,8 @@ func parseJSONL(path string) *SessionInfo {
 						if c.Type == "text" && c.Text != "" {
 							appendSliceText(currentSlice, c.Text)
 							s.Summary = c.Text
+							s.SummaryStatus = "ok"
+							s.SummarySource = "user.message"
 							if len(s.Summary) > 200 {
 								s.Summary = s.Summary[:197] + "..."
 							}
@@ -921,6 +967,13 @@ func parseJSONL(path string) *SessionInfo {
 		s.EndedAt = lastTS
 	}
 	finalizeActivitySlices(s, activitySlices)
+	if s.Summary == "" {
+		if scanner.Err() != nil {
+			s.SummaryStatus = "parse_error"
+		} else {
+			s.SummaryStatus = "empty"
+		}
+	}
 
 	if s.SessionRef == "" {
 		return nil

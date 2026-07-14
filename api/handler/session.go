@@ -85,9 +85,12 @@ func (h *SessionHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	query := `
 		SELECT s.id, s.session_ref, s.user_id, COALESCE(COALESCE(NULLIF(u.nickname,''), u.username),''), s.agent_type, s.started_at, s.ended_at,
-			s.duration_secs, s.model, s.summary, s.tool_calls_json, s.git_commits,
+			s.duration_secs, s.model,
+			CASE WHEN s.content_status = 'available' THEN s.summary END,
+			s.tool_calls_json, s.git_commits,
 			s.task_id, COALESCE(t.title,''), s.requirement_id, s.match_confidence,
-			s.raw_log_url, s.uploaded_at
+			CASE WHEN s.content_status = 'available' THEN s.raw_log_url END,
+			s.content_status, s.uploaded_at
 		FROM sessions s
 		LEFT JOIN users u ON u.id = s.user_id
 		LEFT JOIN tasks t ON t.id = s.task_id` + where
@@ -106,7 +109,7 @@ func (h *SessionHandler) List(w http.ResponseWriter, r *http.Request) {
 		var s model.Session
 		var endedAt, rawLogURL sql.NullString
 		var durationSecs sql.NullInt64
-		var summary sql.NullString
+		var modelName, summary sql.NullString
 		var taskID, reqID sql.NullString
 		var taskTitle sql.NullString
 		var confidence sql.NullFloat64
@@ -114,9 +117,9 @@ func (h *SessionHandler) List(w http.ResponseWriter, r *http.Request) {
 		var gitCommits pq.StringArray
 
 		if err := rows.Scan(&s.ID, &s.SessionRef, &s.UserID, &s.UserName, &s.AgentType, &s.StartedAt, &endedAt,
-			&durationSecs, &s.Model, &summary, &toolCallsJSON, &gitCommits,
+			&durationSecs, &modelName, &summary, &toolCallsJSON, &gitCommits,
 			&taskID, &taskTitle, &reqID, &confidence,
-			&rawLogURL, &s.UploadedAt); err != nil {
+			&rawLogURL, &s.ContentStatus, &s.UploadedAt); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
@@ -127,6 +130,9 @@ func (h *SessionHandler) List(w http.ResponseWriter, r *http.Request) {
 		if durationSecs.Valid {
 			ds := int(durationSecs.Int64)
 			s.DurationSecs = &ds
+		}
+		if modelName.Valid {
+			s.Model = modelName.String
 		}
 		s.Summary = nullStringPtr(summary)
 		if len(toolCallsJSON) > 0 {
@@ -162,7 +168,7 @@ func (h *SessionHandler) Get(w http.ResponseWriter, r *http.Request) {
 	var s model.Session
 	var endedAt, rawLogURL sql.NullString
 	var durationSecs sql.NullInt64
-	var summary sql.NullString
+	var modelName, summary sql.NullString
 	var taskID, reqID sql.NullString
 	var taskTitle sql.NullString
 	var confidence sql.NullFloat64
@@ -171,17 +177,20 @@ func (h *SessionHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 	err := h.db.QueryRow(`
 		SELECT s.id, s.session_ref, s.user_id, COALESCE(COALESCE(NULLIF(u.nickname,''), u.username),''), s.agent_type, s.started_at, s.ended_at,
-			s.duration_secs, s.model, s.summary, s.tool_calls_json, s.git_commits,
+			s.duration_secs, s.model,
+			CASE WHEN s.content_status = 'available' THEN s.summary END,
+			s.tool_calls_json, s.git_commits,
 			s.task_id, COALESCE(t.title,''), s.requirement_id, s.match_confidence,
-			s.raw_log_url, s.uploaded_at
+			CASE WHEN s.content_status = 'available' THEN s.raw_log_url END,
+			s.content_status, s.uploaded_at
 		FROM sessions s
 		LEFT JOIN users u ON u.id = s.user_id
 		LEFT JOIN tasks t ON t.id = s.task_id
 		WHERE s.id = $1`, id).Scan(
 		&s.ID, &s.SessionRef, &s.UserID, &s.UserName, &s.AgentType, &s.StartedAt, &endedAt,
-		&durationSecs, &s.Model, &summary, &toolCallsJSON, &gitCommits,
+		&durationSecs, &modelName, &summary, &toolCallsJSON, &gitCommits,
 		&taskID, &taskTitle, &reqID, &confidence,
-		&rawLogURL, &s.UploadedAt,
+		&rawLogURL, &s.ContentStatus, &s.UploadedAt,
 	)
 	if err == sql.ErrNoRows {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
@@ -198,6 +207,9 @@ func (h *SessionHandler) Get(w http.ResponseWriter, r *http.Request) {
 	if durationSecs.Valid {
 		ds := int(durationSecs.Int64)
 		s.DurationSecs = &ds
+	}
+	if modelName.Valid {
+		s.Model = modelName.String
 	}
 	s.Summary = nullStringPtr(summary)
 	if len(toolCallsJSON) > 0 {
@@ -261,9 +273,11 @@ func (h *SessionHandler) BatchUpload(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var existingID string
+		var v2SourceCount int
 		err := h.db.QueryRow(
-			"SELECT id FROM sessions WHERE session_ref = $1 AND user_id = $2",
-			su.SessionRef, u.ID).Scan(&existingID)
+			`SELECT s.id, (SELECT COUNT(*) FROM session_sources src WHERE src.session_id = s.id)
+			 FROM sessions s WHERE s.session_ref = $1 AND s.user_id = $2 AND s.agent_type = $3`,
+			su.SessionRef, u.ID, agentType).Scan(&existingID, &v2SourceCount)
 
 		status := "created"
 		sessionID := existingID
@@ -282,6 +296,14 @@ func (h *SessionHandler) BatchUpload(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 		} else if err == nil {
+			if v2SourceCount > 0 {
+				results = append(results, result{
+					SessionRef: su.SessionRef,
+					ID:         sessionID,
+					Status:     "error: CLI_UPGRADE_REQUIRED: session content is managed by incremental sync",
+				})
+				continue
+			}
 			status = "updated"
 			_, err := h.db.Exec(`
 				UPDATE sessions
@@ -672,7 +694,8 @@ func (h *SessionHandler) DownloadLog(w http.ResponseWriter, r *http.Request) {
 
 	var rawLogURL sql.NullString
 	var ownerID string
-	err := h.db.QueryRow("SELECT raw_log_url, user_id FROM sessions WHERE id = $1", id).Scan(&rawLogURL, &ownerID)
+	var contentStatus string
+	err := h.db.QueryRow("SELECT raw_log_url, user_id, content_status FROM sessions WHERE id = $1", id).Scan(&rawLogURL, &ownerID, &contentStatus)
 	if err == sql.ErrNoRows {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
@@ -684,6 +707,10 @@ func (h *SessionHandler) DownloadLog(w http.ResponseWriter, r *http.Request) {
 
 	if u.Role != "director" && u.Role != "admin" && u.ID != ownerID {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+	if contentStatus != "available" {
+		writeJSON(w, http.StatusGone, map[string]string{"code": "CONTENT_CLEARED", "error": "session content is not available"})
 		return
 	}
 

@@ -1,0 +1,182 @@
+package usage
+
+import (
+	"bytes"
+	"errors"
+	"os"
+	"path/filepath"
+	"reflect"
+	"testing"
+)
+
+func TestClaudeMonotonicSnapshotsFoldToFinalObservation(t *testing.T) {
+	result := parseUsageFixture(t, "claude_monotonic.jsonl", "claude_code", ParseState{})
+	if len(result.Records) != 4 || result.MalformedCount != 0 || result.UnknownUsageCount != 0 {
+		t.Fatalf("result=%+v", result)
+	}
+	first := result.Records[0]
+	advance := result.Records[1]
+	if fold := FoldClaudeObservation(first, advance); fold.Action != FoldAdvance {
+		t.Fatalf("advance fold=%+v", fold)
+	}
+	if fold := FoldClaudeObservation(result.Records[2], result.Records[3]); fold.Action != FoldDuplicate {
+		t.Fatalf("duplicate fold=%+v", fold)
+	}
+	normalized, err := NormalizeWithOptions(advance, NormalizerOptions{ClaudeCacheWriteVariant: "5m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if normalized.UncachedInputTokens != 120 || normalized.CacheReadTokens != 35 || normalized.CacheWrite5mTokens != 10 || normalized.OutputTokens != 25 || normalized.TotalTokens != 190 || !normalized.IsEstimated {
+		t.Fatalf("normalized=%+v", normalized)
+	}
+	if _, err := Normalize(advance); !errors.Is(err, ErrClaudeCacheWriteVariantRequired) {
+		t.Fatalf("missing variant err=%v", err)
+	}
+}
+
+func TestClaudeNonMonotonicSnapshotConflicts(t *testing.T) {
+	result := parseUsageFixture(t, "claude_conflict.jsonl", "claude_code", ParseState{})
+	if len(result.Records) != 2 {
+		t.Fatalf("records=%d", len(result.Records))
+	}
+	if fold := FoldClaudeObservation(result.Records[0], result.Records[1]); fold.Action != FoldConflict {
+		t.Fatalf("fold=%+v", fold)
+	}
+}
+
+func TestCodexCumulativeCountersProduceDisjointDeltas(t *testing.T) {
+	content := usageFixture(t, "codex_cumulative.jsonl")
+	lines := bytes.SplitAfter(content, []byte{'\n'})
+	firstChunk := bytes.Join(lines[:3], nil)
+	secondChunk := bytes.Join(lines[3:], nil)
+	first, err := ParseProviderChunk("codex", bytes.NewReader(firstChunk), 0, ParseState{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := ParseProviderChunk("codex", bytes.NewReader(secondChunk), int64(len(firstChunk)), first.State)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Records) != 1 || len(second.Records) != 1 || second.EndCursor != int64(len(content)) {
+		t.Fatalf("first=%+v second=%+v", first, second)
+	}
+	firstUsage, err := Normalize(first.Records[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondUsage, err := Normalize(second.Records[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstUsage.UncachedInputTokens != 80 || firstUsage.CacheReadTokens != 20 || firstUsage.OutputTokens != 20 || firstUsage.TotalTokens != 120 {
+		t.Fatalf("first normalized=%+v", firstUsage)
+	}
+	if secondUsage.UncachedInputTokens != 50 || secondUsage.CacheReadTokens != 30 || secondUsage.OutputTokens != 20 || secondUsage.TotalTokens != 100 {
+		t.Fatalf("second normalized=%+v", secondUsage)
+	}
+	if firstUsage.TotalTokens+secondUsage.TotalTokens != 220 {
+		t.Fatalf("combined total=%d", firstUsage.TotalTokens+secondUsage.TotalTokens)
+	}
+}
+
+func TestUsageParserRejectsIncompleteAndOversizedLines(t *testing.T) {
+	if _, err := ParseProviderChunk("codex", bytes.NewReader([]byte(`{"type":"event_msg"}`)), 0, ParseState{}); !errors.Is(err, ErrIncompleteLine) {
+		t.Fatalf("incomplete err=%v", err)
+	}
+	oversized := append(bytes.Repeat([]byte{'x'}, MaxUsageLineBytes+1), '\n')
+	if _, err := ParseProviderChunk("codex", bytes.NewReader(oversized), 0, ParseState{}); !errors.Is(err, ErrUsageLineTooLarge) {
+		t.Fatalf("oversized err=%v", err)
+	}
+}
+
+func TestCodexCounterDecreaseAndModelTransitionRemainExplicit(t *testing.T) {
+	content := []byte(
+		`{"timestamp":"2026-07-10T00:00:00Z","type":"turn_context","payload":{"model":"gpt-first"}}` + "\n" +
+			`{"timestamp":"2026-07-10T00:01:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20,"total_tokens":120}}}}` + "\n" +
+			`{"timestamp":"2026-07-10T00:02:00Z","type":"turn_context","payload":{"model":"gpt-second"}}` + "\n" +
+			`{"timestamp":"2026-07-10T00:03:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":90,"cached_input_tokens":10,"output_tokens":25,"total_tokens":115}}}}` + "\n",
+	)
+	parsed, err := ParseProviderChunk("codex", bytes.NewReader(content), 0, ParseState{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Records) != 2 || parsed.Records[0].RawModel != "gpt-first" || parsed.Records[1].RawModel != "gpt-second" {
+		t.Fatalf("records=%+v", parsed.Records)
+	}
+	if parsed.Records[1].Quality != QualityConflict {
+		t.Fatalf("decrease quality=%s reason=%s", parsed.Records[1].Quality, parsed.Records[1].QualityReason)
+	}
+}
+
+func TestProviderParserIsInvariantAcrossLineAlignedChunkBoundaries(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		provider string
+	}{
+		{name: "claude_monotonic.jsonl", provider: "claude_code"},
+		{name: "codex_cumulative.jsonl", provider: "codex"},
+	} {
+		t.Run(test.provider, func(t *testing.T) {
+			content := usageFixture(t, test.name)
+			lines := bytes.SplitAfter(content, []byte{'\n'})
+			if len(lines) > 0 && len(lines[len(lines)-1]) == 0 {
+				lines = lines[:len(lines)-1]
+			}
+			whole, err := ParseProviderChunk(test.provider, bytes.NewReader(content), 0, ParseState{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for mask := 0; mask < 1<<(len(lines)-1); mask++ {
+				var got ParseResult
+				var state ParseState
+				cursor := int64(0)
+				chunkStart := 0
+				for line := 0; line < len(lines); line++ {
+					last := line == len(lines)-1
+					if !last && mask&(1<<line) == 0 {
+						continue
+					}
+					chunk := bytes.Join(lines[chunkStart:line+1], nil)
+					parsed, parseErr := ParseProviderChunk(test.provider, bytes.NewReader(chunk), cursor, state)
+					if parseErr != nil {
+						t.Fatalf("mask=%b: %v", mask, parseErr)
+					}
+					got.Records = append(got.Records, parsed.Records...)
+					got.ScannedLineCount += parsed.ScannedLineCount
+					got.MalformedCount += parsed.MalformedCount
+					got.UnknownUsageCount += parsed.UnknownUsageCount
+					got.EndCursor = parsed.EndCursor
+					state = parsed.State
+					cursor = parsed.EndCursor
+					chunkStart = line + 1
+				}
+				got.State = state
+				if !reflect.DeepEqual(got, whole) {
+					t.Fatalf("mask=%b chunked result differs\n got=%+v\nwant=%+v", mask, got, whole)
+				}
+			}
+		})
+	}
+}
+
+func parseUsageFixture(t *testing.T, name, provider string, state ParseState) ParseResult {
+	t.Helper()
+	content := usageFixture(t, name)
+	result, err := ParseProviderChunk(provider, bytes.NewReader(content), 0, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.EndCursor != int64(len(content)) {
+		t.Fatalf("end cursor=%d want=%d", result.EndCursor, len(content))
+	}
+	return result
+}
+
+func usageFixture(t *testing.T, name string) []byte {
+	t.Helper()
+	content, err := os.ReadFile(filepath.Join("..", "..", "..", "testdata", "v2_usage", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return content
+}

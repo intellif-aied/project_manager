@@ -1,0 +1,2 @@
+{"type":"assistant","sessionId":"usage-claude-conflict","timestamp":"2026-07-10T01:01:00Z","message":{"id":"msg-conflict","model":"claude-test","usage":{"input_tokens":100,"output_tokens":20,"cache_creation_input_tokens":10,"cache_read_input_tokens":30},"content":[]}}
+{"type":"assistant","sessionId":"usage-claude-conflict","timestamp":"2026-07-10T01:02:00Z","message":{"id":"msg-conflict","model":"claude-test","usage":{"input_tokens":90,"output_tokens":25,"cache_creation_input_tokens":10,"cache_read_input_tokens":30},"content":[]}}

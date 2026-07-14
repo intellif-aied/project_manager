@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/aidashboard/api/internal/reportsource"
 	"github.com/aidashboard/api/model"
 )
 
@@ -47,11 +48,16 @@ var supportedReportTypes = []string{
 // ReportMCPHandler serves /api/v1/mcp/reports. It is the single MCP entrypoint
 // for all 6 report types and exposes the 9 atomic tools defined in doc §3.8.
 type ReportMCPHandler struct {
-	db *sql.DB
+	db           *sql.DB
+	reportSource *reportsource.Service
 }
 
 func NewReportMCPHandler(db *sql.DB) *ReportMCPHandler {
 	return &ReportMCPHandler{db: db}
+}
+
+func (h *ReportMCPHandler) ConfigureReportSourceSelection(service *reportsource.Service) {
+	h.reportSource = service
 }
 
 type mcpRequest struct {

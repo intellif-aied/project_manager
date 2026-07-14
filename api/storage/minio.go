@@ -2,9 +2,13 @@ package storage
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/aidashboard/api/config"
@@ -55,6 +59,63 @@ func (s *MinioStorage) Upload(ctx context.Context, objectName string, reader io.
 	return nil
 }
 
+func (s *MinioStorage) PutVerified(ctx context.Context, objectName string, reader io.Reader, size int64, expectedSHA256 string) error {
+	if size <= 0 || len(expectedSHA256) != sha256.Size*2 || expectedSHA256 != strings.ToLower(expectedSHA256) {
+		return errors.New("invalid verified upload metadata")
+	}
+	if _, err := hex.DecodeString(expectedSHA256); err != nil {
+		return errors.New("invalid verified upload hash")
+	}
+
+	hasher := sha256.New()
+	info, err := s.client.PutObject(ctx, s.bucket, objectName, io.TeeReader(reader, hasher), size, minio.PutObjectOptions{
+		ContentType: "application/x-jsonlines",
+	})
+	if err != nil {
+		return fmt.Errorf("minio verified upload %s: %w", objectName, err)
+	}
+	cleanup := func() {
+		_ = s.client.RemoveObject(context.Background(), s.bucket, objectName, minio.RemoveObjectOptions{})
+	}
+
+	var trailing [1]byte
+	n, trailingErr := io.ReadFull(reader, trailing[:])
+	actualHash := hex.EncodeToString(hasher.Sum(nil))
+	if info.Size != size || actualHash != expectedSHA256 || n != 0 || (trailingErr != nil && !errors.Is(trailingErr, io.EOF)) {
+		cleanup()
+		return fmt.Errorf("minio verified upload %s failed size/hash validation", objectName)
+	}
+	stat, err := s.client.StatObject(ctx, s.bucket, objectName, minio.StatObjectOptions{})
+	if err != nil {
+		cleanup()
+		return fmt.Errorf("minio verified upload %s stat: %w", objectName, err)
+	}
+	if stat.Size != size {
+		cleanup()
+		return fmt.Errorf("minio verified upload %s stored size mismatch", objectName)
+	}
+	stored, err := s.client.GetObject(ctx, s.bucket, objectName, minio.GetObjectOptions{})
+	if err != nil {
+		cleanup()
+		return fmt.Errorf("minio verified upload %s open: %w", objectName, err)
+	}
+	readable := make([]byte, 1)
+	_, readErr := io.ReadFull(stored, readable)
+	closeErr := stored.Close()
+	if readErr != nil || closeErr != nil {
+		cleanup()
+		return fmt.Errorf("minio verified upload %s readability check failed", objectName)
+	}
+	return nil
+}
+
+func (s *MinioStorage) Delete(ctx context.Context, objectName string) error {
+	if err := s.client.RemoveObject(ctx, s.bucket, objectName, minio.RemoveObjectOptions{}); err != nil {
+		return fmt.Errorf("minio delete %s: %w", objectName, err)
+	}
+	return nil
+}
+
 func (s *MinioStorage) Download(ctx context.Context, objectName string) (io.ReadCloser, error) {
 	obj, err := s.client.GetObject(ctx, s.bucket, objectName, minio.GetObjectOptions{})
 	if err != nil {
@@ -70,4 +131,5 @@ func (s *MinioStorage) HealthCheck(ctx context.Context) error {
 
 var _ interface {
 	Upload(context.Context, string, io.Reader, int64, string) error
+	PutVerified(context.Context, string, io.Reader, int64, string) error
 } = (*MinioStorage)(nil)

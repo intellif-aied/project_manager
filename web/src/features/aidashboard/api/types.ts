@@ -639,9 +639,57 @@ export interface ManagedReportAgentRunPayload {
   };
   model_id?: string;
   selected_session_slice_keys?: string[];
+  report_source_selection_id?: string;
   start_prompt_values?: Record<string, string>;
   message?: string;
   credential_overrides?: Record<string, string>;
+}
+
+export interface ReportSourceCandidate {
+  session_ref: string;
+  agent_type: string;
+  summary: string;
+  last_activity_at: string;
+  activity_start_at: string;
+  activity_end_at: string;
+  cwd: string;
+  models: string[];
+  content_status: "available";
+  content_index_status: "ready";
+  available_through_at: string;
+}
+
+export interface ReportSourceCandidatePage {
+  items: ReportSourceCandidate[];
+  page: number;
+  page_size: number;
+  total: number;
+}
+
+export interface ReportSourceInput {
+  session_ref: string;
+  agent_type: string;
+  activity_start_at: string;
+  activity_end_at: string;
+}
+
+export interface ReportSourceSelection {
+  selection_id: string;
+  report_type: "personal_daily" | "personal_weekly";
+  period: { start: string; end: string };
+  selection_mode: "explicit";
+  status: "prepared";
+  content_snapshot_at: string;
+  items: Array<{
+    id: string;
+    session_ref: string;
+    agent_type: string;
+    activity_start_at: string;
+    activity_end_at: string;
+    summary: string;
+    content_event_count: number;
+    content_status: string;
+  }>;
 }
 
 export interface ManagedReportAgentUnavailable {
@@ -1246,3 +1294,161 @@ export interface TeamActivity {
 
 export type TokenPeriod = "today" | "week" | "month" | "range";
 export type TokenGroupBy = "team" | "user" | "requirement" | "task" | "model";
+
+export interface TokenAnalyticsCapability {
+  enabled: boolean;
+  can_manage: boolean;
+  can_manage_pricing: boolean;
+}
+
+export interface TokenAnalyticsFilters {
+  scope: "mine" | "management";
+  from: string;
+  to: string;
+  team_id?: string;
+  department_id?: string;
+  user_id?: string;
+  model?: string;
+  q?: string;
+}
+
+export interface TokenAnalyticsSummary {
+  query_snapshot_token: string;
+  metrics_snapshot_at: string;
+  expires_at: string;
+  search_mode: "filtered" | "exact_session_ref";
+  scope: "mine" | "management";
+  from: string;
+  to: string;
+  total_tokens: string;
+  uncached_input_tokens: string;
+  cache_read_tokens: string;
+  cache_write_5m_tokens: string;
+  cache_write_1h_tokens: string;
+  output_tokens: string;
+  active_days: string;
+  estimated_cost_usd?: string;
+  estimated_cost_cny?: string;
+  pricing_status: "pricing_pending" | "priced" | "partially_priced" | "unpriced";
+  unpriced_tokens: string;
+  quality_status: "exact" | "estimated" | "incomplete" | "conflict";
+  data_freshness: "ready" | "pending";
+  pending_source_count: string;
+  pricing_pending_source_count: string;
+  component_count: string;
+}
+
+export interface TokenAnalyticsTrendPoint {
+  date: string;
+  total_tokens: string;
+  estimated_cost_cny?: string;
+  pricing_status: string;
+}
+
+export interface TokenAnalyticsRankingItem {
+  key: string;
+  label: string;
+  total_tokens: string;
+  estimated_cost_cny?: string;
+  pricing_status: string;
+  last_activity_at?: string;
+  is_zero_usage: boolean;
+}
+
+export interface TokenAnalyticsSessionItem {
+  session_id: string;
+  session_ref: string;
+  user_id: string;
+  user_name: string;
+  agent_type: string;
+  summary?: string;
+  activity_from: string;
+  activity_to: string;
+  model: string;
+  total_tokens: string;
+  estimated_cost_cny?: string;
+  pricing_status: string;
+  quality_status: string;
+}
+
+export interface PriceBook {
+  id: string;
+  name: string;
+  pricing_basis: string;
+  source_currency: "USD";
+  display_currency: "CNY";
+  status: "draft" | "active" | "archived";
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ModelAlias {
+  id: string;
+  provider: string;
+  raw_model_pattern: string;
+  canonical_model: string;
+  status: "pending" | "reviewed" | "rejected";
+  reviewed_at?: string;
+}
+
+export interface ModelPriceVersion {
+  id: string;
+  price_book_id: string;
+  price_book_name: string;
+  canonical_model: string;
+  billing_variant: string;
+  input_per_million: string;
+  cache_read_per_million: string;
+  cache_write_5m_per_million: string;
+  cache_write_1h_per_million: string;
+  output_per_million: string;
+  effective_from: string;
+  effective_to?: string;
+  source_url?: string;
+  notes?: string;
+  status: "draft" | "published";
+  supersedes_id?: string;
+  superseded_at?: string;
+}
+
+export interface ExchangeRateVersion {
+  id: string;
+  rate: string;
+  effective_from: string;
+  effective_to?: string;
+  source_url?: string;
+  notes?: string;
+  status: "draft" | "published";
+  supersedes_id?: string;
+  superseded_at?: string;
+}
+
+export interface UnpricedModel {
+  provider: string;
+  model: string;
+  component_count: string;
+  total_tokens: string;
+  last_activity_date: string;
+}
+
+export interface PricingRecalculationRun {
+  id: string;
+  requested_by: string;
+  requested_by_name: string;
+  filter: {
+    from?: string;
+    to?: string;
+    model?: string;
+    revision_id?: string;
+  };
+  result: {
+    eligible_components: number;
+    priced_components: number;
+    unpriced_components: number;
+    changed_components: number;
+    unchanged_components: number;
+  };
+  reason: string;
+  calculator_version: string;
+  created_at: string;
+}

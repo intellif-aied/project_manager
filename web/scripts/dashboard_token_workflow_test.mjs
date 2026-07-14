@@ -10,13 +10,25 @@ const root = process.cwd();
 const dashboardPath = resolve(root, "src/features/aidashboard/dashboard/DashboardPage.tsx");
 const statsPath = resolve(root, "src/features/aidashboard/dashboard/dashboardTokenStats.ts");
 const clientPath = resolve(root, "src/features/aidashboard/api/client.ts");
+const tokensPagePath = resolve(root, "src/features/aidashboard/tokens/pages/TokensPage.tsx");
 
 const dashboard = readFileSync(dashboardPath, "utf8");
 const statsSource = readFileSync(statsPath, "utf8");
 const client = readFileSync(clientPath, "utf8");
+const tokensPage = readFileSync(tokensPagePath, "utf8");
 
 assert.match(client, /fetchSessionTokens/, "API client should expose fetchSessionTokens");
 assert.match(client, /fetchTokens/, "API client should expose fetchTokens");
+assert.match(
+  tokensPage,
+  /<TokenAnalyticsPage scope="mine" \/>/,
+  "Token page must use the current analytics implementation for every authenticated user"
+);
+assert.doesNotMatch(
+  tokensPage,
+  /fetchTokenAnalyticsCapability|LegacyTokensPage/,
+  "Token page must not branch by a per-user capability allowlist"
+);
 assert.doesNotMatch(dashboard, /TOKEN_DATA/, "Dashboard Token card must not use TOKEN_DATA mock");
 assert.doesNotMatch(dashboard, /previewRole/, "Dashboard should not keep prototype role switching state");
 assert.doesNotMatch(dashboard, /ROLE_OPTIONS/, "Dashboard should not keep prototype role options");

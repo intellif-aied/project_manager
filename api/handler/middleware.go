@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/aidashboard/api/model"
 	"github.com/aidashboard/api/service"
@@ -17,6 +18,14 @@ type contextKey string
 const userKey contextKey = "user"
 
 func AuthMiddleware(db *sql.DB, aiHubSecret string, aihub *service.AIHubClient) func(http.Handler) http.Handler {
+	return authMiddleware(db, aiHubSecret, aihub, false)
+}
+
+func CLIAuthMiddleware(db *sql.DB, aiHubSecret string, aihub *service.AIHubClient) func(http.Handler) http.Handler {
+	return authMiddleware(db, aiHubSecret, aihub, true)
+}
+
+func authMiddleware(db *sql.DB, aiHubSecret string, aihub *service.AIHubClient, allowExpired bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			authHeader := r.Header.Get("Authorization")
@@ -29,7 +38,7 @@ func AuthMiddleware(db *sql.DB, aiHubSecret string, aihub *service.AIHubClient) 
 				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid authorization format"})
 				return
 			}
-			uid, err := extractAIHubUID(tokenStr, aiHubSecret)
+			uid, err := extractAIHubUIDWithPolicy(tokenStr, aiHubSecret, allowExpired)
 			if err != nil || uid == 0 {
 				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid token"})
 				return
@@ -54,6 +63,10 @@ func AuthMiddleware(db *sql.DB, aiHubSecret string, aihub *service.AIHubClient) 
 }
 
 func extractAIHubUID(tokenString, secret string) (int64, error) {
+	return extractAIHubUIDWithPolicy(tokenString, secret, false)
+}
+
+func extractAIHubUIDWithPolicy(tokenString, secret string, allowExpired bool) (int64, error) {
 	claims := jwt.MapClaims{}
 	if secret == "" {
 		_, _, err := jwt.NewParser().ParseUnverified(tokenString, claims)
@@ -62,11 +75,30 @@ func extractAIHubUID(tokenString, secret string) (int64, error) {
 		}
 		return uidFromClaims(claims)
 	}
-	token, err := jwt.ParseWithClaims(tokenString, claims, func(t *jwt.Token) (any, error) {
+	keyFunc := func(t *jwt.Token) (any, error) {
+		if t.Method.Alg() != jwt.SigningMethodHS256.Alg() {
+			return nil, fmt.Errorf("unexpected signing algorithm %s", t.Method.Alg())
+		}
 		return []byte(secret), nil
-	})
+	}
+	var token *jwt.Token
+	var err error
+	if allowExpired {
+		token, err = jwt.ParseWithClaims(tokenString, claims, keyFunc, jwt.WithoutClaimsValidation())
+	} else {
+		token, err = jwt.ParseWithClaims(tokenString, claims, keyFunc)
+	}
 	if err != nil || !token.Valid {
 		return 0, err
+	}
+	if allowExpired {
+		notBefore, nbfErr := claims.GetNotBefore()
+		if nbfErr != nil {
+			return 0, nbfErr
+		}
+		if notBefore != nil && time.Now().Before(notBefore.Time) {
+			return 0, fmt.Errorf("token is not valid yet")
+		}
 	}
 	return uidFromClaims(claims)
 }

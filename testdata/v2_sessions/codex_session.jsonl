@@ -1,0 +1,6 @@
+{"timestamp":"2026-07-10T03:00:00.000Z","type":"session_meta","payload":{"id":"fixture-codex-001","timestamp":"2026-07-10T03:00:00.000Z","cwd":"/workspace/example"}}
+{"timestamp":"2026-07-10T03:00:01.000Z","type":"turn_context","payload":{"cwd":"/workspace/example","model":"gpt-fixture"}}
+{"timestamp":"2026-07-10T03:01:00.000Z","type":"event_msg","payload":{"type":"user_message","message":"Implement contiguous Chunk upload."}}
+{"timestamp":"2026-07-10T03:02:00.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":15,"reasoning_output_tokens":5,"total_tokens":120}}}}
+{"timestamp":"2026-07-11T04:00:00.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":180,"cached_input_tokens":50,"output_tokens":30,"reasoning_output_tokens":10,"total_tokens":220}}}}
+{"timestamp":"2026-07-11T04:01:00.000Z","type":"response_item","payload":{"type":"function_call","name":"exec_command"}}
