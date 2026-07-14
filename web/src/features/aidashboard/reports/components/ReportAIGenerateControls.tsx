@@ -2,12 +2,12 @@ import {
   CheckCircleOutlined,
   ClearOutlined,
   CloseCircleOutlined,
-  DatabaseOutlined,
-  DeploymentUnitOutlined,
-  LoadingOutlined
+  FileSearchOutlined,
+  LoadingOutlined,
+  RobotOutlined
 } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { App, Button, DatePicker, Modal, Space, Table, Tooltip } from "antd";
+import { App, Button, DatePicker, Drawer, Modal, Space, Table, Tooltip } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import type { Dayjs } from "dayjs";
 import { useEffect, useMemo, useState } from "react";
@@ -53,6 +53,7 @@ interface ReportAISettingsPanelProps {
   selectedKeys: string[];
   onSelectedKeysChange: (keys: string[]) => void;
   onClose: () => void;
+  variant?: "panel" | "drawer";
 }
 
 const MAX_SELECTED_SESSION_SLICES = 200;
@@ -297,24 +298,17 @@ export function ReportAIGenerateControls({
       const text = run.error_message || `${periodLabel} AI 生成失败`;
       setLastOutcome({ type: "error", text });
     }
-  }, [
-    activeRunQuery.data,
-    handledRunId,
-    onGenerated,
-    periodLabel,
-    queryClient,
-    storageKey
-  ]);
+  }, [activeRunQuery.data, handledRunId, onGenerated, periodLabel, queryClient, storageKey]);
 
   const runningTitle = initializingDefault
     ? "正在初始化日报生成能力"
     : runMutation.isPending
       ? "正在提交生成任务"
-    : activeStatus === "pending"
-      ? "任务已提交，等待模型开始"
-      : elapsedSeconds >= 45
-        ? "AI 正在处理报告上下文，请继续等待"
-        : "AI 正在读取数据并生成报告";
+      : activeStatus === "pending"
+        ? "任务已提交，等待模型开始"
+        : elapsedSeconds >= 45
+          ? "AI 正在处理报告上下文，请继续等待"
+          : "AI 正在读取数据并生成报告";
   const runningDetail = initializingDefault
     ? "初始化完成后将自动开始生成"
     : `已等待 ${elapsedLabel(elapsedSeconds)}，完成后正文会自动刷新`;
@@ -344,7 +338,7 @@ export function ReportAIGenerateControls({
       ) : null}
       <Space.Compact className="report-ai-generate-controls">
         <Button
-          icon={<DeploymentUnitOutlined />}
+          icon={<RobotOutlined />}
           loading={generating}
           disabled={disabled || generating}
           onClick={() => runMutation.mutate()}
@@ -353,7 +347,7 @@ export function ReportAIGenerateControls({
         </Button>
         {allowSessionSelection ? (
           <Button
-            icon={<DatabaseOutlined />}
+            icon={<FileSearchOutlined />}
             className={settingsOpen ? "is-active" : undefined}
             disabled={disabled || generating}
             title="选择参与生成的 session"
@@ -373,11 +367,12 @@ export function ReportAISettingsPanel({
   open,
   selectedKeys,
   onSelectedKeysChange,
-  onClose
+  onClose,
+  variant = "panel"
 }: ReportAISettingsPanelProps) {
   const { message } = App.useApp();
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(5);
+  const [pageSize, setPageSize] = useState(10);
   const [queryRange, setQueryRange] = useState<[Dayjs, Dayjs] | null>(null);
   const queryFrom = queryRange?.[0].format("YYYY-MM-DD");
   const queryTo = queryRange?.[1].format("YYYY-MM-DD");
@@ -424,77 +419,113 @@ export function ReportAISettingsPanel({
     []
   );
 
+  const selectionSummary =
+    selectedKeys.length > 0 ? `已选 ${selectedKeys.length} 个 session` : "默认按日报日期取数";
+  const toolbar = (
+    <div className="report-ai-settings-panel__toolbar">
+      <DatePicker.RangePicker
+        size="small"
+        allowClear
+        placeholder={["开始日期", "结束日期"]}
+        value={queryRange}
+        onChange={(value) => {
+          setQueryRange(value?.[0] && value[1] ? [value[0], value[1]] : null);
+          setPage(1);
+        }}
+      />
+      <Tooltip title="清空已选 Session">
+        <Button
+          size="small"
+          className="report-ai-settings-panel__clear"
+          type="text"
+          icon={<ClearOutlined />}
+          disabled={selectedKeys.length === 0}
+          aria-label="清空已选 Session"
+          onClick={() => onSelectedKeysChange([])}
+        />
+      </Tooltip>
+    </div>
+  );
+  const sessionTable = (
+    <Table<SessionTokens>
+      rowKey={sessionSliceKey}
+      size="small"
+      columns={columns}
+      dataSource={sessionsQuery.data?.items ?? []}
+      loading={sessionsQuery.isLoading}
+      rowSelection={{
+        preserveSelectedRowKeys: true,
+        selectedRowKeys: selectedKeys,
+        onChange: (keys) => {
+          const normalized = keys.map(String);
+          if (normalized.length > MAX_SELECTED_SESSION_SLICES) {
+            message.warning(`最多选择 ${MAX_SELECTED_SESSION_SLICES} 个 Session`);
+          }
+          onSelectedKeysChange(normalized.slice(0, MAX_SELECTED_SESSION_SLICES));
+        }
+      }}
+      pagination={{
+        current: page,
+        pageSize,
+        total: sessionsQuery.data?.total ?? 0,
+        size: "small",
+        showSizeChanger: true,
+        pageSizeOptions: [5, 10, 20],
+        onChange: (nextPage, nextPageSize) => {
+          setPage(nextPage);
+          setPageSize(nextPageSize);
+        }
+      }}
+      scroll={{
+        y:
+          variant === "drawer"
+            ? "calc(100dvh - 230px)"
+            : "clamp(150px, calc(100dvh - 560px), 230px)"
+      }}
+    />
+  );
+
   if (!open) return null;
+
+  if (variant === "drawer") {
+    return (
+      <Drawer
+        className="report-ai-settings-drawer"
+        title={
+          <span className="report-ai-settings-drawer__title">
+            <strong>选择 session</strong>
+            <em>{selectionSummary}</em>
+          </span>
+        }
+        open={open}
+        placement="right"
+        width={520}
+        mask
+        maskClosable
+        zIndex={1100}
+        onClose={onClose}
+      >
+        <div className="report-ai-settings-drawer__body">
+          {toolbar}
+          {sessionTable}
+        </div>
+      </Drawer>
+    );
+  }
 
   return (
     <aside className="report-ai-settings-panel">
       <div className="report-ai-settings-panel__head">
         <span>
           <strong>选择参与生成的 session</strong>
-          <em>
-            {selectedKeys.length > 0
-              ? `已选 ${selectedKeys.length} 个 session`
-              : "未选择时按报告周期自动取数"}
-          </em>
+          <em>{selectionSummary}</em>
         </span>
         <Button size="small" type="text" onClick={onClose}>
           收起
         </Button>
       </div>
-      <div className="report-ai-settings-panel__toolbar">
-        <DatePicker.RangePicker
-          size="small"
-          allowClear
-          placeholder={["开始日期", "结束日期"]}
-          value={queryRange}
-          onChange={(value) => {
-            setQueryRange(value?.[0] && value[1] ? [value[0], value[1]] : null);
-            setPage(1);
-          }}
-        />
-        <Tooltip title="清空已选 Session">
-          <Button
-            size="small"
-            className="report-ai-settings-panel__clear"
-            type="text"
-            icon={<ClearOutlined />}
-            disabled={selectedKeys.length === 0}
-            aria-label="清空已选 Session"
-            onClick={() => onSelectedKeysChange([])}
-          />
-        </Tooltip>
-      </div>
-      <Table<SessionTokens>
-        rowKey={sessionSliceKey}
-        size="small"
-        columns={columns}
-        dataSource={sessionsQuery.data?.items ?? []}
-        loading={sessionsQuery.isLoading}
-        rowSelection={{
-          preserveSelectedRowKeys: true,
-          selectedRowKeys: selectedKeys,
-          onChange: (keys) => {
-            const normalized = keys.map(String);
-            if (normalized.length > MAX_SELECTED_SESSION_SLICES) {
-              message.warning(`最多选择 ${MAX_SELECTED_SESSION_SLICES} 个 Session`);
-            }
-            onSelectedKeysChange(normalized.slice(0, MAX_SELECTED_SESSION_SLICES));
-          }
-        }}
-        pagination={{
-          current: page,
-          pageSize,
-          total: sessionsQuery.data?.total ?? 0,
-          size: "small",
-          showSizeChanger: true,
-          pageSizeOptions: [5, 10, 20],
-          onChange: (nextPage, nextPageSize) => {
-            setPage(nextPage);
-            setPageSize(nextPageSize);
-          }
-        }}
-        scroll={{ y: "clamp(150px, calc(100dvh - 560px), 230px)" }}
-      />
+      {toolbar}
+      {sessionTable}
     </aside>
   );
 }

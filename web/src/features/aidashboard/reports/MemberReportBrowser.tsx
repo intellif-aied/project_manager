@@ -1,8 +1,8 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Alert, Button, Empty, Select, Space, Table, Tag } from "antd";
+import { Alert, App, Button, Card, Empty, Select, Space, Table, Tag, Tooltip } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { LeftOutlined, RightOutlined } from "@ant-design/icons";
+import { CopyOutlined, DownOutlined, LeftOutlined, RightOutlined, UpOutlined } from "@ant-design/icons";
 
 import type { MemberPersonalReport } from "../api/types";
 import { MarkdownViewer } from "@/shared/components/MarkdownViewer/MarkdownViewer";
@@ -11,15 +11,62 @@ const roleLabels: Record<string, string> = {
   director: "总监", pm: "PM", team_leader: "TL", employee: "员工", admin: "管理员"
 };
 
-export function MemberReportBrowser<T extends { content: string }>({
-  items, loading, error, queryKey, fetchDetail
-}: {
+type MemberReportBrowserProps<T extends { content: string }> = {
   items: MemberPersonalReport[];
   loading: boolean;
   error?: string;
   queryKey: string;
   fetchDetail: (id: string) => Promise<T>;
-}) {
+  displayMode?: "split" | "content-list";
+};
+
+function textPreview(value?: string) {
+  return value
+    ?.replace(/```[\s\S]*?```/g, " ")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/^\s{0,3}#{1,6}\s*/gm, "")
+    .replace(/-{3,}/g, " ")
+    .replace(/[>*_`|]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function copyText(value: string) {
+  if (navigator.clipboard && window.isSecureContext) {
+    const copied = await navigator.clipboard.writeText(value).then(
+      () => true,
+      () => false
+    );
+    if (copied) return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  const copied = document.execCommand("copy");
+  document.body.removeChild(textarea);
+  if (!copied) throw new Error("copy failed");
+}
+
+export function MemberReportBrowser<T extends { content: string }>({
+  displayMode = "split",
+  ...props
+}: MemberReportBrowserProps<T>) {
+  if (displayMode === "content-list") {
+    return <MemberReportContentList {...props} />;
+  }
+  return <MemberReportSplitBrowser {...props} />;
+}
+
+function MemberReportSplitBrowser<T extends { content: string }>({
+  items, loading, error, queryKey, fetchDetail
+}: Omit<MemberReportBrowserProps<T>, "displayMode">) {
   const [teamID, setTeamID] = useState("all");
   const [selectedID, setSelectedID] = useState<string>();
   const teams = useMemo(() => Array.from(new Map(items.filter(x => x.team_id).map(x => [x.team_id!, x.team_name])).entries()), [items]);
@@ -63,4 +110,149 @@ export function MemberReportBrowser<T extends { content: string }>({
       <div className="member-report-browser__content">{detail.isLoading ? "正在加载..." : detail.isError ? <Alert type="error" message="报告加载失败"/> : detail.data?.content?.trim() ? <MarkdownViewer value={detail.data.content}/> : <Empty description="请选择已填写的报告"/>}</div>
     </section>
   </div>;
+}
+
+function MemberReportContentList<T extends { content: string }>({
+  items, loading, error, queryKey, fetchDetail
+}: Omit<MemberReportBrowserProps<T>, "displayMode">) {
+  const { message } = App.useApp();
+  const [teamID, setTeamID] = useState("all");
+  const [selectedID, setSelectedID] = useState<string>();
+  const teams = useMemo(
+    () => Array.from(new Map(items.filter((item) => item.team_id).map((item) => [item.team_id!, item.team_name])).entries()),
+    [items]
+  );
+  const filtered = useMemo(
+    () => (teamID === "all" ? items : items.filter((item) => item.team_id === teamID)),
+    [items, teamID]
+  );
+  const available = filtered.filter((item) => item.report_id);
+  const effectiveSelectedID = available.some((item) => item.report_id === selectedID)
+    ? selectedID
+    : undefined;
+  const detail = useQuery({
+    queryKey: ["reports", "member-content-list", queryKey, effectiveSelectedID],
+    queryFn: () => fetchDetail(effectiveSelectedID!),
+    enabled: Boolean(effectiveSelectedID),
+    staleTime: 30_000
+  });
+  const submittedCount = available.length;
+  const missingCount = filtered.length - submittedCount;
+
+  const copyCurrentReport = async () => {
+    const content = detail.data?.content?.trim();
+    if (!content) return;
+    try {
+      await copyText(content);
+      void message.success("日报全文已复制");
+    } catch {
+      void message.error("复制失败，请稍后重试");
+    }
+  };
+
+  const toggleReport = (reportID: string) => {
+    setSelectedID((current) => (current === reportID ? undefined : reportID));
+  };
+
+  return (
+    <Card
+      className="member-report-content-list"
+      title={
+        <div className="member-report-content-list__title">
+          <span>部门成员日报</span>
+          <small>已提交 {submittedCount} 人 · 未提交 {missingCount} 人</small>
+        </div>
+      }
+      extra={
+        teams.length > 1 ? (
+          <Select
+            value={teamID}
+            onChange={setTeamID}
+            options={[{ value: "all", label: "全部小组" }, ...teams.map(([value, label]) => ({ value, label }))]}
+          />
+        ) : null
+      }
+    >
+      {error ? (
+        <Alert type="error" showIcon message={error} />
+      ) : loading ? (
+        <div className="member-report-content-list__loading">正在加载成员日报…</div>
+      ) : filtered.length === 0 ? (
+        <Empty description="当日暂无成员日报" />
+      ) : (
+        <div className="member-report-content-list__items">
+          {filtered.map((item) => {
+            const isExpanded = Boolean(item.report_id) && item.report_id === effectiveSelectedID;
+            const preview = textPreview(item.content_preview);
+            return (
+              <article
+                className={`member-report-content-item${isExpanded ? " is-expanded" : ""}${item.has_report ? "" : " is-missing"}`}
+                key={item.user_id}
+              >
+                <header className="member-report-content-item__head">
+                  <div>
+                    <div className="member-report-content-item__identity">
+                      <strong>{item.user_name}</strong>
+                      <span>{roleLabels[item.role] ?? item.role}</span>
+                      <span>{item.team_name || "直属部门"}</span>
+                    </div>
+                    {item.saved_at ? (
+                      <small>{new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(item.saved_at))}</small>
+                    ) : null}
+                  </div>
+                  <div className="member-report-content-item__actions">
+                    {item.has_report ? <Tag color="green">已提交</Tag> : <Tag>未提交</Tag>}
+                    {item.report_id ? (
+                      <Button
+                        className="member-report-content-item__toggle"
+                        type="text"
+                        size="small"
+                        aria-expanded={isExpanded}
+                        onClick={() => toggleReport(item.report_id!)}
+                      >
+                        {isExpanded ? <UpOutlined /> : <DownOutlined />}
+                        {isExpanded ? "收起" : "展开"}
+                      </Button>
+                    ) : null}
+                  </div>
+                </header>
+                {item.has_report ? (
+                  <p className="member-report-content-item__preview">
+                    {preview || "日报已提交，展开后查看完整内容。"}
+                  </p>
+                ) : null}
+                {isExpanded ? (
+                  <div className="member-report-content-item__detail">
+                    <div className="member-report-content-item__detail-bar">
+                      <span>日报全文</span>
+                      <Tooltip title="复制全文（保留 Markdown 格式）">
+                        <Button
+                          className="member-report-content-item__copy"
+                          type="text"
+                          size="small"
+                          icon={<CopyOutlined />}
+                          aria-label="复制日报全文"
+                          disabled={!detail.data?.content?.trim()}
+                          onClick={() => void copyCurrentReport()}
+                        />
+                      </Tooltip>
+                    </div>
+                    {detail.isLoading ? (
+                      <div className="member-report-content-item__loading">正在加载日报全文…</div>
+                    ) : detail.isError ? (
+                      <Alert type="error" showIcon message="日报加载失败" />
+                    ) : detail.data?.content?.trim() ? (
+                      <MarkdownViewer value={detail.data.content} />
+                    ) : (
+                      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无日报内容" />
+                    )}
+                  </div>
+                ) : null}
+              </article>
+            );
+          })}
+        </div>
+      )}
+    </Card>
+  );
 }

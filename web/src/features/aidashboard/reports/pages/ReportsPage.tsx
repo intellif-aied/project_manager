@@ -1,21 +1,25 @@
 ﻿import { EditOutlined } from "@ant-design/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { CopyOutlined, DownOutlined, UpOutlined } from "@ant-design/icons";
 import {
   Alert,
+  App,
   Button,
   Card,
   DatePicker,
   Empty,
+  Pagination,
   Segmented,
   Select,
   Space,
   Table,
   Tag,
+  Tooltip,
   Typography
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import type { Dayjs } from "dayjs";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import dayjs from "dayjs";
 
@@ -37,7 +41,9 @@ import {
 import { DailyReportGenerateModal, type DailyGenerateScope } from "../components/DailyReportGenerateModal";
 import { MemberReportBrowser } from "../MemberReportBrowser";
 import type {
+  DailyReport,
   DailyReportListItem,
+  DepartmentReport,
   DepartmentReportListItem,
   TeamReportListItem
 } from "../../api/types";
@@ -75,27 +81,11 @@ function planPreview(value?: string) {
   return plan ? <span title={plan}>{plan}</span> : "-";
 }
 
-function personalStatus(record: DailyReportListItem, role?: string) {
-  if (role === "director" || role === "admin") {
-    return record.status === "saved" || record.status === "submitted" ? <Tag color="blue">已保存</Tag> : <Tag>暂无报告</Tag>;
-  }
-  if (record.status === "submitted") return <Tag color="green">已发送</Tag>;
-  if (record.status === "saved" && record.submitted_at) return <Tag color="gold">已保存，未发送最新修改</Tag>;
-  if (record.status === "saved") return <Tag color="blue">已保存</Tag>;
-  return <Tag>暂无报告</Tag>;
-}
-
 function teamStatus(record: TeamReportListItem) {
   if (record.status === "submitted") return <Tag color="green">已发送</Tag>;
   if (record.status === "saved" && record.submitted_at) return <Tag color="gold">已保存，未发送最新修改</Tag>;
   if (record.status === "saved") return <Tag color="blue">已保存</Tag>;
   return <Tag>暂无报告</Tag>;
-}
-
-function departmentStatus(record: DepartmentReportListItem) {
-  return record.status === "saved" || record.status === "archived" || record.archived_at
-    ? <Tag color="green">已保存</Tag>
-    : <Tag>暂无报告</Tag>;
 }
 
 function useTablePagination() {
@@ -236,9 +226,6 @@ export function ReportsPage() {
           key={`personal:${from ?? ""}:${to ?? ""}`}
           from={from}
           to={to}
-          onOpen={(record) =>
-            setGenerateTarget({ scope: "personal", reportId: record.id, reportDate: record.report_date, readOnly: true })
-          }
           onEdit={(record) =>
             setGenerateTarget({ scope: "personal", reportId: record.id, reportDate: record.report_date })
           }
@@ -265,9 +252,6 @@ export function ReportsPage() {
           key={`department:${from ?? ""}:${to ?? ""}`}
           from={from}
           to={to}
-          onOpen={(record) =>
-            setGenerateTarget({ scope: "department", reportId: record.id, reportDate: record.report_date, readOnly: true })
-          }
           onEdit={(record) =>
             setGenerateTarget({ scope: "department", reportId: record.id, reportDate: record.report_date })
           }
@@ -301,22 +285,169 @@ function MemberDailyTable({ date, departmentId }: { date: string; departmentId?:
   return (
     <MemberReportBrowser items={reportsQuery.data ?? []} loading={reportsQuery.isLoading}
       error={reportsQuery.isError ? errorMessage(reportsQuery.error) : undefined}
-      queryKey={`daily:${date}`} fetchDetail={fetchMemberDailyReport} />
+      queryKey={`daily:${date}`} fetchDetail={fetchMemberDailyReport} displayMode="content-list" />
+  );
+}
+
+type InlineDailyRecord = {
+  id: string;
+  report_date: string;
+  next_day_plan: string;
+  updated_at: string;
+};
+
+async function copyReportText(value: string) {
+  if (navigator.clipboard && window.isSecureContext) {
+    const copied = await navigator.clipboard.writeText(value).then(() => true, () => false);
+    if (copied) return;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  const copied = document.execCommand("copy");
+  document.body.removeChild(textarea);
+  if (!copied) throw new Error("copy failed");
+}
+
+function InlineDailyContentList<TRecord extends InlineDailyRecord, TDetail extends { content: string }>({
+  title,
+  items,
+  total,
+  loading,
+  error,
+  pagination,
+  fetchDetail,
+  renderStatus,
+  renderMeta,
+  onEdit
+}: {
+  title: string;
+  items: TRecord[];
+  total: number;
+  loading: boolean;
+  error?: string;
+  pagination: (total: number) => Parameters<typeof Pagination>[0];
+  fetchDetail: (id: string) => Promise<TDetail>;
+  renderStatus: (record: TRecord) => ReactNode;
+  renderMeta: (record: TRecord) => string;
+  onEdit: (record: TRecord) => void;
+}) {
+  return (
+    <Card className="member-report-content-list reports-inline-content-list" title={title}>
+      {error ? (
+        <Alert type="error" showIcon message={error} />
+      ) : loading ? (
+        <div className="member-report-content-list__loading">正在加载日报…</div>
+      ) : items.length === 0 ? (
+        <Empty description="暂无日报记录" />
+      ) : (
+        <div className="member-report-content-list__items">
+          {items.map((record) => (
+            <InlineDailyContentItem
+              key={record.id}
+              record={record}
+              title={title}
+              fetchDetail={fetchDetail}
+              status={renderStatus(record)}
+              meta={renderMeta(record)}
+              onEdit={() => onEdit(record)}
+            />
+          ))}
+        </div>
+      )}
+      {!error && !loading && total > 0 ? <Pagination className="reports-inline-content-list__pagination" {...pagination(total)} /> : null}
+    </Card>
+  );
+}
+
+function InlineDailyContentItem<TRecord extends InlineDailyRecord, TDetail extends { content: string }>({
+  record,
+  title,
+  fetchDetail,
+  status,
+  meta,
+  onEdit
+}: {
+  record: TRecord;
+  title: string;
+  fetchDetail: (id: string) => Promise<TDetail>;
+  status: ReactNode;
+  meta: string;
+  onEdit: () => void;
+}) {
+  const { message } = App.useApp();
+  const [expanded, setExpanded] = useState(false);
+  const detailQuery = useQuery({
+    queryKey: ["reports", "daily-inline-detail", title, record.id],
+    queryFn: () => fetchDetail(record.id),
+    enabled: expanded,
+    staleTime: 30_000
+  });
+  const copyCurrentReport = async () => {
+    const content = detailQuery.data?.content?.trim();
+    if (!content) return;
+    try {
+      await copyReportText(content);
+      void message.success("日报全文已复制");
+    } catch {
+      void message.error("复制失败，请稍后重试");
+    }
+  };
+
+  return (
+    <article className={`member-report-content-item${expanded ? " is-expanded" : ""}`}>
+      <header className="member-report-content-item__head">
+        <div>
+          <div className="member-report-content-item__identity">
+            <strong>{formatDate(record.report_date)}</strong>
+            <span>{meta}</span>
+          </div>
+          <small>{formatDateTime(record.updated_at)}</small>
+        </div>
+        <div className="member-report-content-item__actions">
+          {status}
+          <Button className="member-report-content-item__edit" type="text" size="small" onClick={onEdit}>
+            编辑
+          </Button>
+          <Button className="member-report-content-item__toggle" type="text" size="small" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>
+            {expanded ? <UpOutlined /> : <DownOutlined />}
+            {expanded ? "收起" : "展开"}
+          </Button>
+        </div>
+      </header>
+      <p className="member-report-content-item__preview">{record.next_day_plan?.trim() || "未填写明日计划"}</p>
+      {expanded ? (
+        <div className="member-report-content-item__detail">
+          <div className="member-report-content-item__detail-bar">
+            <span>日报全文</span>
+            <Tooltip title="复制全文（保留 Markdown 格式）">
+              <Button className="member-report-content-item__copy" type="text" size="small" icon={<CopyOutlined />} aria-label="复制日报全文" disabled={!detailQuery.data?.content?.trim()} onClick={() => void copyCurrentReport()} />
+            </Tooltip>
+          </div>
+          {detailQuery.isLoading ? <div className="member-report-content-item__loading">正在加载日报全文…</div> : null}
+          {detailQuery.isError ? <Alert type="error" showIcon message="日报加载失败" /> : null}
+          {!detailQuery.isLoading && !detailQuery.isError && detailQuery.data?.content?.trim() ? <MarkdownViewer value={detailQuery.data.content} /> : null}
+          {!detailQuery.isLoading && !detailQuery.isError && !detailQuery.data?.content?.trim() ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无日报内容" /> : null}
+        </div>
+      ) : null}
+    </article>
   );
 }
 
 function PersonalDailyTable({
   from,
   to,
-  onOpen,
   onEdit
 }: {
   from?: string;
   to?: string;
-  onOpen: (record: DailyReportListItem) => void;
   onEdit: (record: DailyReportListItem) => void;
 }) {
-  const { user } = useAuth();
   const { page, pageSize, tablePagination } = useTablePagination();
 
   const reportsQuery = useQuery({
@@ -331,45 +462,19 @@ function PersonalDailyTable({
     staleTime: 30_000
   });
 
-  const columns: ColumnsType<DailyReportListItem> = [
-    { title: "日期", dataIndex: "report_date", width: 140, render: formatDate },
-    { title: "明日计划", dataIndex: "next_day_plan", width: 260, ellipsis: true, render: planPreview },
-    { title: "状态", key: "status", width: 180, render: (_, record) => personalStatus(record, user?.role) },
-    { title: "更新时间", dataIndex: "updated_at", render: formatDateTime },
-    {
-      title: "操作",
-      key: "actions",
-      width: 140,
-      render: (_, record) => (
-        <Space size={4}>
-          <Button size="small" type="link" onClick={() => onOpen(record)}>
-            打开
-          </Button>
-          <Button size="small" type="link" onClick={() => onEdit(record)}>
-            编辑
-          </Button>
-        </Space>
-      )
-    }
-  ];
-
   return (
-    <Card
-      className="reports-list-card"
+    <InlineDailyContentList<DailyReportListItem, DailyReport>
       title="我的日报记录"
-    >
-      {reportsQuery.isError ? (
-        <Alert type="error" showIcon message="我的日报加载失败" description={errorMessage(reportsQuery.error)} />
-      ) : (
-        <Table<DailyReportListItem>
-          rowKey="id"
-          columns={columns}
-          dataSource={reportsQuery.data?.items ?? []}
-          loading={reportsQuery.isLoading}
-          pagination={tablePagination(reportsQuery.data?.total ?? 0)}
-        />
-      )}
-    </Card>
+      items={reportsQuery.data?.items ?? []}
+      total={reportsQuery.data?.total ?? 0}
+      loading={reportsQuery.isLoading}
+      error={reportsQuery.isError ? `我的日报加载失败：${errorMessage(reportsQuery.error)}` : undefined}
+      pagination={tablePagination}
+      fetchDetail={fetchReport}
+      renderStatus={() => null}
+      renderMeta={() => "我的日报"}
+      onEdit={onEdit}
+    />
   );
 }
 
@@ -446,12 +551,10 @@ function TeamDailyTable({
 function DepartmentDailyTable({
   from,
   to,
-  onOpen,
   onEdit
 }: {
   from?: string;
   to?: string;
-  onOpen: (record: DepartmentReportListItem) => void;
   onEdit: (record: DepartmentReportListItem) => void;
 }) {
   const { page, pageSize, tablePagination } = useTablePagination();
@@ -468,48 +571,19 @@ function DepartmentDailyTable({
     staleTime: 30_000
   });
 
-  const columns: ColumnsType<DepartmentReportListItem> = [
-    { title: "日期", dataIndex: "report_date", width: 140, render: formatDate },
-    { title: "明日计划", dataIndex: "next_day_plan", width: 260, ellipsis: true, render: planPreview },
-    { title: "小组总数", dataIndex: "team_count", width: 120 },
-    { title: "已发送小组数", dataIndex: "submitted_team_count", width: 140 },
-    { title: "未发送小组数", dataIndex: "missing_team_count", width: 140 },
-    { title: "状态", key: "status", width: 120, render: (_, record) => departmentStatus(record) },
-    { title: "更新时间", dataIndex: "updated_at", render: formatDateTime },
-    {
-      title: "操作",
-      key: "actions",
-      width: 140,
-      render: (_, record) => (
-        <Space size={4}>
-          <Button size="small" type="link" onClick={() => onOpen(record)}>
-            打开
-          </Button>
-          <Button size="small" type="link" onClick={() => onEdit(record)}>
-            编辑
-          </Button>
-        </Space>
-      )
-    }
-  ];
-
   return (
-    <Card
-      className="reports-list-card"
+    <InlineDailyContentList<DepartmentReportListItem, DepartmentReport>
       title="部门日报记录"
-    >
-      {reportsQuery.isError ? (
-        <Alert type="error" showIcon message="部门日报加载失败" description={errorMessage(reportsQuery.error)} />
-      ) : (
-        <Table<DepartmentReportListItem>
-          rowKey="id"
-          columns={columns}
-          dataSource={reportsQuery.data?.items ?? []}
-          loading={reportsQuery.isLoading}
-          pagination={tablePagination(reportsQuery.data?.total ?? 0)}
-        />
-      )}
-    </Card>
+      items={reportsQuery.data?.items ?? []}
+      total={reportsQuery.data?.total ?? 0}
+      loading={reportsQuery.isLoading}
+      error={reportsQuery.isError ? `部门日报加载失败：${errorMessage(reportsQuery.error)}` : undefined}
+      pagination={tablePagination}
+      fetchDetail={fetchDepartmentReport}
+      renderStatus={() => null}
+      renderMeta={(record) => `共 ${record.team_count} 个小组 · 已提交 ${record.submitted_team_count} · 未提交 ${record.missing_team_count}`}
+      onEdit={onEdit}
+    />
   );
 }
 
