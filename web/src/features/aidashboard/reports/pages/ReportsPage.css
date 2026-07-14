@@ -36,6 +36,45 @@
   border-radius: 9px;
 }
 
+.reports-member-team-select {
+  width: 200px;
+}
+
+.member-report-browser {
+  display: grid;
+  grid-template-columns: minmax(680px, 58%) minmax(380px, 1fr);
+  min-height: 560px;
+  overflow: hidden;
+  border: 1px solid #e3e8ef;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.member-report-browser__list { min-width: 0; overflow: hidden; border-right: 1px solid #e3e8ef; }
+.member-report-browser__list .ant-table-wrapper { max-width: 100%; overflow: hidden; }
+.member-report-browser__toolbar,
+.member-report-browser__detail > header {
+  display: flex; align-items: center; justify-content: space-between;
+  min-height: 56px; padding: 10px 16px; border-bottom: 1px solid #e3e8ef;
+}
+.member-report-browser__toolbar .ant-select { width: 180px; }
+.member-report-browser .ant-table-row { cursor: pointer; }
+.member-report-browser .ant-table-row.is-selected > td { background: #eef6ff !important; }
+.member-report-browser small { color: #7a8798; }
+.member-report-browser__detail { min-width: 0; }
+.member-report-browser__content { max-height: 650px; overflow: auto; padding: 20px 24px; }
+
+@media (max-width: 960px) {
+  .member-report-browser { grid-template-columns: 1fr; }
+  .member-report-browser__list { border-right: 0; border-bottom: 1px solid #e3e8ef; }
+}
+
+.reports-member-team-select .ant-select-selector {
+  min-height: 38px;
+  border-color: #dfe8f2 !important;
+  border-radius: 9px !important;
+}
+
 .reports-control-card .ant-btn-primary {
   height: 38px;
   padding-inline: 14px;

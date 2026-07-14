@@ -7,6 +7,30 @@ export interface Team {
   director_name?: string | null;
 }
 
+export interface Department {
+  id: string;
+  name: string;
+  director_user_id?: string | null;
+  director_name?: string | null;
+  team_ids: string[];
+  pm_user_ids: string[];
+}
+
+export interface MemberPersonalReport {
+  user_id: string;
+  user_name: string;
+  role: string;
+  department_id?: string;
+  department_name?: string;
+  team_id?: string;
+  team_name?: string;
+  report_id?: string;
+  has_report: boolean;
+  status?: string;
+  saved_at?: string;
+  content_preview?: string;
+}
+
 export type AIHubAidaStatus = "not_added" | "active" | "disabled";
 
 export interface AIHubUser {

@@ -416,9 +416,9 @@ func fallbackUpsertReportContent(ctx context.Context, tx *sql.Tx, reportType, da
 		}
 		var reportID string
 		err := tx.QueryRowContext(ctx, `
-			INSERT INTO department_reports (report_date, content, generation_mode, managed_agent_run_id, agent_id, agent_version_id, model_id, edited, status, saved_at)
-			VALUES ($1, $2, 'managed_agent', $3, $4, $5, $6, false, 'saved', now())
-			ON CONFLICT (report_date) DO UPDATE
+			INSERT INTO department_reports (department_id, report_date, content, generation_mode, managed_agent_run_id, agent_id, agent_version_id, model_id, edited, status, saved_at)
+			VALUES ((SELECT id FROM departments WHERE director_user_id=$1), $2, $3, 'managed_agent', $4, $5, $6, $7, false, 'saved', now())
+			ON CONFLICT (department_id, report_date) WHERE department_id IS NOT NULL DO UPDATE
 			SET content = EXCLUDED.content,
 			    generation_mode = 'managed_agent',
 			    managed_agent_run_id = EXCLUDED.managed_agent_run_id,
@@ -430,7 +430,7 @@ func fallbackUpsertReportContent(ctx context.Context, tx *sql.Tx, reportType, da
 			    saved_at = now(),
 			    updated_at = now()
 			WHERE department_reports.edited = false
-			RETURNING id::text`, date, content, runID, nullableManagedString(agentID), agentVersionID, nullableManagedString(modelID)).Scan(&reportID)
+			RETURNING id::text`, leaderID, date, content, runID, nullableManagedString(agentID), agentVersionID, nullableManagedString(modelID)).Scan(&reportID)
 		return reportID, err
 	case "department_weekly":
 		if weekStart == "" || weekEnd == "" {
@@ -438,9 +438,9 @@ func fallbackUpsertReportContent(ctx context.Context, tx *sql.Tx, reportType, da
 		}
 		var reportID string
 		err := tx.QueryRowContext(ctx, `
-			INSERT INTO department_weekly_reports (week_start, week_end, content, generation_mode, managed_agent_run_id, agent_id, agent_version_id, model_id, edited)
-			VALUES ($1, $2, $3, 'managed_agent', $4, $5, $6, $7, false)
-			ON CONFLICT (week_start) DO UPDATE
+			INSERT INTO department_weekly_reports (department_id, week_start, week_end, content, generation_mode, managed_agent_run_id, agent_id, agent_version_id, model_id, edited)
+			VALUES ((SELECT id FROM departments WHERE director_user_id=$1), $2, $3, $4, 'managed_agent', $5, $6, $7, $8, false)
+			ON CONFLICT (department_id, week_start) WHERE department_id IS NOT NULL DO UPDATE
 			SET content = EXCLUDED.content,
 			    week_end = EXCLUDED.week_end,
 			    generation_mode = 'managed_agent',
@@ -451,7 +451,7 @@ func fallbackUpsertReportContent(ctx context.Context, tx *sql.Tx, reportType, da
 			    edited = false,
 			    updated_at = now()
 			WHERE department_weekly_reports.edited = false
-			RETURNING id::text`, weekStart, weekEnd, content, runID, nullableManagedString(agentID), agentVersionID, nullableManagedString(modelID)).Scan(&reportID)
+			RETURNING id::text`, leaderID, weekStart, weekEnd, content, runID, nullableManagedString(agentID), agentVersionID, nullableManagedString(modelID)).Scan(&reportID)
 		return reportID, err
 	default:
 		return "", fmt.Errorf("unsupported report_type: %s", reportType)

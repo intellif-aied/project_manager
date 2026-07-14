@@ -82,6 +82,7 @@ func main() {
 	docH := handler.NewDocumentHandler(database)
 	tokenH := handler.NewTokenHandler(database)
 	teamH := handler.NewTeamHandler(database)
+	departmentH := handler.NewDepartmentHandler(database)
 	followH := handler.NewFollowHandler(database)
 	dashboardH := handler.NewDashboardHandler(database)
 
@@ -106,6 +107,7 @@ func main() {
 		r.With(handler.AdminOnly).Get("/aihub/users/search", authH.SearchAIHubUsers)
 		r.Get("/task-assignees", authH.ListTaskAssignees)
 		r.Get("/teams", authH.ListTeams)
+		r.Get("/departments", departmentH.List)
 
 		r.Route("/admin", func(r chi.Router) {
 			r.Use(handler.AdminOnly)
@@ -115,6 +117,8 @@ func main() {
 			r.Post("/teams", authH.AdminCreateTeam)
 			r.Put("/teams/{id}", authH.AdminUpdateTeam)
 			r.Delete("/teams/{id}", authH.AdminDeleteTeam)
+			r.Post("/departments", departmentH.Create)
+			r.Put("/departments/{id}", departmentH.Update)
 		})
 
 		r.Get("/requirements", reqH.List)
@@ -171,6 +175,10 @@ func main() {
 		r.Get("/reports/weekly/mine/sources", reportH.GetPersonalWeeklyReportSources)
 		r.Put("/reports/weekly/mine/current", reportH.SavePersonalWeeklyReportCurrent)
 		r.Post("/reports/weekly/mine/current/submit", reportH.SubmitPersonalWeeklyReportCurrent)
+		r.Get("/reports/members/daily", reportH.ListMemberDailyReports)
+		r.Get("/reports/members/daily/{id}", reportH.GetMemberDailyReport)
+		r.Get("/reports/members/weekly", reportH.ListMemberWeeklyReports)
+		r.Get("/reports/members/weekly/{id}", reportH.GetMemberWeeklyReport)
 
 		r.Get("/reports/team/members", reportH.ListTeamMemberReports)
 		r.Get("/reports/team/sources", reportH.GetTeamReportSources)

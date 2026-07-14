@@ -17,15 +17,18 @@ import { useState } from "react";
 import "../../aidashboard-pattern.css";
 import {
   adminBatchAddUsers,
+  adminCreateDepartment,
   adminCreateTeam,
   adminDeleteTeam,
   adminUpdateTeam,
+  adminUpdateDepartment,
   adminUpdateUser,
   fetchAIHubUsers,
+  fetchDepartments,
   fetchTeams,
   fetchUsers
 } from "../../api/client";
-import type { AIHubUser, Team } from "../../api/types";
+import type { AIHubUser, Department, Team } from "../../api/types";
 import {
   RequirementMetricCard,
   RequirementMetricGrid,
@@ -72,6 +75,7 @@ interface CreateTeamFormValues {
   name: string;
   director_user_id?: string;
 }
+interface DepartmentFormValues { name: string; director_user_id?: string; team_ids: string[]; pm_user_ids: string[]; }
 
 interface RoleTeamChangeFormValues {
   team_id: string;
@@ -146,6 +150,10 @@ export function OrganizationPage() {
   const [createTeamError, setCreateTeamError] = useState<string>();
   const [createTeamForm] = Form.useForm<CreateTeamFormValues>();
   const [roleTeamChange, setRoleTeamChange] = useState<PendingRoleTeamChange | null>(null);
+  const [userSearch, setUserSearch] = useState("");
+  const [departmentOpen, setDepartmentOpen] = useState(false);
+  const [editingDepartment, setEditingDepartment] = useState<Department | null>(null);
+  const [departmentForm] = Form.useForm<DepartmentFormValues>();
   const [roleTeamForm] = Form.useForm<RoleTeamChangeFormValues>();
   const isAdmin = currentUser?.role === "admin";
 
@@ -161,6 +169,7 @@ export function OrganizationPage() {
     enabled: isAdmin,
     staleTime: 5 * 60_000
   });
+  const departmentsQuery = useQuery<Department[]>({ queryKey: ["departments"], queryFn: fetchDepartments, enabled: isAdmin });
   const aihubUsersQuery = useQuery({
     queryKey: ["aihub-users", addUserSearch, aihubUsersPage, aihubUsersPageSize],
     queryFn: () => fetchAIHubUsers({ search_key: addUserSearch, page_size: aihubUsersPageSize, page_num: aihubUsersPage }),
@@ -170,9 +179,14 @@ export function OrganizationPage() {
 
   const users = usersQuery.data ?? EMPTY_USERS;
   const teams = teamsQuery.data ?? EMPTY_TEAMS;
+  const departments = departmentsQuery.data ?? [];
   const aihubUsers = aihubUsersQuery.data?.items ?? [];
   const selectedAIHubUsers = aihubUsers.filter((user) => selectedAIHubUserIDs.includes(user.id));
   const enabledUsers = users.filter((u) => u.local_enabled !== false);
+  const visibleUsers = users.filter((u) => {
+    const q = userSearch.trim().toLowerCase();
+    return !q || [u.nickname, u.name, u.username, u.employee_id, u.email].some(v => v?.toLowerCase().includes(q));
+  });
   const teamMembers = (teamID: string) =>
     enabledUsers.filter((u) => u.team_id === teamID && (u.role === "team_leader" || u.role === "employee"));
 
@@ -235,6 +249,11 @@ export function OrganizationPage() {
       await queryClient.invalidateQueries({ queryKey: ["teams"] });
     },
     onError: (error) => setCreateTeamError(getApiErrorMessage(error, "保存小组失败，请稍后重试"))
+  });
+  const saveDepartmentMutation = useMutation({
+    mutationFn: (values: DepartmentFormValues) => editingDepartment ? adminUpdateDepartment(editingDepartment.id, values) : adminCreateDepartment(values),
+    onSuccess: async () => { setDepartmentOpen(false); setEditingDepartment(null); departmentForm.resetFields(); await Promise.all([queryClient.invalidateQueries({queryKey:["departments"]}), queryClient.invalidateQueries({queryKey:["teams"]}), queryClient.invalidateQueries({queryKey:["users"]})]); },
+    onError: (error) => message.error(getApiErrorMessage(error, "保存部门失败"))
   });
 
   const deleteTeamMutation = useMutation({
@@ -367,6 +386,19 @@ export function OrganizationPage() {
       )
     },
     {
+      title: "部门",
+      key: "department",
+      width: 160,
+      render: (_: unknown, record) => {
+        const department = departments.find((item) =>
+          item.director_user_id === record.id ||
+          item.pm_user_ids.includes(record.id) ||
+          Boolean(record.team_id && item.team_ids.includes(record.team_id))
+        );
+        return department?.name || "未配置";
+      }
+    },
+    {
       title: "Aida 小组",
       dataIndex: "team_id",
       width: 190,
@@ -482,6 +514,18 @@ export function OrganizationPage() {
         </RequirementMetricGrid>
 
         <section className="org-team-section">
+          <div className="org-team-section__head"><div className="org-section-title"><strong>部门</strong><span>{departments.length} 个部门</span></div>
+            <Button size="small" icon={<PlusOutlined/>} onClick={() => { setEditingDepartment(null); departmentForm.setFieldsValue({team_ids:[],pm_user_ids:[]}); setDepartmentOpen(true); }}>添加部门</Button>
+          </div>
+          <div className="org-team-grid">{departments.map(department => <article className="org-team-card" key={department.id}>
+            <header className="org-team-card__head"><span className="org-team-card__name">{department.name}</span><span>{department.team_ids.length} 个小组</span></header>
+            <div className="org-team-card__row"><span className="org-team-card__row-label">总监</span><span>{department.director_name || "未配置"}</span></div>
+            <div className="org-team-card__row"><span className="org-team-card__row-label">直属 PM</span><span>{department.pm_user_ids.length} 人</span></div>
+            <div className="org-team-card__actions"><Button size="small" icon={<EditOutlined/>} onClick={() => {setEditingDepartment(department); departmentForm.setFieldsValue({name:department.name,director_user_id:department.director_user_id || undefined,team_ids:department.team_ids,pm_user_ids:department.pm_user_ids}); setDepartmentOpen(true);}}>批量配置</Button></div>
+          </article>)}</div>
+        </section>
+
+        <section className="org-team-section">
           <div className="org-team-section__head">
             <div className="org-section-title">
               <strong>小组</strong>
@@ -591,6 +635,7 @@ export function OrganizationPage() {
         </section>
 
         <TableLayout>
+          <div className="org-user-search"><Input.Search allowClear placeholder="搜索姓名、username、工号或邮箱" value={userSearch} onChange={event => setUserSearch(event.target.value)} /></div>
           {usersQuery.isError ? (
             <Alert
               type="error"
@@ -603,7 +648,7 @@ export function OrganizationPage() {
           <ResourceTable<User>
             rowKey="id"
             columns={columns}
-            dataSource={users}
+            dataSource={visibleUsers}
             loading={usersQuery.isLoading}
             pagination={{ pageSize: 20, showSizeChanger: false }}
           />
@@ -611,6 +656,7 @@ export function OrganizationPage() {
       </PagePanel>
 
       <Modal
+        className="org-form-modal"
         title="选择 Aida 小组"
         open={Boolean(roleTeamChange)}
         confirmLoading={updateUserMutation.isPending}
@@ -650,6 +696,7 @@ export function OrganizationPage() {
       </Modal>
 
       <Modal
+        className="org-form-modal org-add-user-modal"
         title="从 AIHub 添加用户"
         open={addUserOpen}
         confirmLoading={addUserMutation.isPending}
@@ -789,6 +836,7 @@ export function OrganizationPage() {
       </Modal>
 
       <Modal
+        className="org-form-modal"
         title={editingTeam ? "编辑小组" : "添加小组"}
         open={createTeamOpen}
         confirmLoading={saveTeamMutation.isPending}
@@ -829,6 +877,17 @@ export function OrganizationPage() {
                 .map((user) => ({ value: user.id, label: displayUserWithUsername(user) }))}
             />
           </Form.Item>
+        </Form>
+      </Modal>
+      <Modal className="org-form-modal" width={760} title={editingDepartment ? "批量配置部门" : "添加部门"} open={departmentOpen}
+        confirmLoading={saveDepartmentMutation.isPending} okText="保存" cancelText="取消"
+        onCancel={() => {setDepartmentOpen(false); setEditingDepartment(null); departmentForm.resetFields();}}
+        onOk={() => departmentForm.submit()} destroyOnHidden>
+        <Form form={departmentForm} layout="vertical" requiredMark={false} onFinish={values => saveDepartmentMutation.mutate(values)}>
+          <Form.Item label="部门名称" name="name" rules={[{required:true,message:"请输入部门名称"}]}><Input/></Form.Item>
+          <Form.Item label="部门总监" name="director_user_id"><Select allowClear showSearch optionFilterProp="label" options={users.filter(u=>u.role==="director").map(u=>({value:u.id,label:displayUserWithUsername(u)}))}/></Form.Item>
+          <Form.Item label="包含小组" name="team_ids"><Select mode="multiple" showSearch optionFilterProp="label" options={teams.map(t=>({value:t.id,label:t.name}))}/></Form.Item>
+          <Form.Item label="直属 PM" name="pm_user_ids"><Select mode="multiple" showSearch optionFilterProp="label" options={users.filter(u=>u.role==="pm").map(u=>({value:u.id,label:displayUserWithUsername(u)}))}/></Form.Item>
         </Form>
       </Modal>
     </>

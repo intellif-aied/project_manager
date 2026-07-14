@@ -303,12 +303,12 @@ func userIDsForDepartment(ctx context.Context, db *sql.DB, u *model.User, depart
 	if db == nil {
 		return nil, fmt.Errorf("db unavailable")
 	}
-	// A Director's department is the set of teams they direct (teams.director_user_id = director.id).
 	rows, err := db.QueryContext(ctx, `
 		SELECT u.id::text
 		FROM users u
-		JOIN teams t ON t.id = u.team_id
-		WHERE t.director_user_id = $1`, departmentID)
+		LEFT JOIN teams t ON t.id = u.team_id
+		JOIN departments d ON d.id = COALESCE(u.department_id, t.department_id)
+		WHERE d.director_user_id::text = $1`, departmentID)
 	if err != nil {
 		return nil, err
 	}

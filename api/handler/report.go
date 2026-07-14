@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -215,11 +216,7 @@ func (h *ReportHandler) Get(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	if u.Role == "employee" && dr.UserID != u.ID {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "access denied"})
-		return
-	}
-	if (u.Role == "team_leader" || u.Role == "pm") && dr.UserID != u.ID && (u.TeamID == nil || !reportUserTeamID.Valid || reportUserTeamID.String != *u.TeamID) {
+	if dr.UserID != u.ID && !h.canAccessMemberUser(r.Context(), u, dr.UserID) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "access denied"})
 		return
 	}
@@ -913,26 +910,68 @@ func (h *ReportHandler) generateReportContent(userID, date string) string {
 	return content
 }
 
+func (h *ReportHandler) directorCanAccessTeam(ctx context.Context, directorID, teamID string) (bool, error) {
+	var allowed bool
+	err := h.db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM teams
+			WHERE id = $1 AND director_user_id = $2
+		)`, teamID, directorID).Scan(&allowed)
+	return allowed, err
+}
+
+func (h *ReportHandler) resolveMemberReportTeamID(w http.ResponseWriter, r *http.Request, u *model.User) (string, bool) {
+	if u == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return "", false
+	}
+	requestedTeamID := strings.TrimSpace(r.URL.Query().Get("team_id"))
+	switch u.Role {
+	case "team_leader", "pm":
+		if u.TeamID == nil || strings.TrimSpace(*u.TeamID) == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no team specified"})
+			return "", false
+		}
+		if requestedTeamID != "" && requestedTeamID != *u.TeamID {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "access denied"})
+			return "", false
+		}
+		return *u.TeamID, true
+	case "director":
+		if requestedTeamID == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "team_id is required"})
+			return "", false
+		}
+		allowed, err := h.directorCanAccessTeam(r.Context(), u.ID, requestedTeamID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return "", false
+		}
+		if !allowed {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "access denied"})
+			return "", false
+		}
+		return requestedTeamID, true
+	case "admin":
+		if requestedTeamID == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "team_id is required"})
+			return "", false
+		}
+		return requestedTeamID, true
+	default:
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "access denied"})
+		return "", false
+	}
+}
+
 func (h *ReportHandler) ListTeamMemberReports(w http.ResponseWriter, r *http.Request) {
 	u := getUser(r)
-	if u.Role != "team_leader" && u.Role != "pm" && u.Role != "director" && u.Role != "admin" {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "access denied"})
-		return
-	}
-
 	date := r.URL.Query().Get("date")
 	if date == "" {
 		date = biztime.Today()
 	}
-
-	teamID := u.TeamID
-	if u.Role == "director" || u.Role == "admin" {
-		if tid := r.URL.Query().Get("team_id"); tid != "" {
-			teamID = &tid
-		}
-	}
-	if teamID == nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no team specified"})
+	teamID, ok := h.resolveMemberReportTeamID(w, r, u)
+	if !ok {
 		return
 	}
 
@@ -946,7 +985,7 @@ func (h *ReportHandler) ListTeamMemberReports(w http.ResponseWriter, r *http.Req
 			AND dr.status IS NOT NULL
 			AND NULLIF(TRIM(COALESCE(NULLIF(dr.submitted_content, ''), dr.content, '')), '') IS NOT NULL
 		WHERE u.team_id = $2 AND u.app_role IN ('team_leader', 'employee')
-		ORDER BY COALESCE(NULLIF(u.nickname,''), u.username)`, date, *teamID)
+		ORDER BY COALESCE(NULLIF(u.nickname,''), u.username)`, date, teamID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -975,29 +1014,17 @@ func (h *ReportHandler) ListTeamMemberReports(w http.ResponseWriter, r *http.Req
 
 func (h *ReportHandler) GetTeamReportSources(w http.ResponseWriter, r *http.Request) {
 	u := getUser(r)
-	if u.Role != "team_leader" && u.Role != "pm" && u.Role != "director" && u.Role != "admin" {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "access denied"})
-		return
-	}
-
 	date := r.URL.Query().Get("date")
 	if date == "" {
 		date = biztime.Today()
 	}
-
-	teamID := u.TeamID
-	if u.Role == "director" || u.Role == "admin" {
-		if tid := r.URL.Query().Get("team_id"); tid != "" {
-			teamID = &tid
-		}
-	}
-	if teamID == nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no team specified"})
+	teamID, ok := h.resolveMemberReportTeamID(w, r, u)
+	if !ok {
 		return
 	}
 
 	var teamName string
-	if err := h.db.QueryRow("SELECT name FROM teams WHERE id = $1", *teamID).Scan(&teamName); err != nil {
+	if err := h.db.QueryRow("SELECT name FROM teams WHERE id = $1", teamID).Scan(&teamName); err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "team not found"})
 		return
 	}
@@ -1013,7 +1040,7 @@ func (h *ReportHandler) GetTeamReportSources(w http.ResponseWriter, r *http.Requ
 			AND dr.status IS NOT NULL
 			AND NULLIF(TRIM(COALESCE(NULLIF(dr.submitted_content, ''), dr.content, '')), '') IS NOT NULL
 		WHERE u.team_id = $2 AND u.app_role IN ('team_leader', 'employee')
-		ORDER BY COALESCE(NULLIF(u.nickname,''), u.username)`, date, *teamID)
+		ORDER BY COALESCE(NULLIF(u.nickname,''), u.username)`, date, teamID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -1021,7 +1048,7 @@ func (h *ReportHandler) GetTeamReportSources(w http.ResponseWriter, r *http.Requ
 	defer rows.Close()
 
 	sources := model.TeamReportSources{
-		TeamID:           *teamID,
+		TeamID:           teamID,
 		TeamName:         teamName,
 		ReportDate:       date,
 		Members:          []model.TeamMemberReport{},
@@ -1551,14 +1578,38 @@ func (h *ReportHandler) GetDepartmentReportSources(w http.ResponseWriter, r *htt
 	writeJSON(w, http.StatusOK, sources)
 }
 
+func (h *ReportHandler) resolveReportDepartmentID(u *model.User, requested string) (string, error) {
+	var departmentID string
+	if u.Role == "director" {
+		err := h.db.QueryRow(`SELECT id::text FROM departments WHERE director_user_id = $1`, u.ID).Scan(&departmentID)
+		if err == sql.ErrNoRows {
+			return "", fmt.Errorf("director has no department")
+		}
+		return departmentID, err
+	}
+	if strings.TrimSpace(requested) == "" {
+		return "", fmt.Errorf("director_user_id is required")
+	}
+	err := h.db.QueryRow(`SELECT id::text FROM departments WHERE director_user_id = $1`, requested).Scan(&departmentID)
+	if err == sql.ErrNoRows {
+		return "", fmt.Errorf("department not found")
+	}
+	return departmentID, err
+}
+
 func (h *ReportHandler) GetDepartmentReportToday(w http.ResponseWriter, r *http.Request) {
 	u := getUser(r)
 	if u.Role != "director" && u.Role != "admin" {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "access denied"})
 		return
 	}
+	departmentID, err := h.resolveReportDepartmentID(u, r.URL.Query().Get("director_user_id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 	reportDate := reportDateFromRequest(r)
-	dr, err := h.getDepartmentReportByDate(reportDate)
+	dr, err := h.getDepartmentReportByDate(departmentID, reportDate)
 	if err == sql.ErrNoRows {
 		now := time.Now()
 		writeJSON(w, http.StatusOK, model.DepartmentReport{
@@ -1585,9 +1636,10 @@ func (h *ReportHandler) SaveDepartmentReportToday(w http.ResponseWriter, r *http
 		return
 	}
 	var req struct {
-		ReportDate string `json:"report_date"`
-		Content    string `json:"content"`
-		Archive    bool   `json:"archive,omitempty"`
+		DirectorUserID string `json:"director_user_id,omitempty"`
+		ReportDate     string `json:"report_date"`
+		Content        string `json:"content"`
+		Archive        bool   `json:"archive,omitempty"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
@@ -1597,8 +1649,13 @@ func (h *ReportHandler) SaveDepartmentReportToday(w http.ResponseWriter, r *http
 	if strings.TrimSpace(reportDate) == "" {
 		reportDate = biztime.Today()
 	}
+	departmentID, err := h.resolveReportDepartmentID(u, req.DirectorUserID)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 
-	sources, err := h.buildDepartmentReportSources(reportDate)
+	sources, err := h.buildDepartmentReportSources(departmentID, reportDate)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -1613,28 +1670,28 @@ func (h *ReportHandler) SaveDepartmentReportToday(w http.ResponseWriter, r *http
 	var reportID string
 	err = h.db.QueryRow(`
 		INSERT INTO department_reports (
-			report_date, content, status, source_team_report_ids, saved_at, archived_at
+			department_id, report_date, content, status, source_team_report_ids, saved_at, archived_at
 		)
-		VALUES ($1, $2, 'saved', $3, now(), CASE WHEN $4 THEN now() ELSE NULL END)
-		ON CONFLICT (report_date)
+		VALUES ($1, $2, $3, 'saved', $4, now(), CASE WHEN $5 THEN now() ELSE NULL END)
+		ON CONFLICT (department_id, report_date) WHERE department_id IS NOT NULL
 		DO UPDATE SET
 			content = EXCLUDED.content,
 			status = 'saved',
 			source_team_report_ids = EXCLUDED.source_team_report_ids,
 			saved_at = now(),
 			archived_at = CASE
-				WHEN $4 THEN COALESCE(department_reports.archived_at, now())
+				WHEN $5 THEN COALESCE(department_reports.archived_at, now())
 				ELSE department_reports.archived_at
 			END,
 			updated_at = now()
 		RETURNING id::text`,
-		reportDate, req.Content, pq.Array(sourceIDs), req.Archive,
+		departmentID, reportDate, req.Content, pq.Array(sourceIDs), req.Archive,
 	).Scan(&reportID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	dr, err := h.getDepartmentReportByID(reportID)
+	dr, err := h.getDepartmentReportByID(departmentID, reportID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -1649,7 +1706,12 @@ func (h *ReportHandler) GetDepartmentReport(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "access denied"})
 		return
 	}
-	report, err := h.getDepartmentReportByID(id)
+	departmentID, err := h.resolveReportDepartmentID(u, r.URL.Query().Get("director_user_id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	report, err := h.getDepartmentReportByID(departmentID, id)
 	if err == sql.ErrNoRows {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 		return
@@ -1673,6 +1735,11 @@ func (h *ReportHandler) UpdateDepartmentReport(w http.ResponseWriter, r *http.Re
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
 		return
 	}
+	departmentID, err := h.resolveReportDepartmentID(u, r.URL.Query().Get("director_user_id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 
 	sets := []string{"status = 'saved'", "saved_at = now()", "archived_at = now()", "updated_at = now()"}
 	args := []any{}
@@ -1682,8 +1749,8 @@ func (h *ReportHandler) UpdateDepartmentReport(w http.ResponseWriter, r *http.Re
 		args = append(args, *req.Content)
 		argIdx++
 	}
-	args = append(args, id)
-	query := fmt.Sprintf("UPDATE department_reports SET %s WHERE id = $%d", joinWithCommas(sets), argIdx)
+	args = append(args, id, departmentID)
+	query := fmt.Sprintf("UPDATE department_reports SET %s WHERE id = $%d AND department_id = $%d", joinWithCommas(sets), argIdx, argIdx+1)
 	res, err := h.db.Exec(query, args...)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -1693,7 +1760,7 @@ func (h *ReportHandler) UpdateDepartmentReport(w http.ResponseWriter, r *http.Re
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 		return
 	}
-	dr, err := h.getDepartmentReportByID(id)
+	dr, err := h.getDepartmentReportByID(departmentID, id)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -1701,7 +1768,7 @@ func (h *ReportHandler) UpdateDepartmentReport(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, dr)
 }
 
-func (h *ReportHandler) getDepartmentReportByDate(reportDate string) (*model.DepartmentReport, error) {
+func (h *ReportHandler) getDepartmentReportByDate(departmentID, reportDate string) (*model.DepartmentReport, error) {
 	var dr model.DepartmentReport
 	var status sql.NullString
 	var generationMode, managedAgentRunID, agentID, modelID sql.NullString
@@ -1714,7 +1781,7 @@ func (h *ReportHandler) getDepartmentReportByDate(reportDate string) (*model.Dep
 			dr.created_at, dr.updated_at
 		FROM department_reports dr
 		LEFT JOIN ai_runs ar ON ar.id = dr.managed_agent_run_id
-		WHERE dr.report_date = $1`, reportDate).Scan(
+		WHERE dr.department_id = $1 AND dr.report_date = $2`, departmentID, reportDate).Scan(
 		&dr.ID, &dr.ReportDate, &dr.Content, &status, &sourceIDsStr, &savedAt, &archivedAt,
 		&dr.Edited, &generationMode, &managedAgentRunID, &agentID, &agentVersionID, &modelID, &generatedAt,
 		&dr.CreatedAt, &dr.UpdatedAt,
@@ -1730,7 +1797,7 @@ func (h *ReportHandler) getDepartmentReportByDate(reportDate string) (*model.Dep
 	return &dr, nil
 }
 
-func (h *ReportHandler) buildDepartmentReportSources(reportDate string) (*model.DepartmentReportSources, error) {
+func (h *ReportHandler) buildDepartmentReportSources(departmentID, reportDate string) (*model.DepartmentReportSources, error) {
 	rows, err := h.db.Query(`
 		SELECT t.id::text, t.name, tr.leader_id::text, COALESCE(COALESCE(NULLIF(u.nickname,''), u.username), ''),
 			tr.id::text, COALESCE(NULLIF(tr.submitted_content, ''), tr.content, ''),
@@ -1742,7 +1809,8 @@ func (h *ReportHandler) buildDepartmentReportSources(reportDate string) (*model.
 			AND tr.status IS NOT NULL
 			AND NULLIF(TRIM(COALESCE(NULLIF(tr.submitted_content, ''), tr.content, '')), '') IS NOT NULL
 		LEFT JOIN users u ON u.id = tr.leader_id
-		ORDER BY t.name`, reportDate)
+		WHERE t.department_id = $2
+		ORDER BY t.name`, reportDate, departmentID)
 	if err != nil {
 		return nil, err
 	}
@@ -1786,7 +1854,7 @@ func (h *ReportHandler) buildDepartmentReportSources(reportDate string) (*model.
 	return sources, nil
 }
 
-func (h *ReportHandler) getDepartmentReportByID(id string) (*model.DepartmentReport, error) {
+func (h *ReportHandler) getDepartmentReportByID(departmentID, id string) (*model.DepartmentReport, error) {
 	var dr model.DepartmentReport
 	var status sql.NullString
 	var generationMode, managedAgentRunID, agentID, modelID sql.NullString
@@ -1799,7 +1867,7 @@ func (h *ReportHandler) getDepartmentReportByID(id string) (*model.DepartmentRep
 			dr.created_at, dr.updated_at
 		FROM department_reports dr
 		LEFT JOIN ai_runs ar ON ar.id = dr.managed_agent_run_id
-		WHERE dr.id = $1`, id).Scan(
+		WHERE dr.department_id = $1 AND dr.id = $2`, departmentID, id).Scan(
 		&dr.ID, &dr.ReportDate, &dr.Content, &status, &sourceIDsStr, &savedAt, &archivedAt,
 		&dr.Edited, &generationMode, &managedAgentRunID, &agentID, &agentVersionID, &modelID, &generatedAt,
 		&dr.CreatedAt, &dr.UpdatedAt,
@@ -1821,11 +1889,16 @@ func (h *ReportHandler) ListDepartmentReports(w http.ResponseWriter, r *http.Req
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "access denied"})
 		return
 	}
+	departmentID, err := h.resolveReportDepartmentID(u, r.URL.Query().Get("director_user_id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 	page, pageSize := parsePagination(r, 20, 100)
 
-	where := " WHERE 1=1"
-	args := []any{}
-	argIdx := 1
+	where := " WHERE dr.department_id = $1"
+	args := []any{departmentID}
+	argIdx := 2
 	if from := r.URL.Query().Get("from"); from != "" {
 		where += fmt.Sprintf(" AND dr.report_date >= $%d", argIdx)
 		args = append(args, from)
@@ -1845,9 +1918,9 @@ func (h *ReportHandler) ListDepartmentReports(w http.ResponseWriter, r *http.Req
 
 	query := `
 		SELECT dr.id::text, dr.report_date,
-			(SELECT COUNT(*) FROM teams) AS team_count,
+			(SELECT COUNT(*) FROM teams WHERE department_id = $1) AS team_count,
 			COALESCE(cardinality(dr.source_team_report_ids), 0) AS submitted_team_count,
-			GREATEST((SELECT COUNT(*) FROM teams) - COALESCE(cardinality(dr.source_team_report_ids), 0), 0) AS missing_team_count,
+			GREATEST((SELECT COUNT(*) FROM teams WHERE department_id = $1) - COALESCE(cardinality(dr.source_team_report_ids), 0), 0) AS missing_team_count,
 			dr.status, dr.saved_at, dr.archived_at, dr.created_at, dr.updated_at
 		FROM department_reports dr` + where + fmt.Sprintf(" ORDER BY dr.report_date DESC LIMIT $%d OFFSET $%d", argIdx, argIdx+1)
 	args = append(args, pageSize, (page-1)*pageSize)
@@ -2120,7 +2193,12 @@ func (h *ReportHandler) GetDepartmentWeeklyReportSources(w http.ResponseWriter, 
 	if !ok {
 		return
 	}
-	sources, err := h.buildDepartmentWeeklyReportSources(weekStart, weekEnd)
+	departmentID, err := h.resolveReportDepartmentID(u, r.URL.Query().Get("director_user_id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	sources, err := h.buildDepartmentWeeklyReportSources(departmentID, weekStart, weekEnd)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -2138,7 +2216,12 @@ func (h *ReportHandler) GetDepartmentWeeklyReportCurrent(w http.ResponseWriter, 
 	if !ok {
 		return
 	}
-	report, err := h.getDepartmentWeeklyReportByWeek(weekStart)
+	departmentID, err := h.resolveReportDepartmentID(u, r.URL.Query().Get("director_user_id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	report, err := h.getDepartmentWeeklyReportByWeek(departmentID, weekStart)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 		return
@@ -2153,9 +2236,10 @@ func (h *ReportHandler) SaveDepartmentWeeklyReportCurrent(w http.ResponseWriter,
 		return
 	}
 	var req struct {
-		WeekStart string `json:"week_start"`
-		Content   string `json:"content"`
-		Archive   bool   `json:"archive,omitempty"`
+		DirectorUserID string `json:"director_user_id,omitempty"`
+		WeekStart      string `json:"week_start"`
+		Content        string `json:"content"`
+		Archive        bool   `json:"archive,omitempty"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
@@ -2165,7 +2249,12 @@ func (h *ReportHandler) SaveDepartmentWeeklyReportCurrent(w http.ResponseWriter,
 	if !ok {
 		return
 	}
-	sources, err := h.buildDepartmentWeeklyReportSources(weekStart, weekEnd)
+	departmentID, err := h.resolveReportDepartmentID(u, req.DirectorUserID)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	sources, err := h.buildDepartmentWeeklyReportSources(departmentID, weekStart, weekEnd)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -2179,27 +2268,27 @@ func (h *ReportHandler) SaveDepartmentWeeklyReportCurrent(w http.ResponseWriter,
 	var reportID string
 	err = h.db.QueryRow(`
 		INSERT INTO department_weekly_reports (
-			week_start, week_end, content, source_team_weekly_report_ids, archived_at
+			department_id, week_start, week_end, content, source_team_weekly_report_ids, archived_at
 		)
-		VALUES ($1, $2, $3, $4, CASE WHEN $5 THEN now() ELSE NULL END)
-		ON CONFLICT (week_start)
+		VALUES ($1, $2, $3, $4, $5, CASE WHEN $6 THEN now() ELSE NULL END)
+		ON CONFLICT (department_id, week_start) WHERE department_id IS NOT NULL
 		DO UPDATE SET
 			week_end = EXCLUDED.week_end,
 			content = EXCLUDED.content,
 			source_team_weekly_report_ids = EXCLUDED.source_team_weekly_report_ids,
 			archived_at = CASE
-				WHEN $5 THEN COALESCE(department_weekly_reports.archived_at, now())
+				WHEN $6 THEN COALESCE(department_weekly_reports.archived_at, now())
 				ELSE department_weekly_reports.archived_at
 			END,
 			updated_at = now()
 		RETURNING id::text`,
-		weekStart, weekEnd, req.Content, pq.Array(sourceIDs), req.Archive,
+		departmentID, weekStart, weekEnd, req.Content, pq.Array(sourceIDs), req.Archive,
 	).Scan(&reportID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	report, err := h.getDepartmentWeeklyReportByID(reportID)
+	report, err := h.getDepartmentWeeklyReportByID(departmentID, reportID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -2219,6 +2308,11 @@ func (h *ReportHandler) UpdateDepartmentWeeklyReport(w http.ResponseWriter, r *h
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
 		return
 	}
+	departmentID, err := h.resolveReportDepartmentID(u, r.URL.Query().Get("director_user_id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 	sets := []string{"updated_at = now()"}
 	args := []any{}
 	argIdx := 1
@@ -2230,8 +2324,8 @@ func (h *ReportHandler) UpdateDepartmentWeeklyReport(w http.ResponseWriter, r *h
 	if req.Archive {
 		sets = append(sets, "archived_at = COALESCE(archived_at, now())")
 	}
-	args = append(args, id)
-	query := fmt.Sprintf("UPDATE department_weekly_reports SET %s WHERE id = $%d", joinWithCommas(sets), argIdx)
+	args = append(args, id, departmentID)
+	query := fmt.Sprintf("UPDATE department_weekly_reports SET %s WHERE id = $%d AND department_id = $%d", joinWithCommas(sets), argIdx, argIdx+1)
 	res, err := h.db.Exec(query, args...)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -2241,7 +2335,7 @@ func (h *ReportHandler) UpdateDepartmentWeeklyReport(w http.ResponseWriter, r *h
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 		return
 	}
-	report, err := h.getDepartmentWeeklyReportByID(id)
+	report, err := h.getDepartmentWeeklyReportByID(departmentID, id)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -2255,6 +2349,11 @@ func (h *ReportHandler) ListDepartmentWeeklyReports(w http.ResponseWriter, r *ht
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "access denied"})
 		return
 	}
+	departmentID, err := h.resolveReportDepartmentID(u, r.URL.Query().Get("director_user_id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 	query := `
 		SELECT dwr.id::text, dwr.week_start, dwr.content, dwr.source_team_weekly_report_ids,
 			dwr.archived_at, dwr.created_at, dwr.updated_at,
@@ -2262,9 +2361,9 @@ func (h *ReportHandler) ListDepartmentWeeklyReports(w http.ResponseWriter, r *ht
 			dwr.agent_id, dwr.agent_version_id, dwr.model_id, ar.finished_at
 		FROM department_weekly_reports dwr
 		LEFT JOIN ai_runs ar ON ar.id = dwr.managed_agent_run_id
-		WHERE 1=1`
-	args := []any{}
-	argIdx := 1
+		WHERE dwr.department_id = $1`
+	args := []any{departmentID}
+	argIdx := 2
 	if from := r.URL.Query().Get("from_week"); from != "" {
 		query += fmt.Sprintf(" AND dwr.week_start >= $%d", argIdx)
 		args = append(args, from)
@@ -2464,7 +2563,7 @@ func (h *ReportHandler) upsertTeamWeeklyReport(teamID, leaderID, weekStart, week
 	return h.getTeamWeeklyReportByID(reportID)
 }
 
-func (h *ReportHandler) buildDepartmentWeeklyReportSources(weekStart, weekEnd string) (*model.DepartmentWeeklyReportSources, error) {
+func (h *ReportHandler) buildDepartmentWeeklyReportSources(departmentID, weekStart, weekEnd string) (*model.DepartmentWeeklyReportSources, error) {
 	rows, err := h.db.Query(`
 		SELECT t.id::text, t.name, twr.leader_id::text, COALESCE(COALESCE(NULLIF(u.nickname,''), u.username), ''),
 			twr.id::text, COALESCE(twr.content, ''), COALESCE(twr.submitted_at, twr.updated_at),
@@ -2474,7 +2573,8 @@ func (h *ReportHandler) buildDepartmentWeeklyReportSources(weekStart, weekEnd st
 			AND twr.week_start = $1
 			AND NULLIF(TRIM(COALESCE(twr.content, '')), '') IS NOT NULL
 		LEFT JOIN users u ON u.id = twr.leader_id
-		ORDER BY t.name`, weekStart)
+		WHERE t.department_id = $2
+		ORDER BY t.name`, weekStart, departmentID)
 	if err != nil {
 		return nil, err
 	}
@@ -2685,24 +2785,24 @@ func (h *ReportHandler) getTeamWeeklyReportByID(id string) (*model.TeamWeeklyRep
 	return &report, err
 }
 
-func (h *ReportHandler) getDepartmentWeeklyReportByWeek(weekStart string) (*model.DepartmentWeeklyReport, error) {
+func (h *ReportHandler) getDepartmentWeeklyReportByWeek(departmentID, weekStart string) (*model.DepartmentWeeklyReport, error) {
 	row := h.db.QueryRow(`
 		SELECT dwr.id::text, dwr.week_start, dwr.content, dwr.source_team_weekly_report_ids, dwr.archived_at, dwr.created_at, dwr.updated_at,
 			dwr.edited, COALESCE(dwr.generation_mode, ''), dwr.managed_agent_run_id::text, dwr.agent_id, dwr.agent_version_id, dwr.model_id, ar.finished_at
 		FROM department_weekly_reports dwr
 		LEFT JOIN ai_runs ar ON ar.id = dwr.managed_agent_run_id
-		WHERE dwr.week_start = $1`, weekStart)
+		WHERE dwr.department_id = $1 AND dwr.week_start = $2`, departmentID, weekStart)
 	report, err := scanDepartmentWeeklyReport(row)
 	return &report, err
 }
 
-func (h *ReportHandler) getDepartmentWeeklyReportByID(id string) (*model.DepartmentWeeklyReport, error) {
+func (h *ReportHandler) getDepartmentWeeklyReportByID(departmentID, id string) (*model.DepartmentWeeklyReport, error) {
 	row := h.db.QueryRow(`
 		SELECT dwr.id::text, dwr.week_start, dwr.content, dwr.source_team_weekly_report_ids, dwr.archived_at, dwr.created_at, dwr.updated_at,
 			dwr.edited, COALESCE(dwr.generation_mode, ''), dwr.managed_agent_run_id::text, dwr.agent_id, dwr.agent_version_id, dwr.model_id, ar.finished_at
 		FROM department_weekly_reports dwr
 		LEFT JOIN ai_runs ar ON ar.id = dwr.managed_agent_run_id
-		WHERE dwr.id = $1`, id)
+		WHERE dwr.department_id = $1 AND dwr.id = $2`, departmentID, id)
 	report, err := scanDepartmentWeeklyReport(row)
 	return &report, err
 }

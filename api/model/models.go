@@ -7,27 +7,42 @@ type Team struct {
 	Name           string    `json:"name"`
 	DirectorUserID *string   `json:"director_user_id,omitempty"`
 	DirectorName   *string   `json:"director_name,omitempty"`
+	DepartmentID   *string   `json:"department_id,omitempty"`
+	DepartmentName *string   `json:"department_name,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+type Department struct {
+	ID             string    `json:"id"`
+	Name           string    `json:"name"`
+	DirectorUserID *string   `json:"director_user_id,omitempty"`
+	DirectorName   *string   `json:"director_name,omitempty"`
+	TeamIDs        []string  `json:"team_ids"`
+	PMUserIDs      []string  `json:"pm_user_ids"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 type User struct {
-	ID            string     `json:"id"`
-	Username      string     `json:"username"`
-	Nickname      string     `json:"nickname"`
-	Email         string     `json:"email"`
-	Name          string     `json:"name"`
-	EmployeeID    string     `json:"employee_id"`
-	AppRole       string     `json:"app_role"`
-	Role          string     `json:"role"`
-	TeamID        *string    `json:"team_id,omitempty"`
-	TeamName      *string    `json:"team_name,omitempty"`
-	LocalEnabled  bool       `json:"local_enabled"`
-	Status        string     `json:"status"`
-	LastSyncedAt  *time.Time `json:"last_synced_at,omitempty"`
-	DeactivatedAt *time.Time `json:"deactivated_at,omitempty"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
+	ID             string     `json:"id"`
+	Username       string     `json:"username"`
+	Nickname       string     `json:"nickname"`
+	Email          string     `json:"email"`
+	Name           string     `json:"name"`
+	EmployeeID     string     `json:"employee_id"`
+	AppRole        string     `json:"app_role"`
+	Role           string     `json:"role"`
+	TeamID         *string    `json:"team_id,omitempty"`
+	TeamName       *string    `json:"team_name,omitempty"`
+	DepartmentID   *string    `json:"department_id,omitempty"`
+	DepartmentName *string    `json:"department_name,omitempty"`
+	LocalEnabled   bool       `json:"local_enabled"`
+	Status         string     `json:"status"`
+	LastSyncedAt   *time.Time `json:"last_synced_at,omitempty"`
+	DeactivatedAt  *time.Time `json:"deactivated_at,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
 }
 
 type Requirement struct {
@@ -449,14 +464,24 @@ type LoginResponse struct {
 type AdminCreateTeamRequest struct {
 	Name           string  `json:"name"`
 	DirectorUserID *string `json:"director_user_id,omitempty"`
+	DepartmentID   *string `json:"department_id,omitempty"`
+}
+
+type AdminSaveDepartmentRequest struct {
+	Name           string   `json:"name"`
+	DirectorUserID *string  `json:"director_user_id,omitempty"`
+	TeamIDs        []string `json:"team_ids"`
+	PMUserIDs      []string `json:"pm_user_ids"`
 }
 
 type AdminUpdateUserRequest struct {
-	AppRole      *string `json:"app_role,omitempty"`
-	Role         *string `json:"role,omitempty"`
-	TeamID       *string `json:"team_id,omitempty"`
-	ClearTeam    bool    `json:"clear_team,omitempty"`
-	LocalEnabled *bool   `json:"local_enabled,omitempty"`
+	AppRole         *string `json:"app_role,omitempty"`
+	Role            *string `json:"role,omitempty"`
+	TeamID          *string `json:"team_id,omitempty"`
+	ClearTeam       bool    `json:"clear_team,omitempty"`
+	DepartmentID    *string `json:"department_id,omitempty"`
+	ClearDepartment bool    `json:"clear_department,omitempty"`
+	LocalEnabled    *bool   `json:"local_enabled,omitempty"`
 }
 
 type AIHubUserSearchItem struct {
@@ -1187,6 +1212,21 @@ type TeamMemberReport struct {
 	Content     string     `json:"content"`
 	SubmittedAt *time.Time `json:"submitted_at,omitempty"`
 	HasReport   bool       `json:"has_report"`
+}
+
+type MemberPersonalReport struct {
+	UserID         string     `json:"user_id"`
+	UserName       string     `json:"user_name"`
+	Role           string     `json:"role"`
+	DepartmentID   *string    `json:"department_id,omitempty"`
+	DepartmentName string     `json:"department_name,omitempty"`
+	TeamID         *string    `json:"team_id,omitempty"`
+	TeamName       string     `json:"team_name,omitempty"`
+	ReportID       *string    `json:"report_id,omitempty"`
+	HasReport      bool       `json:"has_report"`
+	Status         string     `json:"status,omitempty"`
+	SavedAt        *time.Time `json:"saved_at,omitempty"`
+	ContentPreview string     `json:"content_preview,omitempty"`
 }
 
 type UpdateTeamReportRequest struct {

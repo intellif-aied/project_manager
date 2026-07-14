@@ -139,8 +139,8 @@ func reportSourceConsistencyIssues(ctx context.Context, db *sql.DB, reportType, 
 	case reportTypeDepartmentDaily:
 		zeroClaim = reportNoPersonalDailyPattern.MatchString(content)
 		table, periodColumn, periodValue = "daily_reports", "report_date", date
-		scopeClause, scopeID, sourceLabel = "t.director_user_id::text = $2", target.DepartmentID, "个人日报"
-		rosterQuery = `SELECT COUNT(*) FROM users u JOIN teams t ON t.id = u.team_id WHERE t.director_user_id::text = $1`
+		scopeClause, scopeID, sourceLabel = "(d.director_user_id::text = $2 OR d.id::text = $2)", target.DepartmentID, "个人日报"
+		rosterQuery = `SELECT COUNT(*) FROM users u LEFT JOIN teams t ON t.id = u.team_id JOIN departments d ON d.id = COALESCE(u.department_id, t.department_id) WHERE d.director_user_id::text = $1 OR d.id::text = $1`
 	case reportTypeTeamWeekly:
 		zeroClaim = reportNoPersonalWeeklyPattern.MatchString(content)
 		table, periodColumn, periodValue = "personal_weekly_reports", "week_start", weekStart
@@ -149,8 +149,8 @@ func reportSourceConsistencyIssues(ctx context.Context, db *sql.DB, reportType, 
 	case reportTypeDepartmentWeekly:
 		zeroClaim = reportNoPersonalWeeklyPattern.MatchString(content)
 		table, periodColumn, periodValue = "personal_weekly_reports", "week_start", weekStart
-		scopeClause, scopeID, sourceLabel = "t.director_user_id::text = $2", target.DepartmentID, "个人周报"
-		rosterQuery = `SELECT COUNT(*) FROM users u JOIN teams t ON t.id = u.team_id WHERE t.director_user_id::text = $1`
+		scopeClause, scopeID, sourceLabel = "(d.director_user_id::text = $2 OR d.id::text = $2)", target.DepartmentID, "个人周报"
+		rosterQuery = `SELECT COUNT(*) FROM users u LEFT JOIN teams t ON t.id = u.team_id JOIN departments d ON d.id = COALESCE(u.department_id, t.department_id) WHERE d.director_user_id::text = $1 OR d.id::text = $1`
 	default:
 		return nil, nil
 	}
@@ -170,6 +170,7 @@ func reportSourceConsistencyIssues(ctx context.Context, db *sql.DB, reportType, 
 		FROM %s r
 		JOIN users u ON u.id = r.user_id
 		LEFT JOIN teams t ON t.id = u.team_id
+		LEFT JOIN departments d ON d.id = COALESCE(u.department_id, t.department_id)
 		WHERE r.%s = $1
 		  AND %s
 		  AND r.status IS NOT NULL

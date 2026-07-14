@@ -7,6 +7,7 @@ import {
   DatePicker,
   Empty,
   Segmented,
+  Select,
   Space,
   Table,
   Tag,
@@ -25,12 +26,16 @@ import { PagePanel } from "@/shared/components/PagePanel/PagePanel";
 import {
   fetchDepartmentReport,
   fetchDepartmentReports,
+  fetchDepartments,
+  fetchMemberDailyReport,
+  fetchMemberDailyReports,
   fetchMyReports,
   fetchReport,
   fetchTeamReport,
   fetchTeamReports
 } from "../../api/client";
 import { DailyReportGenerateModal, type DailyGenerateScope } from "../components/DailyReportGenerateModal";
+import { MemberReportBrowser } from "../MemberReportBrowser";
 import type {
   DailyReportListItem,
   DepartmentReportListItem,
@@ -43,10 +48,10 @@ const { Text } = Typography;
 const { RangePicker } = DatePicker;
 const pageSizeOptions = [10, 20, 50, 100];
 
-type DailyTab = "personal" | "team" | "department";
+type DailyTab = "personal" | "member" | "team" | "department";
 
 function isDailyTab(value: string | null): value is DailyTab {
-  return value === "personal" || value === "team" || value === "department";
+  return value === "personal" || value === "member" || value === "team" || value === "department";
 }
 
 function dailyReportsPath(tab: DailyTab) {
@@ -118,6 +123,8 @@ export function ReportsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const [dateRange, setDateRange] = useState<[Dayjs, Dayjs] | null>(null);
+  const [memberDate, setMemberDate] = useState<Dayjs>(() => dayjs());
+  const [memberDepartmentID, setMemberDepartmentID] = useState<string>();
   const [generateTarget, setGenerateTarget] = useState<{
     scope: DailyGenerateScope;
     reportId?: string;
@@ -126,16 +133,28 @@ export function ReportsPage() {
     allowDateSwitch?: boolean;
   } | null>(null);
 
+  const canSelectMemberDepartment = user?.role === "admin";
+  const departmentsQuery = useQuery({
+    queryKey: ["departments", "member-daily"],
+    queryFn: fetchDepartments,
+    enabled: canSelectMemberDepartment,
+    staleTime: 60_000
+  });
+  const effectiveMemberDepartmentID = canSelectMemberDepartment
+    ? memberDepartmentID ?? departmentsQuery.data?.[0]?.id : undefined;
+
   const options =
     user?.role === "director" || user?.role === "admin"
       ? [
           { label: "我的日报记录", value: "personal" },
-          { label: "部门日报记录", value: "department" }
+          { label: "部门成员日报", value: "member" },
+          { label: "部门汇总日报", value: "department" }
         ]
       : user?.role === "team_leader"
         ? [
             { label: "我的日报记录", value: "personal" },
-            { label: "小组日报记录", value: "team" }
+            { label: "小组成员日报", value: "member" },
+            { label: "小组汇总日报", value: "team" }
           ]
         : [{ label: "我的日报记录", value: "personal" }];
 
@@ -147,7 +166,8 @@ export function ReportsPage() {
   const to = dateRange?.[1].format("YYYY-MM-DD");
   const openLabel =
     activeTab === "team" ? "填写小组日报" : activeTab === "department" ? "填写部门日报" : "填写日报";
-  const canOpenCurrentReport = activeTab !== "team" || user?.role === "team_leader";
+  const canOpenCurrentReport =
+    activeTab !== "member" && (activeTab !== "team" || user?.role === "team_leader");
 
   const handleTabChange = (value: DailyTab) => {
     setSearchParams((current) => {
@@ -173,7 +193,27 @@ export function ReportsPage() {
             {options.length > 1 ? (
               <Segmented value={activeTab} onChange={(value) => handleTabChange(value as DailyTab)} options={options} />
             ) : null}
-            <RangePicker value={dateRange} onChange={(value) => setDateRange(value as [Dayjs, Dayjs] | null)} />
+            {activeTab === "member" ? (
+              <>
+                <DatePicker
+                  value={memberDate}
+                  allowClear={false}
+                  onChange={(value) => value && setMemberDate(value)}
+                />
+                {canSelectMemberDepartment ? (
+                  <Select
+                    className="reports-member-team-select"
+                    value={effectiveMemberDepartmentID}
+                    loading={departmentsQuery.isLoading}
+                    placeholder="选择部门"
+                    options={(departmentsQuery.data ?? []).map((item) => ({ label: item.name, value: item.id }))}
+                    onChange={setMemberDepartmentID}
+                  />
+                ) : null}
+              </>
+            ) : (
+              <RangePicker value={dateRange} onChange={(value) => setDateRange(value as [Dayjs, Dayjs] | null)} />
+            )}
           </Space>
           {canOpenCurrentReport ? (
             <Button
@@ -212,6 +252,9 @@ export function ReportsPage() {
           }
         />
       ) : null}
+      {activeTab === "member" ? (
+        <MemberDailyTable date={memberDate.format("YYYY-MM-DD")} departmentId={effectiveMemberDepartmentID} />
+      ) : null}
       {activeTab === "department" ? (
         <DepartmentDailyTable
           key={`department:${from ?? ""}:${to ?? ""}`}
@@ -241,6 +284,19 @@ export function ReportsPage() {
         />
       ) : null}
     </PagePanel>
+  );
+}
+
+function MemberDailyTable({ date, departmentId }: { date: string; departmentId?: string }) {
+  const reportsQuery = useQuery({
+    queryKey: ["reports", "daily", "member-list", date, departmentId],
+    queryFn: () => fetchMemberDailyReports(date, departmentId),
+    staleTime: 30_000
+  });
+  return (
+    <MemberReportBrowser items={reportsQuery.data ?? []} loading={reportsQuery.isLoading}
+      error={reportsQuery.isError ? errorMessage(reportsQuery.error) : undefined}
+      queryKey={`daily:${date}`} fetchDetail={fetchMemberDailyReport} />
   );
 }
 

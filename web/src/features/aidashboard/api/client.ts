@@ -10,6 +10,7 @@ import type {
   AIRun,
   DailyReport,
   DailyReportAgentIntegration,
+  Department,
   DepartmentReport,
   DepartmentReportSources,
   DepartmentWeeklyReport,
@@ -24,6 +25,7 @@ import type {
   ManagedCredential,
   ManagedMCPEntry,
   ManagedSkill,
+  MemberPersonalReport,
   PaginatedDailyReports,
   PaginatedDepartmentReports,
   PaginatedDashboardFollowItems,
@@ -95,6 +97,7 @@ export const fetchAIHubUsers = async (params?: {
 };
 export const fetchTaskAssignees = () => unwrap(api.get<User[]>("/task-assignees"));
 export const fetchTeams = () => unwrap(api.get<Team[]>("/teams"));
+export const fetchDepartments = () => unwrap(api.get<Department[]>("/departments"));
 export const fetchTeamActivity = (date?: string) =>
   unwrap(api.get<TeamActivity>("/teams/activity", date ? { date } : undefined));
 
@@ -106,6 +109,18 @@ export const adminUpdateTeam = (id: string, data: { name: string; director_user_
   unwrap(api.put<Team>(`/admin/teams/${id}`, data));
 export const adminDeleteTeam = (id: string) =>
   unwrap(api.delete<{ status: string; id: string }>(`/admin/teams/${id}`));
+export const adminCreateDepartment = (data: {
+  name: string;
+  director_user_id?: string;
+  team_ids: string[];
+  pm_user_ids: string[];
+}) => unwrap(api.post<{ id: string }>("/admin/departments", data));
+export const adminUpdateDepartment = (id: string, data: {
+  name: string;
+  director_user_id?: string;
+  team_ids: string[];
+  pm_user_ids: string[];
+}) => unwrap(api.put<{ id: string }>(`/admin/departments/${id}`, data));
 
 export const adminUpdateUser = (
   id: string,
@@ -419,8 +434,27 @@ export const saveReport = updateReport;
 export const submitReport = (id: string, data: { content?: string; session_ids?: string[] }) =>
   unwrap(api.post<DailyReport>(`/reports/${id}/submit`, data));
 
-export const fetchTeamMemberReports = (date: string) =>
-  unwrap(api.get<TeamMemberReport[]>(`/reports/team/members`, { date }));
+export const fetchTeamMemberReports = (date: string, teamId?: string) =>
+  unwrap(
+    api.get<TeamMemberReport[]>(
+      `/reports/team/members`,
+      teamId ? { date, team_id: teamId } : { date }
+    )
+  );
+export const fetchMemberDailyReports = (date: string, departmentId?: string) =>
+  unwrap(api.get<MemberPersonalReport[]>("/reports/members/daily", {
+    date,
+    ...(departmentId ? { department_id: departmentId } : {})
+  }));
+export const fetchMemberDailyReport = (id: string) =>
+  unwrap(api.get<DailyReport>(`/reports/members/daily/${id}`));
+export const fetchMemberWeeklyReports = (weekStart: string, departmentId?: string) =>
+  unwrap(api.get<MemberPersonalReport[]>("/reports/members/weekly", {
+    week_start: weekStart,
+    ...(departmentId ? { department_id: departmentId } : {})
+  }));
+export const fetchMemberWeeklyReport = (id: string) =>
+  unwrap(api.get<PersonalWeeklyReport>(`/reports/members/weekly/${id}`));
 export const fetchTeamReportSources = (date: string, teamId?: string) =>
   unwrap(
     api.get<TeamReportSources>(

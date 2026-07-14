@@ -141,6 +141,93 @@ func TestGetTeamReportSourcesUsesSavedReportsAsSources(t *testing.T) {
 	}
 }
 
+func TestListTeamMemberReportsAllowsManagedDirectorTeam(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	mock.ExpectQuery("SELECT EXISTS").
+		WithArgs("team-1", "director-1").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectQuery("(?s)SELECT u\\.id, COALESCE.*u\\.team_id = \\$2").
+		WithArgs("2026-07-14", "team-1").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "report_id", "content", "submitted_at", "has_report"}).
+			AddRow("emp-1", "成员", "report-1", "日报正文", time.Now(), true))
+
+	h := NewReportHandler(db)
+	req := httptest.NewRequest(http.MethodGet, "/reports/team/members?date=2026-07-14&team_id=team-1", nil)
+	req = requestWithUser(req, &model.User{ID: "director-1", Role: "director"})
+	rec := httptest.NewRecorder()
+
+	h.ListTeamMemberReports(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestListTeamMemberReportsRejectsUnmanagedDirectorTeam(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	mock.ExpectQuery("SELECT EXISTS").
+		WithArgs("team-2", "director-1").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+
+	h := NewReportHandler(db)
+	req := httptest.NewRequest(http.MethodGet, "/reports/team/members?date=2026-07-14&team_id=team-2", nil)
+	req = requestWithUser(req, &model.User{ID: "director-1", Role: "director"})
+	rec := httptest.NewRecorder()
+
+	h.ListTeamMemberReports(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestGetReportRejectsDirectorOutsideManagedTeam(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	now := time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)
+	mock.ExpectQuery("SELECT dr.id").
+		WithArgs("report-1").
+		WillReturnRows(sqlmock.NewRows(dailyReportGetColumns()).
+			AddRow("report-1", "emp-1", "成员", "team-2", "2026-07-14", "日报正文", false, nil, "{}", "saved", nil, now, nil, nil, "default", nil, nil, nil, nil, nil, now, now))
+	mock.ExpectQuery("(?s)SELECT EXISTS.*departments").
+		WithArgs("emp-1", "director-1").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+
+	h := NewReportHandler(db)
+	req := httptest.NewRequest(http.MethodGet, "/reports/report-1", nil)
+	req = requestWithUser(requestWithReportID(req, "report-1"), &model.User{ID: "director-1", Role: "director"})
+	rec := httptest.NewRecorder()
+
+	h.Get(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
 func draftSessionColumns() []string {
 	return []string{
 		"id", "session_ref", "agent_type", "started_at", "ended_at", "duration_secs",

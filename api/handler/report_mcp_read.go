@@ -552,9 +552,10 @@ func (h *ReportMCPHandler) toolGetDailyReports(ctx context.Context, r *http.Requ
 			SELECT dr.id::text, dr.report_date::text, dr.content, COALESCE(dr.generation_mode,'default'), dr.edited, COALESCE(dr.managed_agent_run_id::text,''), dr.updated_at
 			FROM department_reports dr
 			WHERE dr.report_date >= $1 AND dr.report_date <= $2
+			  AND dr.department_id = (SELECT id FROM departments WHERE director_user_id::text = $3)
 			  AND dr.status IS NOT NULL
 			  AND NULLIF(TRIM(COALESCE(dr.content, '')), '') IS NOT NULL
-			ORDER BY dr.report_date DESC`, start, end)
+			ORDER BY dr.report_date DESC`, start, end, rs.DepartmentID)
 		if err != nil {
 			return nil, errMCPInternal
 		}
@@ -735,8 +736,9 @@ func (h *ReportMCPHandler) toolGetWeeklyReports(ctx context.Context, r *http.Req
 			SELECT r.id::text, r.week_start, r.week_end, r.content, COALESCE(r.generation_mode,'default'), r.edited, COALESCE(r.managed_agent_run_id::text,''), r.updated_at
 			FROM department_weekly_reports r
 			WHERE r.week_start >= $1 AND r.week_end <= $2
+			  AND r.department_id = (SELECT id FROM departments WHERE director_user_id::text = $3)
 			  AND NULLIF(TRIM(COALESCE(r.content, '')), '') IS NOT NULL
-			ORDER BY r.week_start DESC`, ws, we)
+			ORDER BY r.week_start DESC`, ws, we, rs.DepartmentID)
 		if err != nil {
 			return nil, errMCPInternal
 		}
@@ -1218,14 +1220,16 @@ func loadReportSnapshot(ctx context.Context, db *sql.DB, reportType, date, ws, w
 	case reportTypeDepartmentDaily:
 		return loadSnapshotRow(ctx, db, `SELECT id::text, content, COALESCE(generation_mode,'default'), edited, COALESCE(managed_agent_run_id::text,''), updated_at
 			FROM department_reports
-			WHERE report_date = $1
+			WHERE department_id = (SELECT id FROM departments WHERE director_user_id::text = $1)
+			  AND report_date = $2
 			  AND status IS NOT NULL
-			  AND NULLIF(TRIM(COALESCE(content, '')), '') IS NOT NULL`, date)
+			  AND NULLIF(TRIM(COALESCE(content, '')), '') IS NOT NULL`, target.DepartmentID, date)
 	case reportTypeDepartmentWeekly:
 		return loadSnapshotRow(ctx, db, `SELECT id::text, content, COALESCE(generation_mode,'default'), edited, COALESCE(managed_agent_run_id::text,''), updated_at
 			FROM department_weekly_reports
-			WHERE week_start = $1 AND week_end = $2
-			  AND NULLIF(TRIM(COALESCE(content, '')), '') IS NOT NULL`, ws, we)
+			WHERE department_id = (SELECT id FROM departments WHERE director_user_id::text = $1)
+			  AND week_start = $2 AND week_end = $3
+			  AND NULLIF(TRIM(COALESCE(content, '')), '') IS NOT NULL`, target.DepartmentID, ws, we)
 	}
 	return nil, nil
 }
@@ -1482,8 +1486,9 @@ func loadDailyInventoryExisting(ctx context.Context, db *sql.DB, reportScope str
 			SELECT id::text, report_date::text, COALESCE(generation_mode,'default'), edited
 			FROM department_reports
 			WHERE report_date >= $1 AND report_date <= $2
+			  AND department_id = (SELECT id FROM departments WHERE director_user_id::text = $3)
 			  AND status IS NOT NULL
-			  AND NULLIF(TRIM(COALESCE(content, '')), '') IS NOT NULL`, start, end)
+			  AND NULLIF(TRIM(COALESCE(content, '')), '') IS NOT NULL`, start, end, rs.DepartmentID)
 		if err != nil {
 			return nil, err
 		}
@@ -1622,7 +1627,8 @@ func loadWeeklyInventoryExisting(ctx context.Context, db *sql.DB, reportScope st
 			SELECT id::text, week_start::text, COALESCE(generation_mode,'default'), edited
 			FROM department_weekly_reports
 			WHERE week_start >= $1 AND week_end <= $2
-			  AND NULLIF(TRIM(COALESCE(content, '')), '') IS NOT NULL`, ws, we)
+			  AND department_id = (SELECT id FROM departments WHERE director_user_id::text = $3)
+			  AND NULLIF(TRIM(COALESCE(content, '')), '') IS NOT NULL`, ws, we, rs.DepartmentID)
 		if err != nil {
 			return nil, err
 		}

@@ -541,6 +541,29 @@ func TestReportMCPScopeForbiddenForPM(t *testing.T) {
 	}
 }
 
+func TestUserIDsForDepartmentUsesDirectorUserIDAsAuthority(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	mock.ExpectQuery(`(?s)JOIN departments d ON d\.id = COALESCE\(u\.department_id, t\.department_id\)\s+WHERE d\.director_user_id::text = \$1\s*$`).
+		WithArgs("304").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("304").AddRow("305"))
+
+	ids, err := userIDsForDepartment(context.Background(), db, &model.User{}, "304")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(ids, ",") != "304,305" {
+		t.Fatalf("ids = %v", ids)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestReportMCPTargetMatrix(t *testing.T) {
 	cases := []struct {
 		name       string

@@ -25,6 +25,8 @@ import dayjs from "dayjs";
 import {
   fetchDepartmentWeeklyReportCurrentOrNull,
   fetchDepartmentWeeklyReports,
+  fetchMemberWeeklyReport,
+  fetchMemberWeeklyReports,
   fetchPersonalWeeklyReportCurrentOrNull,
   fetchPersonalWeeklyReports,
   fetchTeamWeeklyReportCurrentOrNull,
@@ -52,6 +54,7 @@ import {
 import { useAuth } from "@/shared/auth/authContext";
 import { MarkdownViewer } from "@/shared/components/MarkdownViewer/MarkdownViewer";
 import { PagePanel } from "@/shared/components/PagePanel/PagePanel";
+import { MemberReportBrowser } from "../MemberReportBrowser";
 
 import "../components/DailyReportGenerateModal.css";
 import "./ReportsPage.css";
@@ -452,6 +455,8 @@ function WeeklyReportEditorModal({
 
   useEffect(() => {
     if (!open) return;
+    // Modal state intentionally resets when the requested week changes.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSelectedWeekStart(weekStart);
   }, [open, weekStart]);
 
@@ -695,7 +700,8 @@ function PersonalWeeklyHistory({
 export function WeeklyReportsPage() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
-  const [roleTab, setRoleTab] = useState<"mine" | "team" | "department">("mine");
+  const [roleTab, setRoleTab] = useState<"mine" | "member" | "team" | "department">("mine");
+  const [memberWeekStart, setMemberWeekStart] = useState(() => weekStartOf(dayjs()));
   const [modalTarget, setModalTarget] = useState<{
     scope: "mine" | "team" | "department";
     weekStart: string;
@@ -709,12 +715,14 @@ export function WeeklyReportsPage() {
     user.role === "director" || user.role === "admin"
       ? [
           { label: "我的周报记录", value: "mine" },
-          { label: "部门周报记录", value: "department" }
+          { label: "部门成员周报", value: "member" },
+          { label: "部门汇总周报", value: "department" }
         ]
       : user.role === "team_leader"
         ? [
             { label: "我的周报记录", value: "mine" },
-            { label: "小组周报记录", value: "team" }
+            { label: "小组成员周报", value: "member" },
+            { label: "小组汇总周报", value: "team" }
           ]
         : [{ label: "我的周报记录", value: "mine" }];
   const activeTab = tabOptions.some((item) => item.value === roleTab) ? roleTab : "mine";
@@ -743,12 +751,13 @@ export function WeeklyReportsPage() {
             {tabOptions.length > 1 ? (
               <Segmented
                 value={activeTab}
-                onChange={(value) => setRoleTab(value as "mine" | "team" | "department")}
+                onChange={(value) => setRoleTab(value as "mine" | "member" | "team" | "department")}
                 options={tabOptions}
               />
             ) : null}
+            {activeTab === "member" ? <DatePicker picker="week" allowClear={false} value={dayjs(memberWeekStart)} onChange={(value) => value && setMemberWeekStart(weekStartOf(value))} /> : null}
           </Space>
-          <Button
+          {activeTab !== "member" ? <Button
             type="primary"
             icon={<FileTextOutlined />}
             onClick={() => setModalTarget({
@@ -759,7 +768,7 @@ export function WeeklyReportsPage() {
             })}
           >
             {openLabel}
-          </Button>
+          </Button> : null}
         </Space>
       </Card>
 
@@ -775,6 +784,7 @@ export function WeeklyReportsPage() {
           onEdit={(recordWeekStart) => setModalTarget({ scope: "team", weekStart: recordWeekStart, mode: "edit" })}
         />
       ) : null}
+      {activeTab === "member" ? <MemberWeeklyTable weekStart={memberWeekStart} /> : null}
       {activeTab === "department" ? (
         <DepartmentWeeklyRecordsTable
           onOpen={(recordWeekStart) => setModalTarget({ scope: "department", weekStart: recordWeekStart, mode: "view" })}
@@ -888,6 +898,21 @@ function PersonalWeeklyRecordsTable({
       )}
     </Card>
   );
+}
+
+function MemberWeeklyTable({ weekStart }: { weekStart: string }) {
+  const reportsQuery = useQuery({
+    queryKey: ["reports", "weekly", "member-list", weekStart],
+    queryFn: () => fetchMemberWeeklyReports(weekStart),
+    staleTime: 30_000
+  });
+  return <MemberReportBrowser
+    items={reportsQuery.data ?? []}
+    loading={reportsQuery.isLoading}
+    error={reportsQuery.isError ? errorMessage(reportsQuery.error) : undefined}
+    queryKey={`weekly:${weekStart}`}
+    fetchDetail={fetchMemberWeeklyReport}
+  />;
 }
 
 function TeamWeeklyRecordsTable({

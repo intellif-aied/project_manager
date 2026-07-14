@@ -225,6 +225,16 @@
   padding: 0;
 }
 
+.org-form-modal .ant-modal-header { margin: 0; padding: 20px 24px 16px; border-bottom: 1px solid #e5eaf0; }
+.org-form-modal .ant-modal-body { padding: 20px 24px; }
+.org-form-modal .ant-modal-footer { margin: 0; padding: 12px 24px 16px; border-top: 1px solid #e5eaf0; }
+.org-form-modal .ant-modal-container { overflow: hidden; }
+.org-user-search { width: min(420px, 100%); padding: 0 0 16px; }
+@media (max-width: 640px) {
+  .org-form-modal .ant-modal-header, .org-form-modal .ant-modal-body { padding: 16px; }
+  .org-form-modal .ant-modal-footer { padding: 12px 16px 16px; }
+}
+
 .org-name-cell {
   display: inline-flex;
   align-items: center;
