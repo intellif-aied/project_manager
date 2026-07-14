@@ -8,14 +8,21 @@ import {
   Empty,
   Input,
   Modal,
+  Pagination,
   Segmented,
   Skeleton,
   Space,
-  Table,
-  Tag
+  Tag,
+  Tooltip
 } from "antd";
-import type { ColumnsType } from "antd/es/table";
-import { CalendarOutlined, FileTextOutlined } from "@ant-design/icons";
+import {
+  CalendarOutlined,
+  CopyOutlined,
+  DownOutlined,
+  EditOutlined,
+  UpOutlined,
+  FileTextOutlined
+} from "@ant-design/icons";
 import { useEffect, useState, type ReactNode } from "react";
 import dayjs from "dayjs";
 
@@ -36,7 +43,6 @@ import type {
   DepartmentWeeklyReport,
   PaginatedPersonalWeeklyReports,
   PersonalWeeklyReport,
-  PersonalWeeklyReportListItem,
   ReportSourceInput,
   ReportType,
   TeamWeeklyReport
@@ -100,18 +106,6 @@ function formatWeekDate(value: string) {
 function weeklyRange(weekStart: string, weekEnd?: string) {
   const start = formatWeekDate(weekStart);
   return `${start} 至 ${weekEnd ? formatWeekDate(weekEnd) : weekEndOf(start)}`;
-}
-
-function personalWeeklyStatus(status: PersonalWeeklyReport["status"]) {
-  return status === "submitted" ? <Tag color="green">已发送</Tag> : <Tag color="blue">已保存</Tag>;
-}
-
-function teamWeeklyStatus(report: TeamWeeklyReport) {
-  return report.submitted_at ? <Tag color="green">已提交</Tag> : <Tag color="blue">已保存</Tag>;
-}
-
-function departmentWeeklyStatus(report: DepartmentWeeklyReport) {
-  return report.content?.trim() ? <Tag color="green">已保存</Tag> : <Tag>暂无报告</Tag>;
 }
 
 type WeeklyReportScope = "personal" | "team" | "department";
@@ -565,7 +559,7 @@ function WeeklyReportEditorModal({
       className="console-report-workflow-modal"
       title={`${title}内容管理`}
       open={open}
-      width={showSessionSettings ? 1180 : 980}
+      width={860}
       onCancel={handleClose}
       destroyOnHidden
       footer={
@@ -627,9 +621,7 @@ function WeeklyReportEditorModal({
           </span>
           {weeklyReportStatusTag(scope, report)}
         </div>
-        <div
-          className={`console-report-management__content${showSessionSettings ? " has-settings" : ""}`}
-        >
+        <div className="console-report-management__content">
           <div className="console-report-management__main">
             {reportQuery.isLoading ? (
               <div className="console-session-empty">正在加载报告内容...</div>
@@ -672,6 +664,7 @@ function WeeklyReportEditorModal({
               selectedSources={selectedSessionSources}
               onSelectedSourcesChange={setSelectedSessionSources}
               onClose={() => setSettingsOpen(false)}
+              variant="drawer"
             />
           ) : null}
         </div>
@@ -798,9 +791,6 @@ export function WeeklyReportsPage() {
 
       {activeTab === "mine" ? (
         <PersonalWeeklyRecordsTable
-          onOpen={(recordWeekStart) =>
-            setModalTarget({ scope: "mine", weekStart: recordWeekStart, mode: "view" })
-          }
           onEdit={(recordWeekStart) =>
             setModalTarget({ scope: "mine", weekStart: recordWeekStart, mode: "edit" })
           }
@@ -808,9 +798,6 @@ export function WeeklyReportsPage() {
       ) : null}
       {activeTab === "team" ? (
         <TeamWeeklyRecordsTable
-          onOpen={(recordWeekStart) =>
-            setModalTarget({ scope: "team", weekStart: recordWeekStart, mode: "view" })
-          }
           onEdit={(recordWeekStart) =>
             setModalTarget({ scope: "team", weekStart: recordWeekStart, mode: "edit" })
           }
@@ -819,9 +806,6 @@ export function WeeklyReportsPage() {
       {activeTab === "member" ? <MemberWeeklyTable weekStart={memberWeekStart} /> : null}
       {activeTab === "department" ? (
         <DepartmentWeeklyRecordsTable
-          onOpen={(recordWeekStart) =>
-            setModalTarget({ scope: "department", weekStart: recordWeekStart, mode: "view" })
-          }
           onEdit={(recordWeekStart) =>
             setModalTarget({ scope: "department", weekStart: recordWeekStart, mode: "edit" })
           }
@@ -865,13 +849,195 @@ export function WeeklyReportsPage() {
   );
 }
 
-function PersonalWeeklyRecordsTable({
-  onOpen,
+type InlineWeeklyRecord = {
+  id: string;
+  week_start: string;
+  updated_at: string;
+};
+
+async function copyWeeklyReportText(value: string) {
+  if (navigator.clipboard && window.isSecureContext) {
+    const copied = await navigator.clipboard.writeText(value).then(
+      () => true,
+      () => false
+    );
+    if (copied) return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  const copied = document.execCommand("copy");
+  document.body.removeChild(textarea);
+  if (!copied) throw new Error("copy failed");
+}
+
+function InlineWeeklyContentList<TRecord extends InlineWeeklyRecord>({
+  title,
+  items,
+  total,
+  loading,
+  error,
+  pagination,
+  getRange,
+  getMeta,
+  getPreview,
+  fetchDetail,
   onEdit
 }: {
-  onOpen: (weekStart: string) => void;
-  onEdit: (weekStart: string) => void;
+  title: string;
+  items: TRecord[];
+  total: number;
+  loading: boolean;
+  error?: string;
+  pagination: Parameters<typeof Pagination>[0];
+  getRange: (record: TRecord) => string;
+  getMeta: (record: TRecord) => string;
+  getPreview: (record: TRecord) => string;
+  fetchDetail: (record: TRecord) => Promise<{ content: string } | null>;
+  onEdit: (record: TRecord) => void;
 }) {
+  return (
+    <Card
+      className="reports-list-card reports-inline-content-list reports-weekly-inline-content-list"
+      title={title}
+    >
+      {error ? <Alert type="error" showIcon message={error} /> : null}
+      {!error && loading ? <ReportsSkeleton rows={4} /> : null}
+      {!error && !loading && items.length === 0 ? (
+        <ReportsEmpty description={`暂无${title}`} />
+      ) : null}
+      {!error && !loading && items.length > 0 ? (
+        <div className="member-report-content-list">
+          {items.map((record) => (
+            <InlineWeeklyContentItem
+              key={record.id}
+              record={record}
+              getRange={getRange}
+              meta={getMeta(record)}
+              preview={getPreview(record)}
+              fetchDetail={fetchDetail}
+              onEdit={() => onEdit(record)}
+            />
+          ))}
+        </div>
+      ) : null}
+      {!error && !loading && total > 0 ? (
+        <Pagination
+          className="reports-inline-content-list__pagination"
+          total={total}
+          {...pagination}
+        />
+      ) : null}
+    </Card>
+  );
+}
+
+function InlineWeeklyContentItem<TRecord extends InlineWeeklyRecord>({
+  record,
+  getRange,
+  meta,
+  preview,
+  fetchDetail,
+  onEdit
+}: {
+  record: TRecord;
+  getRange: (record: TRecord) => string;
+  meta: string;
+  preview: string;
+  fetchDetail: (record: TRecord) => Promise<{ content: string } | null>;
+  onEdit: () => void;
+}) {
+  const { message } = App.useApp();
+  const [expanded, setExpanded] = useState(false);
+  const detailQuery = useQuery({
+    queryKey: ["reports", "weekly-inline-detail", record.id],
+    queryFn: () => fetchDetail(record),
+    enabled: expanded,
+    staleTime: 30_000
+  });
+  const copyCurrentReport = async () => {
+    const content = detailQuery.data?.content?.trim();
+    if (!content) return;
+    try {
+      await copyWeeklyReportText(content);
+      void message.success("周报全文已复制");
+    } catch {
+      void message.error("复制失败，请稍后重试");
+    }
+  };
+
+  return (
+    <article className={`member-report-content-item${expanded ? " is-expanded" : ""}`}>
+      <header className="member-report-content-item__head">
+        <div>
+          <div className="member-report-content-item__identity">
+            <strong>{getRange(record)}</strong>
+            <span>{meta}</span>
+          </div>
+          <small>{formatDateTime(record.updated_at)}</small>
+        </div>
+        <div className="member-report-content-item__actions">
+          <Button
+            className="member-report-content-item__edit"
+            type="text"
+            size="small"
+            icon={<EditOutlined />}
+            onClick={onEdit}
+          >
+            编辑
+          </Button>
+          <Button
+            className="member-report-content-item__toggle"
+            type="text"
+            size="small"
+            aria-expanded={expanded}
+            onClick={() => setExpanded((value) => !value)}
+          >
+            {expanded ? <UpOutlined /> : <DownOutlined />}
+            {expanded ? "收起" : "展开"}
+          </Button>
+        </div>
+      </header>
+      <p className="member-report-content-item__preview">{preview}</p>
+      {expanded ? (
+        <div className="member-report-content-item__detail">
+          <div className="member-report-content-item__detail-bar">
+            <span>周报全文</span>
+            <Tooltip title="复制全文（保留 Markdown 格式）">
+              <Button
+                className="member-report-content-item__copy"
+                type="text"
+                size="small"
+                icon={<CopyOutlined />}
+                aria-label="复制周报全文"
+                disabled={!detailQuery.data?.content?.trim()}
+                onClick={() => void copyCurrentReport()}
+              />
+            </Tooltip>
+          </div>
+          {detailQuery.isLoading ? (
+            <div className="member-report-content-item__loading">正在加载周报全文…</div>
+          ) : null}
+          {detailQuery.isError ? <Alert type="error" showIcon message="周报加载失败" /> : null}
+          {!detailQuery.isLoading && !detailQuery.isError && detailQuery.data?.content?.trim() ? (
+            <MarkdownViewer value={detailQuery.data.content} />
+          ) : null}
+          {!detailQuery.isLoading && !detailQuery.isError && !detailQuery.data?.content?.trim() ? (
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无周报内容" />
+          ) : null}
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
+function PersonalWeeklyRecordsTable({ onEdit }: { onEdit: (weekStart: string) => void }) {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const reportsQuery = useQuery<PaginatedPersonalWeeklyReports>({
@@ -880,70 +1046,37 @@ function PersonalWeeklyRecordsTable({
     staleTime: 30_000
   });
 
-  const columns: ColumnsType<PersonalWeeklyReportListItem> = [
-    {
-      title: "周期",
-      dataIndex: "week_start",
-      width: 220,
-      render: (_, record) => weeklyRange(record.week_start, record.week_end)
-    },
-    { title: "状态", dataIndex: "status", width: 120, render: personalWeeklyStatus },
-    { title: "发送时间", dataIndex: "submitted_at", render: formatDateTime },
-    { title: "更新时间", dataIndex: "updated_at", render: formatDateTime },
-    {
-      title: "操作",
-      key: "actions",
-      width: 140,
-      render: (_, record) => (
-        <Space size={4}>
-          <Button
-            size="small"
-            type="link"
-            onClick={() => onOpen(formatWeekDate(record.week_start))}
-          >
-            打开
-          </Button>
-          <Button
-            size="small"
-            type="link"
-            onClick={() => onEdit(formatWeekDate(record.week_start))}
-          >
-            编辑
-          </Button>
-        </Space>
-      )
-    }
-  ];
-
   return (
-    <Card className="reports-list-card" title="我的周报记录">
-      {reportsQuery.isError ? (
-        <Alert
-          type="error"
-          showIcon
-          message="我的周报记录加载失败"
-          description={errorMessage(reportsQuery.error)}
-        />
-      ) : (
-        <Table<PersonalWeeklyReportListItem>
-          rowKey="id"
-          columns={columns}
-          dataSource={reportsQuery.data?.items ?? []}
-          loading={reportsQuery.isLoading}
-          pagination={{
-            current: page,
-            pageSize,
-            total: reportsQuery.data?.total ?? 0,
-            showSizeChanger: true,
-            showTotal: (total) => `共 ${total} 条记录`,
-            onChange: (next, size) => {
-              setPage(size !== pageSize ? 1 : next);
-              setPageSize(size);
-            }
-          }}
-        />
-      )}
-    </Card>
+    <InlineWeeklyContentList
+      title="我的周报记录"
+      items={reportsQuery.data?.items ?? []}
+      total={reportsQuery.data?.total ?? 0}
+      loading={reportsQuery.isLoading}
+      error={
+        reportsQuery.isError
+          ? `我的周报记录加载失败：${errorMessage(reportsQuery.error)}`
+          : undefined
+      }
+      pagination={{
+        current: page,
+        pageSize,
+        showSizeChanger: true,
+        showTotal: (total) => `共 ${total} 条记录`,
+        onChange: (next, size) => {
+          setPage(size !== pageSize ? 1 : next);
+          setPageSize(size);
+        }
+      }}
+      getRange={(record) => weeklyRange(record.week_start, record.week_end)}
+      getMeta={() => "我的周报"}
+      getPreview={(record) =>
+        `已关联 ${record.source_daily_count} 份日报 · ${record.source_session_count} 个 session`
+      }
+      fetchDetail={async (record) =>
+        fetchPersonalWeeklyReportCurrentOrNull(formatWeekDate(record.week_start))
+      }
+      onEdit={(record) => onEdit(formatWeekDate(record.week_start))}
+    />
   );
 }
 
@@ -960,158 +1093,95 @@ function MemberWeeklyTable({ weekStart }: { weekStart: string }) {
       error={reportsQuery.isError ? errorMessage(reportsQuery.error) : undefined}
       queryKey={`weekly:${weekStart}`}
       fetchDetail={fetchMemberWeeklyReport}
+      displayMode="content-list"
     />
   );
 }
 
-function TeamWeeklyRecordsTable({
-  onOpen,
-  onEdit
-}: {
-  onOpen: (weekStart: string) => void;
-  onEdit: (weekStart: string) => void;
-}) {
+function TeamWeeklyRecordsTable({ onEdit }: { onEdit: (weekStart: string) => void }) {
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const reportsQuery = useQuery<TeamWeeklyReport[]>({
     queryKey: ["reports", "weekly", "team", "history"],
     queryFn: () => fetchTeamWeeklyReports(),
     staleTime: 30_000
   });
-  const columns: ColumnsType<TeamWeeklyReport> = [
-    { title: "小组", dataIndex: "team_name", width: 160 },
-    {
-      title: "周期",
-      dataIndex: "week_start",
-      width: 220,
-      render: (_, record) => weeklyRange(record.week_start)
-    },
-    { title: "状态", key: "status", width: 120, render: (_, record) => teamWeeklyStatus(record) },
-    { title: "提交时间", dataIndex: "submitted_at", render: formatDateTime },
-    { title: "更新时间", dataIndex: "updated_at", render: formatDateTime },
-    {
-      title: "操作",
-      key: "actions",
-      width: 140,
-      render: (_, record) => (
-        <Space size={4}>
-          <Button
-            size="small"
-            type="link"
-            onClick={() => onOpen(formatWeekDate(record.week_start))}
-          >
-            打开
-          </Button>
-          <Button
-            size="small"
-            type="link"
-            onClick={() => onEdit(formatWeekDate(record.week_start))}
-          >
-            编辑
-          </Button>
-        </Space>
-      )
-    }
-  ];
-
+  const reports = reportsQuery.data ?? [];
   return (
-    <Card className="reports-list-card" title="小组周报记录">
-      {reportsQuery.isError ? (
-        <Alert
-          type="error"
-          showIcon
-          message="小组周报记录加载失败"
-          description={errorMessage(reportsQuery.error)}
-        />
-      ) : (
-        <Table<TeamWeeklyReport>
-          rowKey="id"
-          columns={columns}
-          dataSource={reportsQuery.data ?? []}
-          loading={reportsQuery.isLoading}
-          pagination={{
-            pageSize: 10,
-            showSizeChanger: true,
-            showTotal: (total) => `共 ${total} 条记录`
-          }}
-        />
-      )}
-    </Card>
+    <InlineWeeklyContentList
+      title="小组周报记录"
+      items={reports.slice((page - 1) * pageSize, page * pageSize)}
+      total={reports.length}
+      loading={reportsQuery.isLoading}
+      error={
+        reportsQuery.isError
+          ? `小组周报记录加载失败：${errorMessage(reportsQuery.error)}`
+          : undefined
+      }
+      pagination={{
+        current: page,
+        pageSize,
+        showSizeChanger: true,
+        showTotal: (total) => `共 ${total} 条记录`,
+        onChange: (next, size) => {
+          setPage(size !== pageSize ? 1 : next);
+          setPageSize(size);
+        }
+      }}
+      getRange={(record) => weeklyRange(record.week_start)}
+      getMeta={(record) => record.team_name}
+      getPreview={(record) =>
+        record.content?.trim() ||
+        `已关联 ${record.source_personal_weekly_report_ids.length} 份成员周报`
+      }
+      fetchDetail={async (record) =>
+        fetchTeamWeeklyReportCurrentOrNull(formatWeekDate(record.week_start))
+      }
+      onEdit={(record) => onEdit(formatWeekDate(record.week_start))}
+    />
   );
 }
 
-function DepartmentWeeklyRecordsTable({
-  onOpen,
-  onEdit
-}: {
-  onOpen: (weekStart: string) => void;
-  onEdit: (weekStart: string) => void;
-}) {
+function DepartmentWeeklyRecordsTable({ onEdit }: { onEdit: (weekStart: string) => void }) {
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const reportsQuery = useQuery<DepartmentWeeklyReport[]>({
     queryKey: ["reports", "weekly", "department", "history"],
     queryFn: () => fetchDepartmentWeeklyReports(),
     staleTime: 30_000
   });
-  const columns: ColumnsType<DepartmentWeeklyReport> = [
-    {
-      title: "周期",
-      dataIndex: "week_start",
-      width: 220,
-      render: (_, record) => weeklyRange(record.week_start)
-    },
-    {
-      title: "状态",
-      key: "status",
-      width: 120,
-      render: (_, record) => departmentWeeklyStatus(record)
-    },
-    { title: "更新时间", dataIndex: "updated_at", render: formatDateTime },
-    {
-      title: "操作",
-      key: "actions",
-      width: 140,
-      render: (_, record) => (
-        <Space size={4}>
-          <Button
-            size="small"
-            type="link"
-            onClick={() => onOpen(formatWeekDate(record.week_start))}
-          >
-            打开
-          </Button>
-          <Button
-            size="small"
-            type="link"
-            onClick={() => onEdit(formatWeekDate(record.week_start))}
-          >
-            编辑
-          </Button>
-        </Space>
-      )
-    }
-  ];
-
+  const reports = reportsQuery.data ?? [];
   return (
-    <Card className="reports-list-card" title="部门周报记录">
-      {reportsQuery.isError ? (
-        <Alert
-          type="error"
-          showIcon
-          message="部门周报记录加载失败"
-          description={errorMessage(reportsQuery.error)}
-        />
-      ) : (
-        <Table<DepartmentWeeklyReport>
-          rowKey="id"
-          columns={columns}
-          dataSource={reportsQuery.data ?? []}
-          loading={reportsQuery.isLoading}
-          pagination={{
-            pageSize: 10,
-            showSizeChanger: true,
-            showTotal: (total) => `共 ${total} 条记录`
-          }}
-        />
-      )}
-    </Card>
+    <InlineWeeklyContentList
+      title="部门周报记录"
+      items={reports.slice((page - 1) * pageSize, page * pageSize)}
+      total={reports.length}
+      loading={reportsQuery.isLoading}
+      error={
+        reportsQuery.isError
+          ? `部门周报记录加载失败：${errorMessage(reportsQuery.error)}`
+          : undefined
+      }
+      pagination={{
+        current: page,
+        pageSize,
+        showSizeChanger: true,
+        showTotal: (total) => `共 ${total} 条记录`,
+        onChange: (next, size) => {
+          setPage(size !== pageSize ? 1 : next);
+          setPageSize(size);
+        }
+      }}
+      getRange={(record) => weeklyRange(record.week_start)}
+      getMeta={() => "部门周报"}
+      getPreview={(record) =>
+        record.content?.trim() || `已汇总 ${record.source_team_weekly_report_ids.length} 个小组周报`
+      }
+      fetchDetail={async (record) =>
+        fetchDepartmentWeeklyReportCurrentOrNull(formatWeekDate(record.week_start))
+      }
+      onEdit={(record) => onEdit(formatWeekDate(record.week_start))}
+    />
   );
 }
 

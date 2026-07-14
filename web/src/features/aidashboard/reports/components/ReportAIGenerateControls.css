@@ -147,6 +147,56 @@
   font-weight: 650;
 }
 
+.report-ai-settings-drawer .ant-drawer-content {
+  background: #fbfcfe;
+}
+
+.report-ai-settings-drawer .ant-drawer-header {
+  padding: 18px 20px 14px;
+  border-bottom-color: #e8eef5;
+  background: #ffffff;
+}
+
+.report-ai-settings-drawer .ant-drawer-body {
+  overflow: hidden;
+  padding: 16px 20px 20px;
+}
+
+.report-ai-settings-drawer__title {
+  display: grid;
+  gap: 3px;
+}
+
+.report-ai-settings-drawer__title strong {
+  color: #172033;
+  font-size: 15px;
+  font-weight: 720;
+}
+
+.report-ai-settings-drawer__title em {
+  color: #64748b;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 400;
+}
+
+.report-ai-settings-drawer__body {
+  display: grid;
+  height: 100%;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 14px;
+}
+
+.report-ai-settings-drawer .report-ai-settings-panel__toolbar {
+  justify-content: stretch;
+}
+
+.report-ai-settings-drawer .report-ai-settings-panel__toolbar .ant-picker {
+  flex: 1 1 auto;
+  width: auto;
+}
+
 .report-ai-settings-panel__toolbar {
   display: flex;
   align-items: center;
@@ -195,11 +245,12 @@
 .report-ai-session-id {
   display: inline-block;
   max-width: 100%;
+  overflow: hidden;
   color: #172033;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   font-size: 12px;
-  overflow-wrap: anywhere;
-  word-break: break-all;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .report-ai-session-cell {
@@ -261,32 +312,78 @@
 .report-ai-settings-panel .ant-spin-container,
 .report-ai-settings-panel .ant-table,
 .report-ai-settings-panel .ant-table-container,
-.report-ai-settings-panel .ant-table-content {
+.report-ai-settings-panel .ant-table-content,
+.report-ai-settings-drawer .ant-table-wrapper,
+.report-ai-settings-drawer .ant-spin,
+.report-ai-settings-drawer .ant-spin-nested-loading,
+.report-ai-settings-drawer .ant-spin-container,
+.report-ai-settings-drawer .ant-table,
+.report-ai-settings-drawer .ant-table-container,
+.report-ai-settings-drawer .ant-table-content {
   max-width: 100%;
   overflow: hidden !important;
 }
 
 .report-ai-settings-panel .ant-table-wrapper,
 .report-ai-settings-panel .ant-spin-nested-loading,
-.report-ai-settings-panel .ant-spin-container {
+.report-ai-settings-panel .ant-spin-container,
+.report-ai-settings-drawer .ant-table-wrapper,
+.report-ai-settings-drawer .ant-spin-nested-loading,
+.report-ai-settings-drawer .ant-spin-container {
   min-height: 0;
 }
 
-.report-ai-settings-panel .ant-table {
+.report-ai-settings-panel .ant-table,
+.report-ai-settings-drawer .ant-table {
   table-layout: fixed;
   border: 1px solid #e6edf5;
   border-radius: 8px;
   overflow: hidden;
 }
 
-.report-ai-settings-panel .ant-table-body {
+.report-ai-settings-panel .ant-table-body,
+.report-ai-settings-drawer .ant-table-body {
   overflow-x: hidden !important;
   overflow-y: auto !important;
   scrollbar-color: #cbd5e1 transparent;
   scrollbar-width: thin;
 }
 
-.report-ai-settings-panel .ant-table-thead > tr > th {
+.report-ai-settings-drawer .ant-table-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto !important;
+  max-height: none !important;
+}
+
+.report-ai-settings-drawer .ant-table-wrapper,
+.report-ai-settings-drawer .ant-spin,
+.report-ai-settings-drawer .ant-spin-nested-loading,
+.report-ai-settings-drawer .ant-spin-container,
+.report-ai-settings-drawer .ant-table,
+.report-ai-settings-drawer .ant-table-container {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.report-ai-settings-drawer .ant-table-wrapper,
+.report-ai-settings-drawer .ant-spin-nested-loading,
+.report-ai-settings-drawer .ant-spin,
+.report-ai-settings-drawer .ant-spin-container,
+.report-ai-settings-drawer .ant-table {
+  height: 100%;
+}
+
+.report-ai-settings-drawer .ant-spin-nested-loading,
+.report-ai-settings-drawer .ant-spin-container,
+.report-ai-settings-drawer .ant-table,
+.report-ai-settings-drawer .ant-table-container {
+  flex: 1 1 auto;
+}
+
+.report-ai-settings-panel .ant-table-thead > tr > th,
+.report-ai-settings-drawer .ant-table-thead > tr > th {
   padding: 8px;
   background: #f8fafc !important;
   color: #526173;
@@ -294,7 +391,8 @@
   font-weight: 700;
 }
 
-.report-ai-settings-panel .ant-table-tbody > tr > td {
+.report-ai-settings-panel .ant-table-tbody > tr > td,
+.report-ai-settings-drawer .ant-table-tbody > tr > td {
   padding: 8px;
   color: #172033;
   font-size: 12px;
@@ -303,23 +401,27 @@
   word-break: break-word;
 }
 
-.report-ai-settings-panel .ant-table-selection-column {
+.report-ai-settings-panel .ant-table-selection-column,
+.report-ai-settings-drawer .ant-table-selection-column {
   width: 34px;
   min-width: 34px;
   padding-inline: 8px !important;
 }
 
-.report-ai-settings-panel .ant-table-placeholder .ant-table-cell {
+.report-ai-settings-panel .ant-table-placeholder .ant-table-cell,
+.report-ai-settings-drawer .ant-table-placeholder .ant-table-cell {
   border-bottom: 0;
 }
 
-.report-ai-settings-panel .ant-table-pagination {
+.report-ai-settings-panel .ant-table-pagination,
+.report-ai-settings-drawer .ant-table-pagination {
   flex-wrap: wrap;
   row-gap: 6px;
   margin: 10px 0 0 !important;
 }
 
-.report-ai-settings-panel .ant-pagination-options {
+.report-ai-settings-panel .ant-pagination-options,
+.report-ai-settings-drawer .ant-pagination-options {
   margin-inline-start: 4px;
 }
 

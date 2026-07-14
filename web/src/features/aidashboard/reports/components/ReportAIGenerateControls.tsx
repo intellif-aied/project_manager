@@ -2,12 +2,12 @@ import {
   CheckCircleOutlined,
   ClearOutlined,
   CloseCircleOutlined,
-  DatabaseOutlined,
-  DeploymentUnitOutlined,
-  LoadingOutlined
+  FileSearchOutlined,
+  LoadingOutlined,
+  RobotOutlined
 } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { App, Button, DatePicker, Input, Modal, Space, Table, Tooltip } from "antd";
+import { App, Button, DatePicker, Drawer, Input, Modal, Space, Table, Tooltip } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import type { Dayjs } from "dayjs";
 import dayjs from "dayjs";
@@ -62,6 +62,7 @@ interface ReportAISettingsPanelProps {
   selectedSources: ReportSourceInput[];
   onSelectedSourcesChange: (sources: ReportSourceInput[]) => void;
   onClose: () => void;
+  variant?: "panel" | "drawer";
 }
 
 const MAX_SELECTED_SESSION_RANGES = 200;
@@ -340,7 +341,7 @@ function ReportAIGenerateControlsState({
       ) : null}
       <Space.Compact className="report-ai-generate-controls">
         <Button
-          icon={<DeploymentUnitOutlined />}
+          icon={<RobotOutlined />}
           loading={generating}
           disabled={disabled || generating}
           onClick={() => runMutation.mutate()}
@@ -349,7 +350,7 @@ function ReportAIGenerateControlsState({
         </Button>
         {allowSessionSelection ? (
           <Button
-            icon={<DatabaseOutlined />}
+            icon={<FileSearchOutlined />}
             className={settingsOpen ? "is-active" : undefined}
             disabled={disabled || generating}
             title="选择参与生成的 session"
@@ -375,13 +376,14 @@ function SnapshotReportAISettingsPanel({
   period,
   selectedSources,
   onSelectedSourcesChange,
-  onClose
+  onClose,
+  variant = "panel"
 }: ReportAISettingsPanelProps) {
   const { message } = App.useApp();
   const periodStart = period.date ?? period.week_start ?? "";
   const periodEnd = period.date ?? period.week_end ?? periodStart;
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(5);
+  const [pageSize, setPageSize] = useState(10);
   const [queryRange, setQueryRange] = useState<[Dayjs, Dayjs] | null>(() =>
     periodStart && periodEnd ? [dayjs(periodStart), dayjs(periodEnd)] : null
   );
@@ -444,23 +446,12 @@ function SnapshotReportAISettingsPanel({
     []
   );
 
-  if (!open) return null;
-
-  return (
-    <aside className="report-ai-settings-panel">
-      <div className="report-ai-settings-panel__head">
-        <span>
-          <strong>选择参与生成的 session</strong>
-          <em>
-            {selectedSources.length > 0
-              ? `已选 ${selectedSources.length} 个活动范围`
-              : "未选择时按报告周期自动取数"}
-          </em>
-        </span>
-        <Button size="small" type="text" onClick={onClose}>
-          收起
-        </Button>
-      </div>
+  const selectionSummary =
+    selectedSources.length > 0
+      ? `已选 ${selectedSources.length} 个活动范围`
+      : "未选择时按报告周期自动取数";
+  const settingsBody = (
+    <>
       <div className="report-ai-settings-panel__toolbar">
         <Input.Search
           size="small"
@@ -607,8 +598,53 @@ function SnapshotReportAISettingsPanel({
             setPageSize(nextPageSize);
           }
         }}
-        scroll={{ y: "clamp(150px, calc(100dvh - 560px), 230px)" }}
+        scroll={{
+          y:
+            variant === "drawer"
+              ? "calc(100dvh - 230px)"
+              : "clamp(150px, calc(100dvh - 560px), 230px)"
+        }}
       />
+    </>
+  );
+
+  if (!open) return null;
+
+  if (variant === "drawer") {
+    return (
+      <Drawer
+        className="report-ai-settings-drawer"
+        title={
+          <span className="report-ai-settings-drawer__title">
+            <strong>选择 session</strong>
+            <em>{selectionSummary}</em>
+          </span>
+        }
+        open={open}
+        placement="right"
+        width={520}
+        mask
+        maskClosable
+        zIndex={1100}
+        onClose={onClose}
+      >
+        <div className="report-ai-settings-drawer__body">{settingsBody}</div>
+      </Drawer>
+    );
+  }
+
+  return (
+    <aside className="report-ai-settings-panel">
+      <div className="report-ai-settings-panel__head">
+        <span>
+          <strong>选择参与生成的 session</strong>
+          <em>{selectionSummary}</em>
+        </span>
+        <Button size="small" type="text" onClick={onClose}>
+          收起
+        </Button>
+      </div>
+      {settingsBody}
     </aside>
   );
 }

@@ -182,6 +182,13 @@ export function DailyReportGenerateModal({
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
+      if (open) setSelectedDate(normalizedDate(reportDate));
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [open, reportDate]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
       if (!open) {
         return;
       }
@@ -311,11 +318,8 @@ export function DailyReportGenerateModal({
       className="console-report-workflow-modal"
       title={title ?? `${scopeName(scope)}内容管理`}
       open={open}
-      width={showSessionSettings ? 1180 : 860}
+      width={860}
       onCancel={handleClose}
-      afterOpenChange={(opened) => {
-        if (opened) setSelectedDate(normalizedDate(reportDate));
-      }}
       footer={
         <Space>
           {canEditContent ? (
@@ -383,9 +387,7 @@ export function DailyReportGenerateModal({
           </span>
           {reportStatus(currentReport)}
         </div>
-        <div
-          className={`console-report-management__content${showSessionSettings ? " has-settings" : ""}`}
-        >
+        <div className="console-report-management__content">
           <div className="console-report-management__main">
             {loading ? (
               <div className="console-session-empty">正在加载报告内容...</div>
@@ -394,9 +396,9 @@ export function DailyReportGenerateModal({
                 <div className="console-report-editor-layout__main">
                   <div className="console-session-modal__section">
                     <strong>报告正文</strong>
-                    <span>{readOnly ? "查看当前报告内容。" : "可编辑保存当前报告内容。"}</span>
                   </div>
                   <TextArea
+                    className="console-report-editor-layout__content-input"
                     rows={18}
                     readOnly={readOnly}
                     value={editorContent}
@@ -407,19 +409,18 @@ export function DailyReportGenerateModal({
                     }}
                     placeholder="请输入报告内容"
                   />
-                  <div className="console-session-modal__section">
+                  <div className="console-session-modal__section console-report-editor-layout__next-day-heading">
                     <strong>明日计划（可选）</strong>
-                    <span>
-                      {readOnly ? "查看填写的明日计划。" : "可手写或直接粘贴，最多两行。"}
-                    </span>
                   </div>
                   <TextArea
+                    className="console-report-editor-layout__next-day-input"
                     rows={2}
+                    autoSize={{ minRows: 2, maxRows: 2 }}
                     readOnly={readOnly}
                     value={editorNextDayPlan}
                     onChange={(event) => {
                       if (readOnly) return;
-                      setNextDayPlan(event.target.value);
+                      setNextDayPlan(event.target.value.split(/\r?\n/).slice(0, 2).join("\n"));
                       setNextDayPlanTouched(true);
                     }}
                     placeholder="请输入明日计划"
@@ -439,6 +440,7 @@ export function DailyReportGenerateModal({
               selectedSources={selectedSessionSources}
               onSelectedSourcesChange={setSelectedSessionSources}
               onClose={() => setSettingsOpen(false)}
+              variant="drawer"
             />
           ) : null}
         </div>

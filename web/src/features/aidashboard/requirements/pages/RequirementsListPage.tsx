@@ -2659,6 +2659,7 @@ export function RequirementDrawer({
       <DatePicker
         value={draftDeadline}
         format="YYYY-MM-DD"
+        placement="topRight"
         getPopupContainer={getQuickEditPopupContainer}
         disabled={
           quickUpdateMutation.isPending && quickUpdateMutation.variables?.field === "deadline"
@@ -2687,13 +2688,11 @@ export function RequirementDrawer({
         optionFilterProp="label"
         maxTagCount="responsive"
         options={quickAssigneeOptions}
+        placement="topLeft"
         getPopupContainer={getQuickEditPopupContainer}
         onChange={setDraftOwnerIds}
       />
       <div className="requirements-quick-edit__actions">
-        <Button size="small" onClick={closeQuickEditor}>
-          取消
-        </Button>
         <Button
           size="small"
           type="primary"
@@ -2717,13 +2716,11 @@ export function RequirementDrawer({
         placeholder={teamsQuery.isError ? "团队加载失败" : "选择参与团队"}
         options={quickTeamOptions}
         maxTagCount="responsive"
+        placement="topLeft"
         getPopupContainer={getQuickEditPopupContainer}
         onChange={setDraftTeamIds}
       />
       <div className="requirements-quick-edit__actions">
-        <Button size="small" onClick={closeQuickEditor}>
-          取消
-        </Button>
         <Button
           size="small"
           type="primary"
@@ -2848,7 +2845,7 @@ export function RequirementDrawer({
             />
           ) : (
             <>
-              <section className="requirements-drawer__compact-summary" aria-label="需求关键信息">
+              {Boolean(requirement.description) && !requirement.description ? <section className="requirements-drawer__compact-summary" aria-label="需求关键信息">
                 <div className="requirements-drawer__summary-item is-strong">
                   <span>任务</span>
                   <strong>
@@ -2958,12 +2955,41 @@ export function RequirementDrawer({
                     </Popover>
                   ) : null}
                 </div>
+              </section> : null}
+
+              <section className="requirements-drawer__overview" aria-label="需求概览">
+                <div className="requirements-drawer__overview-copy">
+                  <p>{requirement.description || "暂无需求描述"}</p>
+                </div>
+                <dl className="requirements-drawer__overview-meta">
+                  <div className="requirements-drawer__overview-meta-row is-actions">
+                    <div><dt>截止时间</dt><dd>{formatDate(requirement.deadline)} {canQuickEditRequirement ? <Popover open={quickEditor === "deadline"} trigger="click" placement="bottomRight" destroyOnHidden content={deadlineQuickEditor} onOpenChange={(nextOpen) => nextOpen ? openQuickEditor("deadline") : closeQuickEditor()}><button type="button" className="requirements-drawer__summary-edit" aria-label="设置截止日期"><EditOutlined /></button></Popover> : null}</dd></div>
+                    <div><dt>负责人</dt><dd>{getRequirementOwnerLabel(requirement)} {canQuickEditRequirement ? <Popover open={quickEditor === "owner"} trigger="click" placement="bottomRight" destroyOnHidden content={ownerQuickEditor} onOpenChange={(nextOpen) => nextOpen ? openQuickEditor("owner") : closeQuickEditor()}><button type="button" className="requirements-drawer__summary-edit" aria-label="设置负责人"><EditOutlined /></button></Popover> : null}</dd></div>
+                    <div><dt>参与团队</dt><dd>{getRequirementTeamCompactLabel(requirement)} {canQuickEditRequirement ? <Popover open={quickEditor === "teams"} trigger="click" placement="bottomRight" destroyOnHidden content={teamsQuickEditor} onOpenChange={(nextOpen) => nextOpen ? openQuickEditor("teams") : closeQuickEditor()}><button type="button" className="requirements-drawer__summary-edit" aria-label="设置参与团队"><EditOutlined /></button></Popover> : null}</dd></div>
+                  </div>
+                  <div className="requirements-drawer__overview-meta-row is-details">
+                    <div><dt>推进进度</dt><dd><RequirementProgress value={requirement.progress} /></dd></div>
+                    <div><dt>创建者</dt><dd>{requirement.creator_name}</dd></div>
+                    <div><dt>飞书文档</dt><dd>{requirement.feishu_doc_url ? <a href={requirement.feishu_doc_url} target="_blank" rel="noreferrer">打开文档</a> : "-"}</dd></div>
+                  </div>
+                </dl>
               </section>
 
               <Tabs
                 key={requirement.id}
                 className="requirements-drawer__tabs"
                 defaultActiveKey="tasks"
+                tabBarExtraContent={
+                  <Button
+                    className="requirements-drawer__tabs-session-action"
+                    type="text"
+                    size="small"
+                    icon={<LinkOutlined />}
+                    onClick={() => setPickerOpen(true)}
+                  >
+                    关联 session
+                  </Button>
+                }
                 items={[
                   {
                     key: "tasks",
@@ -3221,7 +3247,7 @@ export function RequirementDrawer({
                       </section>
                     )
                   }
-                ]}
+                ].filter((item) => item.key !== "records" && item.key !== "overview")}
               />
 
               <TokenSourcePicker
