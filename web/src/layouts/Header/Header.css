@@ -101,6 +101,18 @@
   flex: 0 0 auto;
 }
 
+.app-header__help-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-right: 10px;
+  color: #526176 !important;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.app-header__help-trigger:hover { color: #1d4ed8 !important; }
+
 .user-menu {
   position: relative;
   min-width: 164px;
@@ -322,6 +334,16 @@
   .app-header__right {
     height: 52px;
   }
+
+  .app-header__help-trigger {
+    width: 34px;
+    min-width: 34px;
+    margin-right: 4px;
+    padding: 0;
+    font-size: 0;
+  }
+
+  .app-header__help-trigger .anticon { margin: 0; font-size: 17px; }
 
   .user-menu {
     min-width: 0;

@@ -1,10 +1,14 @@
-import { MenuOutlined } from "@ant-design/icons";
+import { MenuOutlined, QuestionCircleOutlined } from "@ant-design/icons";
 import { Button } from "antd";
+import { useState } from "react";
 import { useLocation } from "react-router-dom";
 
+import { HelpCenter } from "@/layouts/HelpCenter/HelpCenter";
+import { getHelpModuleByPath } from "@/layouts/HelpCenter/helpCenterConfig";
 import { appRoutes } from "@/router/routes";
 import { findBestMenuMatch, findRouteByPath } from "@/router/routeAccess";
 import { UserMenu } from "@/shared/auth/UserMenu";
+import { useAuth } from "@/shared/auth/authContext";
 import { Nav } from "@/shared/components/Nav/Nav";
 import { useLayoutStore } from "@/stores/layoutStore";
 
@@ -13,6 +17,8 @@ import "./Header.css";
 
 export function Header() {
   const location = useLocation();
+  const { user } = useAuth();
+  const [helpOpen, setHelpOpen] = useState(false);
   const { navProps } = useHeaderNav();
   const setMobileSidebarOpen = useLayoutStore((state) => state.setMobileSidebarOpen);
   const currentRoute = findRouteByPath(location.pathname, appRoutes);
@@ -22,6 +28,7 @@ export function Header() {
     currentMenu?.path === "/examples/table-crud"
       ? [{ title: "Data" }, { title: currentMenu.title, path: currentMenu.path }]
       : [{ title }];
+  const helpModule = user?.role === "admin" ? undefined : getHelpModuleByPath(location.pathname);
 
   return (
     <header className="app-header">
@@ -46,8 +53,19 @@ export function Header() {
         </div>
       </div>
       <div className="app-header__right">
+        {helpModule ? (
+          <Button
+            className="app-header__help-trigger"
+            type="text"
+            icon={<QuestionCircleOutlined />}
+            onClick={() => setHelpOpen(true)}
+          >
+            使用指南
+          </Button>
+        ) : null}
         <UserMenu />
       </div>
+      {helpModule ? <HelpCenter key={helpModule} currentModule={helpModule} open={helpOpen} onClose={() => setHelpOpen(false)} /> : null}
     </header>
   );
 }

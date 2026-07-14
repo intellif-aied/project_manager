@@ -176,7 +176,8 @@ export function DailyReportGenerateModal({
 
   useEffect(() => {
     if (!open) return;
-    setSelectedDate(normalizedDate(reportDate));
+    const timer = window.setTimeout(() => setSelectedDate(normalizedDate(reportDate)), 0);
+    return () => window.clearTimeout(timer);
   }, [open, reportDate]);
 
   useEffect(() => {

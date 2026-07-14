@@ -177,11 +177,14 @@ export function ReportAIGenerateControls({
 
   useEffect(() => {
     const storedRunId = readStoredRunId(storageKey);
-    setActiveRunId(storedRunId);
-    setHandledRunId(undefined);
-    setLastOutcome(undefined);
-    setRunStartedAt(storedRunId ? Date.now() : undefined);
-    setElapsedSeconds(0);
+    const timer = window.setTimeout(() => {
+      setActiveRunId(storedRunId);
+      setHandledRunId(undefined);
+      setLastOutcome(undefined);
+      setRunStartedAt(storedRunId ? Date.now() : undefined);
+      setElapsedSeconds(0);
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [storageKey]);
 
   const activeRunQuery = useQuery<AIRun>({
@@ -205,8 +208,11 @@ export function ReportAIGenerateControls({
     if (!activeRunId || !(err instanceof HttpError)) return;
     if (err.status !== 403 && err.status !== 404) return;
     clearStoredRunId(storageKey, activeRunId);
-    setActiveRunId(undefined);
-    setHandledRunId(undefined);
+    const timer = window.setTimeout(() => {
+      setActiveRunId(undefined);
+      setHandledRunId(undefined);
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [activeRunId, activeRunQuery.error, storageKey]);
 
   const runMutation = useMutation({
@@ -281,23 +287,26 @@ export function ReportAIGenerateControls({
   useEffect(() => {
     const run = activeRunQuery.data;
     if (!run || handledRunId === run.id) return;
-    if (run.status === "succeeded") {
-      setHandledRunId(run.id);
-      clearStoredRunId(storageKey, run.id);
-      setActiveRunId(undefined);
-      setLastOutcome({ type: "success", text: `${periodLabel} 生成完成，报告正文已刷新` });
-      void queryClient.invalidateQueries({ queryKey: ["reports"] });
-      void queryClient.invalidateQueries({ queryKey: ["managed-agent-runs"] });
-      onGenerated?.(run);
-      return;
-    }
-    if (run.status === "failed" || run.status === "timeout") {
-      setHandledRunId(run.id);
-      clearStoredRunId(storageKey, run.id);
-      setActiveRunId(undefined);
-      const text = run.error_message || `${periodLabel} AI 生成失败`;
-      setLastOutcome({ type: "error", text });
-    }
+    const timer = window.setTimeout(() => {
+      if (run.status === "succeeded") {
+        setHandledRunId(run.id);
+        clearStoredRunId(storageKey, run.id);
+        setActiveRunId(undefined);
+        setLastOutcome({ type: "success", text: `${periodLabel} 生成完成，报告正文已刷新` });
+        void queryClient.invalidateQueries({ queryKey: ["reports"] });
+        void queryClient.invalidateQueries({ queryKey: ["managed-agent-runs"] });
+        onGenerated?.(run);
+        return;
+      }
+      if (run.status === "failed" || run.status === "timeout") {
+        setHandledRunId(run.id);
+        clearStoredRunId(storageKey, run.id);
+        setActiveRunId(undefined);
+        const text = run.error_message || `${periodLabel} AI 生成失败`;
+        setLastOutcome({ type: "error", text });
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [activeRunQuery.data, handledRunId, onGenerated, periodLabel, queryClient, storageKey]);
 
   const runningTitle = initializingDefault
