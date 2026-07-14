@@ -108,6 +108,8 @@ export function DailyReportGenerateModal({
   const date = selectedDate;
   const [content, setContent] = useState("");
   const [contentTouched, setContentTouched] = useState(false);
+  const [nextDayPlan, setNextDayPlan] = useState("");
+  const [nextDayPlanTouched, setNextDayPlanTouched] = useState(false);
   const [manualMode, setManualMode] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [selectedSessionSliceKeys, setSelectedSessionSliceKeys] = useState<string[]>([]);
@@ -166,8 +168,11 @@ export function DailyReportGenerateModal({
   const hasContent = Boolean(currentReport?.content?.trim());
   const showEditor = hasContent || manualMode;
   const editorContent = contentTouched ? content : currentReport?.content ?? "";
+  const editorNextDayPlan = nextDayPlanTouched ? nextDayPlan : currentReport?.next_day_plan ?? "";
   const personalReport = scope === "personal" ? personalReportQuery.data ?? null : null;
-  const hasUnsavedContentChange = contentTouched && editorContent !== (currentReport?.content ?? "");
+  const hasUnsavedContentChange =
+    (contentTouched && editorContent !== (currentReport?.content ?? "")) ||
+    (nextDayPlanTouched && editorNextDayPlan !== (currentReport?.next_day_plan ?? ""));
   const canSwitchDate = allowDateSwitch && !readOnly && !reportId;
   const allowSessionSettings = scope === "personal" && !readOnly;
   const showSessionSettings = allowSessionSettings && settingsOpen;
@@ -187,6 +192,8 @@ export function DailyReportGenerateModal({
       setManualMode(false);
       setContent("");
       setContentTouched(false);
+      setNextDayPlan("");
+      setNextDayPlanTouched(false);
       setSettingsOpen(false);
       setSelectedSessionSliceKeys([]);
     }, 0);
@@ -225,24 +232,26 @@ export function DailyReportGenerateModal({
         const report = personalReport ?? await fetchTodayReport(date);
         return saveReport(report.id, {
           content: nextContent,
+          next_day_plan: editorNextDayPlan.trim(),
           session_ids: report.session_ids ?? []
         });
       }
 
       if (scope === "team") {
         if (currentReport?.id) {
-          return updateTeamReport(currentReport.id, { content: nextContent });
+          return updateTeamReport(currentReport.id, { content: nextContent, next_day_plan: editorNextDayPlan.trim() });
         }
-        return saveTeamReportCurrent({ report_date: date, content: nextContent });
+        return saveTeamReportCurrent({ report_date: date, content: nextContent, next_day_plan: editorNextDayPlan.trim() });
       }
 
       if (currentReport?.id) {
-        return updateDepartmentReport(currentReport.id, { content: nextContent });
+        return updateDepartmentReport(currentReport.id, { content: nextContent, next_day_plan: editorNextDayPlan.trim() });
       }
-      return saveDepartmentReportCurrent({ report_date: date, content: nextContent });
+      return saveDepartmentReportCurrent({ report_date: date, content: nextContent, next_day_plan: editorNextDayPlan.trim() });
     },
     onSuccess: (result) => {
       setContentTouched(false);
+      setNextDayPlanTouched(false);
       void queryClient.invalidateQueries({ queryKey: ["reports", "daily"] });
       void queryClient.invalidateQueries({ queryKey: ["reports"] });
       message.success("报告已保存");
@@ -380,6 +389,21 @@ export function DailyReportGenerateModal({
                       setContentTouched(true);
                     }}
                     placeholder="请输入报告内容"
+                  />
+                  <div className="console-session-modal__section">
+                    <strong>明日计划（可选）</strong>
+                    <span>{readOnly ? "查看填写的明日计划。" : "可手写或直接粘贴，最多两行。"}</span>
+                  </div>
+                  <TextArea
+                    rows={2}
+                    readOnly={readOnly}
+                    value={editorNextDayPlan}
+                    onChange={(event) => {
+                      if (readOnly) return;
+                      setNextDayPlan(event.target.value);
+                      setNextDayPlanTouched(true);
+                    }}
+                    placeholder="请输入明日计划"
                   />
                 </div>
               </div>

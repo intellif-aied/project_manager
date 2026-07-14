@@ -428,7 +428,7 @@ export const fetchTodayReport = (reportDate?: string) =>
 export const fetchReport = (id: string) => unwrap(api.get<DailyReport>(`/reports/${id}`));
 export const updateReport = (
   id: string,
-  data: { content?: string; feishu_doc_url?: string; session_ids?: string[] }
+  data: { content?: string; next_day_plan?: string; feishu_doc_url?: string; session_ids?: string[] }
 ) => unwrap(api.put<DailyReport>(`/reports/${id}`, data));
 export const saveReport = updateReport;
 export const submitReport = (id: string, data: { content?: string; session_ids?: string[] }) =>
@@ -482,12 +482,12 @@ export async function fetchTeamReportTodayOrNull(reportDate?: string) {
     throw error;
   }
 }
-export const saveTeamReportCurrent = (data: { report_date: string; content?: string }) =>
+export const saveTeamReportCurrent = (data: { report_date: string; content?: string; next_day_plan?: string }) =>
   unwrap(api.put<TeamReport>("/reports/team/today", data));
 export const fetchTeamReports = (params?: Record<string, string>) =>
   unwrap(api.get<PaginatedTeamReports>("/reports/team", params));
 export const fetchTeamReport = (id: string) => unwrap(api.get<TeamReport>(`/reports/team/${id}`));
-export const updateTeamReport = (id: string, data: { content?: string; feishu_doc_url?: string }) =>
+export const updateTeamReport = (id: string, data: { content?: string; next_day_plan?: string; feishu_doc_url?: string }) =>
   unwrap(api.put<TeamReport>(`/reports/team/${id}`, data));
 export const submitTeamReport = (id: string, data?: { content?: string }) =>
   unwrap(api.post<TeamReport>(`/reports/team/${id}/submit`, data));
@@ -519,13 +519,14 @@ export async function fetchDepartmentReportTodayOrNull(reportDate?: string) {
 export const saveDepartmentReportCurrent = (data: {
   report_date: string;
   content?: string;
+  next_day_plan?: string;
   archive?: boolean;
 }) => unwrap(api.put<DepartmentReport>("/reports/department/today", data));
 export const fetchDepartmentReports = (params?: Record<string, string>) =>
   unwrap(api.get<PaginatedDepartmentReports>("/reports/department", params));
 export const fetchDepartmentReport = (id: string) =>
   unwrap(api.get<DepartmentReport>(`/reports/department/${id}`));
-export const updateDepartmentReport = (id: string, data: { content?: string; archive?: boolean }) =>
+export const updateDepartmentReport = (id: string, data: { content?: string; next_day_plan?: string; archive?: boolean }) =>
   unwrap(api.put<DepartmentReport>(`/reports/department/${id}`, data));
 
 export const fetchPersonalWeeklyReports = (params?: Record<string, string>) =>

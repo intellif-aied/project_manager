@@ -408,6 +408,7 @@ export interface DailyReport {
   user_name: string;
   report_date: string;
   content: string;
+  next_day_plan: string;
   submitted_content?: string;
   status?: "saved" | "submitted" | null;
   submitted_to?: "team_leader" | "director" | null;
@@ -435,6 +436,7 @@ export interface DailyReportListItem {
   user_id: string;
   user_name: string;
   report_date: string;
+  next_day_plan: string;
   status?: "saved" | "submitted" | null;
   submitted_to?: "team_leader" | "director" | null;
   edited: boolean;
@@ -773,6 +775,7 @@ export interface TeamReport {
   leader_name: string;
   report_date: string;
   content: string;
+  next_day_plan: string;
   submitted_content?: string;
   status?: "saved" | "submitted" | null;
   feishu_doc_url?: string;
@@ -804,6 +807,7 @@ export interface TeamReportListItem {
   leader_id: string;
   leader_name: string;
   report_date: string;
+  next_day_plan: string;
   member_count: number;
   submitted_count: number;
   missing_count: number;
@@ -876,6 +880,7 @@ export interface DepartmentReport {
   id: string;
   report_date: string;
   content: string;
+  next_day_plan: string;
   status?: "saved" | "archived" | null;
   source_team_report_ids: string[];
   edited: boolean;
@@ -898,6 +903,7 @@ export interface DepartmentReport {
 export interface DepartmentReportListItem {
   id: string;
   report_date: string;
+  next_day_plan: string;
   team_count: number;
   submitted_team_count: number;
   missing_team_count: number;

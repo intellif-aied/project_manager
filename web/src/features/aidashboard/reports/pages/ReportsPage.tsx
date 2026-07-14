@@ -70,6 +70,11 @@ function formatDate(value?: string) {
   return value ? dayjs(value).format("YYYY-MM-DD") : "-";
 }
 
+function planPreview(value?: string) {
+  const plan = value?.trim();
+  return plan ? <span title={plan}>{plan}</span> : "-";
+}
+
 function personalStatus(record: DailyReportListItem, role?: string) {
   if (role === "director" || role === "admin") {
     return record.status === "saved" || record.status === "submitted" ? <Tag color="blue">已保存</Tag> : <Tag>暂无报告</Tag>;
@@ -328,6 +333,7 @@ function PersonalDailyTable({
 
   const columns: ColumnsType<DailyReportListItem> = [
     { title: "日期", dataIndex: "report_date", width: 140, render: formatDate },
+    { title: "明日计划", dataIndex: "next_day_plan", width: 260, ellipsis: true, render: planPreview },
     { title: "状态", key: "status", width: 180, render: (_, record) => personalStatus(record, user?.role) },
     { title: "更新时间", dataIndex: "updated_at", render: formatDateTime },
     {
@@ -394,6 +400,7 @@ function TeamDailyTable({
 
   const columns: ColumnsType<TeamReportListItem> = [
     { title: "日期", dataIndex: "report_date", width: 130, render: formatDate },
+    { title: "明日计划", dataIndex: "next_day_plan", width: 260, ellipsis: true, render: planPreview },
     { title: "成员数", dataIndex: "member_count", width: 100 },
     { title: "已发送人数", dataIndex: "submitted_count", width: 120 },
     { title: "未发送人数", dataIndex: "missing_count", width: 120 },
@@ -463,6 +470,7 @@ function DepartmentDailyTable({
 
   const columns: ColumnsType<DepartmentReportListItem> = [
     { title: "日期", dataIndex: "report_date", width: 140, render: formatDate },
+    { title: "明日计划", dataIndex: "next_day_plan", width: 260, ellipsis: true, render: planPreview },
     { title: "小组总数", dataIndex: "team_count", width: 120 },
     { title: "已发送小组数", dataIndex: "submitted_team_count", width: 140 },
     { title: "未发送小组数", dataIndex: "missing_team_count", width: 140 },

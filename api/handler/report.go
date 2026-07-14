@@ -71,6 +71,7 @@ func (h *ReportHandler) List(w http.ResponseWriter, r *http.Request) {
 	query := `
 		SELECT dr.id::text, dr.user_id::text, COALESCE(NULLIF(u.nickname,''), u.username), dr.report_date, dr.status, dr.submitted_to, dr.edited,
 			COALESCE(cardinality(dr.session_ids), 0), COALESCE(dr.session_ids, '{}'),
+			COALESCE(dr.next_day_plan, ''),
 			dr.saved_at, dr.submitted_at, dr.created_at, dr.updated_at
 		FROM daily_reports dr
 		JOIN users u ON u.id = dr.user_id` + where + fmt.Sprintf(" ORDER BY dr.report_date DESC LIMIT $%d OFFSET $%d", argIdx, argIdx+1)
@@ -89,7 +90,7 @@ func (h *ReportHandler) List(w http.ResponseWriter, r *http.Request) {
 		var sessionIDsStr string
 		var status, submittedTo sql.NullString
 		var savedAt, submittedAt sql.NullTime
-		if err := rows.Scan(&dr.ID, &dr.UserID, &dr.UserName, &dr.ReportDate, &status, &submittedTo, &dr.Edited, &dr.SourceSessionCount, &sessionIDsStr, &savedAt, &submittedAt, &dr.CreatedAt, &dr.UpdatedAt); err != nil {
+		if err := rows.Scan(&dr.ID, &dr.UserID, &dr.UserName, &dr.ReportDate, &status, &submittedTo, &dr.Edited, &dr.SourceSessionCount, &sessionIDsStr, &dr.NextDayPlan, &savedAt, &submittedAt, &dr.CreatedAt, &dr.UpdatedAt); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
@@ -141,6 +142,7 @@ func (h *ReportHandler) ListMine(w http.ResponseWriter, r *http.Request) {
 	query := `
 		SELECT dr.id::text, dr.user_id::text, COALESCE(NULLIF(u.nickname,''), u.username), dr.report_date, dr.status, dr.submitted_to, dr.edited,
 			COALESCE(cardinality(dr.session_ids), 0), COALESCE(dr.session_ids, '{}'),
+			COALESCE(dr.next_day_plan, ''),
 			dr.saved_at, dr.submitted_at, dr.created_at, dr.updated_at
 		FROM daily_reports dr
 		JOIN users u ON u.id = dr.user_id` + where + fmt.Sprintf(" ORDER BY dr.report_date DESC LIMIT $%d OFFSET $%d", argIdx, argIdx+1)
@@ -159,7 +161,7 @@ func (h *ReportHandler) ListMine(w http.ResponseWriter, r *http.Request) {
 		var sessionIDsStr string
 		var status, submittedTo sql.NullString
 		var savedAt, submittedAt sql.NullTime
-		if err := rows.Scan(&dr.ID, &dr.UserID, &dr.UserName, &dr.ReportDate, &status, &submittedTo, &dr.Edited, &dr.SourceSessionCount, &sessionIDsStr, &savedAt, &submittedAt, &dr.CreatedAt, &dr.UpdatedAt); err != nil {
+		if err := rows.Scan(&dr.ID, &dr.UserID, &dr.UserName, &dr.ReportDate, &status, &submittedTo, &dr.Edited, &dr.SourceSessionCount, &sessionIDsStr, &dr.NextDayPlan, &savedAt, &submittedAt, &dr.CreatedAt, &dr.UpdatedAt); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
@@ -195,7 +197,7 @@ func (h *ReportHandler) Get(w http.ResponseWriter, r *http.Request) {
 	var reportUserTeamID sql.NullString
 
 	err := h.db.QueryRow(`
-		SELECT dr.id, dr.user_id, COALESCE(NULLIF(report_user.nickname,''), report_user.username), report_user.team_id::text, dr.report_date, dr.content, dr.edited,
+		SELECT dr.id, dr.user_id, COALESCE(NULLIF(report_user.nickname,''), report_user.username), report_user.team_id::text, dr.report_date, dr.content, COALESCE(dr.next_day_plan, ''), dr.edited,
 			dr.feishu_doc_url, COALESCE(dr.session_ids, '{}'), dr.status, dr.submitted_content, dr.saved_at, dr.submitted_at, dr.submitted_to,
 			COALESCE(dr.generation_mode, ''), dr.managed_agent_run_id::text, dr.agent_id, dr.agent_version_id, dr.model_id, ar.finished_at,
 			dr.created_at, dr.updated_at
@@ -203,7 +205,7 @@ func (h *ReportHandler) Get(w http.ResponseWriter, r *http.Request) {
 		JOIN users report_user ON report_user.id = dr.user_id
 		LEFT JOIN ai_runs ar ON ar.id = dr.managed_agent_run_id
 		WHERE dr.id = $1`, id).Scan(
-		&dr.ID, &dr.UserID, &dr.UserName, &reportUserTeamID, &dr.ReportDate, &dr.Content, &dr.Edited,
+		&dr.ID, &dr.UserID, &dr.UserName, &reportUserTeamID, &dr.ReportDate, &dr.Content, &dr.NextDayPlan, &dr.Edited,
 		&feishuURL, &sessionIDsStr, &status, &submittedContent, &savedAt, &submittedAt, &submittedTo,
 		&generationMode, &managedAgentRunID, &agentID, &agentVersionID, &modelID, &generatedAt,
 		&dr.CreatedAt, &dr.UpdatedAt,
@@ -243,7 +245,7 @@ func (h *ReportHandler) GetOrCreateToday(w http.ResponseWriter, r *http.Request)
 	var sessionIDsStr string
 
 	err := h.db.QueryRow(`
-		SELECT dr.id, dr.user_id, COALESCE(NULLIF(u.nickname,''), u.username), dr.report_date, dr.content, dr.edited,
+		SELECT dr.id, dr.user_id, COALESCE(NULLIF(u.nickname,''), u.username), dr.report_date, dr.content, COALESCE(dr.next_day_plan, ''), dr.edited,
 			dr.feishu_doc_url, COALESCE(dr.session_ids, '{}'), dr.status, dr.submitted_content, dr.saved_at, dr.submitted_at, dr.submitted_to,
 			COALESCE(dr.generation_mode, ''), dr.managed_agent_run_id::text, dr.agent_id, dr.agent_version_id, dr.model_id, ar.finished_at,
 			dr.created_at, dr.updated_at
@@ -251,7 +253,7 @@ func (h *ReportHandler) GetOrCreateToday(w http.ResponseWriter, r *http.Request)
 		JOIN users u ON u.id = dr.user_id
 		LEFT JOIN ai_runs ar ON ar.id = dr.managed_agent_run_id
 		WHERE dr.user_id = $1 AND dr.report_date = $2`, u.ID, reportDate).Scan(
-		&dr.ID, &dr.UserID, &dr.UserName, &dr.ReportDate, &dr.Content, &dr.Edited,
+		&dr.ID, &dr.UserID, &dr.UserName, &dr.ReportDate, &dr.Content, &dr.NextDayPlan, &dr.Edited,
 		&feishuURL, &sessionIDsStr, &status, &submittedContent, &savedAt, &submittedAt, &submittedTo,
 		&generationMode, &managedAgentRunID, &agentID, &agentVersionID, &modelID, &generatedAt,
 		&dr.CreatedAt, &dr.UpdatedAt,
@@ -528,13 +530,13 @@ func (h *ReportHandler) getReportByUserDate(userID, reportDate string) (*model.D
 	var savedAt, submittedAt sql.NullTime
 	var sessionIDsStr string
 	err := h.db.QueryRow(`
-		SELECT dr.id, dr.user_id, COALESCE(NULLIF(u.nickname,''), u.username), dr.report_date, dr.content, dr.edited,
+		SELECT dr.id, dr.user_id, COALESCE(NULLIF(u.nickname,''), u.username), dr.report_date, dr.content, COALESCE(dr.next_day_plan, ''), dr.edited,
 			dr.feishu_doc_url, COALESCE(dr.session_ids, '{}'), dr.status, dr.submitted_content, dr.saved_at, dr.submitted_at, dr.submitted_to,
 			dr.created_at, dr.updated_at
 		FROM daily_reports dr
 		JOIN users u ON u.id = dr.user_id
 		WHERE dr.user_id = $1 AND dr.report_date = $2`, userID, reportDate).Scan(
-		&dr.ID, &dr.UserID, &dr.UserName, &dr.ReportDate, &dr.Content, &dr.Edited,
+		&dr.ID, &dr.UserID, &dr.UserName, &dr.ReportDate, &dr.Content, &dr.NextDayPlan, &dr.Edited,
 		&feishuURL, &sessionIDsStr, &status, &submittedContent, &savedAt, &submittedAt, &submittedTo,
 		&dr.CreatedAt, &dr.UpdatedAt,
 	)
@@ -576,6 +578,11 @@ func (h *ReportHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if req.Content != nil {
 		sets = append(sets, fmt.Sprintf("content = $%d, edited = true", argIdx))
 		args = append(args, *req.Content)
+		argIdx++
+	}
+	if req.NextDayPlan != nil {
+		sets = append(sets, fmt.Sprintf("next_day_plan = $%d", argIdx))
+		args = append(args, *req.NextDayPlan)
 		argIdx++
 	}
 	if req.FeishuDocURL != nil {
@@ -660,6 +667,11 @@ func (h *ReportHandler) SubmitReport(w http.ResponseWriter, r *http.Request) {
 		argIdx++
 	} else {
 		sets = append(sets, "submitted_content = content")
+	}
+	if req.NextDayPlan != nil {
+		sets = append(sets, fmt.Sprintf("next_day_plan = $%d", argIdx))
+		args = append(args, *req.NextDayPlan)
+		argIdx++
 	}
 	if req.SessionIDs != nil {
 		sets = append(sets, fmt.Sprintf("session_ids = $%d", argIdx))
@@ -1110,8 +1122,9 @@ func (h *ReportHandler) SaveTeamReportToday(w http.ResponseWriter, r *http.Reque
 	}
 
 	var req struct {
-		ReportDate string  `json:"report_date"`
-		Content    *string `json:"content"`
+		ReportDate  string  `json:"report_date"`
+		Content     *string `json:"content"`
+		NextDayPlan *string `json:"next_day_plan"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
@@ -1135,18 +1148,19 @@ func (h *ReportHandler) SaveTeamReportToday(w http.ResponseWriter, r *http.Reque
 
 	if _, err := h.db.ExecContext(r.Context(), `
 		INSERT INTO team_reports (
-			team_id, leader_id, report_date, content, status, member_report_ids, source_daily_report_ids, saved_at, updated_at
-		) VALUES ($1, $2, $3, $4, 'saved', $5::uuid[], $5::uuid[], now(), now())
+			team_id, leader_id, report_date, content, next_day_plan, status, member_report_ids, source_daily_report_ids, saved_at, updated_at
+		) VALUES ($1, $2, $3, $4, COALESCE($5, ''), 'saved', $6::uuid[], $6::uuid[], now(), now())
 		ON CONFLICT (team_id, report_date)
 		DO UPDATE SET
 			leader_id = EXCLUDED.leader_id,
 			content = EXCLUDED.content,
+			next_day_plan = COALESCE($5, team_reports.next_day_plan),
 			status = 'saved',
 			member_report_ids = EXCLUDED.member_report_ids,
 			source_daily_report_ids = EXCLUDED.source_daily_report_ids,
 			saved_at = now(),
 			updated_at = now()`,
-		*u.TeamID, u.ID, reportDate, *req.Content, pq.Array(sourceDailyIDs),
+		*u.TeamID, u.ID, reportDate, *req.Content, req.NextDayPlan, pq.Array(sourceDailyIDs),
 	); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -1274,6 +1288,7 @@ func (h *ReportHandler) ListTeamReports(w http.ResponseWriter, r *http.Request) 
 	query := `
 		SELECT tr.id::text, tr.team_id::text, t.name, tr.leader_id::text, COALESCE(NULLIF(u.nickname,''), u.username),
 			tr.report_date,
+			COALESCE(tr.next_day_plan, ''),
 			(SELECT COUNT(*) FROM users member WHERE member.team_id = tr.team_id AND member.app_role = 'employee') AS member_count,
 			COALESCE(cardinality(tr.source_daily_report_ids), 0) AS submitted_count,
 			GREATEST((SELECT COUNT(*) FROM users member WHERE member.team_id = tr.team_id AND member.app_role = 'employee') - COALESCE(cardinality(tr.source_daily_report_ids), 0), 0) AS missing_count,
@@ -1296,7 +1311,7 @@ func (h *ReportHandler) ListTeamReports(w http.ResponseWriter, r *http.Request) 
 		var status, submittedTo sql.NullString
 		var savedAt, submittedAt sql.NullTime
 		if err := rows.Scan(&tr.ID, &tr.TeamID, &tr.TeamName, &tr.LeaderID, &tr.LeaderName,
-			&tr.ReportDate, &tr.MemberCount, &tr.SubmittedCount, &tr.MissingCount,
+			&tr.ReportDate, &tr.NextDayPlan, &tr.MemberCount, &tr.SubmittedCount, &tr.MissingCount,
 			&status, &savedAt, &submittedAt, &submittedTo, &tr.CreatedAt, &tr.UpdatedAt); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
@@ -1366,6 +1381,11 @@ func (h *ReportHandler) UpdateTeamReport(w http.ResponseWriter, r *http.Request)
 		args = append(args, *req.Content)
 		argIdx++
 	}
+	if req.NextDayPlan != nil {
+		sets = append(sets, fmt.Sprintf("next_day_plan = $%d", argIdx))
+		args = append(args, *req.NextDayPlan)
+		argIdx++
+	}
 	if req.FeishuDocURL != nil {
 		sets = append(sets, fmt.Sprintf("feishu_doc_url = $%d", argIdx))
 		args = append(args, *req.FeishuDocURL)
@@ -1406,7 +1426,7 @@ func (h *ReportHandler) getTeamReportByTeamDate(teamID, reportDate string) (*mod
 	var memberIDsStr, sourceDailyIDsStr, sessionIDsStr string
 	err := h.db.QueryRow(`
 		SELECT tr.id, tr.team_id, t.name, tr.leader_id, COALESCE(NULLIF(u.nickname,''), u.username),
-			tr.report_date, tr.content, tr.submitted_content, tr.status, tr.feishu_doc_url,
+			tr.report_date, tr.content, COALESCE(tr.next_day_plan, ''), tr.submitted_content, tr.status, tr.feishu_doc_url,
 			tr.member_report_ids, tr.source_daily_report_ids, tr.session_ids,
 			tr.saved_at, tr.submitted_at, tr.submitted_to,
 			tr.edited, COALESCE(tr.generation_mode, ''), tr.managed_agent_run_id::text, tr.agent_id, tr.agent_version_id, tr.model_id, ar.finished_at,
@@ -1417,7 +1437,7 @@ func (h *ReportHandler) getTeamReportByTeamDate(teamID, reportDate string) (*mod
 		LEFT JOIN ai_runs ar ON ar.id = tr.managed_agent_run_id
 		WHERE tr.team_id = $1 AND tr.report_date = $2`, teamID, reportDate).Scan(
 		&tr.ID, &tr.TeamID, &tr.TeamName, &tr.LeaderID, &tr.LeaderName,
-		&tr.ReportDate, &tr.Content, &submittedContent, &status, &feishuURL,
+		&tr.ReportDate, &tr.Content, &tr.NextDayPlan, &submittedContent, &status, &feishuURL,
 		&memberIDsStr, &sourceDailyIDsStr, &sessionIDsStr,
 		&savedAt, &submittedAt, &submittedTo,
 		&tr.Edited, &generationMode, &managedAgentRunID, &agentID, &agentVersionID, &modelID, &generatedAt,
@@ -1475,7 +1495,7 @@ func (h *ReportHandler) getTeamReportByID(id string) (*model.TeamReport, error) 
 	var memberIDsStr, sourceDailyIDsStr, sessionIDsStr string
 	err := h.db.QueryRow(`
 		SELECT tr.id, tr.team_id, t.name, tr.leader_id, COALESCE(NULLIF(u.nickname,''), u.username),
-			tr.report_date, tr.content, tr.submitted_content, tr.status, tr.feishu_doc_url,
+			tr.report_date, tr.content, COALESCE(tr.next_day_plan, ''), tr.submitted_content, tr.status, tr.feishu_doc_url,
 			tr.member_report_ids, tr.source_daily_report_ids, tr.session_ids,
 			tr.saved_at, tr.submitted_at, tr.submitted_to,
 			tr.edited, COALESCE(tr.generation_mode, ''), tr.managed_agent_run_id::text, tr.agent_id, tr.agent_version_id, tr.model_id, ar.finished_at,
@@ -1486,7 +1506,7 @@ func (h *ReportHandler) getTeamReportByID(id string) (*model.TeamReport, error) 
 		LEFT JOIN ai_runs ar ON ar.id = tr.managed_agent_run_id
 		WHERE tr.id = $1`, id).Scan(
 		&tr.ID, &tr.TeamID, &tr.TeamName, &tr.LeaderID, &tr.LeaderName,
-		&tr.ReportDate, &tr.Content, &submittedContent, &status, &feishuURL,
+		&tr.ReportDate, &tr.Content, &tr.NextDayPlan, &submittedContent, &status, &feishuURL,
 		&memberIDsStr, &sourceDailyIDsStr, &sessionIDsStr,
 		&savedAt, &submittedAt, &submittedTo,
 		&tr.Edited, &generationMode, &managedAgentRunID, &agentID, &agentVersionID, &modelID, &generatedAt,
@@ -1636,10 +1656,11 @@ func (h *ReportHandler) SaveDepartmentReportToday(w http.ResponseWriter, r *http
 		return
 	}
 	var req struct {
-		DirectorUserID string `json:"director_user_id,omitempty"`
-		ReportDate     string `json:"report_date"`
-		Content        string `json:"content"`
-		Archive        bool   `json:"archive,omitempty"`
+		DirectorUserID string  `json:"director_user_id,omitempty"`
+		ReportDate     string  `json:"report_date"`
+		Content        string  `json:"content"`
+		NextDayPlan    *string `json:"next_day_plan"`
+		Archive        bool    `json:"archive,omitempty"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
@@ -1670,22 +1691,23 @@ func (h *ReportHandler) SaveDepartmentReportToday(w http.ResponseWriter, r *http
 	var reportID string
 	err = h.db.QueryRow(`
 		INSERT INTO department_reports (
-			department_id, report_date, content, status, source_team_report_ids, saved_at, archived_at
+			department_id, report_date, content, next_day_plan, status, source_team_report_ids, saved_at, archived_at
 		)
-		VALUES ($1, $2, $3, 'saved', $4, now(), CASE WHEN $5 THEN now() ELSE NULL END)
+		VALUES ($1, $2, $3, COALESCE($4, ''), 'saved', $5, now(), CASE WHEN $6 THEN now() ELSE NULL END)
 		ON CONFLICT (department_id, report_date) WHERE department_id IS NOT NULL
 		DO UPDATE SET
 			content = EXCLUDED.content,
+			next_day_plan = COALESCE($4, department_reports.next_day_plan),
 			status = 'saved',
 			source_team_report_ids = EXCLUDED.source_team_report_ids,
 			saved_at = now(),
 			archived_at = CASE
-				WHEN $5 THEN COALESCE(department_reports.archived_at, now())
+			WHEN $6 THEN COALESCE(department_reports.archived_at, now())
 				ELSE department_reports.archived_at
 			END,
 			updated_at = now()
 		RETURNING id::text`,
-		departmentID, reportDate, req.Content, pq.Array(sourceIDs), req.Archive,
+		departmentID, reportDate, req.Content, req.NextDayPlan, pq.Array(sourceIDs), req.Archive,
 	).Scan(&reportID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -1749,6 +1771,11 @@ func (h *ReportHandler) UpdateDepartmentReport(w http.ResponseWriter, r *http.Re
 		args = append(args, *req.Content)
 		argIdx++
 	}
+	if req.NextDayPlan != nil {
+		sets = append(sets, fmt.Sprintf("next_day_plan = $%d", argIdx))
+		args = append(args, *req.NextDayPlan)
+		argIdx++
+	}
 	args = append(args, id, departmentID)
 	query := fmt.Sprintf("UPDATE department_reports SET %s WHERE id = $%d AND department_id = $%d", joinWithCommas(sets), argIdx, argIdx+1)
 	res, err := h.db.Exec(query, args...)
@@ -1776,13 +1803,13 @@ func (h *ReportHandler) getDepartmentReportByDate(departmentID, reportDate strin
 	var savedAt, archivedAt, generatedAt sql.NullTime
 	var sourceIDsStr string
 	err := h.db.QueryRow(`
-		SELECT dr.id::text, dr.report_date, dr.content, dr.status, dr.source_team_report_ids, dr.saved_at, dr.archived_at,
+		SELECT dr.id::text, dr.report_date, dr.content, COALESCE(dr.next_day_plan, ''), dr.status, dr.source_team_report_ids, dr.saved_at, dr.archived_at,
 			dr.edited, COALESCE(dr.generation_mode, ''), dr.managed_agent_run_id::text, dr.agent_id, dr.agent_version_id, dr.model_id, ar.finished_at,
 			dr.created_at, dr.updated_at
 		FROM department_reports dr
 		LEFT JOIN ai_runs ar ON ar.id = dr.managed_agent_run_id
 		WHERE dr.department_id = $1 AND dr.report_date = $2`, departmentID, reportDate).Scan(
-		&dr.ID, &dr.ReportDate, &dr.Content, &status, &sourceIDsStr, &savedAt, &archivedAt,
+		&dr.ID, &dr.ReportDate, &dr.Content, &dr.NextDayPlan, &status, &sourceIDsStr, &savedAt, &archivedAt,
 		&dr.Edited, &generationMode, &managedAgentRunID, &agentID, &agentVersionID, &modelID, &generatedAt,
 		&dr.CreatedAt, &dr.UpdatedAt,
 	)
@@ -1862,13 +1889,13 @@ func (h *ReportHandler) getDepartmentReportByID(departmentID, id string) (*model
 	var savedAt, archivedAt, generatedAt sql.NullTime
 	var sourceIDsStr string
 	err := h.db.QueryRow(`
-		SELECT dr.id::text, dr.report_date, dr.content, dr.status, dr.source_team_report_ids, dr.saved_at, dr.archived_at,
+		SELECT dr.id::text, dr.report_date, dr.content, COALESCE(dr.next_day_plan, ''), dr.status, dr.source_team_report_ids, dr.saved_at, dr.archived_at,
 			dr.edited, COALESCE(dr.generation_mode, ''), dr.managed_agent_run_id::text, dr.agent_id, dr.agent_version_id, dr.model_id, ar.finished_at,
 			dr.created_at, dr.updated_at
 		FROM department_reports dr
 		LEFT JOIN ai_runs ar ON ar.id = dr.managed_agent_run_id
 		WHERE dr.department_id = $1 AND dr.id = $2`, departmentID, id).Scan(
-		&dr.ID, &dr.ReportDate, &dr.Content, &status, &sourceIDsStr, &savedAt, &archivedAt,
+		&dr.ID, &dr.ReportDate, &dr.Content, &dr.NextDayPlan, &status, &sourceIDsStr, &savedAt, &archivedAt,
 		&dr.Edited, &generationMode, &managedAgentRunID, &agentID, &agentVersionID, &modelID, &generatedAt,
 		&dr.CreatedAt, &dr.UpdatedAt,
 	)
@@ -1918,6 +1945,7 @@ func (h *ReportHandler) ListDepartmentReports(w http.ResponseWriter, r *http.Req
 
 	query := `
 		SELECT dr.id::text, dr.report_date,
+			COALESCE(dr.next_day_plan, ''),
 			(SELECT COUNT(*) FROM teams WHERE department_id = $1) AS team_count,
 			COALESCE(cardinality(dr.source_team_report_ids), 0) AS submitted_team_count,
 			GREATEST((SELECT COUNT(*) FROM teams WHERE department_id = $1) - COALESCE(cardinality(dr.source_team_report_ids), 0), 0) AS missing_team_count,
@@ -1937,7 +1965,7 @@ func (h *ReportHandler) ListDepartmentReports(w http.ResponseWriter, r *http.Req
 		var dr model.DepartmentReportListItem
 		var status sql.NullString
 		var savedAt, archivedAt sql.NullTime
-		if err := rows.Scan(&dr.ID, &dr.ReportDate, &dr.TeamCount, &dr.SubmittedTeamCount, &dr.MissingTeamCount, &status, &savedAt, &archivedAt, &dr.CreatedAt, &dr.UpdatedAt); err != nil {
+		if err := rows.Scan(&dr.ID, &dr.ReportDate, &dr.NextDayPlan, &dr.TeamCount, &dr.SubmittedTeamCount, &dr.MissingTeamCount, &status, &savedAt, &archivedAt, &dr.CreatedAt, &dr.UpdatedAt); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}

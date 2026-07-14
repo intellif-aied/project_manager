@@ -403,6 +403,7 @@ type DailyReport struct {
 	UserName          string     `json:"user_name"`
 	ReportDate        string     `json:"report_date"`
 	Content           string     `json:"content"`
+	NextDayPlan       string     `json:"next_day_plan"`
 	SubmittedContent  *string    `json:"submitted_content,omitempty"`
 	Status            *string    `json:"status,omitempty"`
 	SubmittedTo       *string    `json:"submitted_to,omitempty"`
@@ -430,6 +431,7 @@ type DailyReportListItem struct {
 	UserID             string     `json:"user_id"`
 	UserName           string     `json:"user_name"`
 	ReportDate         string     `json:"report_date"`
+	NextDayPlan        string     `json:"next_day_plan"`
 	Status             *string    `json:"status,omitempty"`
 	SubmittedTo        *string    `json:"submitted_to,omitempty"`
 	Edited             bool       `json:"edited"`
@@ -656,13 +658,15 @@ type UpdateSessionTaskRequest struct {
 
 type UpdateReportRequest struct {
 	Content      *string   `json:"content,omitempty"`
+	NextDayPlan  *string   `json:"next_day_plan,omitempty"`
 	FeishuDocURL *string   `json:"feishu_doc_url,omitempty"`
 	SessionIDs   *[]string `json:"session_ids,omitempty"`
 }
 
 type SubmitReportRequest struct {
-	Content    *string   `json:"content,omitempty"`
-	SessionIDs *[]string `json:"session_ids,omitempty"`
+	Content     *string   `json:"content,omitempty"`
+	NextDayPlan *string   `json:"next_day_plan,omitempty"`
+	SessionIDs  *[]string `json:"session_ids,omitempty"`
 }
 
 type WeeklySessionSource struct {
@@ -695,6 +699,7 @@ type PersonalWeeklyReport struct {
 	WeekStart            string     `json:"week_start"`
 	WeekEnd              string     `json:"week_end"`
 	Content              string     `json:"content"`
+	NextDayPlan          string     `json:"next_day_plan"`
 	SubmittedContent     *string    `json:"submitted_content,omitempty"`
 	Status               string     `json:"status"`
 	SavedAt              *time.Time `json:"saved_at,omitempty"`
@@ -1156,6 +1161,7 @@ type TeamReport struct {
 	LeaderName           string     `json:"leader_name"`
 	ReportDate           string     `json:"report_date"`
 	Content              string     `json:"content"`
+	NextDayPlan          string     `json:"next_day_plan"`
 	SubmittedContent     *string    `json:"submitted_content,omitempty"`
 	Status               *string    `json:"status,omitempty"`
 	FeishuDocURL         *string    `json:"feishu_doc_url,omitempty"`
@@ -1187,6 +1193,7 @@ type TeamReportListItem struct {
 	LeaderID       string     `json:"leader_id"`
 	LeaderName     string     `json:"leader_name"`
 	ReportDate     string     `json:"report_date"`
+	NextDayPlan    string     `json:"next_day_plan"`
 	MemberCount    int        `json:"member_count"`
 	SubmittedCount int        `json:"submitted_count"`
 	MissingCount   int        `json:"missing_count"`
@@ -1231,6 +1238,7 @@ type MemberPersonalReport struct {
 
 type UpdateTeamReportRequest struct {
 	Content      *string `json:"content,omitempty"`
+	NextDayPlan  *string `json:"next_day_plan,omitempty"`
 	FeishuDocURL *string `json:"feishu_doc_url,omitempty"`
 }
 
@@ -1283,6 +1291,7 @@ type DepartmentReport struct {
 	ID                  string     `json:"id"`
 	ReportDate          string     `json:"report_date"`
 	Content             string     `json:"content"`
+	NextDayPlan         string     `json:"next_day_plan"`
 	Status              *string    `json:"status,omitempty"`
 	SourceTeamReportIDs []string   `json:"source_team_report_ids"`
 	GenerationMode      string     `json:"generation_mode,omitempty"`
@@ -1305,6 +1314,7 @@ type DepartmentReport struct {
 type DepartmentReportListItem struct {
 	ID                 string     `json:"id"`
 	ReportDate         string     `json:"report_date"`
+	NextDayPlan        string     `json:"next_day_plan"`
 	TeamCount          int        `json:"team_count"`
 	SubmittedTeamCount int        `json:"submitted_team_count"`
 	MissingTeamCount   int        `json:"missing_team_count"`
@@ -1323,8 +1333,9 @@ type PaginatedDepartmentReports struct {
 }
 
 type UpdateDepartmentReportRequest struct {
-	Content *string `json:"content,omitempty"`
-	Archive bool    `json:"archive,omitempty"`
+	Content     *string `json:"content,omitempty"`
+	NextDayPlan *string `json:"next_day_plan,omitempty"`
+	Archive     bool    `json:"archive,omitempty"`
 }
 
 type WeeklyDailyReportSource struct {

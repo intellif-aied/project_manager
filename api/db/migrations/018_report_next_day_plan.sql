@@ -1,0 +1,3 @@
+ALTER TABLE daily_reports ADD COLUMN IF NOT EXISTS next_day_plan TEXT NOT NULL DEFAULT '';
+ALTER TABLE team_reports ADD COLUMN IF NOT EXISTS next_day_plan TEXT NOT NULL DEFAULT '';
+ALTER TABLE department_reports ADD COLUMN IF NOT EXISTS next_day_plan TEXT NOT NULL DEFAULT '';
