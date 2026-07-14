@@ -17,6 +17,10 @@ func TestReportSkillMarkdownUsesDeterministicDisplayContext(t *testing.T) {
 		"total_members is roster size only",
 		"A submitted team report proves only that the team report exists",
 		"2/2 team reports submitted must not be rewritten as all department members active",
+		"selected_session_slice_keys, when non-empty, are the explicit source selection",
+		"selected sessions are the mandatory primary source",
+		"The report period controls where the report is saved",
+		"include every returned selected slice in the report's work summary",
 	}
 	for _, expected := range required {
 		if !strings.Contains(markdown, expected) {

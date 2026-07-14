@@ -649,9 +649,8 @@ function WeeklyReportEditorModal({
           </div>
           {allowSessionSettings ? (
             <ReportAISettingsPanel
+              key={`weekly:${selectedWeekStart}:${selectedWeekEnd}`}
               open={settingsOpen}
-              from={selectedWeekStart}
-              to={selectedWeekEnd}
               selectedKeys={selectedSessionSliceKeys}
               onSelectedKeysChange={setSelectedSessionSliceKeys}
               onClose={() => setSettingsOpen(false)}

@@ -1,18 +1,29 @@
-.console-report-workflow-modal .report-ai-generate-controls {
-  margin-right: auto;
+.report-ai-generate-shell {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 0;
+  max-width: 100%;
+  gap: 10px;
 }
 
 .report-ai-generate-controls .ant-btn {
   height: 34px;
 }
 
-.console-report-workflow-modal .ant-modal-footer .report-ai-generate-controls .ant-btn:not(:first-child) {
+.console-report-workflow-modal
+  .ant-modal-footer
+  .report-ai-generate-controls
+  .ant-btn:not(:first-child) {
   margin-inline-start: -1px;
   border-start-start-radius: 0;
   border-end-start-radius: 0;
 }
 
-.console-report-workflow-modal .ant-modal-footer .report-ai-generate-controls .ant-btn:not(:last-child) {
+.console-report-workflow-modal
+  .ant-modal-footer
+  .report-ai-generate-controls
+  .ant-btn:not(:last-child) {
   border-start-end-radius: 0;
   border-end-end-radius: 0;
 }
@@ -24,19 +35,80 @@
   z-index: 1;
 }
 
+.report-ai-run-status {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 520px;
+  color: #475569;
+}
+
+.report-ai-run-status > .anticon {
+  font-size: 16px;
+}
+
+.report-ai-run-status > span {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+  overflow: hidden;
+  gap: 6px;
+}
+
+.report-ai-run-status strong::after {
+  margin-left: 6px;
+  color: #cbd5e1;
+  content: "·";
+}
+
+.report-ai-run-status strong,
+.report-ai-run-status em {
+  overflow: hidden;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.report-ai-run-status strong {
+  color: #172033;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.report-ai-run-status em {
+  color: #64748b;
+  font-size: 12px;
+  font-style: normal;
+}
+
+.report-ai-run-status.is-running > .anticon {
+  color: #2563eb;
+}
+
+.report-ai-run-status.is-success > .anticon {
+  color: #15803d;
+}
+
+.report-ai-run-status.is-error > .anticon,
+.report-ai-run-status.is-error strong {
+  color: #b42318;
+}
+
 .report-ai-settings-panel {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
   gap: 12px;
   min-width: 0;
   min-height: 0;
   max-width: 100%;
-  max-height: calc(100dvh - 230px);
+  height: 100%;
   overflow: hidden;
   padding: 12px;
   border: 1px solid #dfe8f3;
-  border-radius: 10px;
-  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+  border-radius: 8px;
+  background: #ffffff;
   box-shadow: 0 12px 26px rgba(15, 23, 42, 0.06);
 }
 
@@ -73,6 +145,46 @@
   color: #526173;
   font-size: 12px;
   font-weight: 650;
+}
+
+.report-ai-settings-panel__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.report-ai-settings-panel__toolbar .ant-picker {
+  flex: 0 1 260px;
+  width: 260px;
+  min-width: 220px;
+  height: 28px;
+  min-height: 28px;
+  padding-inline: 8px;
+}
+
+.report-ai-settings-panel__toolbar .ant-picker-input > input {
+  height: 26px;
+  line-height: 26px;
+}
+
+.report-ai-settings-panel__toolbar .ant-btn {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+}
+
+.report-ai-settings-panel__clear.ant-btn {
+  color: #64748b;
+  background: #f3f6fa;
+}
+
+.report-ai-settings-panel__clear.ant-btn:not(:disabled):hover {
+  color: #b42318;
+  background: #fff1f0;
 }
 
 .report-ai-session-id {
@@ -169,7 +281,23 @@
 }
 
 @media (max-width: 760px) {
+  .report-ai-generate-shell {
+    width: 100%;
+  }
+
+  .report-ai-run-status {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .report-ai-settings-panel__toolbar .ant-picker {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
+  }
+
   .report-ai-settings-panel {
     order: -1;
+    height: auto;
   }
 }

@@ -62,7 +62,7 @@ import { PagePanel } from "@/shared/components/PagePanel/PagePanel";
 import { isEditConflict } from "@/shared/request/apiError";
 import { appendSearch } from "@/shared/utils/urlQuery";
 
-import { fetchFollowFollowers, fetchSessionTokens } from "../../api/client";
+import { fetchAllSessionTokens, fetchFollowFollowers, fetchSessionTokens } from "../../api/client";
 import type {
   AttentionLevel,
   DashboardFollowFollowerDTO,
@@ -2110,6 +2110,26 @@ function TokenSourcePicker({
     placeholderData: (previousData) => previousData,
     staleTime: 60_000
   });
+  const selectAllMutation = useMutation({
+    mutationFn: () =>
+      fetchAllSessionTokens({
+        scope: "mine",
+        ...(dateRange ? { from: dateRange[0], to: dateRange[1] } : {})
+      }),
+    onSuccess: (items) => {
+      const selectableItems = items.filter((item) => item.total_tokens > 0);
+      setSelected((current) => [
+        ...new Set([...current, ...selectableItems.map((item) => sessionRowKey(item))])
+      ]);
+      setSelectedRows((current) => {
+        const next = { ...current };
+        selectableItems.forEach((item) => {
+          next[sessionRowKey(item)] = item;
+        });
+        return next;
+      });
+    }
+  });
   const sessions = useMemo(() => sessionsQuery.data?.items ?? [], [sessionsQuery.data]);
   const rows = useMemo(() => sessions.filter((source) => source.total_tokens > 0), [sessions]);
   useEffect(() => {
@@ -2226,6 +2246,22 @@ function TokenSourcePicker({
             setPage(1);
           }}
         />
+        <Button
+          loading={selectAllMutation.isPending}
+          disabled={(sessionsQuery.data?.total ?? 0) === 0}
+          onClick={() => selectAllMutation.mutate()}
+        >
+          全选查询结果
+        </Button>
+        <Button
+          disabled={selected.length === 0}
+          onClick={() => {
+            setSelected([]);
+            setSelectedRows({});
+          }}
+        >
+          清空选择
+        </Button>
       </div>
       <div className="requirements-session-modal__table tokens-table-card">
         <Table<SessionTokens>

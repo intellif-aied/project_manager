@@ -292,8 +292,11 @@ func (h *ReportMCPHandler) toolGetSessions(ctx context.Context, r *http.Request,
 	if limit <= 0 || limit > 200 {
 		limit = 100
 	}
+	if len(selectedSliceKeys) > 0 && limit < len(selectedSliceKeys) {
+		limit = len(selectedSliceKeys)
+	}
 	rows, err := h.db.QueryContext(ctx, `
-		SELECT s.id::text, sas.user_id::text, COALESCE(NULLIF(u.nickname,''),u.username), COALESCE(u.role,''), COALESCE(u.team_id::text,''), COALESCE(t.name,''),
+			SELECT s.id::text, sas.user_id::text, COALESCE(NULLIF(u.nickname,''),u.username), COALESCE(u.role,''), COALESCE(u.team_id::text,''), COALESCE(t.name,''),
 		       s.session_ref, s.agent_type, s.started_at, s.ended_at,
 		       sas.activity_date::text, sas.activity_start_at, sas.activity_end_at,
 		       ARRAY[sas.activity_date::text],
@@ -312,13 +315,15 @@ func (h *ReportMCPHandler) toolGetSessions(ctx context.Context, r *http.Request,
 		       sas.summary_strategy,
 		       sas.is_estimated
 		FROM session_activity_slices sas
-		JOIN sessions s ON s.id = sas.session_id
-		JOIN users u ON u.id = sas.user_id
-		LEFT JOIN teams t ON t.id = u.team_id
-		WHERE sas.activity_date >= $1::date AND sas.activity_date <= $2::date
-		  AND sas.user_id::text = ANY($3)
-		  AND (COALESCE(cardinality($4::text[]), 0) = 0 OR (s.id::text || ':' || sas.activity_date::text) = ANY($4::text[]))
-		ORDER BY sas.activity_end_at DESC LIMIT $5`, start, end, pq.Array(visible), pq.Array(selectedSliceKeys), limit)
+			JOIN sessions s ON s.id = sas.session_id
+			JOIN users u ON u.id = sas.user_id
+			LEFT JOIN teams t ON t.id = u.team_id
+			WHERE sas.user_id::text = ANY($3)
+			  AND (
+			       (COALESCE(cardinality($4::text[]), 0) = 0 AND sas.activity_date >= $1::date AND sas.activity_date <= $2::date)
+			       OR (s.id::text || ':' || sas.activity_date::text) = ANY($4::text[])
+			  )
+			ORDER BY sas.activity_end_at DESC LIMIT $5`, start, end, pq.Array(visible), pq.Array(selectedSliceKeys), limit)
 	if err != nil {
 		return nil, errMCPInternal
 	}
@@ -803,6 +808,20 @@ type taskReqLink struct {
 	Title string `json:"title"`
 }
 
+func dashboardMyItemIDs(ctx context.Context, db *sql.DB, userID, targetType string) ([]string, error) {
+	refs, err := loadDashboardMyItemRefs(ctx, db, userID)
+	if err != nil {
+		return nil, err
+	}
+	ids := []string{}
+	for _, ref := range refs {
+		if ref.TargetType == targetType {
+			ids = append(ids, ref.TargetID)
+		}
+	}
+	return ids, nil
+}
+
 func (h *ReportMCPHandler) toolGetTasks(ctx context.Context, r *http.Request, rawArgs json.RawMessage) (any, error) {
 	u, err := requireUser(r)
 	if err != nil {
@@ -832,8 +851,21 @@ func (h *ReportMCPHandler) toolGetTasks(ctx context.Context, r *http.Request, ra
 	if len(statuses) == 0 {
 		statuses = []string{"todo", "in_progress", "done", "blocked"}
 	}
+	visibilityClause := `EXISTS (
+			SELECT 1 FROM task_responsibles tr
+			WHERE tr.task_id = t.id AND tr.user_id = ANY($3)
+		  )`
+	queryArgs := []any{start, end, pq.Array(visible), pq.Array(statuses)}
+	if rs.Type == "self" {
+		myTaskIDs, err := dashboardMyItemIDs(ctx, h.db, u.ID, "task")
+		if err != nil {
+			return nil, errMCPInternal
+		}
+		visibilityClause = "t.id::text = ANY($3)"
+		queryArgs[2] = pq.Array(myTaskIDs)
+	}
 
-	rows, err := h.db.QueryContext(ctx, `
+	query := fmt.Sprintf(`
 		SELECT t.id::text, t.title, t.status, COALESCE(t.progress,0),
 		       COALESCE(MIN(tr_all.user_id::text), ''),
 		       COALESCE(
@@ -846,13 +878,11 @@ func (h *ReportMCPHandler) toolGetTasks(ctx context.Context, r *http.Request, ra
 		LEFT JOIN task_responsibles tr_all ON tr_all.task_id = t.id
 		LEFT JOIN users ru ON ru.id = tr_all.user_id
 		WHERE t.updated_at >= $1 AND t.updated_at < ($2::date + 1)
-		  AND EXISTS (
-			SELECT 1 FROM task_responsibles tr
-			WHERE tr.task_id = t.id AND tr.user_id = ANY($3)
-		  )
+		  AND %s
 		  AND t.status = ANY($4)
 		GROUP BY t.id, t.title, t.status, t.progress, r.id, r.title, t.updated_at
-		ORDER BY t.updated_at DESC LIMIT 200`, start, end, pq.Array(visible), pq.Array(statuses))
+		ORDER BY t.updated_at DESC LIMIT 200`, visibilityClause)
+	rows, err := h.db.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
 		return nil, errMCPInternal
 	}
@@ -930,17 +960,27 @@ func (h *ReportMCPHandler) toolGetRequirements(ctx context.Context, r *http.Requ
 		return nil, err
 	}
 	visible := rs.UserIDs
-
-	rows, err := h.db.QueryContext(ctx, `
+	visibilityClause := `(r.creator_id = ANY($3) OR EXISTS (
+		       SELECT 1 FROM requirement_teams rt JOIN users u2 ON u2.team_id = rt.team_id
+		       WHERE rt.requirement_id = r.id AND u2.id = ANY($3)))`
+	queryArgs := []any{start, end, pq.Array(visible)}
+	if rs.Type == "self" {
+		myRequirementIDs, err := dashboardMyItemIDs(ctx, h.db, u.ID, "requirement")
+		if err != nil {
+			return nil, errMCPInternal
+		}
+		visibilityClause = "r.id::text = ANY($3)"
+		queryArgs[2] = pq.Array(myRequirementIDs)
+	}
+	query := fmt.Sprintf(`
 		SELECT r.id::text, r.title, r.status, COALESCE(r.creator_id::text,''), COALESCE(NULLIF(u.nickname,''),u.username),
 		       r.updated_at
 		FROM requirements r
 		LEFT JOIN users u ON u.id = r.creator_id
 		WHERE r.updated_at >= $1 AND r.updated_at < ($2::date + 1)
-		  AND (r.creator_id = ANY($3) OR EXISTS (
-		       SELECT 1 FROM requirement_teams rt JOIN users u2 ON u2.team_id = rt.team_id
-		       WHERE rt.requirement_id = r.id AND u2.id = ANY($3)))
-		ORDER BY r.updated_at DESC LIMIT 200`, start, end, pq.Array(visible))
+		  AND %s
+		ORDER BY r.updated_at DESC LIMIT 200`, visibilityClause)
+	rows, err := h.db.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
 		return nil, errMCPInternal
 	}

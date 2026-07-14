@@ -68,7 +68,7 @@ func reportMCPTools() []map[string]any {
 					"selected_session_slice_keys": map[string]any{
 						"type":        "array",
 						"items":       map[string]any{"type": "string"},
-						"description": "Optional session activity slice keys in the format session_id:YYYY-MM-DD.",
+						"description": "Optional explicit session activity slice keys in the format session_id:YYYY-MM-DD. When provided, they are the authoritative session source selection and are returned even when outside date_range.",
 					},
 					"limit":           map[string]any{"type": "integer"},
 					"include_summary": map[string]any{"type": "boolean"},

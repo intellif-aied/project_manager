@@ -83,12 +83,13 @@ func requireContainsAll(t *testing.T, value string, expected ...string) {
 
 func TestBuildReportRunMessageIncludesSystemParams(t *testing.T) {
 	message := buildReportRunMessage(map[string]string{
-		"report_type":           "personal_daily",
-		"period_json":           `{"date":"2026-07-01"}`,
-		"calendar_context_json": `{"type":"daily","day":{"date":"2026-07-01","weekday":"周三"}}`,
-		"target_json":           `{"type":"self","user_id":"305"}`,
-		"run_id":                "run-report",
-		"mcp_url":               "https://aida.example.com/api/v1/mcp/reports",
+		"report_type":                      "personal_daily",
+		"period_json":                      `{"date":"2026-07-01"}`,
+		"calendar_context_json":            `{"type":"daily","day":{"date":"2026-07-01","weekday":"周三"}}`,
+		"target_json":                      `{"type":"self","user_id":"305"}`,
+		"selected_session_slice_keys_json": `["session-a:2026-06-01"]`,
+		"run_id":                           "run-report",
+		"mcp_url":                          "https://aida.example.com/api/v1/mcp/reports",
 	}, "请重点关注风险", reportMCPCredentialSlot)
 
 	requireContainsAll(t, message,
@@ -99,6 +100,8 @@ func TestBuildReportRunMessageIncludesSystemParams(t *testing.T) {
 		"run_id=run-report",
 		reportMCPCredentialSlot,
 		"请重点关注风险",
+		"必须把 MCP 返回的全部选中 Session 作为报告正文证据",
+		"period 只决定报告归档日期",
 	)
 	if strings.Contains(message, "mcp_url=") {
 		t.Fatalf("message should not expose mcp_url: %q", message)
@@ -126,6 +129,9 @@ func TestDefaultReportAgentInstructionsSeparateRosterFromActivity(t *testing.T) 
 		"成员总数仅表示名册范围",
 		"小组报告已提交仅证明该小组报告存在",
 		"缺少成员级证据时禁止输出活跃人数",
+		"最高优先级 Session 来源指令",
+		"必须把返回的所有选中切片作为报告正文证据",
+		"period 只决定报告归档日期",
 		"全员参与",
 		"全部在岗",
 	)
@@ -1599,6 +1605,54 @@ func TestReportAgentRepairRequestRefreshesManagedStartPromptTemplate(t *testing.
 	}
 	if !strings.Contains(repairReq.StartPromptTemplate, "calendar_context={{ calendar_context_json }}") {
 		t.Fatalf("calendar context missing from refreshed start prompt: %q", repairReq.StartPromptTemplate)
+	}
+}
+
+func TestResolveAndRepairDefaultReportAgentRefreshesManagedPromptBeforeRun(t *testing.T) {
+	defaults := testManagedAgentDefaults()
+	var updated model.UpsertManagedAgentRequest
+	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/skill/list":
+			writeJSON(w, http.StatusOK, model.ListManagedSkillsResponse{Skills: []model.ManagedSkill{{
+				SkillID: "skill-report",
+				Owner:   "100866",
+				Slug:    service.ReportSkillSlug,
+				Version: service.ReportSkillVersion,
+			}}})
+		case r.Method == http.MethodPut && r.URL.Path == "/api/my/agents/agent-default":
+			if err := json.NewDecoder(r.Body).Decode(&updated); err != nil {
+				t.Fatal(err)
+			}
+			writeJSON(w, http.StatusOK, model.ManagedAgent{AgentID: "agent-default"})
+		default:
+			t.Fatalf("unexpected platform request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer platform.Close()
+
+	h := NewManagedAgentHandlerWithDefaults(nil, service.NewManagedAgentClient(platform.URL, "platform-token"), defaults)
+	agent := model.ManagedAgent{
+		AgentID:             "agent-default",
+		Name:                defaultReportAgentName,
+		Description:         defaultReportAgentDescription,
+		Engine:              "claude-code",
+		DefaultModelID:      defaults.ModelID,
+		Instructions:        defaultReportAgentInstructions(reportMCPCredentialSlot),
+		StartPromptTemplate: strings.Replace(defaultReportAgentStartPromptTemplate(reportMCPCredentialSlot), "calendar_context={{ calendar_context_json }}\n", "", 1),
+		CredentialSlots:     []model.ManagedCredentialSlot{{Name: reportMCPCredentialSlot, Required: true}},
+		Skills:              []model.ManagedSkillRef{{Owner: "100866", Slug: service.ReportSkillSlug, Version: service.ReportSkillVersion}},
+		MCPServers:          []model.ManagedMCPServer{h.defaultReportMCPServer()},
+	}
+
+	if err := h.resolveAndRepairReportAgent(context.Background(), h.client, &agent, true); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(updated.StartPromptTemplate, "calendar_context={{ calendar_context_json }}") {
+		t.Fatalf("updated start prompt = %q", updated.StartPromptTemplate)
+	}
+	if agent.StartPromptTemplate != h.reportAgentStartPromptTemplate() {
+		t.Fatalf("in-memory start prompt was not refreshed: %q", agent.StartPromptTemplate)
 	}
 }
 

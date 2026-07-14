@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,44 @@ import (
 	"github.com/aidashboard/api/model"
 	"github.com/lib/pq"
 )
+
+func TestLoadDashboardMyItemRefsDefinesPersonalReportItemScope(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	mock.ExpectQuery("SELECT DISTINCT r.id").
+		WithArgs("307").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "followed_by_me", "created_by_me", "assigned_to_me"}).
+			AddRow("req-created", false, true, false).
+			AddRow("req-followed", true, false, false))
+	mock.ExpectQuery("SELECT DISTINCT t.id").
+		WithArgs("307").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "followed_by_me", "created_by_me", "assigned_to_me"}).
+			AddRow("task-assigned", false, false, true))
+
+	refs, err := loadDashboardMyItemRefs(context.Background(), db, "307")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) != 3 {
+		t.Fatalf("refs = %#v", refs)
+	}
+	if refs[0].TargetType != "requirement" || refs[0].TargetID != "req-created" || !refs[0].CreatedByMe {
+		t.Fatalf("created requirement ref = %#v", refs[0])
+	}
+	if refs[1].TargetID != "req-followed" || !refs[1].FollowedByMe {
+		t.Fatalf("followed requirement ref = %#v", refs[1])
+	}
+	if refs[2].TargetType != "task" || refs[2].TargetID != "task-assigned" || !refs[2].AssignedToMe {
+		t.Fatalf("assigned task ref = %#v", refs[2])
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestDashboardRisksUsesMyRiskScopeForAllRolesAndMergesTaskRisks(t *testing.T) {
 	tests := []struct {

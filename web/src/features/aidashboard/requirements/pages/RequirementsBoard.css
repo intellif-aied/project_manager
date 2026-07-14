@@ -2732,6 +2732,8 @@
 .requirements-session-modal__toolbar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
   justify-content: flex-end;
   margin-bottom: 12px;
 }

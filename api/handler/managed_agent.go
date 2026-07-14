@@ -1243,7 +1243,7 @@ func defaultReportAgentInstructions(credentialSlot string) string {
 		"运行参数由 Aida 后端注入，包含 run_id、report_type、period、calendar_context、target，以及可选的 selected_session_slice_keys。不要要求用户提供 session ids、urls、token 或 credential。",
 		"Aida Report MCP 已通过 " + credentialSlot + " 凭据槽配置当前用户 Authorization。调用已绑定的 MCP tools，不要手工拼接管理员 token。",
 		"必须使用当前用户身份调用 Aida Report MCP，并尊重 MCP 返回的权限边界和缺失来源事实。",
-		"先调用 get_existing_report 获取已有内容，再根据 report_type 调用 get_sessions/get_daily_reports/get_weekly_reports/get_tasks/get_requirements/get_report_inventory 等原子工具取数；读取工具使用 date_range 或 week_range，写回工具使用 period。若 selected_session_slice_keys 非空，调用 get_sessions 时必须原样传入。",
+		"先调用 get_existing_report 获取已有内容，再根据 report_type 调用 get_sessions/get_daily_reports/get_weekly_reports/get_tasks/get_requirements/get_report_inventory 等原子工具取数；读取工具使用 date_range 或 week_range，写回工具使用 period。若 selected_session_slice_keys 非空，它是个人报告的最高优先级 Session 来源指令：必须调用 get_sessions 并原样传入，必须把返回的所有选中切片作为报告正文证据。period 只决定报告归档日期，不得因选中切片在 period/date_range 之外而丢弃、降级或声称无可用 Session。",
 		"个人周报优先汇总已保存的个人日报；小组日报/周报优先汇总已保存的成员日报/周报；部门日报/周报优先汇总已保存的小组日报/周报。session、task、requirement 只作为补充证据，不要把 token 或 session 数量统计作为小组/部门报告主体。",
 		"成员总数仅表示名册范围，不代表出勤、参与或有工作产出。小组报告已提交仅证明该小组报告存在，不代表小组全员有活动。部门报告必须保留下级报告中的缺失成员和无报告事实；缺少成员级证据时禁止输出活跃人数，也禁止使用“全员参与”“全部在岗”“所有成员完成”“全部有记录”等结论。",
 		"日期对应的星期只能复制 calendar_context，禁止自行推算。报告正文不得展示 user_id、team_id、department_id、report_id、session_id、run_id、任何 ID/编号标签或 UUID。部门名称只能使用 MCP 返回的 department_name；为空时统一写“部门”，禁止猜测。",
@@ -1260,6 +1260,7 @@ func defaultReportAgentStartPromptTemplate(credentialSlot string) string {
 		"calendar_context={{ calendar_context_json }}",
 		"target={{ target_json }}",
 		"selected_session_slice_keys={{ selected_session_slice_keys_json }}",
+		"当 selected_session_slice_keys 非空时，必须使用 get_sessions 返回的全部选中切片生成正文；这些切片允许跨出 period，禁止因日期不在报告周期内而忽略。",
 		"run_id={{ run_id }}",
 		"当前用户凭据已通过 " + credentialSlot + " credential slot 注入；优先调用已绑定的 Aida Report MCP tools 获取上下文并回写生成结果，不要手工拼接 Authorization。",
 	}, "\n")
@@ -1511,6 +1512,10 @@ func (h *ManagedAgentHandler) repairedReportAgentDependencyRequest(agent model.M
 }
 
 func (h *ManagedAgentHandler) resolveAndRepairReportAgentDependencies(ctx context.Context, client *service.ManagedAgentClient, agent *model.ManagedAgent) error {
+	return h.resolveAndRepairReportAgent(ctx, client, agent, false)
+}
+
+func (h *ManagedAgentHandler) resolveAndRepairReportAgent(ctx context.Context, client *service.ManagedAgentClient, agent *model.ManagedAgent, repairDefault bool) error {
 	if agent == nil {
 		return managedAgentConfigError("Report Agent is required")
 	}
@@ -1521,14 +1526,14 @@ func (h *ManagedAgentHandler) resolveAndRepairReportAgentDependencies(ctx contex
 	expected := managedSkillRef(systemSkill)
 	if h.defaults.ReportAssetRepair {
 		patch, changed := h.repairedReportAgentDependencyRequest(*agent, expected)
+		if repairDefault {
+			patch, changed = h.repairedDefaultReportAgentRequest(*agent, expected)
+		}
 		if changed {
 			if _, err := client.UpdateMyAgent(ctx, agent.AgentID, platformManagedAgentRequest(patch)); err != nil {
 				return err
 			}
-			agent.CredentialSlots = patch.CredentialSlots
-			agent.Skills = patch.Skills
-			agent.MCPServers = patch.MCPServers
-			agent.MCPBindings = patch.MCPBindings
+			*agent = managedAgentFromUpsertRequest(patch)
 		}
 	}
 	if !hasExactSkillRef(agent.Skills, expected) {
@@ -1957,6 +1962,11 @@ func buildReportRunMessage(startPromptValues map[string]string, message string, 
 		"selected_session_slice_keys=" + strings.TrimSpace(startPromptValues["selected_session_slice_keys_json"]),
 		"run_id=" + strings.TrimSpace(startPromptValues["run_id"]),
 		"当前用户凭据已通过 " + strings.TrimSpace(credentialSlot) + " credential slot 注入；优先调用已绑定的 Aida Report MCP tools 获取上下文并回写生成结果，不要手工拼接 Authorization。",
+	}
+	if selected := strings.TrimSpace(startPromptValues["selected_session_slice_keys_json"]); selected != "" && selected != "[]" && selected != "null" {
+		parts = append(parts,
+			"强制来源规则：selected_session_slice_keys 非空，必须调用 get_sessions 并原样传入这些 key。必须把 MCP 返回的全部选中 Session 作为报告正文证据，即使它们位于 period/date_range 之外；period 只决定报告归档日期。禁止因跨周期而忽略选中 Session，也禁止声称这些 Session 不可用。",
+		)
 	}
 	message = strings.TrimSpace(message)
 	if message != "" {
@@ -2441,7 +2451,8 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 		writeJSON(w, http.StatusBadRequest, map[string]string{"code": "REPORT_TYPE_NOT_SUPPORTED", "error": "unsupported report_type"})
 		return
 	}
-	if err := h.resolveAndRepairReportAgentDependencies(r.Context(), client, agent); err != nil {
+	repairDefault := profile != nil && profile.IsDefaultReport || profile == nil && isMarkedDefaultReportAgent(*agent)
+	if err := h.resolveAndRepairReportAgent(r.Context(), client, agent, repairDefault); err != nil {
 		writeManagedAgentError(w, err)
 		return
 	}
@@ -3911,7 +3922,8 @@ func (h *ManagedAgentHandler) ensureScheduleAgentRunnable(ctx context.Context, c
 			return fmt.Errorf("run_kind does not match agent type")
 		}
 		if agentRunKind == scheduleRunKindReport {
-			if err := h.resolveAndRepairReportAgentDependencies(ctx, client, &agent); err != nil {
+			repairDefault := profile != nil && profile.IsDefaultReport || profile == nil && isMarkedDefaultReportAgent(agent)
+			if err := h.resolveAndRepairReportAgent(ctx, client, &agent, repairDefault); err != nil {
 				return err
 			}
 		}

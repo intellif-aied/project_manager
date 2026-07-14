@@ -480,6 +480,7 @@
 .ai-assets-session-modal__summary {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 12px;

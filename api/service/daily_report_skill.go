@@ -77,7 +77,7 @@ func ReportSkillMarkdownWithConfig(data ReportSkillTemplateData) string {
 	data = normalizeReportSkillTemplateData(data)
 	return fmt.Sprintf(`# Aida Report Skill
 
-Use this skill when generating Aida reports. The run input must include report_type, period, target, and run_id. It may include selected_session_slice_keys injected by Aida. Do not ask the user to provide session ids, urls, MCP tokens, or credentials.
+Use this skill when generating Aida reports. The run input must include report_type, period, target, and run_id. It may include selected_session_slice_keys injected by Aida. Treat selected_session_slice_keys as an explicit user-selected source directive for personal reports, not as a casual filter. Do not ask the user to provide session ids, urls, MCP tokens, or credentials.
 
 ## Supported report_type
 
@@ -108,7 +108,7 @@ Derive these shared values from run input:
 - date_range for daily reports or sessions: {"start": date, "end": date}
 - date_range for weekly context: {"start": week_start, "end": week_end}
 - week_range for weekly reports: {"week_start": week_start, "week_end": week_end}
-- selected_session_slice_keys: optional JSON array of session slice keys in the form "session_id:YYYY-MM-DD"; when present and non-empty, pass it unchanged to get_sessions.
+- selected_session_slice_keys: optional JSON array of session slice keys in the form "session_id:YYYY-MM-DD"; when present and non-empty, it is the highest-priority user-selected session source set for personal reports. Pass it unchanged to get_sessions and use every returned selected slice as report-body evidence. The report period controls where the report is saved, not which explicitly selected sessions are usable. Do not drop, narrow, downgrade, or describe selected slices as unavailable because they are outside period/date_range.
 
 Use scope by report_type:
 
@@ -141,7 +141,7 @@ Use report_scope by source:
 
 Use this exact tool argument contract:
 
-- get_sessions: {"scope": scope, "target": target, "date_range": date_range, "include_summary": true, "selected_session_slice_keys": optional_selected_session_slice_keys}.
+- get_sessions: {"scope": scope, "target": target, "date_range": date_range, "include_summary": true, "selected_session_slice_keys": optional_selected_session_slice_keys}. date_range is the default period window when no explicit session slices are selected; selected_session_slice_keys, when non-empty, are the explicit source selection.
 - get_daily_reports: {"scope": scope, "target": target, "date_range": date_range, "report_scope": report_scope, "include_content": true}.
 - get_weekly_reports: {"scope": scope, "target": target, "week_range": week_range, "report_scope": report_scope, "include_content": true}.
 - get_tasks: {"scope": scope, "target": target, "date_range": date_range, "include_requirement": true}.
@@ -165,7 +165,7 @@ Do not send period to read-list tools that require date_range or week_range. Do 
    - team_weekly: get_weekly_reports(report_scope=personal), get_daily_reports(report_scope=personal), get_report_inventory(report_scope=personal, report_kind=weekly), and optionally get_tasks/get_requirements with scope.type=team. Do not call get_sessions by default.
    - department_daily: get_daily_reports(report_scope=team), get_report_inventory(report_scope=team, report_kind=daily), and optionally get_requirements with scope.type=department and date_range for period.date. Do not call get_sessions by default.
    - department_weekly: get_weekly_reports(report_scope=team), get_daily_reports(report_scope=team), get_report_inventory(report_scope=team, report_kind=weekly), and optionally get_requirements with scope.type=department. Do not call get_sessions by default.
-4. selected_session_slice_keys applies only to personal reports. If present and non-empty, pass it unchanged to personal get_sessions calls so MCP filters to those slices. Do not apply selected_session_slice_keys to team or department reports.
+4. selected_session_slice_keys applies only to personal reports. If present and non-empty, it is the highest-priority session source instruction for the personal report: call get_sessions with the selected_session_slice_keys unchanged and include every returned selected slice in the report's work summary, even when those slices are outside the report period. The period remains the report's display and storage period only. Never state that an explicitly selected session is unusable merely because its date is outside the period. Do not apply selected_session_slice_keys to team or department reports.
 5. Use source_state when present. If source_state.source_mode is reports_only, write that the report is based on saved reports. If it is sessions_only, write that it is based on session activity. If it is mixed, distinguish saved reports from supplemental data. If dependency_ready is false, list missing_names and do not invent missing lower-level report content.
 6. Use only facts returned by MCP tools. Do not invent tasks, sessions, blockers, progress, members, teams, or departments.
 7. For team and department reports, read scope_context from report/inventory MCP responses before writing the report. If a response has no scope_context, call get_report_inventory for the same scope/period to obtain roster context; do not call get_sessions just to obtain roster context.
@@ -184,8 +184,8 @@ Do not send period to read-list tools that require date_range or week_range. Do 
 
 ## Source Priority
 
-- personal_daily: sessions, tasks, and requirements are primary sources.
-- personal_weekly: saved personal daily reports returned by get_daily_reports are the primary source; sessions, tasks, and requirements are supplemental evidence.
+- personal_daily: when selected_session_slice_keys is present, the selected sessions are the mandatory primary source and their returned work facts must appear in the report body regardless of session date. Otherwise sessions, tasks, and requirements are primary sources for the report period.
+- personal_weekly: saved personal daily reports returned by get_daily_reports are the primary source; selected sessions, tasks, and requirements are supplemental evidence. When selected_session_slice_keys is present, selected sessions are the highest-priority session supplement.
 - team_daily / team_weekly: saved personal daily/weekly reports returned by get_daily_reports/get_weekly_reports are the primary source for member work. Do not scan team members' sessions by default. If member reports are missing, list missing reports instead of falling back to member sessions.
 - department_daily / department_weekly: saved team daily/weekly reports returned by get_daily_reports/get_weekly_reports are the primary source for team work. Do not scan all members' sessions by default. If team reports are missing, list missing teams instead of falling back to member sessions.
 - Token/session statistics are low-priority metrics. Do not make token totals, session counts, or model usage the main body of team or department reports.

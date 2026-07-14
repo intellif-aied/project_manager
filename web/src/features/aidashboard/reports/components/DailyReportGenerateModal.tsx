@@ -392,9 +392,8 @@ export function DailyReportGenerateModal({
           </div>
           {allowSessionSettings ? (
             <ReportAISettingsPanel
+              key={`daily:${date}`}
               open={settingsOpen}
-              from={date}
-              to={date}
               selectedKeys={selectedSessionSliceKeys}
               onSelectedKeysChange={setSelectedSessionSliceKeys}
               onClose={() => setSettingsOpen(false)}

@@ -72,13 +72,20 @@ function trimTrailingSlash(value: string) {
 
 export const fetchUsers = async () => {
   const payload = await unwrap<User[] | { items?: User[] }>(api.get("/users"));
-  return Array.isArray(payload) ? payload : payload.items ?? [];
+  return Array.isArray(payload) ? payload : (payload.items ?? []);
 };
 
-export const fetchAIHubUsers = async (params?: { search_key?: string; page_size?: number; page_num?: number }) => {
-  const payload = await unwrap<{ items?: AIHubUser[]; total?: number; page_size?: number; page_num?: number }>(
-    api.get("/aihub/users/search", params)
-  );
+export const fetchAIHubUsers = async (params?: {
+  search_key?: string;
+  page_size?: number;
+  page_num?: number;
+}) => {
+  const payload = await unwrap<{
+    items?: AIHubUser[];
+    total?: number;
+    page_size?: number;
+    page_num?: number;
+  }>(api.get("/aihub/users/search", params));
   return {
     items: payload.items ?? [],
     total: payload.total ?? 0,
@@ -102,7 +109,13 @@ export const adminDeleteTeam = (id: string) =>
 
 export const adminUpdateUser = (
   id: string,
-  data: { app_role?: string; role?: string; team_id?: string; clear_team?: boolean; local_enabled?: boolean }
+  data: {
+    app_role?: string;
+    role?: string;
+    team_id?: string;
+    clear_team?: boolean;
+    local_enabled?: boolean;
+  }
 ) => unwrap(api.put<unknown>(`/admin/users/${id}/profile`, data));
 
 export const adminBatchAddUsers = (data: {
@@ -119,7 +132,9 @@ export const fetchRequirements = (params?: Record<string, string>) =>
 export const fetchPaginatedRequirements = (params?: Record<string, string>) =>
   unwrap(api.get<PaginatedRequirements>("/requirements", { view: "list", ...(params ?? {}) }));
 export const fetchRequirementBoard = (params?: Record<string, string>) =>
-  unwrap(api.get<RequirementBoardResponseDTO>("/requirements", { view: "board", ...(params ?? {}) }));
+  unwrap(
+    api.get<RequirementBoardResponseDTO>("/requirements", { view: "board", ...(params ?? {}) })
+  );
 export const fetchRequirement = (id: string) => unwrap(api.get<Requirement>(`/requirements/${id}`));
 export const createRequirement = (data: {
   title: string;
@@ -140,13 +155,18 @@ export const deleteRequirement = (id: string, baseVersion: number) =>
     )
   );
 export const cancelRequirement = (id: string, baseVersion: number) =>
-  unwrap(api.put<Requirement>(`/requirements/${id}`, { status: "cancelled", base_version: baseVersion }));
+  unwrap(
+    api.put<Requirement>(`/requirements/${id}`, { status: "cancelled", base_version: baseVersion })
+  );
 export const restoreRequirement = (id: string, baseVersion: number) =>
   unwrap(api.put<Requirement>(`/requirements/${id}/restore`, { base_version: baseVersion }));
 export const fetchACStatus = (id: string) => unwrap(api.get<ACStatus[]>(`/requirements/${id}/ac`));
 export const regenerateAC = (id: string, baseVersion: number) =>
   unwrap(api.post<Requirement>(`/requirements/${id}/regenerate-ac`, { base_version: baseVersion }));
-export const fetchRequirementEvents = (id: string, params?: { page?: number; page_size?: number }) =>
+export const fetchRequirementEvents = (
+  id: string,
+  params?: { page?: number; page_size?: number }
+) =>
   unwrap(
     api.get<PaginatedWorkItemEvents>(`/requirements/${id}/events`, {
       page: String(params?.page ?? 1),
@@ -161,7 +181,10 @@ export const fetchTasks = (params?: Record<string, string>) =>
 export const fetchPaginatedTasks = (params?: Record<string, string>) =>
   unwrap(api.get<PaginatedTasks>("/tasks", params));
 export const fetchTask = (id: string) => unwrap(api.get<Task>(`/tasks/${id}`));
-export const fetchTaskEvents = async (id: string, params?: { page?: number; page_size?: number }) => {
+export const fetchTaskEvents = async (
+  id: string,
+  params?: { page?: number; page_size?: number }
+) => {
   const page = params?.page ?? 1;
   const pageSize = params?.page_size ?? 20;
   try {
@@ -202,9 +225,21 @@ export const deleteTask = (id: string, baseVersion: number) =>
     )
   );
 export const updateTaskStatus = (id: string, status: string, baseVersion: number) =>
-  unwrap(api.put<Task>(`/tasks/${id}/status`, { status, base_version: baseVersion }, { skipErrorHandler: true }));
+  unwrap(
+    api.put<Task>(
+      `/tasks/${id}/status`,
+      { status, base_version: baseVersion },
+      { skipErrorHandler: true }
+    )
+  );
 export const updateTaskProgress = (id: string, progress: number, baseVersion: number) =>
-  unwrap(api.put<Task>(`/tasks/${id}/progress`, { progress, base_version: baseVersion }, { skipErrorHandler: true }));
+  unwrap(
+    api.put<Task>(
+      `/tasks/${id}/progress`,
+      { progress, base_version: baseVersion },
+      { skipErrorHandler: true }
+    )
+  );
 export const addTaskDependency = (
   taskId: string,
   dependsOnId: string,
@@ -292,10 +327,12 @@ export const updateSessionTask = (
   taskId: string | null,
   activityDate?: string
 ) =>
-  unwrap(api.put<Session>(`/sessions/${sessionId}/task`, {
-    task_id: taskId,
-    ...(activityDate ? { activity_date: activityDate } : {})
-  }));
+  unwrap(
+    api.put<Session>(`/sessions/${sessionId}/task`, {
+      task_id: taskId,
+      ...(activityDate ? { activity_date: activityDate } : {})
+    })
+  );
 export const updateSessionRequirement = (
   sessionId: string,
   requirementId: string | null,
@@ -371,10 +408,7 @@ export const fetchReports = async (params?: Record<string, string>) => {
 };
 export const fetchTodayReport = (reportDate?: string) =>
   unwrap(
-    api.get<DailyReport>(
-      "/reports/today",
-      reportDate ? { report_date: reportDate } : undefined
-    )
+    api.get<DailyReport>("/reports/today", reportDate ? { report_date: reportDate } : undefined)
   );
 export const fetchReport = (id: string) => unwrap(api.get<DailyReport>(`/reports/${id}`));
 export const updateReport = (
@@ -414,10 +448,8 @@ export async function fetchTeamReportTodayOrNull(reportDate?: string) {
     throw error;
   }
 }
-export const saveTeamReportCurrent = (data: {
-  report_date: string;
-  content?: string;
-}) => unwrap(api.put<TeamReport>("/reports/team/today", data));
+export const saveTeamReportCurrent = (data: { report_date: string; content?: string }) =>
+  unwrap(api.put<TeamReport>("/reports/team/today", data));
 export const fetchTeamReports = (params?: Record<string, string>) =>
   unwrap(api.get<PaginatedTeamReports>("/reports/team", params));
 export const fetchTeamReport = (id: string) => unwrap(api.get<TeamReport>(`/reports/team/${id}`));
@@ -596,16 +628,29 @@ export const fetchManagedSkills = (includeSystem = false) =>
   );
 export const createManagedSkill = (payload: CreateManagedSkillPayload) =>
   unwrap(api.post<ManagedSkill>("/ai-assets/skills", payload));
-export const fetchManagedSkillMarkdown = (owner: string | undefined, slug: string, version: string) =>
+export const fetchManagedSkillMarkdown = (
+  owner: string | undefined,
+  slug: string,
+  version: string
+) =>
   unwrap(
     api.get<{ content: string }>(
       `/ai-assets/skills/${encodeURIComponent(owner || "_mine")}/${encodeURIComponent(slug)}/${encodeURIComponent(version)}/skill-md`
     )
   );
 export const archiveManagedSkill = (slug: string, version: string, archived: boolean) =>
-  unwrap(api.post<Record<string, unknown>>(`/ai-assets/skills/${encodeURIComponent(slug)}/${encodeURIComponent(version)}/archive`, { archived }));
+  unwrap(
+    api.post<Record<string, unknown>>(
+      `/ai-assets/skills/${encodeURIComponent(slug)}/${encodeURIComponent(version)}/archive`,
+      { archived }
+    )
+  );
 export const deleteManagedSkill = (slug: string, version: string) =>
-  unwrap(api.delete<Record<string, unknown>>(`/ai-assets/skills/${encodeURIComponent(slug)}/${encodeURIComponent(version)}`));
+  unwrap(
+    api.delete<Record<string, unknown>>(
+      `/ai-assets/skills/${encodeURIComponent(slug)}/${encodeURIComponent(version)}`
+    )
+  );
 export const fetchManagedMCPEntries = (includeSystem = false) =>
   unwrap(
     api.get<{ entries: ManagedMCPEntry[] }>(
@@ -617,19 +662,42 @@ export const fetchManagedMCPEntries = (includeSystem = false) =>
 export const createManagedMCPEntry = (payload: ManagedMCPEntry) =>
   unwrap(api.post<ManagedMCPEntry>("/ai-assets/mcp", payload));
 export const archiveManagedMCPEntry = (slug: string, version: string, archived: boolean) =>
-  unwrap(api.post<Record<string, unknown>>(`/ai-assets/mcp/${encodeURIComponent(slug)}/${encodeURIComponent(version)}/archive`, { archived }));
+  unwrap(
+    api.post<Record<string, unknown>>(
+      `/ai-assets/mcp/${encodeURIComponent(slug)}/${encodeURIComponent(version)}/archive`,
+      { archived }
+    )
+  );
 export const deleteManagedMCPEntry = (slug: string, version: string) =>
-  unwrap(api.delete<Record<string, unknown>>(`/ai-assets/mcp/${encodeURIComponent(slug)}/${encodeURIComponent(version)}`));
+  unwrap(
+    api.delete<Record<string, unknown>>(
+      `/ai-assets/mcp/${encodeURIComponent(slug)}/${encodeURIComponent(version)}`
+    )
+  );
 export const fetchManagedCredentials = () =>
-  unwrap(api.get<{ credentials: ManagedCredential[] }>("/ai-assets/credentials", undefined, { skipErrorHandler: true }));
-export const createManagedCredential = (payload: { name: string; value: string; kind?: string; description?: string }) =>
-  unwrap(api.post<{ credential_id: string }>("/ai-assets/credentials", payload));
+  unwrap(
+    api.get<{ credentials: ManagedCredential[] }>("/ai-assets/credentials", undefined, {
+      skipErrorHandler: true
+    })
+  );
+export const createManagedCredential = (payload: {
+  name: string;
+  value: string;
+  kind?: string;
+  description?: string;
+}) => unwrap(api.post<{ credential_id: string }>("/ai-assets/credentials", payload));
 export const deleteManagedCredential = (credentialId: string) =>
-  unwrap(api.delete<Record<string, unknown>>(`/ai-assets/credentials/${encodeURIComponent(credentialId)}`));
+  unwrap(
+    api.delete<Record<string, unknown>>(
+      `/ai-assets/credentials/${encodeURIComponent(credentialId)}`
+    )
+  );
 export const fetchDailyReportAgentIntegration = () =>
   unwrap(api.get<DailyReportAgentIntegration>("/ai-assets/daily-report-integration"));
 export const fetchManagedAgents = () =>
-  unwrap(api.get<{ agents: ManagedAgent[] }>("/ai-assets/agents", undefined, { skipErrorHandler: true }));
+  unwrap(
+    api.get<{ agents: ManagedAgent[] }>("/ai-assets/agents", undefined, { skipErrorHandler: true })
+  );
 export const createManagedAgent = (payload: UpsertManagedAgentPayload) =>
   unwrap(api.post<{ agent_id: string; managed_version?: number }>("/ai-assets/agents", payload));
 export const createDefaultReportAgent = () =>
@@ -641,7 +709,11 @@ export const updateManagedAgent = (agentId: string, payload: UpsertManagedAgentP
     api.put<{ agent_id: string; managed_version?: number }>(`/ai-assets/agents/${agentId}`, payload)
   );
 export const archiveManagedAgent = (agentId: string, archived: boolean) =>
-  unwrap(api.post<Record<string, unknown>>(`/ai-assets/agents/${encodeURIComponent(agentId)}/archive`, { archived }));
+  unwrap(
+    api.post<Record<string, unknown>>(`/ai-assets/agents/${encodeURIComponent(agentId)}/archive`, {
+      archived
+    })
+  );
 export const startManagedAgentRun = (agentId: string, payload: ManagedAgentManualRunPayload) =>
   unwrap(api.post<AIRun>(`/ai-assets/agents/${agentId}/runs`, payload));
 export const startReportAgentRun = (
@@ -666,7 +738,9 @@ export const fetchManagedAgentRun = (runId: string, options?: { skipErrorHandler
 export const fetchManagedAgentSchedules = () =>
   unwrap(api.get<{ schedules: ManagedAgentSchedule[] }>("/ai-assets/agent-schedules"));
 export const previewManagedAgentSchedule = (payload: PreviewManagedAgentSchedulePayload) =>
-  unwrap(api.post<PreviewManagedAgentScheduleResponse>("/ai-assets/agent-schedules/preview", payload));
+  unwrap(
+    api.post<PreviewManagedAgentScheduleResponse>("/ai-assets/agent-schedules/preview", payload)
+  );
 export const createManagedAgentSchedule = (payload: UpsertManagedAgentSchedulePayload) =>
   unwrap(api.post<ManagedAgentSchedule>("/ai-assets/agent-schedules", payload));
 export const updateManagedAgentSchedule = (
@@ -678,7 +752,12 @@ export const deleteManagedAgentSchedule = (scheduleId: string) =>
 export const runManagedAgentScheduleNow = (
   scheduleId: string,
   triggerSource: "manual" | "save_and_run" = "manual"
-) => unwrap(api.post<AIRun>(`/ai-assets/agent-schedules/${scheduleId}/runs`, { trigger_source: triggerSource }));
+) =>
+  unwrap(
+    api.post<AIRun>(`/ai-assets/agent-schedules/${scheduleId}/runs`, {
+      trigger_source: triggerSource
+    })
+  );
 
 // ───────────────────────── Tokens ─────────────────────────
 
@@ -702,8 +781,8 @@ export const fetchSessionTokens = (params: {
 }) => unwrap(api.get<PaginatedSessionTokens>("/tokens/sessions", params));
 
 export async function fetchAllSessionTokens(params: {
-  from: string;
-  to: string;
+  from?: string;
+  to?: string;
   scope?: "mine" | "team";
 }) {
   const pageSize = 100;

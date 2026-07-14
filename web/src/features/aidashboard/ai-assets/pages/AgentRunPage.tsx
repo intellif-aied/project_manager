@@ -18,7 +18,7 @@ import { PlayCircleOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
 import type { Dayjs } from "dayjs";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import {
@@ -26,6 +26,7 @@ import {
   fetchManagedAgentRun,
   fetchManagedAgents,
   fetchManagedCredentials,
+  fetchAllSessionTokens,
   fetchSessionTokens,
   startManagedAgentRun,
   startReportAgentRun
@@ -48,6 +49,7 @@ import {
   REPORT_AGENT_MARKER,
   REPORT_SYSTEM_MCP_SLUG,
   REPORT_SYSTEM_MCP_VERSION,
+  REPORT_SYSTEM_PROMPT_KEYS,
   reportAgentMarkerText,
   renderPromptPreview
 } from "../utils/agentAssets";
@@ -61,17 +63,6 @@ const AI_ASSETS_RETURN_PATH = aiAssetsPath("agents");
 
 const REPORT_TYPES_MARKER = "AIDA_REPORT_AGENT_TYPES:";
 const REPORT_SYSTEM_CREDENTIAL_SLOT = "AIDA_REPORT_MCP_AUTH";
-const REPORT_SYSTEM_PROMPT_KEYS = new Set([
-  "report_type",
-  "period_json",
-  "target_json",
-  "selected_session_slice_keys",
-  "selected_session_slice_keys_json",
-  "run_id",
-  "mcp_url",
-  "credential_slot",
-  REPORT_SYSTEM_CREDENTIAL_SLOT
-]);
 
 const REPORT_TYPE_OPTIONS: Array<{ label: string; value: ReportType; roles: UserRole[] }> = [
   {
@@ -93,6 +84,8 @@ const REPORT_TYPE_OPTIONS: Array<{ label: string; value: ReportType; roles: User
 function isWeeklyReportType(type: ReportType) {
   return type.endsWith("_weekly");
 }
+
+const WEEKDAY_LABELS = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
 
 function supportedReportTypes(agent: ManagedAgent): ReportType[] {
   if (agent.business_type === "report") {
@@ -157,6 +150,42 @@ function reportSessionRange(reportType: ReportType, reportDate: Dayjs, weekRange
   }
   const date = reportDate.format("YYYY-MM-DD");
   return { from: date, to: date };
+}
+
+function calendarDayPayload(day: Dayjs) {
+  const date = day.format("YYYY-MM-DD");
+  const weekday = WEEKDAY_LABELS[day.day()] ?? "";
+  return {
+    date,
+    weekday,
+    date_label: `${date}（${weekday}）`
+  };
+}
+
+function reportCalendarContextPayload(
+  reportType: ReportType,
+  reportDate: Dayjs,
+  weekRange: [Dayjs, Dayjs]
+) {
+  if (!isWeeklyReportType(reportType)) {
+    return { type: "daily", day: calendarDayPayload(reportDate) };
+  }
+  const start = weekRange[0].startOf("day");
+  const end = weekRange[1].startOf("day");
+  const days = [];
+  for (
+    let day = start;
+    day.valueOf() <= end.valueOf() && days.length < 31;
+    day = day.add(1, "day")
+  ) {
+    days.push(calendarDayPayload(day));
+  }
+  return {
+    type: "weekly",
+    week_start: start.format("YYYY-MM-DD"),
+    week_end: end.format("YYYY-MM-DD"),
+    days
+  };
 }
 
 function isReportAgentUnavailable(
@@ -341,20 +370,20 @@ function SessionSliceSelector({
   selectedRecords: Record<string, SessionTokens>;
   onChange: (keys: string[], records: Record<string, SessionTokens>) => void;
 }) {
+  const { message } = App.useApp();
   const [open, setOpen] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(8);
-
-  useEffect(() => {
-    setPage(1);
-  }, [from, to]);
+  const [queryRange, setQueryRange] = useState<[Dayjs, Dayjs]>(() => [dayjs(from), dayjs(to)]);
+  const queryFrom = queryRange[0].format("YYYY-MM-DD");
+  const queryTo = queryRange[1].format("YYYY-MM-DD");
 
   const sessionsQuery = useQuery({
-    queryKey: ["report-session-slices", from, to, page, pageSize],
+    queryKey: ["report-session-slices", queryFrom, queryTo, page, pageSize],
     queryFn: () =>
       fetchSessionTokens({
-        from,
-        to,
+        from: queryFrom,
+        to: queryTo,
         scope: "mine",
         page: String(page),
         page_size: String(pageSize)
@@ -362,6 +391,24 @@ function SessionSliceSelector({
     enabled: open,
     placeholderData: (previousData) => previousData,
     staleTime: 30_000
+  });
+  const selectAllMutation = useMutation({
+    mutationFn: () => fetchAllSessionTokens({ from: queryFrom, to: queryTo, scope: "mine" }),
+    onSuccess: (items) => {
+      const nextKeys = new Set(selectedKeys);
+      const nextRecords = { ...selectedRecords };
+      items.forEach((item) => {
+        const key = sessionSliceKey(item);
+        nextKeys.add(key);
+        nextRecords[key] = item;
+      });
+      const normalized = [...nextKeys];
+      if (normalized.length > 200) {
+        message.warning("最多选择 200 个 Session，已保留前 200 个");
+      }
+      const limited = normalized.slice(0, 200);
+      onChange(limited, compactSelectedRecords(limited, nextRecords));
+    }
   });
 
   const sessions = sessionsQuery.data?.items ?? [];
@@ -423,14 +470,33 @@ function SessionSliceSelector({
         cancelText="取消"
       >
         <div className="ai-assets-session-modal__summary">
-          <span>
-            {from === to ? from : `${from} ~ ${to}`} · 已选 {selectedKeys.length} 条
-          </span>
-          {selectedKeys.length > 0 ? (
-            <Button size="small" onClick={() => onChange([], {})}>
+          <span>已选 {selectedKeys.length} 条</span>
+          <Space size="small" wrap>
+            <DatePicker.RangePicker
+              allowClear={false}
+              value={queryRange}
+              onChange={(value) => {
+                if (!value?.[0] || !value[1]) return;
+                setQueryRange([value[0], value[1]]);
+                setPage(1);
+              }}
+            />
+            <Button
+              size="small"
+              loading={selectAllMutation.isPending}
+              disabled={(sessionsQuery.data?.total ?? 0) === 0}
+              onClick={() => selectAllMutation.mutate()}
+            >
+              全选查询结果
+            </Button>
+            <Button
+              size="small"
+              disabled={selectedKeys.length === 0}
+              onClick={() => onChange([], {})}
+            >
               清空选择
             </Button>
-          ) : null}
+          </Space>
         </div>
         <Table<SessionTokens>
           rowKey={sessionSliceKey}
@@ -441,7 +507,10 @@ function SessionSliceSelector({
             selectedRowKeys: selectedKeys,
             preserveSelectedRowKeys: true,
             onChange: (keys, rows) => {
-              const normalized = keys.map(String);
+              const normalized = keys.map(String).slice(0, 200);
+              if (keys.length > 200) {
+                message.warning("最多选择 200 个 Session");
+              }
               const nextRecords = { ...selectedRecords };
               rows.forEach((row) => {
                 nextRecords[sessionSliceKey(row)] = row;
@@ -499,7 +568,7 @@ function SessionSliceSelector({
               render: (value: number) => formatTokens(value)
             }
           ]}
-          locale={{ emptyText: <Empty description="当前报告周期暂无 Session 切片" /> }}
+          locale={{ emptyText: <Empty description="当前查询范围暂无 Session 切片" /> }}
         />
       </Modal>
     </Card>
@@ -884,6 +953,7 @@ function ReportAgentRunForm({ agent }: { agent: ManagedAgent }) {
   const [selectedSessionRecords, setSelectedSessionRecords] = useState<
     Record<string, SessionTokens>
   >({});
+  const [selectedSessionRangeKey, setSelectedSessionRangeKey] = useState("");
 
   const activeRunQuery = useQuery<AIRun>({
     queryKey: ["managed-agent-run", activeRunId],
@@ -905,10 +975,15 @@ function ReportAgentRunForm({ agent }: { agent: ManagedAgent }) {
     : (options[0]?.value ?? reportTypeInput);
   const period = reportPeriodPayload(reportType, reportDate, weekRange);
   const sessionRange = reportSessionRange(reportType, reportDate, weekRange);
-  useEffect(() => {
-    setSelectedSessionSliceKeys([]);
-    setSelectedSessionRecords({});
-  }, [sessionRange.from, sessionRange.to]);
+  const sessionRangeKey = `${sessionRange.from}:${sessionRange.to}`;
+  const selectedSessionsForRange = useMemo(() => {
+    if (selectedSessionRangeKey !== sessionRangeKey) {
+      return { keys: [] as string[], records: {} as Record<string, SessionTokens> };
+    }
+    return { keys: selectedSessionSliceKeys, records: selectedSessionRecords };
+  }, [selectedSessionRangeKey, selectedSessionRecords, selectedSessionSliceKeys, sessionRangeKey]);
+  const selectedSessionSliceKeysForRange = selectedSessionsForRange.keys;
+  const selectedSessionRecordsForRange = selectedSessionsForRange.records;
   const defaultModelId = agent.default_model_id?.trim() || "";
   const modelId = runModelId.trim() || defaultModelId;
   const missingPromptVariables = userPromptVariables.filter(
@@ -919,13 +994,16 @@ function ReportAgentRunForm({ agent }: { agent: ManagedAgent }) {
       ...startPromptValues,
       report_type: reportType,
       period_json: JSON.stringify(period),
+      calendar_context_json: JSON.stringify(
+        reportCalendarContextPayload(reportType, reportDate, weekRange)
+      ),
       target_json: JSON.stringify({ type: "self" }),
-      selected_session_slice_keys: selectedSessionSliceKeys.join("\n"),
-      selected_session_slice_keys_json: JSON.stringify(selectedSessionSliceKeys),
+      selected_session_slice_keys: selectedSessionSliceKeysForRange.join("\n"),
+      selected_session_slice_keys_json: JSON.stringify(selectedSessionSliceKeysForRange),
       run_id: "运行时生成",
       credential_slot: REPORT_SYSTEM_CREDENTIAL_SLOT
     }),
-    [period, reportType, selectedSessionSliceKeys, startPromptValues]
+    [period, reportDate, reportType, selectedSessionSliceKeysForRange, startPromptValues, weekRange]
   );
   const promptPreview = template ? renderPromptPreview(template, promptPreviewValues) : "";
   const credentialSlots = useMemo(() => runtimeCredentialSlots(agent), [agent]);
@@ -970,8 +1048,8 @@ function ReportAgentRunForm({ agent }: { agent: ManagedAgent }) {
         period,
         target: { type: "self" },
         model_id: modelId,
-        selected_session_slice_keys: selectedSessionSliceKeys.length
-          ? selectedSessionSliceKeys
+        selected_session_slice_keys: selectedSessionSliceKeysForRange.length
+          ? selectedSessionSliceKeysForRange
           : undefined,
         start_prompt_values: userPromptVariables.length ? startPromptValues : undefined,
         message: runMessage.trim() || undefined,
@@ -1083,11 +1161,13 @@ function ReportAgentRunForm({ agent }: { agent: ManagedAgent }) {
           ) : null}
 
           <SessionSliceSelector
+            key={sessionRangeKey}
             from={sessionRange.from}
             to={sessionRange.to}
-            selectedKeys={selectedSessionSliceKeys}
-            selectedRecords={selectedSessionRecords}
+            selectedKeys={selectedSessionSliceKeysForRange}
+            selectedRecords={selectedSessionRecordsForRange}
             onChange={(keys, records) => {
+              setSelectedSessionRangeKey(sessionRangeKey);
               setSelectedSessionSliceKeys(keys);
               setSelectedSessionRecords(records);
             }}

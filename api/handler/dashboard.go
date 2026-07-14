@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"net/http"
@@ -73,8 +74,54 @@ func (h *DashboardHandler) Follows(w http.ResponseWriter, r *http.Request) {
 func (h *DashboardHandler) MyItems(w http.ResponseWriter, r *http.Request) {
 	u := getUser(r)
 	itemsByKey := map[string]model.DashboardFollowItem{}
+	refs, err := loadDashboardMyItemRefs(r.Context(), h.db, u.ID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	for _, ref := range refs {
+		var item model.DashboardFollowItem
+		var ok bool
+		if ref.TargetType == "requirement" {
+			item, ok = h.requirementFollowItem(ref.TargetID, u.ID)
+		} else {
+			item, ok = h.taskFollowItem(ref.TargetID, u.ID)
+		}
+		if !ok {
+			continue
+		}
+		item.FollowedByMe = ref.FollowedByMe
+		item.CreatedByMe = ref.CreatedByMe
+		item.AssignedToMe = ref.AssignedToMe
+		itemsByKey[item.Key] = item
+	}
 
-	requirementRows, err := h.db.Query(`
+	items := make([]model.DashboardFollowItem, 0, len(itemsByKey))
+	for _, item := range itemsByKey {
+		if item.FollowedByMe || item.CreatedByMe || item.AssignedToMe {
+			items = append(items, item)
+		}
+	}
+	sortDashboardFollowItems(items)
+	if shouldUseDashboardPagedResponse(r) {
+		page, pageSize := parsePagination(r, 20, 100)
+		writeJSON(w, http.StatusOK, paginateDashboardFollowItems(items, page, pageSize))
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+type dashboardMyItemRef struct {
+	TargetType   string
+	TargetID     string
+	FollowedByMe bool
+	CreatedByMe  bool
+	AssignedToMe bool
+}
+
+func loadDashboardMyItemRefs(ctx context.Context, db *sql.DB, userID string) ([]dashboardMyItemRef, error) {
+	refs := []dashboardMyItemRef{}
+	requirementRows, err := db.QueryContext(ctx, `
 		SELECT DISTINCT r.id,
 			EXISTS (
 				SELECT 1 FROM user_follows f
@@ -97,35 +144,26 @@ func (h *DashboardHandler) MyItems(w http.ResponseWriter, r *http.Request) {
 					SELECT 1 FROM user_follows f
 					WHERE f.user_id = $1 AND f.target_type = 'requirement' AND f.target_id = r.id
 				)
-			)`, u.ID)
+			)`, userID)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
+		return nil, err
 	}
-	defer requirementRows.Close()
 
 	for requirementRows.Next() {
-		var id string
-		var followedByMe, createdByMe, assignedToMe bool
-		if err := requirementRows.Scan(&id, &followedByMe, &createdByMe, &assignedToMe); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
+		ref := dashboardMyItemRef{TargetType: "requirement"}
+		if err := requirementRows.Scan(&ref.TargetID, &ref.FollowedByMe, &ref.CreatedByMe, &ref.AssignedToMe); err != nil {
+			requirementRows.Close()
+			return nil, err
 		}
-		item, ok := h.requirementFollowItem(id, u.ID)
-		if !ok {
-			continue
-		}
-		item.FollowedByMe = followedByMe
-		item.CreatedByMe = createdByMe
-		item.AssignedToMe = assignedToMe
-		itemsByKey[item.Key] = item
+		refs = append(refs, ref)
 	}
 	if err := requirementRows.Err(); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
+		requirementRows.Close()
+		return nil, err
 	}
+	requirementRows.Close()
 
-	taskRows, err := h.db.Query(`
+	taskRows, err := db.QueryContext(ctx, `
 		SELECT DISTINCT t.id,
 			EXISTS (
 				SELECT 1 FROM user_follows f
@@ -150,47 +188,25 @@ func (h *DashboardHandler) MyItems(w http.ResponseWriter, r *http.Request) {
 					SELECT 1 FROM user_follows f
 					WHERE f.user_id = $1 AND f.target_type = 'task' AND f.target_id = t.id
 				)
-			)`, u.ID)
+			)`, userID)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
+		return nil, err
 	}
-	defer taskRows.Close()
 
 	for taskRows.Next() {
-		var id string
-		var followedByMe, createdByMe, assignedToMe bool
-		if err := taskRows.Scan(&id, &followedByMe, &createdByMe, &assignedToMe); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
+		ref := dashboardMyItemRef{TargetType: "task"}
+		if err := taskRows.Scan(&ref.TargetID, &ref.FollowedByMe, &ref.CreatedByMe, &ref.AssignedToMe); err != nil {
+			taskRows.Close()
+			return nil, err
 		}
-		item, ok := h.taskFollowItem(id, u.ID)
-		if !ok {
-			continue
-		}
-		item.FollowedByMe = followedByMe
-		item.CreatedByMe = createdByMe
-		item.AssignedToMe = assignedToMe
-		itemsByKey[item.Key] = item
+		refs = append(refs, ref)
 	}
 	if err := taskRows.Err(); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
+		taskRows.Close()
+		return nil, err
 	}
-
-	items := make([]model.DashboardFollowItem, 0, len(itemsByKey))
-	for _, item := range itemsByKey {
-		if item.FollowedByMe || item.CreatedByMe || item.AssignedToMe {
-			items = append(items, item)
-		}
-	}
-	sortDashboardFollowItems(items)
-	if shouldUseDashboardPagedResponse(r) {
-		page, pageSize := parsePagination(r, 20, 100)
-		writeJSON(w, http.StatusOK, paginateDashboardFollowItems(items, page, pageSize))
-		return
-	}
-	writeJSON(w, http.StatusOK, items)
+	taskRows.Close()
+	return refs, nil
 }
 
 func (h *DashboardHandler) Risks(w http.ResponseWriter, r *http.Request) {

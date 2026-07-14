@@ -959,6 +959,61 @@ func TestReportMCPGetSessionsReturnsScopeContextRoster(t *testing.T) {
 	}
 }
 
+func TestReportMCPGetSessionsSelectedSliceKeysOverrideDateRange(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	h := NewReportMCPHandler(db)
+
+	now := time.Date(2026, 7, 1, 2, 0, 0, 0, time.UTC)
+	sessionRows := sqlmock.NewRows([]string{
+		"id", "user_id", "username", "role", "team_id", "team_name", "session_ref", "agent_type", "started_at", "ended_at",
+		"activity_date", "activity_start_at", "activity_end_at", "activity_dates", "summary", "excerpt", "message_count", "source_event_count",
+		"input_tokens", "output_tokens", "cache_creation_tokens", "cache_read_tokens", "total_tokens", "slice_count", "source_has_raw_log",
+		"token_slice_strategy", "summary_strategy", "is_estimated",
+	}).
+		AddRow("s-old", "305", "测试03", "employee", "team-a", "测试小组A", "prod-old", "codex", now, now.Add(10*time.Minute), "2026-07-01", now, now.Add(10*time.Minute), "{2026-07-01}", "用户显式选择的旧切片", "", 6, 6, 100, 20, 0, 0, 120, 1, true, "actual", "summary", false)
+	mock.ExpectQuery("SELECT s.id::text, sas.user_id::text").
+		WithArgs("2026-07-06", "2026-07-06", sqlmock.AnyArg(), sqlmock.AnyArg(), 100).
+		WillReturnRows(sessionRows)
+	mock.ExpectQuery("SELECT u.id::text,").
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "username", "role", "team_id", "team_name", "director_user_id", "director_name", "team_leader_id", "team_leader_name"}).
+			AddRow("305", "测试03", "employee", "team-a", "测试小组A", "303", "测试01", "306", "测试04"))
+
+	req := newReportMCPRequest("tools/call", map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "get_sessions",
+			"arguments": map[string]any{
+				"scope":                       map[string]any{"type": "self"},
+				"date_range":                  map[string]any{"start": "2026-07-06", "end": "2026-07-06"},
+				"selected_session_slice_keys": []string{"s-old:2026-07-01"},
+			},
+		},
+	})
+	req = requestWithUser(req, &model.User{ID: "305", Role: "employee", TeamID: strPtr("team-a")})
+	rec := httptest.NewRecorder()
+	h.Serve(rec, req)
+
+	payload := reportMCPTextPayload(t, reportMCPBody(t, rec))
+	sessions := payload["sessions"].([]any)
+	if len(sessions) != 1 {
+		t.Fatalf("sessions len = %d, want 1 payload=%#v", len(sessions), payload)
+	}
+	got := sessions[0].(map[string]any)
+	if got["slice_key"] != "s-old:2026-07-01" {
+		t.Fatalf("slice_key = %#v, want explicit selected slice outside date_range", got["slice_key"])
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestReportMCPInventoryTeamsRespectDepartmentScope(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
