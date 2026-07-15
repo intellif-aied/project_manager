@@ -337,8 +337,11 @@ export function DailyReportGenerateModal({
       open={open}
       width={860}
       onCancel={handleClose}
+      keyboard={!settingsOpen}
+      maskClosable={!settingsOpen}
+      focusTriggerAfterClose
       footer={
-        <Space>
+        <Space className="console-report-workflow-modal__footer">
           {canEditContent ? (
             <ReportAIGenerateControls
               reportType={dailyReportType(scope)}
@@ -450,7 +453,7 @@ export function DailyReportGenerateModal({
           </div>
           {allowSessionSettings ? (
             <ReportAISettingsPanel
-              key={`daily:${date}`}
+              key={`daily:${date}:${settingsOpen ? "open" : "closed"}`}
               open={settingsOpen}
               reportType="personal_daily"
               period={{ date }}

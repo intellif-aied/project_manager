@@ -213,7 +213,7 @@ export function HelpCenter({ onClose, open }: HelpCenterProps) {
       destroyOnHidden
       open={open}
       placement="right"
-      width="min(1040px, 100vw)"
+      size="min(1040px, 100vw)"
       title={
         <div className="help-center__title">
           <strong>AIDA 指南中心</strong>

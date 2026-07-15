@@ -884,6 +884,7 @@ export function TokenAnalyticsPage({
           </Space>
         </header>
         <Table<TokenAnalyticsSessionItem>
+          className="token-analytics-session-table"
           rowKey="session_id"
           loading={sessionsQuery.isLoading}
           dataSource={sessionsQuery.data?.items ?? []}
@@ -891,8 +892,7 @@ export function TokenAnalyticsPage({
             current: sessionsQuery.data?.page ?? page,
             pageSize: sessionsQuery.data?.page_size ?? pageSize,
             total: sessionsQuery.data?.total ?? 0,
-            showSizeChanger: true,
-            pageSizeOptions: [10, 20, 50],
+            showSizeChanger: false,
             showTotal: (total) => `共 ${total} 条`,
             onChange: (nextPage, nextPageSize) => {
               setPage(nextPage);

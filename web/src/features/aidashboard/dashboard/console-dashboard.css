@@ -2549,6 +2549,25 @@
     min-width: 0;
   }
 
+  .console-dashboard-hero-row {
+    row-gap: 14px;
+  }
+
+  .console-dashboard-hero-row__report,
+  .console-dashboard-hero-row__token {
+    flex: 0 0 100%;
+    max-width: 100%;
+  }
+
+  .console-dashboard-hero-row__report {
+    align-self: stretch;
+  }
+
+  .console-panel--daily,
+  .console-panel--token {
+    width: 100%;
+  }
+
   .console-panel__header,
   .console-dashboard-drawer__toolbar,
   .console-list-more {
@@ -2570,10 +2589,75 @@
   }
 
   .console-dashboard-drawer .console-risk-card,
-  .console-dashboard-drawer .console-follow-card,
-  .console-follow-card,
   .console-risk-card {
-    grid-template-columns: 3px minmax(0, 1fr);
+    grid-template-columns: 3px minmax(0, 1fr) auto;
+    grid-template-areas:
+      "rail main main"
+      "rail meta action";
+    align-items: center;
+  }
+
+  .console-dashboard-drawer .console-follow-card,
+  .console-follow-card {
+    grid-template-columns: 3px minmax(0, 1fr) auto;
+    grid-template-areas:
+      "rail main signals"
+      "rail content content"
+      "rail people people"
+      "rail deadline action";
+    align-items: center;
+    gap: 7px 9px;
+  }
+
+  .console-follow-card__rail,
+  .console-risk-card__rail {
+    grid-area: rail;
+    align-self: stretch;
+  }
+
+  .console-follow-card__main {
+    grid-area: main;
+  }
+
+  .console-follow-card__content {
+    grid-area: content;
+  }
+
+  .console-follow-card__signals {
+    grid-area: signals;
+    width: auto;
+    min-width: 0;
+  }
+
+  .console-follow-card__people {
+    grid-area: people;
+    text-align: left;
+  }
+
+  .console-follow-card__deadline {
+    grid-area: deadline;
+    justify-content: flex-start;
+  }
+
+  .console-follow-card > .ant-btn {
+    grid-area: action;
+    min-height: 40px;
+    justify-self: end;
+  }
+
+  .console-risk-card__main {
+    grid-area: main;
+  }
+
+  .console-risk-card__meta {
+    grid-area: meta;
+    justify-content: flex-start;
+  }
+
+  .console-risk-card > .ant-btn {
+    grid-area: action;
+    min-height: 40px;
+    justify-self: end;
   }
 
   .console-dashboard-drawer .console-risk-card__impact,

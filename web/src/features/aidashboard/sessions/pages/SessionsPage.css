@@ -1,0 +1,93 @@
+.sessions-page__mobile-list {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .sessions-page__desktop-table {
+    display: none;
+  }
+
+  .sessions-page__card > .ant-card-body {
+    padding: 0;
+  }
+
+  .sessions-page__mobile-list {
+    display: grid;
+    gap: 10px;
+  }
+
+  .sessions-page__mobile-card {
+    display: grid;
+    gap: 12px;
+    padding: 14px;
+    background: #fff;
+    border-bottom: 1px solid #e8eef5;
+  }
+
+  .sessions-page__mobile-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .sessions-page__mobile-head > div {
+    display: grid;
+    min-width: 0;
+    gap: 5px;
+  }
+
+  .sessions-page__mobile-head p {
+    display: -webkit-box;
+    margin: 0;
+    overflow: hidden;
+    color: #64748b;
+    font-size: 13px;
+    line-height: 1.45;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .sessions-page__mobile-meta {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px 16px;
+    margin: 0;
+    padding: 11px 0;
+    border-block: 1px solid #eef3f8;
+  }
+
+  .sessions-page__mobile-meta div,
+  .sessions-page__mobile-task {
+    display: grid;
+    min-width: 0;
+    gap: 3px;
+  }
+
+  .sessions-page__mobile-meta dt,
+  .sessions-page__mobile-task > span {
+    color: #8492a6;
+    font-size: 11px;
+  }
+
+  .sessions-page__mobile-meta dd {
+    margin: 0;
+    color: #334155;
+    font-size: 13px;
+  }
+
+  .sessions-page__mobile-task .ant-select {
+    width: 100%;
+  }
+
+  .sessions-page__mobile-actions {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .sessions-page__mobile-pagination {
+    justify-content: center;
+    margin: 4px 12px 14px;
+  }
+}

@@ -574,8 +574,11 @@ function WeeklyReportEditorModal({
       width={860}
       onCancel={handleClose}
       destroyOnHidden
+      keyboard={!settingsOpen}
+      maskClosable={!settingsOpen}
+      focusTriggerAfterClose
       footer={
-        <Space>
+        <Space className="console-report-workflow-modal__footer">
           {!readOnly ? (
             <ReportAIGenerateControls
               reportType={weeklyReportType(scope)}
@@ -669,7 +672,7 @@ function WeeklyReportEditorModal({
           </div>
           {allowSessionSettings ? (
             <ReportAISettingsPanel
-              key={`weekly:${selectedWeekStart}:${selectedWeekEnd}`}
+              key={`weekly:${selectedWeekStart}:${selectedWeekEnd}:${settingsOpen ? "open" : "closed"}`}
               open={settingsOpen}
               reportType="personal_weekly"
               period={{ week_start: selectedWeekStart, week_end: selectedWeekEnd }}

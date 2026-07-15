@@ -455,3 +455,170 @@
     margin-left: 0;
   }
 }
+
+@media (max-width: 768px) {
+  .token-analytics-member-list-panel .ant-table-thead {
+    display: none;
+  }
+
+  .token-analytics-member-list-panel .ant-table-content > table,
+  .token-analytics-member-list-panel .ant-table-tbody {
+    display: block;
+    width: 100% !important;
+  }
+
+  .token-analytics-member-list-panel .ant-table-tbody {
+    padding: 0 12px 4px;
+  }
+
+  .token-analytics-member-list-panel .ant-table-tbody > tr.ant-table-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px 14px;
+    margin: 10px 0;
+    padding: 12px;
+    background: #fff;
+    border: 1px solid #e5edf6;
+    border-radius: 9px;
+  }
+
+  .token-analytics-member-list-panel .ant-table-tbody > tr.ant-table-row > td {
+    display: grid;
+    min-width: 0;
+    gap: 3px;
+    padding: 0 !important;
+    text-align: left !important;
+    background: transparent !important;
+    border-bottom: 0 !important;
+  }
+
+  .token-analytics-member-list-panel .ant-table-tbody > tr.ant-table-row > td:first-child {
+    grid-column: 1 / -1;
+    padding-bottom: 9px !important;
+    color: #172033;
+    font-size: 15px;
+    font-weight: 680;
+    border-bottom: 1px solid #eef3f8 !important;
+  }
+
+  .token-analytics-member-list-panel .ant-table-tbody > tr.ant-table-row > td:nth-child(2)::before {
+    color: #8492a6;
+    font-size: 11px;
+    font-weight: 400;
+    content: "Token";
+  }
+
+  .token-analytics-member-list-panel .ant-table-tbody > tr.ant-table-row > td:nth-child(3)::before {
+    color: #8492a6;
+    font-size: 11px;
+    font-weight: 400;
+    content: "API 等价成本";
+  }
+
+  .token-analytics-member-list-panel .ant-table-tbody > tr.ant-table-row > td:nth-child(4)::before {
+    color: #8492a6;
+    font-size: 11px;
+    font-weight: 400;
+    content: "计价状态";
+  }
+
+  .token-analytics-member-list-panel .ant-table-tbody > tr.ant-table-row > td:last-child {
+    grid-column: 1 / -1;
+  }
+
+  .token-analytics-member-list-panel .ant-table-tbody > tr.ant-table-row > td:last-child .ant-btn {
+    width: 100%;
+    height: 34px;
+    padding: 0 12px;
+    text-align: center;
+    background: #f7faff;
+    border: 1px solid #dce8f8;
+    border-radius: 7px;
+  }
+
+  .token-analytics-member-list-panel .ant-table-pagination.ant-pagination {
+    justify-content: center;
+    margin: 12px !important;
+  }
+
+  .token-analytics-session-table .ant-table-thead {
+    display: none;
+  }
+
+  .token-analytics-session-table .ant-table-content > table,
+  .token-analytics-session-table .ant-table-tbody {
+    display: block;
+    width: 100% !important;
+  }
+
+  .token-analytics-session-table .ant-table-tbody {
+    padding: 0 12px 4px;
+  }
+
+  .token-analytics-session-table .ant-table-tbody > tr.ant-table-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px 14px;
+    margin: 10px 0;
+    padding: 12px;
+    background: #fff;
+    border: 1px solid #e5edf6;
+    border-radius: 9px;
+  }
+
+  .token-analytics-session-table .ant-table-tbody > tr.ant-table-row > td {
+    display: grid;
+    min-width: 0;
+    gap: 3px;
+    padding: 0 !important;
+    color: #334155;
+    font-size: 12px;
+    text-align: left !important;
+    background: transparent !important;
+    border-bottom: 0 !important;
+  }
+
+  .token-analytics-session-table .ant-table-tbody > tr.ant-table-row > td:first-child {
+    grid-column: 1 / -1;
+    padding-bottom: 9px !important;
+    border-bottom: 1px solid #eef3f8 !important;
+  }
+
+  .token-analytics-session-table .token-analytics-session-cell strong {
+    font-size: 12px;
+  }
+
+  .token-analytics-session-table .token-analytics-session-cell span {
+    max-width: 100%;
+  }
+
+  .token-analytics-session-table .ant-table-tbody > tr.ant-table-row > td:nth-child(2)::before {
+    content: "模型";
+  }
+
+  .token-analytics-session-table .ant-table-tbody > tr.ant-table-row > td:nth-child(3)::before {
+    content: "活动日期";
+  }
+
+  .token-analytics-session-table .ant-table-tbody > tr.ant-table-row > td:nth-child(4)::before {
+    content: "Token";
+  }
+
+  .token-analytics-session-table .ant-table-tbody > tr.ant-table-row > td:nth-child(5)::before {
+    content: "API 等价成本";
+  }
+
+  .token-analytics-session-table .ant-table-tbody > tr.ant-table-row > td:nth-child(6)::before {
+    content: "计价状态";
+  }
+
+  .token-analytics-session-table .ant-table-tbody > tr.ant-table-row > td:nth-child(n + 2)::before {
+    color: #8492a6;
+    font-size: 11px;
+  }
+
+  .token-analytics-session-table .ant-table-pagination.ant-pagination {
+    justify-content: center;
+    margin: 12px !important;
+  }
+}

@@ -33,6 +33,7 @@ import { PagePanel } from "@/shared/components/PagePanel/PagePanel";
 import { ResourceTable } from "@/shared/components/ResourceTable/ResourceTable";
 import { appendSearch } from "@/shared/utils/urlQuery";
 import { invalidateRequirementTaskWorkspace } from "../../requirements/queryInvalidation";
+import "./ProductsPage.css";
 
 const { Text } = Typography;
 
@@ -241,6 +242,7 @@ export function ProductsPage() {
             action={<Button onClick={() => void documentsQuery.refetch()}>重试</Button>}
           />
         ) : (
+          <div className="products-page__desktop-table">
           <ResourceTable<Document>
             rowKey="id"
             dataSource={sortedDocuments.slice(0, 8)}
@@ -297,7 +299,28 @@ export function ProductsPage() {
               }
             ]}
           />
+          </div>
         )}
+        {!documentsQuery.isError ? (
+          <div className="products-page__mobile-list" aria-label="文档列表">
+            {!documentsQuery.isLoading && !sortedDocuments.length ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={dateStr ? `${dateStr} 无上传文档` : "暂无文档"} /> : null}
+            {sortedDocuments.slice(0, 8).map((document) => (
+              <article className="products-page__mobile-card" key={document.id}>
+                <div className="products-page__mobile-head">
+                  <a href={document.url} target="_blank" rel="noreferrer">{document.title}</a>
+                  <Popconfirm title="删除此文档？" okText="删除" okButtonProps={{ danger: true }} cancelText="取消" onConfirm={() => deleteDocMutation.mutate(document.id)}>
+                    <Button size="small" type="link" danger>删除</Button>
+                  </Popconfirm>
+                </div>
+                {document.description ? <p>{document.description}</p> : null}
+                <div className="products-page__mobile-foot">
+                  <span>{formatDateTime(document.uploaded_at)}</span>
+                  <span>{document.task_title || "未关联任务"}</span>
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : null}
         {sortedDocuments.length > 8 ? (
           <div style={{ marginTop: 8 }}>
             <Text type="secondary" style={{ fontSize: 12 }}>
@@ -326,6 +349,7 @@ export function ProductsPage() {
             action={<Button onClick={() => void sessionsQuery.refetch()}>重试</Button>}
           />
         ) : (
+          <div className="products-page__desktop-table">
           <ResourceTable<Session>
             rowKey="id"
             dataSource={sortedSessions.slice(0, 8)}
@@ -416,7 +440,41 @@ export function ProductsPage() {
               }
             ]}
           />
+          </div>
         )}
+        {!sessionsQuery.isError ? (
+          <div className="products-page__mobile-list" aria-label="AI 工作记录列表">
+            {!sessionsQuery.isLoading && !sortedSessions.length ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={dateStr ? `${dateStr} 无 AI 工作记录` : "暂无 AI 工作记录，使用 aida upload 上传"} /> : null}
+            {sortedSessions.slice(0, 8).map((session) => (
+              <article className="products-page__mobile-card" key={session.id}>
+                <div className="products-page__mobile-head">
+                  <div>
+                    <strong>{session.summary || session.session_ref.slice(0, 12)}</strong>
+                    <span>{session.model || "Claude Code"} · {formatDuration(session.duration_secs)}{user?.role !== "employee" ? ` · ${session.user_name}` : ""}</span>
+                  </div>
+                  <span className="products-page__mobile-time">{formatDateTime(session.uploaded_at)}</span>
+                </div>
+                <div className="products-page__mobile-task">
+                  <span>关联任务</span>
+                  <Select
+                    value={session.task_id || ""}
+                    loading={tasksQuery.isLoading || pendingSessionTaskId === session.id}
+                    disabled={taskSelectDisabled || pendingSessionTaskId === session.id}
+                    placeholder={taskSelectPlaceholder}
+                    onChange={(value) => void handleSessionTaskChange(session.id, value)}
+                    options={[{ value: "", label: "无关联任务" }, ...tasks.map((task) => ({ value: task.id, label: task.title }))]}
+                  />
+                </div>
+                <div className="products-page__mobile-actions">
+                  {session.raw_log_url ? <Button onClick={() => handleDownload(session.id)}>下载日志</Button> : <span />}
+                  <Popconfirm title="撤回此 AI 工作记录？" okText="撤回" okButtonProps={{ danger: true }} cancelText="取消" onConfirm={() => void handleWithdraw(session.id)}>
+                    <Button danger loading={pendingWithdrawId === session.id} disabled={pendingWithdrawId === session.id}>撤回</Button>
+                  </Popconfirm>
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : null}
         {sortedSessions.length > 8 ? (
           <div style={{ marginTop: 8 }}>
             <Text type="secondary" style={{ fontSize: 12 }}>

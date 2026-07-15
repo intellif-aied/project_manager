@@ -6,6 +6,7 @@ import {
   Card,
   DatePicker,
   Empty,
+  Pagination,
   Popconfirm,
   Select,
   Space,
@@ -29,6 +30,7 @@ import type { PaginatedSessions, Session, Task } from "../../api/types";
 import { useAuth } from "@/shared/auth/authContext";
 import { PagePanel } from "@/shared/components/PagePanel/PagePanel";
 import { invalidateRequirementTaskWorkspace } from "../../requirements/queryInvalidation";
+import "./SessionsPage.css";
 
 const { Text } = Typography;
 
@@ -58,7 +60,7 @@ export function SessionsPage() {
   const { message } = App.useApp();
   const [date, setDate] = useState<dayjs.Dayjs | null>(null);
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
+  const [pageSize, setPageSize] = useState(10);
   const [pendingSessionTaskId, setPendingSessionTaskId] = useState<string | null>(null);
   const [pendingWithdrawId, setPendingWithdrawId] = useState<string | null>(null);
 
@@ -180,7 +182,8 @@ export function SessionsPage() {
           />
         ) : null}
 
-      <Card size="small">
+      <Card size="small" className="sessions-page__card">
+        <div className="sessions-page__desktop-table">
         <Table<Session>
           rowKey="id"
           dataSource={sessions}
@@ -326,6 +329,68 @@ export function SessionsPage() {
             )
           }}
         />
+        </div>
+        <div className="sessions-page__mobile-list" aria-label="Session 列表">
+          {!sessionsQuery.isLoading && !sessions.length ? (
+            <Empty
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description={dateStr ? `${dateStr} 当日无上报 session` : "暂无 session，使用 CLI 上传：aida upload"}
+            />
+          ) : null}
+          {sessions.map((session) => (
+            <article className="sessions-page__mobile-card" key={session.id}>
+              <div className="sessions-page__mobile-head">
+                <div>
+                  <Text code>{session.session_ref.slice(0, 12)}</Text>
+                  <p>{session.summary || "暂无摘要"}</p>
+                </div>
+                <ConfidenceTag value={session.match_confidence} />
+              </div>
+              <dl className="sessions-page__mobile-meta">
+                <div><dt>开始时间</dt><dd>{formatDateTime(session.started_at)}</dd></div>
+                <div><dt>上报时间</dt><dd>{formatDateTime(session.uploaded_at)}</dd></div>
+                <div><dt>模型</dt><dd>{session.model || "-"}</dd></div>
+                <div><dt>时长</dt><dd>{formatDuration(session.duration_secs)}</dd></div>
+              </dl>
+              <div className="sessions-page__mobile-task">
+                <span>关联任务</span>
+                <Select
+                  size="middle"
+                  value={session.task_id || ""}
+                  loading={tasksQuery.isLoading || pendingSessionTaskId === session.id}
+                  disabled={taskSelectDisabled || pendingSessionTaskId === session.id}
+                  placeholder={taskSelectPlaceholder}
+                  onChange={(value) => void handleSessionTaskChange(session.id, value)}
+                  options={[{ value: "", label: "未匹配" }, ...tasks.map((task) => ({ value: task.id, label: task.title }))]}
+                />
+              </div>
+              <div className="sessions-page__mobile-actions">
+                {session.raw_log_url ? <Button icon={<DownloadOutlined />} onClick={() => handleDownload(session.id)}>下载日志</Button> : <span />}
+                <Popconfirm
+                  title="撤回此 session？"
+                  description="此操作将永久删除，包括 Token 统计。"
+                  okText="确认撤回"
+                  okButtonProps={{ danger: true }}
+                  cancelText="取消"
+                  onConfirm={() => void handleWithdraw(session.id)}
+                >
+                  <Button danger loading={pendingWithdrawId === session.id} disabled={pendingWithdrawId === session.id}>撤回</Button>
+                </Popconfirm>
+              </div>
+            </article>
+          ))}
+          {total > pageSize ? (
+            <Pagination
+              className="sessions-page__mobile-pagination"
+              current={page}
+              pageSize={pageSize}
+              total={total}
+              showSizeChanger={false}
+              hideOnSinglePage
+              onChange={setPage}
+            />
+          ) : null}
+        </div>
       </Card>
       </Space>
     </PagePanel>

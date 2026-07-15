@@ -72,7 +72,7 @@
   justify-content: flex-end;
 }
 
-.console-report-workflow-modal .ant-modal-footer .ant-space-item:has(.report-ai-generate-shell) {
+.console-report-workflow-modal .ant-modal-footer .console-report-workflow-modal__footer > .ant-space-item:first-child {
   min-width: 0;
 }
 
@@ -643,6 +643,55 @@
 }
 
 @media (max-width: 720px) {
+  .console-report-workflow-modal.ant-modal,
+  .console-report-workflow-modal .ant-modal-content {
+    max-height: calc(100dvh - 16px);
+    max-width: calc(100vw - 16px);
+    top: 8px;
+  }
+
+  .console-report-workflow-modal .ant-modal-header {
+    padding: 14px 14px 11px;
+  }
+
+  .console-report-workflow-modal .ant-modal-body {
+    max-height: calc(100dvh - 154px);
+    padding: 12px 14px 14px;
+  }
+
+  .console-report-workflow-modal .ant-modal-footer {
+    padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+  }
+
+  .console-report-workflow-modal .ant-modal-footer .ant-space {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 8px !important;
+  }
+
+  .console-report-workflow-modal .ant-modal-footer .ant-space-item {
+    min-width: 0;
+  }
+
+  .console-report-workflow-modal .ant-modal-footer .console-report-workflow-modal__footer > .ant-space-item:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .console-report-workflow-modal .ant-modal-footer .ant-btn {
+    width: 100%;
+    margin-inline-start: 0 !important;
+  }
+
+  .console-report-workflow-modal .ant-modal-footer .report-ai-generate-shell,
+  .console-report-workflow-modal .ant-modal-footer .report-ai-generate-controls {
+    width: 100%;
+  }
+
+  .console-report-workflow-modal .ant-modal-footer .report-ai-generate-controls {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .console-team-source__stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }

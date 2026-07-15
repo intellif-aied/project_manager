@@ -337,7 +337,7 @@ function ReportAIGenerateControlsState({
           : "AI 正在读取数据并生成报告";
   const runningDetail = initializingDefault
     ? "初始化完成后将自动开始生成"
-    : `已等待 ${elapsedLabel(elapsedSeconds)}，完成后正文会自动刷新`;
+    : `已等待 ${elapsedLabel(elapsedSeconds)} · 完成后自动刷新`;
 
   return (
     <div className="report-ai-generate-shell">
@@ -427,6 +427,24 @@ function SnapshotReportAISettingsPanel({
     enabled: open,
     staleTime: 15_000
   });
+
+  const updateSourceSelection = (
+    records: ReportSourceCandidate[],
+    selected: boolean
+  ) => {
+    const changedSources = records.map(sessionSourceInput);
+    const changedKeys = new Set(changedSources.map(selectedSourceKey));
+    const retained = selectedSources.filter((source) => !changedKeys.has(selectedSourceKey(source)));
+    if (!selected) {
+      onSelectedSourcesChange(retained);
+      return;
+    }
+    const next = [...retained, ...changedSources];
+    if (next.length > MAX_SELECTED_SESSIONS) {
+      message.warning(`最多选择 ${MAX_SELECTED_SESSIONS} 个 Session`);
+    }
+    onSelectedSourcesChange(next.slice(0, MAX_SELECTED_SESSIONS));
+  };
   const columns = useMemo<ColumnsType<ReportSourceCandidate>>(
     () => [
       {
@@ -496,21 +514,20 @@ function SnapshotReportAISettingsPanel({
         rowSelection={{
           preserveSelectedRowKeys: true,
           selectedRowKeys: selectedSources.map(selectedSourceKey),
-          onSelect: (record, selected) => {
-            const source = sessionSourceInput(record);
-            const key = selectedSourceKey(source);
-            const retained = selectedSources.filter((item) => selectedSourceKey(item) !== key);
-            if (!selected) {
-              onSelectedSourcesChange(retained);
-              return;
-            }
-            const next = [...retained, source];
-            if (next.length > MAX_SELECTED_SESSIONS) {
-              message.warning(`最多选择 ${MAX_SELECTED_SESSIONS} 个 Session`);
-            }
-            onSelectedSourcesChange(next.slice(0, MAX_SELECTED_SESSIONS));
-          }
+          onSelect: (record, selected) => updateSourceSelection([record], selected),
+          onSelectAll: (selected, _selectedRows, changedRows) =>
+            updateSourceSelection(changedRows, selected)
         }}
+        onRow={(record) => ({
+          onClick: (event) => {
+            const target = event.target as HTMLElement;
+            if (target.closest("a, button, input, label, .ant-checkbox-wrapper")) return;
+            const selected = selectedSources.some(
+              (source) => selectedSourceKey(source) === sessionSourceKey(record)
+            );
+            updateSourceSelection([record], !selected);
+          }
+        })}
         pagination={{
           current: page,
           pageSize,
@@ -547,11 +564,22 @@ function SnapshotReportAISettingsPanel({
         }
         open={open}
         placement="right"
-        width="min(680px, 94vw)"
+        size="min(680px, 94vw)"
         mask
         maskClosable
+        keyboard
+        autoFocus
+        destroyOnHidden
         zIndex={1100}
         onClose={onClose}
+        footer={
+          <div className="report-ai-settings-drawer__footer">
+            <span>{selectionSummary}</span>
+            <Button type="primary" onClick={onClose}>
+              完成
+            </Button>
+          </div>
+        }
       >
         <div className="report-ai-settings-drawer__body">{settingsBody}</div>
       </Drawer>

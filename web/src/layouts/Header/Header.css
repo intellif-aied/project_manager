@@ -328,7 +328,29 @@
   }
 
   .app-header__page .page-nav__breadcrumb {
+    width: 100%;
     max-width: 54vw;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .app-header__page .page-nav__breadcrumb ol,
+  .app-header__page .page-nav__breadcrumb li:last-child,
+  .app-header__page .page-nav__breadcrumb li:last-child .ant-breadcrumb-link {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .app-header__page .page-nav__breadcrumb li:not(:last-child),
+  .app-header__page .page-nav__breadcrumb .ant-breadcrumb-separator {
+    display: none;
+  }
+
+  .app-header__page .page-nav__breadcrumb li:last-child .ant-breadcrumb-link {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .app-header__right {

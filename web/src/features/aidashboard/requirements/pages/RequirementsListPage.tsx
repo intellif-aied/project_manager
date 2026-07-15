@@ -2745,7 +2745,7 @@ export function RequirementDrawer({
   return (
     <Drawer
       className="requirements-drawer requirements-drawer--requirement"
-      width={980}
+      size={980}
       open={Boolean(requirement)}
       onClose={onClose}
       closable={false}

@@ -1,0 +1,83 @@
+.tasks-list__mobile {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .tasks-list__desktop-table {
+    display: none;
+  }
+
+  .tasks-list__mobile {
+    display: grid;
+    gap: 10px;
+  }
+
+  .tasks-list__mobile-card {
+    display: grid;
+    gap: 10px;
+    padding: 14px;
+    background: #fff;
+    border: 1px solid #e5edf6;
+    border-radius: 10px;
+  }
+
+  .tasks-list__mobile-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .tasks-list__mobile-head > a {
+    min-width: 0;
+    color: #172033;
+    font-size: 15px;
+    font-weight: 680;
+    line-height: 1.45;
+  }
+
+  .tasks-list__mobile-requirement {
+    margin: 0;
+    overflow: hidden;
+    color: #64748b;
+    font-size: 13px;
+    line-height: 1.45;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .tasks-list__mobile-meta {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px 14px;
+    margin: 0;
+    padding: 10px 0;
+    border-block: 1px solid #eef3f8;
+  }
+
+  .tasks-list__mobile-meta > div {
+    display: grid;
+    min-width: 0;
+    gap: 3px;
+  }
+
+  .tasks-list__mobile-meta dt {
+    color: #8492a6;
+    font-size: 11px;
+  }
+
+  .tasks-list__mobile-meta dd {
+    min-width: 0;
+    margin: 0;
+    overflow: hidden;
+    color: #334155;
+    font-size: 13px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .tasks-list__mobile .ant-pagination {
+    justify-content: center;
+    margin-top: 4px;
+  }
+}

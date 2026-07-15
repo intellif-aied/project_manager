@@ -1,10 +1,27 @@
 .report-ai-generate-shell {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  width: 100%;
   align-items: center;
   justify-content: flex-end;
   min-width: 0;
   max-width: 100%;
   gap: 10px;
+}
+
+.console-report-workflow-modal .console-report-workflow-modal__footer {
+  display: flex;
+  width: 100%;
+}
+
+.console-report-workflow-modal .console-report-workflow-modal__footer > .ant-space-item:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.report-ai-generate-controls {
+  flex: 0 0 auto;
 }
 
 .report-ai-generate-controls .ant-btn {
@@ -50,17 +67,11 @@
 }
 
 .report-ai-run-status > span {
-  display: flex;
-  align-items: baseline;
+  display: grid;
+  align-items: center;
   min-width: 0;
   overflow: hidden;
-  gap: 6px;
-}
-
-.report-ai-run-status strong::after {
-  margin-left: 6px;
-  color: #cbd5e1;
-  content: "·";
+  gap: 1px;
 }
 
 .report-ai-run-status strong,
@@ -160,6 +171,34 @@
 .report-ai-settings-drawer .ant-drawer-body {
   overflow: hidden;
   padding: 16px 20px 20px;
+}
+
+.report-ai-settings-drawer .ant-drawer-footer {
+  padding: 12px 20px calc(12px + env(safe-area-inset-bottom));
+  border-top: 1px solid #e8eef5;
+  background: #ffffff;
+}
+
+.report-ai-settings-drawer__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.report-ai-settings-drawer__footer > span {
+  min-width: 0;
+  overflow: hidden;
+  color: #64748b;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.report-ai-settings-drawer__footer .ant-btn {
+  min-width: 76px;
+  border-radius: 7px;
+  font-weight: 650;
 }
 
 .report-ai-settings-drawer__title {
@@ -363,6 +402,10 @@
   word-break: break-word;
 }
 
+.report-ai-settings-drawer .ant-table-tbody > tr > td {
+  cursor: pointer;
+}
+
 .report-ai-settings-panel .ant-table-selection-column,
 .report-ai-settings-drawer .ant-table-selection-column {
   width: 34px;
@@ -390,11 +433,20 @@
 @media (max-width: 760px) {
   .report-ai-generate-shell {
     width: 100%;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+    gap: 8px;
   }
 
   .report-ai-run-status {
+    width: 100%;
     min-width: 0;
-    max-width: 100%;
+    max-width: none;
+    padding: 7px 9px;
+    border: 1px solid #dfe8f3;
+    border-radius: 7px;
+    background: #f8fafc;
   }
 
   .report-ai-settings-panel__toolbar .ant-picker {

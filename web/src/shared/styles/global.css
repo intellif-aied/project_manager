@@ -345,3 +345,37 @@ input.ant-input {
 .resource-action--danger {
   color: var(--aihub-color-danger);
 }
+
+@media (max-width: 768px) {
+  .ant-modal-root .ant-modal {
+    top: 8px;
+    width: calc(100vw - 16px) !important;
+    max-width: calc(100vw - 16px);
+    margin: 0 auto;
+    padding-bottom: 8px;
+  }
+
+  .ant-modal-root .ant-modal-content {
+    display: flex;
+    max-height: calc(100vh - 16px);
+    max-height: calc(100dvh - 16px);
+    flex-direction: column;
+  }
+
+  .ant-modal-root .ant-modal-body {
+    min-height: 0;
+    overflow: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .ant-drawer-content-wrapper {
+    max-width: 100vw;
+  }
+
+  .main-layout__content .ant-input,
+  .main-layout__content .ant-input-affix-wrapper input,
+  .main-layout__content .ant-picker-input > input,
+  .main-layout__content .ant-select-selection-search-input {
+    font-size: 16px;
+  }
+}

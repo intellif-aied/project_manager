@@ -1,8 +1,9 @@
 import { PlusOutlined, ReloadOutlined } from "@ant-design/icons";
-import { Alert, Button, Select } from "antd";
+import { Alert, Button, Empty, Pagination, Select } from "antd";
 import type { TableProps } from "antd";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
 
 import { fetchTasks } from "../../api/client";
 import type { Task, TaskPriority, TaskStatus } from "../../api/types";
@@ -14,6 +15,7 @@ import { appendSearch } from "@/shared/utils/urlQuery";
 
 import "../../aidashboard-pattern.css";
 import { TaskPriorityTag, TaskStatusTag } from "../../dashboard/shared";
+import "./TasksListPage.css";
 
 function taskResponsibleLabel(task: Pick<Task, "responsible_users" | "responsible_user_ids">) {
   const names = (task.responsible_users ?? []).map((responsible) => responsible.name || responsible.id).filter(Boolean);
@@ -21,6 +23,10 @@ function taskResponsibleLabel(task: Pick<Task, "responsible_users" | "responsibl
   const visible = names.slice(0, 2);
   const restCount = names.length - visible.length;
   return restCount > 0 ? `${visible.join("、")} +${restCount}` : visible.join("、");
+}
+
+function taskDueDateLabel(value?: string) {
+  return value ? value.slice(0, 10) : "未设置";
 }
 
 const STATUS_FILTER_OPTIONS: Array<{ value: TaskStatus; label: string }> = [
@@ -34,8 +40,11 @@ export function TasksListPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const statusFilter = (searchParams.get("status") as TaskStatus | null) ?? "";
+  const [mobilePage, setMobilePage] = useState(1);
+  const mobilePageSize = 10;
 
   const updateParam = (key: string, value: string) => {
+    setMobilePage(1);
     setSearchParams(
       (prev) => {
         const next = new URLSearchParams(prev);
@@ -62,6 +71,7 @@ export function TasksListPage() {
     staleTime: 30_000
   });
   const tasks = tasksQuery.data ?? [];
+  const mobileTasks = tasks.slice((mobilePage - 1) * mobilePageSize, mobilePage * mobilePageSize);
 
   const columns: TableProps<Task>["columns"] = [
     {
@@ -164,13 +174,43 @@ export function TasksListPage() {
             action={<Button onClick={() => void tasksQuery.refetch()}>重试</Button>}
           />
         ) : null}
-        <ResourceTable<Task>
-          rowKey="id"
-          columns={columns}
-          dataSource={tasks}
-          loading={tasksQuery.isLoading}
-          pagination={{ pageSize: 20, showSizeChanger: false }}
-        />
+        <div className="tasks-list__desktop-table">
+          <ResourceTable<Task>
+            rowKey="id"
+            columns={columns}
+            dataSource={tasks}
+            loading={tasksQuery.isLoading}
+            pagination={{ pageSize: 20, showSizeChanger: false }}
+          />
+        </div>
+        <div className="tasks-list__mobile" aria-label="任务列表">
+          {!tasksQuery.isLoading && !mobileTasks.length ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无任务" /> : null}
+          {mobileTasks.map((task) => (
+            <article className="tasks-list__mobile-card" key={task.id}>
+              <div className="tasks-list__mobile-head">
+                <Link to={appendSearch(`/tasks/${task.id}`, searchParams)}>{task.title}</Link>
+                <TaskStatusTag status={task.status} />
+              </div>
+              <p className="tasks-list__mobile-requirement">{task.requirement_title || "未关联需求"}</p>
+              <dl className="tasks-list__mobile-meta">
+                <div><dt>负责人</dt><dd>{taskResponsibleLabel(task)}</dd></div>
+                <div><dt>优先级</dt><dd><TaskPriorityTag priority={task.priority} /></dd></div>
+                <div><dt>截止时间</dt><dd>{taskDueDateLabel(task.due_date)}</dd></div>
+              </dl>
+              <Button block onClick={() => navigate(appendSearch(`/tasks/${task.id}`, searchParams))}>查看详情</Button>
+            </article>
+          ))}
+          {tasks.length > mobilePageSize ? (
+            <Pagination
+              current={mobilePage}
+              pageSize={mobilePageSize}
+              total={tasks.length}
+              showSizeChanger={false}
+              hideOnSinglePage
+              onChange={setMobilePage}
+            />
+          ) : null}
+        </div>
       </TableLayout>
     </PagePanel>
   );

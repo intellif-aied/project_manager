@@ -152,10 +152,37 @@
 
 @media (max-width: 768px) {
   .page-nav {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 8px;
     min-height: auto;
+    padding-bottom: 12px;
+  }
+
+  .page-nav__main {
+    width: 100%;
+  }
+
+  .page-nav__heading,
+  .page-nav__heading-main {
+    width: 100%;
+  }
+
+  .page-nav__grow {
+    display: none;
   }
 
   .page-nav__heading-main {
     gap: 0;
+  }
+
+  .page-nav__actions {
+    width: 100%;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .page-nav__actions .ant-picker {
+    max-width: 100%;
   }
 }
