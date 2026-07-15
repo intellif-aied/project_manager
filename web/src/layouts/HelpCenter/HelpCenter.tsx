@@ -32,7 +32,6 @@ import type { HelpModuleKey } from "./helpCenterConfig";
 import "./HelpCenter.css";
 
 interface HelpCenterProps {
-  currentModule: HelpModuleKey;
   onClose: () => void;
   open: boolean;
 }
@@ -82,10 +81,10 @@ function HelpArticleList({ articles, onOpen }: { articles: HelpArticle[]; onOpen
   );
 }
 
-export function HelpCenter({ currentModule, onClose, open }: HelpCenterProps) {
+export function HelpCenter({ onClose, open }: HelpCenterProps) {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const [selectedModule, setSelectedModule] = useState<HelpModuleKey>(currentModule);
+  const [selectedModule, setSelectedModule] = useState<HelpModuleKey>("quickstart");
   const [selectedArticleId, setSelectedArticleId] = useState<string>();
   const [searchDraft, setSearchDraft] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
@@ -243,10 +242,6 @@ export function HelpCenter({ currentModule, onClose, open }: HelpCenterProps) {
 
       <div className="help-center__body">
         <aside className="help-center__sidebar" aria-label="帮助模块">
-          <button type="button" className="help-center__current" onClick={() => resetToModule(currentModule)}>
-            <span>当前页面</span>
-            <strong>{HELP_MODULE_LABELS[currentModule]}</strong>
-          </button>
           <nav className="help-center__nav">
             {HELP_MODULES.map((item) => {
               const count = allowedArticles.filter((article) => article.module === item.key).length;
@@ -284,7 +279,7 @@ export function HelpCenter({ currentModule, onClose, open }: HelpCenterProps) {
           ) : (
             <section className="help-center__index">
               <div className="help-center__index-head">
-                <span>{selectedModule === currentModule ? "当前页面指南" : "模块指南"}</span>
+                <span>模块指南</span>
                 <h2>{HELP_MODULE_LABELS[selectedModule]}</h2>
                 <p>选择一个任务，查看完整操作步骤、权限说明和常见风险。</p>
               </div>

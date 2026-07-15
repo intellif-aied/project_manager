@@ -181,7 +181,7 @@ export function DailyReportGenerateModal({
     (scope === "department" && departmentReportQuery.isError);
 
   const hasContent = Boolean(currentReport?.content?.trim());
-  const showEditor = hasContent || manualMode;
+  const showEditor = hasContent || manualMode || scope === "personal";
   const editorContent = contentTouched ? content : (currentReport?.content ?? "");
   const editorNextDayPlan = nextDayPlanTouched ? nextDayPlan : (currentReport?.next_day_plan ?? "");
   const personalReport = scope === "personal" ? (personalReportQuery.data ?? null) : null;

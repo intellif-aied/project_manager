@@ -120,15 +120,14 @@ export const HELP_ARTICLES: HelpArticle[] = [
           "检查生成内容和明日计划，确认事实无误后保存。"
         ],
         screenshots: [
-          { alt: "个人日报切换日期", caption: "弹窗顶部的日历选择日报归属日期，不负责筛选 Session。", src: "/help-center/screenshots/v1/quickstart/04-daily-date-select.png" },
-          { alt: "日报 AI 生成入口", caption: "AI 生成和选择 Session 是并列操作；Session 选择不是必选步骤。", src: "/help-center/screenshots/v1/dir/13-daily-ai-generate.png" },
+          { alt: "日报日期与 AI 生成入口", caption: "弹窗顶部的日历选择日报归属日期；AI 生成和选择 Session 是并列操作，Session 选择不是必选步骤。", src: "/help-center/screenshots/v1/dir/13-daily-ai-generate.png" },
           { alt: "Session 日期范围筛选", caption: "打开 Session 抽屉后，开始日期和结束日期只筛选候选 Session，不会修改日报日期。", src: "/help-center/screenshots/v1/dir/12-daily-session-selection.png" }
         ]
       },
       {
         title: "完成检查",
-        bullets: ["“我的日报记录”出现目标日期。", "展开后可以查看完整正文。", "仍可复制全文或再次编辑。"],
-        screenshots: [{ alt: "日报保存结果", caption: "日报保存后会出现在个人日报记录列表中。", src: "/help-center/screenshots/v1/quickstart/03-daily-saved-result.png" }]
+        bullets: ["“我的日报记录”出现目标日期。", "展开后可以依次查看完整正文和明日计划。", "仍可复制正文或再次编辑。"],
+        screenshots: [{ alt: "日报保存后的展开结果", caption: "日报保存后会出现在个人日报记录中；展开后，明日计划显示在完整正文下方。", src: "/help-center/screenshots/v1/quickstart/03-daily-saved-result.png" }]
       }
     ]
   },
@@ -483,18 +482,33 @@ export const HELP_ARTICLES: HelpArticle[] = [
       {
         title: "完整流程",
         steps: [
-          "创建需求并写清目标、描述、负责人、参与团队、截止时间和验收标准。",
-          "在需求详情中拆分任务，为任务设置负责人、截止时间和上游依赖。",
-          "任务负责人持续更新任务状态与进度。",
+          "团队负责人、产品经理或部门总监创建需求并写清目标和描述；工程师从本人可见的既有需求开始处理。",
+          "有任务创建权限时，在需求详情中拆分任务，并按角色允许的人员范围设置负责人、截止时间和上游依赖。",
+          "任务创建者、任务负责人或有管理权限的角色持续更新任务状态与进度。",
           "通过风险和动态跟踪逾期、阻塞及关键变更。",
           "任务完成后对照验收标准确认需求是否达到完成条件。"
         ],
         screenshots: [
-          { alt: "工程师需求看板", caption: "工程师仅处理与本人相关的需求和任务，不显示新建需求入口。", roles: ["employee"], src: "/help-center/screenshots/v1/emp/02-requirements-board.png" },
-          { alt: "团队负责人需求看板", caption: "团队负责人可创建和管理团队范围需求。", roles: ["team_leader"], src: "/help-center/screenshots/v1/tl/02-requirements-board.png" },
-          { alt: "产品经理需求看板", caption: "产品经理可管理跨团队需求、任务和验收。", roles: ["pm"], src: "/help-center/screenshots/v1/pm/02-requirements-board.png" },
-          { alt: "部门总监需求看板", caption: "部门总监可从部门范围跟踪需求阶段和风险。", roles: ["director"], src: "/help-center/screenshots/v1/dir/02-requirements-board.png" }
+          { alt: "工程师需求看板", caption: "工程师可查看本人创建、本人负责或本组参与的需求；不显示新建需求入口，创建任务时只能指派给自己。", roles: ["employee"], src: "/help-center/screenshots/v1/emp/02-requirements-board.png" },
+          { alt: "团队负责人需求看板", caption: "团队负责人可新建需求，并管理本人创建、本人负责或本组参与的需求；任务负责人限定为本组可选人员。", roles: ["team_leader"], src: "/help-center/screenshots/v1/tl/02-requirements-board.png" },
+          { alt: "产品经理需求看板", caption: "产品经理可查看和管理全部需求与任务，并支持跨团队分配、依赖和验收管理。", roles: ["pm"], src: "/help-center/screenshots/v1/pm/02-requirements-board.png" },
+          { alt: "部门总监需求看板", caption: "部门总监可查看和管理全部需求与任务，并从跨团队视角跟踪阶段、依赖、验收和风险。", roles: ["director"], src: "/help-center/screenshots/v1/dir/02-requirements-board.png" }
         ]
+      },
+      {
+        title: "工程师权限边界",
+        roles: ["employee"],
+        bullets: ["不能新建需求。", "可查看本人创建、本人负责或本组作为参与团队的需求。", "仅能管理本人创建或本人负责的需求。", "可在本人可见的未取消需求中创建任务，但任务只能指派给自己；不能改派任务负责人。"]
+      },
+      {
+        title: "团队负责人权限边界",
+        roles: ["team_leader"],
+        bullets: ["可以新建需求。", "可查看和管理本人创建、本人负责或本组作为参与团队的需求。", "创建或改派任务时，只能选择本组可用人员。", "可管理本人创建、本人负责、本组成员负责，或所属需求在本人管理范围内的任务。"]
+      },
+      {
+        title: "产品经理与部门总监权限边界",
+        roles: ["pm", "director"],
+        bullets: ["可以查看、创建和管理全部需求。", "可以在未取消需求中创建和管理任务，并从全部可用业务人员中选择负责人。", "可以管理需求和任务的状态、进度、依赖与验收标准。"]
       }
     ]
   },
@@ -519,7 +533,11 @@ export const HELP_ARTICLES: HelpArticle[] = [
       },
       {
         title: "选择视图",
-        bullets: ["阶段看板适合按状态推进。", "需求列表适合搜索、筛选和批量浏览。"]
+        bullets: ["阶段看板适合按状态推进。", "需求列表适合搜索、筛选和批量浏览。"],
+        screenshots: [
+          { alt: "工程师需求范围与阶段看板", caption: "工程师同样可以切换我的事项、关注、负责、创建或全部；每个范围只返回本人有权查看的需求。", roles: ["employee"], src: "/help-center/screenshots/v1/emp/02-requirements-board.png" },
+          { alt: "需求范围筛选与列表视图", caption: "管理角色先选择我的事项、关注、负责、创建或全部，再根据工作场景切换阶段看板或需求列表。", roles: ["team_leader", "pm", "director"], src: "/help-center/screenshots/v1/tl/09-requirements-scope-view.png" }
+        ]
       }
     ]
   },
@@ -527,20 +545,33 @@ export const HELP_ARTICLES: HelpArticle[] = [
     id: "requirements-create",
     module: "requirements",
     title: "创建一条可执行的需求",
-    summary: "把背景、负责人、参与团队、截止时间和验收标准一次写清。",
+    summary: "填写标题、描述并指定负责人，再按需补充协作范围与验收口径。",
     route: "/requirements/create",
     roles: MANAGEMENT_ROLES,
-    keywords: ["新建需求", "标题", "描述", "负责人", "团队", "截止", "验收标准"],
+    keywords: ["新建需求", "标题", "描述", "负责人", "必填", "校验", "团队", "截止", "飞书文档", "验收标准"],
     sections: [
       {
         title: "创建步骤",
         steps: [
           "在需求看板选择“新建需求”。",
           "填写标题和需求描述，描述应说明背景、目标与范围。",
-          "选择一个或多个负责人及参与团队。",
-          "设置截止日期、优先级和可验证的验收标准。",
+          "至少选择一名负责人；负责人用于明确推进责任，不能留空。",
+          "确认优先级，并按需补充参与团队、截止日期、飞书文档和可验证的验收标准。",
           "保存后进入需求详情继续拆分任务。"
-        ]
+        ],
+        screenshots: [{ alt: "新建需求完整表单", caption: "团队负责人视角的新建需求页面；标题、描述、负责人和优先级是创建时需要重点确认的字段。", src: "/help-center/screenshots/v1/tl/10-requirements-create.png" }]
+      },
+      {
+        title: "提交前校验",
+        bullets: [
+          "标题和需求描述为必填项；只输入空格不会通过校验。",
+          "标题最多 120 个字符，不能包含换行、制表符或不可见控制字符。",
+          "需求描述最多 10000 个字符，不能包含不可见控制字符。",
+          "负责人至少选择一人；优先级必须选择低、中、高或紧急。",
+          "飞书文档为可选项；填写时必须是完整的 http 或 https 链接，最长 2048 个字符。",
+          "验收标准最多 50 条，每条最多 1000 个字符，不能包含不可见控制字符。"
+        ],
+        note: "参与团队、截止日期、飞书文档和验收标准可以留空，但应根据实际协作与交付需要及时补充。"
       },
       {
         title: "权限说明",
@@ -567,12 +598,12 @@ export const HELP_ARTICLES: HelpArticle[] = [
           "动态：需求与任务关键变更的时间记录。"
         ],
         screenshots: [
-          { alt: "需求详情抽屉", caption: "需求概览与任务、验收、动态集中在同一抽屉内。", roles: ["director"], src: "/help-center/screenshots/v1/dir/03-requirement-detail.png" }
+          { alt: "需求详情抽屉", caption: "以团队负责人视角为例：需求说明和关键字段位于概览区，任务、验收、动态及 Session 入口集中在下方工作区；操作按钮按实际权限显示。", src: "/help-center/screenshots/v1/tl/11-requirements-detail.png" }
         ]
       },
       {
         title: "快捷操作",
-        bullets: ["有权限时可直接编辑截止时间、负责人和参与团队。", "“关联 session”位于标签栏右侧，用于管理需求级工作记录。"]
+        bullets: ["有权限时可直接编辑截止时间、负责人和参与团队；负责人至少保留一人。", "“关联 session”位于标签栏右侧，用于管理需求级工作记录。"]
       }
     ]
   },
@@ -602,11 +633,11 @@ export const HELP_ARTICLES: HelpArticle[] = [
     summary: "把需求拆成可分配、可跟踪、可完成的执行任务。",
     route: "/requirements?scope=mine",
     roles: ALL_BUSINESS_ROLES,
-    keywords: ["拆分任务", "添加任务", "任务负责人", "进度", "状态", "完成"],
+    keywords: ["拆分任务", "添加任务", "任务负责人", "必填", "校验", "进度", "状态", "完成"],
     sections: [
       {
         title: "拆分原则",
-        bullets: ["每个任务只表达一个可交付结果。", "明确负责人、截止时间和完成标准。", "存在先后顺序时设置上游依赖。"]
+        bullets: ["每个任务只表达一个可交付结果。", "任务标题、负责人和优先级为必填项。", "按需补充截止时间和完成标准。", "存在先后顺序时设置上游依赖。"]
       },
       {
         title: "推进步骤",
@@ -616,7 +647,29 @@ export const HELP_ARTICLES: HelpArticle[] = [
           "实际开始后更新状态和进度。",
           "遇到阻塞时先查看上游依赖和风险说明。",
           "完成后确认进度、状态和完成时间保持一致。"
+        ],
+        screenshots: [{ alt: "任务推进详情", caption: "任务详情集中展示负责人、截止日期、进度、状态、风险、依赖和验收标准。", src: "/help-center/screenshots/v1/tl/12-requirements-task-progress.png" }]
+      },
+      {
+        title: "任务校验规则",
+        bullets: [
+          "任务标题最多 120 个字符，不能包含换行、制表符或不可见控制字符。",
+          "负责人至少选择一人；优先级必须选择低、中或高。",
+          "上游依赖最多选择 50 项，不能选择无权限访问或不合法的依赖。",
+          "任务验收标准最多 50 条，每条最多 1000 个字符。",
+          "进度必须在 0% 到 100% 之间；“阻塞”由未完成依赖和时间关系计算，不是可手动选择的任务状态。",
+          "将任务设为完成时，系统同时保持完成状态、100% 进度和完成时间一致。"
         ]
+      },
+      {
+        title: "工程师操作范围",
+        roles: ["employee"],
+        note: "工程师可在本人可见的未取消需求中新增只分配给自己的任务；可更新本人创建或负责的任务，也可管理本人创建或负责需求下的任务，但不能修改任务负责人。"
+      },
+      {
+        title: "管理角色操作范围",
+        roles: ["team_leader", "pm", "director"],
+        note: "团队负责人只在本人或本组管理范围内拆分和推进任务，负责人限定本组；产品经理与部门总监可跨团队管理任务和负责人。"
       }
     ]
   },
@@ -631,7 +684,8 @@ export const HELP_ARTICLES: HelpArticle[] = [
     sections: [
       {
         title: "设置依赖",
-        steps: ["创建或编辑任务时打开上游依赖选择器。", "搜索并选择必须先完成的任务。", "保存后在任务详情中核对依赖关系。"]
+        steps: ["确认当前任务显示依赖管理权限后，打开上游依赖选择器。", "搜索并选择必须先完成且本人有权访问的任务。", "保存后在任务详情中核对依赖关系。"],
+        screenshots: [{ alt: "选择任务上游依赖", caption: "依赖选择器按需求分组展示候选任务；只选择当前任务真正需要等待的上游工作。", src: "/help-center/screenshots/v1/tl/13-requirements-dependencies.png" }]
       },
       {
         title: "处理风险",
@@ -646,11 +700,20 @@ export const HELP_ARTICLES: HelpArticle[] = [
     summary: "用可验证的条件统一需求完成口径。",
     route: "/requirements?scope=mine",
     roles: ALL_BUSINESS_ROLES,
-    keywords: ["验收", "AC", "完成标准", "验收标准"],
+    keywords: ["验收", "AC", "完成标准", "验收标准", "50 条", "1000 字符", "编辑冲突"],
     sections: [
       {
         title: "写法建议",
-        bullets: ["每条标准只描述一个可检查结果。", "避免“体验良好”“尽量优化”等不可验证表达。", "需求范围变化时同步更新验收标准，并通过动态确认变更。"]
+        bullets: ["每条标准只描述一个可检查结果。", "避免“体验良好”“尽量优化”等不可验证表达。", "有需求编辑权限时，范围变化后同步更新验收标准，并通过动态确认变更；只读用户负责核对，不会看到保存入口。"],
+        screenshots: [{ alt: "需求验收标准页签", caption: "验收页签集中列出需求级完成条件，完成需求前应逐项核对。", src: "/help-center/screenshots/v1/tl/14-requirements-acceptance.png" }]
+      },
+      {
+        title: "数量与内容限制",
+        bullets: ["需求和任务的验收标准均为可选项。", "最多填写 50 条。", "每条最多 1000 个字符。", "不能包含不可见控制字符；空白条目保存时会被忽略。"]
+      },
+      {
+        title: "多人编辑",
+        note: "需求和任务保存时会携带当前版本。若内容已被其他人更新，页面会提示编辑冲突并刷新数据；请基于最新内容重新修改，不要覆盖他人的变更。"
       }
     ]
   },
@@ -665,11 +728,13 @@ export const HELP_ARTICLES: HelpArticle[] = [
     sections: [
       {
         title: "关联 session",
-        steps: ["打开需求详情。", "在标签栏右侧选择“关联 session”。", "按时间筛选并勾选对应工作记录。", "确认后在需求上下文中保留关联。"]
+        steps: ["打开本人有权查看的需求详情。", "在标签栏右侧选择“关联 session”。", "按时间筛选并勾选本人的工作记录。", "确认后在需求上下文中保留关联；每个用户只能新增或移除自己的 Session 关联。"],
+        screenshots: [{ alt: "需求关联 Session 弹窗", caption: "通过日期范围筛选并关联可作为需求证据来源的 Session；截图仅保留经过安全检查的测试记录。", src: "/help-center/screenshots/v1/tl/15-requirements-session-link.png" }]
       },
       {
         title: "动态记录",
-        bullets: ["动态按时间显示需求和任务的重要变更。", "动态用于追溯，不替代当前字段值。", "查看负责人、状态或关联记录变化时，可用动态确认是谁在何时操作。"]
+        bullets: ["动态按时间显示需求和任务的重要变更。", "动态用于追溯，不替代当前字段值。", "查看负责人、状态或关联记录变化时，可用动态确认是谁在何时操作。"],
+        screenshots: [{ alt: "需求动态记录", caption: "动态按时间记录需求阶段、负责人和任务等关键变更，便于确认操作者与变更前后值。", src: "/help-center/screenshots/v1/tl/16-requirements-activity.png" }]
       }
     ]
   },
@@ -726,11 +791,12 @@ export const HELP_ARTICLES: HelpArticle[] = [
     summary: "按日期筛选记录，在列表中直接阅读摘要、展开全文、复制或编辑。",
     route: "/reports/daily?tab=personal",
     roles: ALL_BUSINESS_ROLES,
-    keywords: ["个人日报", "日期筛选", "展开", "收起", "复制全文", "编辑"],
+    keywords: ["个人日报", "日期筛选", "展开", "收起", "复制全文", "明日计划", "编辑"],
     sections: [
       {
         title: "浏览记录",
-        steps: ["使用开始日期和结束日期筛选历史范围。", "在折叠状态快速阅读一行内容预览。", "选择“展开”加载并查看完整 Markdown 内容。", "展开后可复制全文或再次收起。"]
+        steps: ["使用开始日期和结束日期筛选历史范围。", "在折叠状态快速定位日期和记录。", "选择“展开”加载完整 Markdown 正文。", "正文下方会继续显示该日报的明日计划；没有填写时显示“未填写”。", "展开后可复制正文或再次收起。"],
+        screenshots: [{ alt: "个人日报展开后的正文和明日计划", caption: "展开记录后，完整正文与明日计划在同一张记录卡片中连续展示。", src: "/help-center/screenshots/v1/dir/04-daily-personal.png" }]
       },
       {
         title: "编辑记录",
@@ -774,7 +840,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
     sections: [
       {
         title: "生成步骤",
-        steps: ["打开日报管理弹窗，通过日历图标确认或切换目标日期。", "个人日报可直接选择“AI 生成”，也可先选择 session 缩小上下文范围。", "生成完成后检查事实、结构和遗漏内容。", "确认无误后保存。"],
+        steps: ["打开日报管理弹窗，通过日历图标确认或切换目标日期。", "个人日报可直接选择“AI 生成”，也可先选择 session 缩小上下文范围。", "生成完成后分别检查报告正文和明日计划，修正事实、结构或遗漏内容。", "确认无误后保存。"],
         screenshots: [{ alt: "日报 AI 生成入口", caption: "AI 生成与 Session 选择是并列操作；不选择 Session 也可以直接生成。", src: "/help-center/screenshots/v1/dir/13-daily-ai-generate.png" }]
       },
       {
@@ -856,8 +922,8 @@ export const HELP_ARTICLES: HelpArticle[] = [
     sections: [
       {
         title: "操作步骤",
-        steps: ["切换到“小组汇总日报”。", "使用日期范围查看历史记录。", "选择“填写小组日报”并确认目标日期。", "直接编辑或使用 AI 基于小组范围数据生成。", "检查成员遗漏、风险和计划后保存。"],
-        screenshots: [{ alt: "小组汇总日报", caption: "小组汇总日报的历史记录和编辑入口。", src: "/help-center/screenshots/v1/tl/05-daily-team.png" }]
+        steps: ["切换到“小组汇总日报”。", "使用日期范围查看历史记录。", "选择记录右侧的“打开”，可连续查看报告正文和下方的明日计划。", "选择“填写小组日报”并确认目标日期。", "直接编辑或使用 AI 基于小组范围数据生成。", "分别检查成员遗漏、风险和明日计划后保存。"],
+        screenshots: [{ alt: "小组汇总日报正文和明日计划", caption: "打开小组日报记录后，报告正文下方会显示明日计划。", src: "/help-center/screenshots/v1/tl/05-daily-team.png" }]
       }
     ]
   },
@@ -872,8 +938,8 @@ export const HELP_ARTICLES: HelpArticle[] = [
     sections: [
       {
         title: "操作步骤",
-        steps: ["切换到“部门汇总日报”。", "使用日期范围查看历史记录。", "选择“填写部门日报”并确认目标日期。", "直接编辑或使用 AI 基于部门范围数据生成。", "检查跨团队风险、重点进展和后续计划后保存。"],
-        screenshots: [{ alt: "部门汇总日报", caption: "部门汇总日报的历史记录和编辑入口。", src: "/help-center/screenshots/v1/dir/07-daily-department.png" }]
+        steps: ["切换到“部门汇总日报”。", "使用日期范围查看历史记录。", "选择“展开”，可连续查看完整 Markdown 正文和下方的明日计划。", "选择“填写部门日报”并确认目标日期。", "直接编辑或使用 AI 基于部门范围数据生成。", "分别检查跨团队风险、重点进展和明日计划后保存。"],
+        screenshots: [{ alt: "部门汇总日报展开后的正文和明日计划", caption: "展开部门日报记录后，明日计划显示在完整正文下方。", src: "/help-center/screenshots/v1/dir/07-daily-department.png" }]
       }
     ]
   },

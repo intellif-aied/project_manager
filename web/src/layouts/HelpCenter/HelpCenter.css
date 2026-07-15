@@ -51,22 +51,6 @@
   border-right: 1px solid #e3eaf2;
 }
 
-.help-center__current {
-  display: grid;
-  gap: 4px;
-  width: 100%;
-  padding: 9px 10px 11px;
-  text-align: left;
-  cursor: pointer;
-  background: #fff;
-  border: 1px solid #e0e8f1;
-  border-radius: 9px;
-  box-shadow: 0 5px 14px rgba(15, 23, 42, 0.035);
-}
-.help-center__current span { color: #8a98aa; font-size: 10px; font-weight: 700; letter-spacing: 0.04em; }
-.help-center__current strong { color: #334155; font-size: 13px; }
-.help-center__current:hover { border-color: #bfdbfe; }
-
 .help-center__nav { display: grid; gap: 4px; padding: 12px 0; }
 .help-center__nav button {
   display: grid;
@@ -239,7 +223,6 @@
   .help-center__search { padding: 12px 14px; }
   .help-center__body { height: calc(100vh - 129px); grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
   .help-center__sidebar { display: block; padding: 10px 12px; overflow-x: auto; border-right: 0; border-bottom: 1px solid #e3eaf2; white-space: nowrap; }
-  .help-center__current { display: none; }
   .help-center__nav { display: flex; gap: 5px; padding: 0; }
   .help-center__nav button { width: auto; min-width: max-content; grid-template-columns: 18px auto auto; }
   .help-center__role-note { display: none; }

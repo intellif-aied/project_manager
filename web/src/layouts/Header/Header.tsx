@@ -65,7 +65,7 @@ export function Header() {
         ) : null}
         <UserMenu />
       </div>
-      {helpModule ? <HelpCenter key={helpModule} currentModule={helpModule} open={helpOpen} onClose={() => setHelpOpen(false)} /> : null}
+      {helpModule ? <HelpCenter key={helpOpen ? "open" : "closed"} open={helpOpen} onClose={() => setHelpOpen(false)} /> : null}
     </header>
   );
 }
