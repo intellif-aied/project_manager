@@ -1,7 +1,7 @@
 import {
   ApiOutlined,
+  ArrowLeftOutlined,
   ArrowRightOutlined,
-  BarChartOutlined,
   CalendarOutlined,
   CheckCircleOutlined,
   ClockCircleOutlined,
@@ -28,11 +28,11 @@ import {
 } from "antd";
 import type { EChartsOption } from "echarts";
 import dayjs from "dayjs";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 
 import {
   fetchDepartments,
-  fetchTeams,
   fetchTokenAnalyticsCapability,
   fetchTokenAnalyticsRankings,
   fetchTokenAnalyticsSessions,
@@ -56,8 +56,20 @@ import "./TokenAnalyticsPage.css";
 
 type DateRange = [dayjs.Dayjs, dayjs.Dayjs];
 
+export interface TokenAnalyticsMember {
+  id: string;
+  name: string;
+}
+
 interface TokenAnalyticsPageProps {
   scope: "mine" | "management";
+  member?: TokenAnalyticsMember;
+  onOpenMember?: (member: TokenAnalyticsMember) => void;
+  onBack?: () => void;
+}
+
+interface TokenAnalyticsDrilldownState {
+  tokenAnalyticsMember?: TokenAnalyticsMember;
 }
 
 function defaultRange(): DateRange {
@@ -90,15 +102,6 @@ function formatCost(raw: string | undefined) {
   return `¥${integer}.${decimal.padEnd(2, "0").slice(0, 2)}`;
 }
 
-function formatAverage(total: string | undefined, count: number) {
-  if (!total || count <= 0) return "--";
-  try {
-    return formatTokenValue((BigInt(total) / BigInt(count)).toString());
-  } catch {
-    return "--";
-  }
-}
-
 function formatSnapshotTime(raw: string | undefined) {
   if (!raw) return "--";
   const value = dayjs(raw);
@@ -124,32 +127,95 @@ function errorText(error: unknown) {
   return error instanceof Error ? error.message : "请稍后重试";
 }
 
-export function TokenAnalyticsPage({ scope }: TokenAnalyticsPageProps) {
+export function TokenAnalyticsManagementPage() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const returnScrollTopRef = useRef(0);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  const previousMemberRef = useRef<TokenAnalyticsMember>();
+  const [hasOpenedMember, setHasOpenedMember] = useState(false);
+  const locationState = (location.state ?? {}) as TokenAnalyticsDrilldownState;
+  const selectedMember = locationState.tokenAnalyticsMember;
+
+  const openMember = (nextMember: TokenAnalyticsMember) => {
+    const scrollContainer = document.getElementById("main-content-scroll-container");
+    returnScrollTopRef.current = scrollContainer?.scrollTop ?? 0;
+    returnFocusRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setHasOpenedMember(true);
+    navigate(`${location.pathname}${location.search}`, {
+      state: { ...locationState, tokenAnalyticsMember: nextMember }
+    });
+  };
+
+  const closeMember = () => navigate(-1);
+
+  useEffect(() => {
+    const scrollContainer = document.getElementById("main-content-scroll-container");
+    if (selectedMember) {
+      previousMemberRef.current = selectedMember;
+      scrollContainer?.scrollTo({ top: 0, left: 0 });
+      return;
+    }
+    if (!previousMemberRef.current) return;
+    previousMemberRef.current = undefined;
+    requestAnimationFrame(() => {
+      scrollContainer?.scrollTo({ top: returnScrollTopRef.current, left: 0 });
+      returnFocusRef.current?.focus({ preventScroll: true });
+    });
+  }, [selectedMember]);
+
+  return (
+    <div className="token-analytics-drilldown">
+      <div
+        className={`token-analytics-drilldown__view token-analytics-drilldown__view--overview${
+          !selectedMember && hasOpenedMember ? " is-entering" : ""
+        }`}
+        hidden={Boolean(selectedMember)}
+      >
+        <TokenAnalyticsPage scope="management" onOpenMember={openMember} />
+      </div>
+      {selectedMember ? (
+        <div className="token-analytics-drilldown__view token-analytics-drilldown__view--detail is-entering">
+          <TokenAnalyticsPage scope="management" member={selectedMember} onBack={closeMember} />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+export function TokenAnalyticsPage({
+  scope,
+  member,
+  onOpenMember,
+  onBack
+}: TokenAnalyticsPageProps) {
   const { user } = useAuth();
+  const navigate = useNavigate();
+  const isMemberDetail = scope === "management" && Boolean(member);
+  const isPersonalView = scope === "mine" || isMemberDetail;
   const [range, setRange] = useState<DateRange>(() => defaultRange());
   const [queryInput, setQueryInput] = useState("");
   const [query, setQuery] = useState("");
   const [teamID, setTeamID] = useState<string>();
   const [departmentID, setDepartmentID] = useState<string>();
-  const [userID, setUserID] = useState<string>();
+  const [showAllRankings, setShowAllRankings] = useState(false);
+  const [memberQuery, setMemberQuery] = useState("");
+  const [memberPage, setMemberPage] = useState(1);
+  const [memberPageSize, setMemberPageSize] = useState(10);
   const [rankingGroup, setRankingGroup] = useState<"department" | "team" | "user" | "model">(
-    scope === "mine" ? "model" : user?.role === "team_leader" ? "user" : "team"
+    isPersonalView ? "model" : user?.role === "team_leader" ? "user" : "team"
   );
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
+  const [pageSize, setPageSize] = useState(10);
 
   const capabilityQuery = useQuery({
     queryKey: ["token-analytics-capability", user?.id],
     queryFn: fetchTokenAnalyticsCapability,
     staleTime: 60_000
   });
-  const isAdminManagement = scope === "management" && user?.role === "admin";
-  const teamsQuery = useQuery({
-    queryKey: ["token-analytics-teams"],
-    queryFn: fetchTeams,
-    enabled: isAdminManagement,
-    staleTime: 60_000
-  });
+  const isAdminManagement = scope === "management" && !isMemberDetail && user?.role === "admin";
+  const canFilterByTeam = scope === "management" && !isMemberDetail && user?.role !== "team_leader";
   const departmentsQuery = useQuery({
     queryKey: ["token-analytics-departments"],
     queryFn: fetchDepartments,
@@ -157,36 +223,49 @@ export function TokenAnalyticsPage({ scope }: TokenAnalyticsPageProps) {
     staleTime: 60_000
   });
 
-  const overviewFilters = useMemo<TokenAnalyticsFilters>(
+  const baseOverviewFilters = useMemo<TokenAnalyticsFilters>(
     () => ({
       scope,
       from: range[0].format("YYYY-MM-DD"),
       to: range[1].format("YYYY-MM-DD"),
-      ...(teamID ? { team_id: teamID } : {}),
-      ...(departmentID ? { department_id: departmentID } : {})
+      ...(departmentID ? { department_id: departmentID } : {}),
+      ...(member ? { user_id: member.id } : {})
     }),
-    [departmentID, range, scope, teamID]
+    [departmentID, member, range, scope]
+  );
+  const overviewFilters = useMemo<TokenAnalyticsFilters>(
+    () => ({
+      ...baseOverviewFilters,
+      ...(teamID ? { team_id: teamID } : {})
+    }),
+    [baseOverviewFilters, teamID]
   );
   const sessionFilters = useMemo<TokenAnalyticsFilters>(
     () => ({
       ...overviewFilters,
-      ...(userID ? { user_id: userID } : {}),
       ...(query ? { q: query } : {})
     }),
-    [overviewFilters, query, userID]
+    [overviewFilters, query]
   );
 
   const canLoad = Boolean(
     capabilityQuery.data?.enabled && (scope === "mine" || capabilityQuery.data?.can_manage)
   );
+  const scopeSummaryQuery = useQuery({
+    queryKey: ["token-analytics-summary", baseOverviewFilters],
+    queryFn: () => fetchTokenAnalyticsSummary(baseOverviewFilters),
+    enabled: canLoad && canFilterByTeam,
+    staleTime: 30_000
+  });
   const summaryQuery = useQuery({
     queryKey: ["token-analytics-summary", overviewFilters],
     queryFn: () => fetchTokenAnalyticsSummary(overviewFilters),
     enabled: canLoad,
     staleTime: 30_000
   });
+  const scopeSnapshotToken = scopeSummaryQuery.data?.query_snapshot_token;
   const snapshotToken = summaryQuery.data?.query_snapshot_token;
-  const hasSessionFilter = Boolean(userID || query);
+  const hasSessionFilter = Boolean(query);
   const sessionSummaryQuery = useQuery({
     queryKey: ["token-analytics-session-summary", sessionFilters],
     queryFn: () => fetchTokenAnalyticsSummary(sessionFilters),
@@ -220,7 +299,17 @@ export function TokenAnalyticsPage({ scope }: TokenAnalyticsPageProps) {
         query_snapshot_token: snapshotToken!,
         group_by: "user"
       }),
-    enabled: scope === "management" && Boolean(snapshotToken)
+    enabled: scope === "management" && !isMemberDetail && Boolean(snapshotToken)
+  });
+  const teamOptionsQuery = useQuery({
+    queryKey: ["token-analytics-team-options", scopeSnapshotToken],
+    queryFn: () =>
+      fetchTokenAnalyticsRankings({
+        ...baseOverviewFilters,
+        query_snapshot_token: scopeSnapshotToken!,
+        group_by: "team"
+      }),
+    enabled: canFilterByTeam && Boolean(scopeSnapshotToken)
   });
   const overviewSessionsQuery = useQuery({
     queryKey: ["token-analytics-overview-sessions", snapshotToken],
@@ -231,7 +320,7 @@ export function TokenAnalyticsPage({ scope }: TokenAnalyticsPageProps) {
         page: "1",
         page_size: "1"
       }),
-    enabled: scope === "mine" && Boolean(snapshotToken)
+    enabled: isPersonalView && Boolean(snapshotToken)
   });
   const sessionsQuery = useQuery({
     queryKey: ["token-analytics-sessions", sessionSnapshotToken, page, pageSize],
@@ -242,7 +331,7 @@ export function TokenAnalyticsPage({ scope }: TokenAnalyticsPageProps) {
         page: String(page),
         page_size: String(pageSize)
       }),
-    enabled: Boolean(sessionSnapshotToken),
+    enabled: isPersonalView && Boolean(sessionSnapshotToken),
     placeholderData: (previous) => previous
   });
 
@@ -359,13 +448,13 @@ export function TokenAnalyticsPage({ scope }: TokenAnalyticsPageProps) {
   ) {
     return (
       <PagePanel title={scope === "mine" ? "我的 Token" : "团队 AI 使用分析"}>
-        <Alert type="info" showIcon message="该功能尚未对当前账号开放" />
+        <Alert type="info" showIcon title="该功能尚未对当前账号开放" />
       </PagePanel>
     );
   }
 
   const summary = summaryQuery.data;
-  const title = scope === "mine" ? "我的 Token" : "团队 AI 使用分析";
+  const title = scope === "mine" ? "我的 Token" : isMemberDetail ? `${member?.name ?? "成员"} 的 Token` : "团队 AI 使用分析";
   const rankingLabel = {
     department: "部门",
     team: "小组",
@@ -377,10 +466,34 @@ export function TokenAnalyticsPage({ scope }: TokenAnalyticsPageProps) {
   const zeroUsagePeople = peopleItems.filter((item) => item.is_zero_usage);
   const highUsagePeople = activePeople.slice(0, 5);
   const lowUsagePeople = [...activePeople].reverse().slice(0, 5);
-  const selectedMember = peopleItems.find((item) => item.key === userID);
+  const filteredPeopleItems = memberQuery.trim()
+    ? peopleItems.filter((item) => item.label.toLowerCase().includes(memberQuery.trim().toLowerCase()))
+    : peopleItems;
+  const usageCoverage = peopleItems.length
+    ? `${Math.round((activePeople.length / peopleItems.length) * 100)}%`
+    : "--";
+  const openMember = (item: TokenAnalyticsRankingItem) => {
+    if (onOpenMember) {
+      onOpenMember({ id: item.key, name: item.label });
+      return;
+    }
+    const params = new URLSearchParams({ name: item.label });
+    navigate(`/token-analytics/member/${encodeURIComponent(item.key)}?${params.toString()}`);
+  };
+  const toggleMemberList = () => {
+    const nextShowMemberList = !showAllRankings;
+    setShowAllRankings(nextShowMemberList);
+    setMemberPage(1);
+  };
+  const availableTeams = teamOptionsQuery.data?.items ?? [];
+  const selectedTeamName = availableTeams.find((item) => item.key === teamID)?.label;
   const scopeLabel =
     scope === "mine"
       ? "仅本人数据"
+      : isMemberDetail
+        ? `成员：${member?.name ?? "--"}`
+      : selectedTeamName
+        ? `小组：${selectedTeamName}`
       : user?.role === "team_leader"
         ? "当前小组"
         : user?.role === "director"
@@ -394,16 +507,29 @@ export function TokenAnalyticsPage({ scope }: TokenAnalyticsPageProps) {
       description={
         scope === "mine"
           ? "查看个人 AI 使用趋势、模型分布和使用记录"
-          : "判断团队 AI 使用情况，优先发现低用量与零用量成员"
+          : isMemberDetail
+            ? "查看该成员的 AI 使用趋势、模型分布和使用记录"
+            : "对比成员使用量，定位需要进一步了解的人员"
       }
-      breadcrumbs={[{ title }]}
+      breadcrumbs={isMemberDetail ? [{ title: "团队 AI 使用分析" }, { title }] : [{ title }]}
       showNav={false}
     >
       <div className="token-analytics-filterbar">
-        <div className="token-analytics-scope">
-          {scope === "mine" ? <UserOutlined /> : <TeamOutlined />}
-          <span>统计范围</span>
-          <strong>{scopeLabel}</strong>
+        <div className="token-analytics-filterbar__context">
+          {isMemberDetail ? (
+            <Button
+              type="text"
+              icon={<ArrowLeftOutlined />}
+              onClick={onBack ?? (() => navigate("/token-analytics"))}
+            >
+              返回
+            </Button>
+          ) : null}
+          <div className="token-analytics-scope">
+            {isPersonalView ? <UserOutlined /> : <TeamOutlined />}
+            <span>统计范围</span>
+            <strong>{scopeLabel}</strong>
+          </div>
         </div>
         <div className="token-analytics-toolbar">
           <DatePicker.RangePicker
@@ -412,45 +538,50 @@ export function TokenAnalyticsPage({ scope }: TokenAnalyticsPageProps) {
             onChange={(value) => {
               if (!value?.[0] || !value[1]) return;
               setRange([value[0], value[1]]);
-              setUserID(undefined);
               setQuery("");
               setQueryInput("");
               setPage(1);
+              setMemberPage(1);
             }}
           />
           {isAdminManagement ? (
-            <>
-              <Select
-                allowClear
-                value={departmentID}
-                placeholder="全部部门"
-                options={(departmentsQuery.data ?? []).map((item) => ({
-                  label: item.name,
-                  value: item.id
-                }))}
-                onChange={(value) => {
-                  setDepartmentID(value);
-                  setUserID(undefined);
-                  setPage(1);
-                }}
-                style={{ minWidth: 160 }}
-              />
-              <Select
-                allowClear
-                value={teamID}
-                placeholder="全部小组"
-                options={(teamsQuery.data ?? []).map((item) => ({
-                  label: item.name,
-                  value: item.id
-                }))}
-                onChange={(value) => {
-                  setTeamID(value);
-                  setUserID(undefined);
-                  setPage(1);
-                }}
-                style={{ minWidth: 160 }}
-              />
-            </>
+            <Select
+              allowClear
+              value={departmentID}
+              placeholder="全部部门"
+              options={(departmentsQuery.data ?? []).map((item) => ({
+                label: item.name,
+                value: item.id
+              }))}
+              onChange={(value) => {
+                setDepartmentID(value);
+                setTeamID(undefined);
+                setPage(1);
+                setMemberPage(1);
+              }}
+              style={{ minWidth: 160 }}
+            />
+          ) : null}
+          {canFilterByTeam ? (
+            <Select
+              value={teamID ?? "all"}
+              options={[
+                { label: "全部小组（全局）", value: "all" },
+                ...availableTeams.map((item) => ({
+                  label: item.label,
+                  value: item.key
+                })).filter((item) => item.value !== "unknown")
+              ]}
+              onChange={(value) => {
+                setTeamID(value === "all" ? undefined : value);
+                setShowAllRankings(false);
+                setMemberQuery("");
+                setPage(1);
+                setMemberPage(1);
+              }}
+              loading={teamOptionsQuery.isLoading}
+              style={{ minWidth: 180 }}
+            />
           ) : null}
         </div>
       </div>
@@ -467,26 +598,11 @@ export function TokenAnalyticsPage({ scope }: TokenAnalyticsPageProps) {
         <Alert
           type="error"
           showIcon
-          message="Token 分析加载失败"
+          title="Token 分析加载失败"
           description={errorText(summaryQuery.error)}
           action={<Button onClick={() => void summaryQuery.refetch()}>重试</Button>}
         />
       ) : null}
-      {summary?.data_freshness === "pending" ? (
-        <Alert
-          type="warning"
-          showIcon
-          message={`${summary.pending_source_count} 个 Session 来源仍在统计，当前结果为已完成部分`}
-        />
-      ) : null}
-      {scope === "management" && summary && summary.pricing_status !== "priced" ? (
-        <Alert
-          type="info"
-          showIcon
-          message={`成本未完全计价：${formatTokenValue(summary.unpriced_tokens)} Token 暂未计入金额`}
-        />
-      ) : null}
-
       <RequirementMetricGrid>
         <RequirementMetricCard
           tone="primary"
@@ -496,10 +612,10 @@ export function TokenAnalyticsPage({ scope }: TokenAnalyticsPageProps) {
             key: "total",
             title: "总 Token",
             value: formatTokenValue(summary?.total_tokens),
-            description: scope === "mine" ? "我的全部 AI 使用量" : "当前管理范围合计"
+            description: scope === "mine" ? "我的全部 AI 使用量" : isMemberDetail ? "该成员的全部 AI 使用量" : "当前管理范围合计"
           }}
         />
-        {scope === "management" ? (
+        {!isPersonalView ? (
           <>
             <RequirementMetricCard
               tone="success"
@@ -508,8 +624,8 @@ export function TokenAnalyticsPage({ scope }: TokenAnalyticsPageProps) {
               metric={{
                 key: "active_people",
                 title: "有使用成员",
-                value: activePeople.length,
-                description: `当前成员共 ${peopleItems.length} 人`
+                value: `${activePeople.length} / ${peopleItems.length}`,
+                description: `使用覆盖率 ${usageCoverage}`
               }}
             />
             <RequirementMetricCard
@@ -520,18 +636,7 @@ export function TokenAnalyticsPage({ scope }: TokenAnalyticsPageProps) {
                 key: "zero_people",
                 title: "零用量成员",
                 value: zeroUsagePeople.length,
-                description: zeroUsagePeople.length ? "建议优先确认使用情况" : "当前范围暂无零用量成员"
-              }}
-            />
-            <RequirementMetricCard
-              tone="info"
-              icon={<BarChartOutlined />}
-              loading={summaryQuery.isLoading || peopleRankingsQuery.isLoading}
-              metric={{
-                key: "average",
-                title: "人均 Token",
-                value: formatAverage(summary?.total_tokens, peopleItems.length),
-                description: "按当前成员人数计算"
+                description: zeroUsagePeople.length ? "所选周期暂无 Token 记录" : "当前范围暂无零用量成员"
               }}
             />
           </>
@@ -570,7 +675,7 @@ export function TokenAnalyticsPage({ scope }: TokenAnalyticsPageProps) {
             title: "API 等价成本",
             value: formatCost(summary?.estimated_cost_cny),
             description:
-              scope === "mine" && summary && summary.pricing_status !== "priced"
+              isPersonalView && summary && summary.pricing_status !== "priced"
                 ? `另有 ${formatTokenValue(summary.unpriced_tokens)} Token 待计价`
                 : "按已发布价格与汇率估算"
           }}
@@ -586,43 +691,131 @@ export function TokenAnalyticsPage({ scope }: TokenAnalyticsPageProps) {
         <span>输出 {formatTokenValue(summary?.output_tokens)}</span>
       </div>
 
-      {scope === "management" ? (
+      {scope === "management" && !isMemberDetail ? (
         <section className="token-analytics-section token-analytics-attention">
-          <header>
+          <header className={showAllRankings ? "token-analytics-ranking-header" : undefined}>
             <div>
-              <h3>重点关注</h3>
-              <p>先看使用最充分和使用偏低的成员，再进入 Session 核实具体情况</p>
+              <h3 aria-live="polite">
+                {showAllRankings ? "成员列表" : "成员用量"}
+              </h3>
+              <p>
+                {showAllRankings
+                  ? "按本期 Token 用量从高到低排列，默认每页 10 人"
+                  : "先看本期用量前 5 和后 5，再进入成员页查看趋势与使用记录"}
+              </p>
             </div>
-            {zeroUsagePeople.length ? <Tag color="error">{zeroUsagePeople.length} 人零用量</Tag> : null}
+            <Space size={8} wrap className="token-analytics-member-actions">
+              {showAllRankings ? (
+                <>
+                  <Tag>{filteredPeopleItems.length} 人</Tag>
+                  <Input
+                    allowClear
+                    prefix={<SearchOutlined />}
+                    placeholder="搜索成员姓名"
+                    value={memberQuery}
+                    onChange={(event) => {
+                      setMemberQuery(event.target.value);
+                      setMemberPage(1);
+                    }}
+                    style={{ width: 240 }}
+                  />
+                </>
+              ) : zeroUsagePeople.length ? (
+                <Tag>{zeroUsagePeople.length} 人本期未使用</Tag>
+              ) : null}
+              <Button
+                type={showAllRankings ? "link" : "primary"}
+                size="small"
+                icon={showAllRankings ? undefined : <TeamOutlined />}
+                aria-expanded={showAllRankings}
+                aria-controls="token-analytics-member-content"
+                onClick={toggleMemberList}
+              >
+                {showAllRankings ? "返回摘要" : "查看成员列表"}
+              </Button>
+            </Space>
           </header>
-          <div className="token-analytics-attention-grid">
-            <div className="token-analytics-ranking-list">
-              <div className="token-analytics-ranking-list__title">
-                <strong>高用量 Top 5</strong>
-                <span>了解高频使用者</span>
-              </div>
-              {highUsagePeople.length ? highUsagePeople.map((item, index) => (
-                <button key={item.key} type="button" onClick={() => { setUserID(item.key); setPage(1); }}>
-                  <span className="token-analytics-rank-number">{index + 1}</span>
-                  <span className="token-analytics-rank-person"><strong>{item.label}</strong><small>{formatCost(item.estimated_cost_cny)}</small></span>
-                  <span className="token-analytics-rank-value">{formatTokenValue(item.total_tokens)}<ArrowRightOutlined /></span>
-                </button>
-              )) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无成员用量" />}
+          {showAllRankings ? (
+            <div id="token-analytics-member-content" className="token-analytics-member-list-panel">
+              <Table<TokenAnalyticsRankingItem>
+                rowKey="key"
+                size="small"
+                pagination={{
+                  current: memberPage,
+                  pageSize: memberPageSize,
+                  showSizeChanger: true,
+                  pageSizeOptions: [10, 20, 50],
+                  showTotal: (total) => `共 ${total} 人`,
+                  onChange: (nextPage, nextPageSize) => {
+                    setMemberPage(nextPageSize === memberPageSize ? nextPage : 1);
+                    setMemberPageSize(nextPageSize);
+                  }
+                }}
+                loading={peopleRankingsQuery.isLoading}
+                dataSource={filteredPeopleItems}
+                columns={[
+                  { title: "成员", dataIndex: "label" },
+                  {
+                    title: "Token",
+                    dataIndex: "total_tokens",
+                    align: "right",
+                    render: (value: string) => formatTokenValue(value)
+                  },
+                  {
+                    title: "API 等价成本",
+                    dataIndex: "estimated_cost_cny",
+                    align: "right",
+                    render: (value?: string) => formatCost(value)
+                  },
+                  {
+                    title: "计价状态",
+                    dataIndex: "pricing_status",
+                    render: (value: string, record: TokenAnalyticsRankingItem) =>
+                      record.is_zero_usage ? <Tag>无用量</Tag> : statusTag(value)
+                  },
+                  {
+                    title: "操作",
+                    width: 120,
+                    align: "right" as const,
+                    render: (_: unknown, record: TokenAnalyticsRankingItem) => (
+                      <Button type="link" onClick={() => openMember(record)}>
+                        查看详情 <ArrowRightOutlined />
+                      </Button>
+                    )
+                  }
+                ]}
+              />
             </div>
-            <div className="token-analytics-ranking-list token-analytics-ranking-list--attention">
-              <div className="token-analytics-ranking-list__title">
-                <strong>低用量与零用量</strong>
-                <span>建议优先确认是否正常使用</span>
+          ) : (
+            <div id="token-analytics-member-content" className="token-analytics-attention-grid">
+              <div className="token-analytics-ranking-list">
+                <div className="token-analytics-ranking-list__title">
+                  <strong>用量前 5</strong>
+                  <span>按 Token 从高到低</span>
+                </div>
+                {highUsagePeople.length ? highUsagePeople.map((item, index) => (
+                  <button key={item.key} type="button" onClick={() => openMember(item)}>
+                    <span className="token-analytics-rank-number">{index + 1}</span>
+                    <span className="token-analytics-rank-person"><strong>{item.label}</strong><small>{formatCost(item.estimated_cost_cny)}</small></span>
+                    <span className="token-analytics-rank-value">{formatTokenValue(item.total_tokens)}<ArrowRightOutlined /></span>
+                  </button>
+                )) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无成员用量" />}
               </div>
-              {[...zeroUsagePeople, ...lowUsagePeople].slice(0, 5).length ? [...zeroUsagePeople, ...lowUsagePeople].slice(0, 5).map((item) => (
-                <button key={item.key} type="button" onClick={() => { setUserID(item.key); setPage(1); }}>
-                  <span className={`token-analytics-status-dot${item.is_zero_usage ? " is-zero" : ""}`} />
-                  <span className="token-analytics-rank-person"><strong>{item.label}</strong><small>{item.is_zero_usage ? "所选周期无用量" : `最近活跃 ${item.last_activity_at ? dayjs(item.last_activity_at).format("MM-DD HH:mm") : "--"}`}</small></span>
-                  <span className="token-analytics-rank-value">{formatTokenValue(item.total_tokens)}<ArrowRightOutlined /></span>
-                </button>
-              )) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无低用量成员" />}
+              <div className="token-analytics-ranking-list token-analytics-ranking-list--attention">
+                <div className="token-analytics-ranking-list__title">
+                  <strong>用量后 5</strong>
+                  <span>仅统计本期有记录的成员</span>
+                </div>
+                {lowUsagePeople.length ? lowUsagePeople.map((item) => (
+                  <button key={item.key} type="button" onClick={() => openMember(item)}>
+                    <span className="token-analytics-status-dot" />
+                    <span className="token-analytics-rank-person"><strong>{item.label}</strong><small>{`最近活跃 ${item.last_activity_at ? dayjs(item.last_activity_at).format("MM-DD HH:mm") : "--"}`}</small></span>
+                    <span className="token-analytics-rank-value">{formatTokenValue(item.total_tokens)}<ArrowRightOutlined /></span>
+                  </button>
+                )) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无可比较成员" />}
+              </div>
             </div>
-          </div>
+          )}
         </section>
       ) : null}
 
@@ -641,8 +834,10 @@ export function TokenAnalyticsPage({ scope }: TokenAnalyticsPageProps) {
         </section>
         <section>
           <header>
-            <h3>{scope === "mine" ? "模型构成" : `${rankingLabel}对比`}</h3>
-            {scope === "management" ? (
+            <h3>
+              {isPersonalView ? "模型构成" : `${rankingLabel}对比`}
+            </h3>
+            {scope === "management" && !isMemberDetail ? (
               <Segmented
                 size="small"
                 value={rankingGroup}
@@ -666,62 +861,13 @@ export function TokenAnalyticsPage({ scope }: TokenAnalyticsPageProps) {
         </section>
       </div>
 
-      {scope === "management" ? (
-        <section className="token-analytics-section">
-          <header>
-            <div>
-              <h3>{rankingLabel}完整排名</h3>
-              <p>{rankingGroup === "user" ? "查看 Session 后，顶部统计和排名保持当前管理范围不变" : `按 ${rankingLabel} 汇总当前范围用量`}</p>
-            </div>
-          </header>
-          <Table<TokenAnalyticsRankingItem>
-            rowKey="key"
-            size="small"
-            pagination={false}
-            loading={rankingsQuery.isLoading}
-            dataSource={rankingsQuery.data?.items ?? []}
-            columns={[
-              { title: rankingLabel, dataIndex: "label" },
-              {
-                title: "Token",
-                dataIndex: "total_tokens",
-                align: "right",
-                render: (value: string) => formatTokenValue(value)
-              },
-              {
-                title: "API 等价成本",
-                dataIndex: "estimated_cost_cny",
-                align: "right",
-                render: (value?: string) => formatCost(value)
-              },
-              {
-                title: "计价状态",
-                dataIndex: "pricing_status",
-                render: (value: string) => statusTag(value)
-              },
-              ...(rankingGroup === "user" ? [{
-                title: "操作",
-                width: 120,
-                align: "right" as const,
-                render: (_: unknown, record: TokenAnalyticsRankingItem) => (
-                  <Button type="link" onClick={() => { setUserID(record.key); setPage(1); }}>
-                    查看 Session <ArrowRightOutlined />
-                  </Button>
-                )
-              }] : [])
-            ]}
-          />
-        </section>
-      ) : null}
-
-      <section className="token-analytics-section">
+      {isPersonalView ? <section className="token-analytics-section">
         <header className="token-analytics-session-header">
           <div>
-            <h3>{scope === "mine" ? "使用记录" : "使用明细"}</h3>
-            <p>{selectedMember ? `当前查看：${selectedMember.label}` : scope === "mine" ? "查看每次 AI 使用的模型、Token 和成本" : "按成员或关键词查看具体 Session"}</p>
+            <h3>使用记录</h3>
+            <p>查看每次 AI 使用的模型、Token 和成本</p>
           </div>
           <Space size={8} wrap className="token-analytics-session-actions">
-            {selectedMember ? <Tag color="blue" closable onClose={() => { setUserID(undefined); setPage(1); }}>成员：{selectedMember.label}</Tag> : null}
             {query ? <Tag closable onClose={() => { setQuery(""); setQueryInput(""); setPage(1); }}>关键词：{query}</Tag> : null}
             {sessionSummaryQuery.data?.search_mode === "exact_session_ref" ? (
               <Tag color="blue">精确 ID 定位</Tag>
@@ -746,6 +892,7 @@ export function TokenAnalyticsPage({ scope }: TokenAnalyticsPageProps) {
             pageSize: sessionsQuery.data?.page_size ?? pageSize,
             total: sessionsQuery.data?.total ?? 0,
             showSizeChanger: true,
+            pageSizeOptions: [10, 20, 50],
             showTotal: (total) => `共 ${total} 条`,
             onChange: (nextPage, nextPageSize) => {
               setPage(nextPage);
@@ -765,9 +912,6 @@ export function TokenAnalyticsPage({ scope }: TokenAnalyticsPageProps) {
                 </div>
               )
             },
-            ...(scope === "management"
-              ? [{ title: "成员", dataIndex: "user_name", width: 130 }]
-              : []),
             { title: "模型", dataIndex: "model", width: 180 },
             {
               title: "活动日期",
@@ -797,7 +941,7 @@ export function TokenAnalyticsPage({ scope }: TokenAnalyticsPageProps) {
             }
           ]}
         />
-      </section>
+      </section> : null}
     </PagePanel>
   );
 }

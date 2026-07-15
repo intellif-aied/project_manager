@@ -39,7 +39,8 @@ import { TaskCreatePage } from "@/features/aidashboard/tasks/pages/TaskCreatePag
 import { TaskDetailPage } from "@/features/aidashboard/tasks/pages/TaskDetailPage";
 import { TasksListPage } from "@/features/aidashboard/tasks/pages/TasksListPage";
 import { TokensPage } from "@/features/aidashboard/tokens/pages/TokensPage";
-import { TokenAnalyticsPage } from "@/features/aidashboard/tokens/pages/TokenAnalyticsPage";
+import { TokenAnalyticsManagementPage } from "@/features/aidashboard/tokens/pages/TokenAnalyticsPage";
+import { TokenMemberAnalyticsPage } from "@/features/aidashboard/tokens/pages/TokenMemberAnalyticsPage";
 import { PricingManagementPage } from "@/features/aidashboard/tokens/pages/PricingManagementPage";
 
 import { PagePlaceholder } from "./PagePlaceholder";
@@ -194,7 +195,15 @@ export const appRoutes: AppRoute[] = [
     menuOrder: 61,
     roles: ["admin", "director", "team_leader"],
     feature: "token_analytics",
-    element: <TokenAnalyticsPage scope="management" />
+    element: <TokenAnalyticsManagementPage />
+  },
+  {
+    path: "/token-analytics/member/:userID",
+    title: "成员 Token 详情",
+    hideInMenu: true,
+    roles: ["admin", "director", "team_leader"],
+    feature: "token_analytics",
+    element: <TokenMemberAnalyticsPage />
   },
   {
     path: "/admin/pricing",

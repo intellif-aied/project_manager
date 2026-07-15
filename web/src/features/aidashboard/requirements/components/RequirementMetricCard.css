@@ -102,27 +102,25 @@
 
 .requirements-metric-card__skeleton--title {
   width: 96px;
-  height: 14px;
+  height: 12px;
 }
 
 .requirements-metric-card__skeleton--icon {
-  width: 30px;
-  height: 30px;
-  flex: 0 0 30px;
-  border-radius: 8px;
+  width: 21px;
+  height: 21px;
+  flex: 0 0 21px;
+  border-radius: 7px;
 }
 
 .requirements-metric-card__skeleton--value {
   width: 120px;
-  height: 34px;
-  margin-top: 18px;
-  border-radius: 12px;
+  height: 18px;
+  border-radius: 7px;
 }
 
 .requirements-metric-card__skeleton--line {
   width: 72%;
-  height: 12px;
-  margin-top: 16px;
+  height: 10px;
 }
 
 @keyframes requirements-metric-shimmer {

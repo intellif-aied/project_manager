@@ -28,27 +28,35 @@ export function RequirementMetricCard({
 }) {
   return (
     <article className={`requirements-metric-card requirements-metric-card--tone-${tone}`}>
-      {loading ? (
-        <>
-          <div className="requirements-metric-card__header">
+      <div className="requirements-metric-card__header">
+        {loading ? (
+          <>
             <span className="requirements-metric-card__skeleton requirements-metric-card__skeleton--title" />
             <span className="requirements-metric-card__skeleton requirements-metric-card__skeleton--icon" />
-          </div>
-          <span className="requirements-metric-card__skeleton requirements-metric-card__skeleton--value" />
-          <span className="requirements-metric-card__skeleton requirements-metric-card__skeleton--line" />
-        </>
-      ) : (
-        <>
-          <div className="requirements-metric-card__header">
+          </>
+        ) : (
+          <>
             <span className="requirements-metric-card__title">{metric.title}</span>
             <span className="requirements-metric-card__icon" aria-hidden="true">
               {icon}
             </span>
-          </div>
-          <strong className="requirements-metric-card__value">{metric.value}</strong>
-          <span className="requirements-metric-card__description">{metric.description}</span>
-        </>
-      )}
+          </>
+        )}
+      </div>
+      <strong className="requirements-metric-card__value">
+        {loading ? (
+          <span className="requirements-metric-card__skeleton requirements-metric-card__skeleton--value" />
+        ) : (
+          metric.value
+        )}
+      </strong>
+      <span className="requirements-metric-card__description">
+        {loading ? (
+          <span className="requirements-metric-card__skeleton requirements-metric-card__skeleton--line" />
+        ) : (
+          metric.description
+        )}
+      </span>
     </article>
   );
 }
