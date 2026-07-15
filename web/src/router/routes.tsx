@@ -180,7 +180,7 @@ export const appRoutes: AppRoute[] = [
   },
   {
     path: "/tokens",
-    title: "Token 用量",
+    title: "我的 Token",
     icon: <BarChartOutlined />,
     menuGroup: "AI 管理",
     menuOrder: 60,
@@ -188,7 +188,7 @@ export const appRoutes: AppRoute[] = [
   },
   {
     path: "/token-analytics",
-    title: "Token 使用分析",
+    title: "团队 AI 使用分析",
     icon: <BarChartOutlined />,
     menuGroup: "AI 管理",
     menuOrder: 61,

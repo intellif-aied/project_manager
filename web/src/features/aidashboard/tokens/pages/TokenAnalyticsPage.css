@@ -1,47 +1,125 @@
 .token-analytics-page {
   display: flex;
   flex-direction: column;
+  gap: 12px;
+}
+
+.token-analytics-filterbar {
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  justify-content: space-between;
   gap: 16px;
+  padding: 8px 12px;
+  background: #f8fafc;
+  border: 1px solid #e5ebf3;
+  border-radius: 8px;
+}
+
+.token-analytics-scope,
+.token-analytics-toolbar,
+.token-analytics-meta,
+.token-analytics-composition {
+  display: flex;
+  align-items: center;
+}
+
+.token-analytics-scope {
+  gap: 8px;
+  color: #64748b;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.token-analytics-scope svg {
+  color: #2563eb;
+}
+
+.token-analytics-scope strong {
+  color: #172033;
+  font-weight: 650;
 }
 
 .token-analytics-toolbar {
-  display: flex;
   flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.token-analytics-meta {
+  min-height: 24px;
+  flex-wrap: wrap;
+  gap: 12px;
+  color: #758399;
+  font-size: 12px;
+}
+
+.token-analytics-meta span {
+  display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: 5px;
+}
+
+.token-analytics-composition {
+  min-height: 38px;
+  flex-wrap: wrap;
+  gap: 18px;
+  padding: 7px 12px;
+  color: #526173;
+  font-size: 12px;
+  background: #fbfcfe;
+  border: 1px solid #e8edf4;
+  border-radius: 7px;
+}
+
+.token-analytics-composition > span:first-child {
+  color: #172033;
+  font-weight: 650;
 }
 
 .token-analytics-charts {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 16px;
+  gap: 14px;
 }
 
 .token-analytics-charts section,
 .token-analytics-section {
   min-width: 0;
-  border: 1px solid #e6e9ee;
+  overflow: hidden;
   background: #fff;
-  border-radius: 6px;
+  border: 1px solid #e3e9f1;
+  border-radius: 8px;
 }
 
 .token-analytics-charts header,
 .token-analytics-section > header {
-  min-height: 46px;
+  min-height: 48px;
   padding: 0 16px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  border-bottom: 1px solid #edf0f3;
+  border-bottom: 1px solid #edf1f5;
+}
+
+.token-analytics-section > header > div {
+  padding: 10px 0;
 }
 
 .token-analytics-charts h3,
 .token-analytics-section h3 {
   margin: 0;
+  color: #172033;
   font-size: 15px;
   line-height: 1.4;
-  font-weight: 600;
+  font-weight: 650;
+}
+
+.token-analytics-section header p {
+  margin: 3px 0 0;
+  color: #7b8798;
+  font-size: 12px;
 }
 
 .token-analytics-section > header span {
@@ -53,8 +131,164 @@
   padding: 0 1px 1px;
 }
 
-.token-analytics-clickable-row {
+.token-analytics-section .ant-table-pagination.ant-pagination {
+  margin: 12px;
+}
+
+.token-analytics-attention > header {
+  min-height: 56px;
+  background: linear-gradient(90deg, #fbfcff, #fff);
+}
+
+.token-analytics-attention-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
+}
+
+.token-analytics-ranking-list {
+  min-width: 0;
+  padding: 12px 14px 14px;
+}
+
+.token-analytics-ranking-list + .token-analytics-ranking-list {
+  border-left: 1px solid #edf1f5;
+}
+
+.token-analytics-ranking-list__title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 7px;
+  color: #172033;
+  font-size: 13px;
+}
+
+.token-analytics-ranking-list__title span {
+  color: #8a95a5;
+  font-size: 11px;
+}
+
+.token-analytics-ranking-list button {
+  width: 100%;
+  min-height: 44px;
+  padding: 5px 8px;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  color: inherit;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
   cursor: pointer;
+}
+
+.token-analytics-ranking-list button:hover {
+  background: #f6f9fd;
+}
+
+.token-analytics-ranking-list button:focus-visible {
+  outline: 2px solid #1677ff;
+  outline-offset: -2px;
+}
+
+.token-analytics-rank-number {
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  color: #56657a;
+  font-size: 11px;
+  font-weight: 700;
+  background: #eef3f9;
+  border-radius: 6px;
+}
+
+.token-analytics-ranking-list button:nth-of-type(1) .token-analytics-rank-number {
+  color: #9a5b00;
+  background: #fff4d6;
+}
+
+.token-analytics-ranking-list button:nth-of-type(2) .token-analytics-rank-number,
+.token-analytics-ranking-list button:nth-of-type(3) .token-analytics-rank-number {
+  color: #536176;
+  background: #edf1f6;
+}
+
+.token-analytics-rank-person {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.token-analytics-rank-person strong,
+.token-analytics-rank-person small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.token-analytics-rank-person strong {
+  color: #263247;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.token-analytics-rank-person small {
+  color: #8a95a5;
+  font-size: 11px;
+}
+
+.token-analytics-rank-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #344258;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.token-analytics-rank-value svg {
+  color: #9aa5b4;
+  font-size: 10px;
+}
+
+.token-analytics-status-dot {
+  width: 8px;
+  height: 8px;
+  margin-left: 7px;
+  background: #f59e0b;
+  border-radius: 50%;
+  box-shadow: 0 0 0 4px #fff7e6;
+}
+
+.token-analytics-status-dot.is-zero {
+  background: #e5484d;
+  box-shadow: 0 0 0 4px #fff0f0;
+}
+
+.token-analytics-session-header {
+  min-height: 58px !important;
+  padding: 0 12px 0 16px !important;
+}
+
+.token-analytics-session-actions {
+  margin-left: auto;
+}
+
+.token-analytics-session-actions .ant-input-search-button,
+.token-analytics-session-actions .ant-input-search-button .anticon,
+.token-analytics-session-actions .ant-input-search-button .anticon svg {
+  color: #fff !important;
+}
+
+.token-analytics-session-actions .ant-input-search-button .anticon svg {
+  fill: currentColor;
 }
 
 .token-analytics-session-cell {
@@ -79,13 +313,43 @@
   white-space: nowrap;
 }
 
+@media (max-width: 1100px) {
+  .token-analytics-filterbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .token-analytics-toolbar {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+}
+
 @media (max-width: 960px) {
-  .token-analytics-charts {
+  .token-analytics-charts,
+  .token-analytics-attention-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .token-analytics-ranking-list + .token-analytics-ranking-list {
+    border-top: 1px solid #edf1f5;
+    border-left: 0;
+  }
+
   .token-analytics-toolbar .ant-picker,
-  .token-analytics-toolbar .ant-input-search {
+  .token-analytics-session-actions .ant-input-search {
     width: 100% !important;
+  }
+
+  .token-analytics-session-header {
+    align-items: flex-start !important;
+    flex-direction: column;
+    padding-bottom: 10px !important;
+  }
+
+  .token-analytics-session-actions {
+    width: 100%;
+    margin-left: 0;
   }
 }
