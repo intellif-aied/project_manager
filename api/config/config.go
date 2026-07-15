@@ -40,8 +40,6 @@ type Config struct {
 	ManagedAgentReportAssetRepair       bool
 	AIDAPublicBaseURL                   string
 	EnablePublicRegister                bool
-	SessionSyncContentWorkerEnabled     bool
-	SessionSyncUsageWorkerEnabled       bool
 	ClaudeCacheWriteVariant             string
 
 	MinioEndpoint         string
@@ -88,8 +86,6 @@ func Load() *Config {
 		ManagedAgentReportAssetRepair:       getEnvBool("MANAGED_AGENT_REPORT_ASSET_REPAIR", true),
 		AIDAPublicBaseURL:                   getEnv("AIDA_PUBLIC_BASE_URL", ""),
 		EnablePublicRegister:                getEnv("ENABLE_PUBLIC_REGISTER", "false") == "true",
-		SessionSyncContentWorkerEnabled:     getEnvBool("AIDA_SESSION_SYNC_CONTENT_WORKER_ENABLED", false),
-		SessionSyncUsageWorkerEnabled:       getEnvBool("AIDA_SESSION_SYNC_USAGE_WORKER_ENABLED", false),
 		ClaudeCacheWriteVariant:             strings.TrimSpace(strings.ToLower(getEnv("AIDA_CLAUDE_CACHE_WRITE_VARIANT", ""))),
 
 		MinioEndpoint:         getEnv("MINIO_ENDPOINT", ""),

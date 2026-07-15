@@ -79,6 +79,46 @@ func TestCodexCumulativeCountersProduceDisjointDeltas(t *testing.T) {
 	}
 }
 
+func TestCodexLastUsagePreservesLongContextRequestBoundary(t *testing.T) {
+	content := []byte(
+		`{"timestamp":"2026-07-10T00:00:00Z","type":"turn_context","payload":{"model":"gpt-5.6-sol"}}` + "\n" +
+			`{"timestamp":"2026-07-10T00:01:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":272000,"cached_input_tokens":270000,"output_tokens":100,"total_tokens":272100},"last_token_usage":{"input_tokens":272000,"cached_input_tokens":270000,"output_tokens":100,"total_tokens":272100}}}}` + "\n" +
+			`{"timestamp":"2026-07-10T00:02:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":544001,"cached_input_tokens":540000,"output_tokens":200,"total_tokens":544201},"last_token_usage":{"input_tokens":272001,"cached_input_tokens":270000,"output_tokens":100,"total_tokens":272101}}}}` + "\n",
+	)
+	parsed, err := ParseProviderChunk("codex", bytes.NewReader(content), 0, ParseState{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Records) != 2 {
+		t.Fatalf("records=%d", len(parsed.Records))
+	}
+	if parsed.Records[0].Delta.RequestInputTokens != CodexLongContextInputThreshold ||
+		parsed.Records[1].Delta.RequestInputTokens != CodexLongContextInputThreshold+1 {
+		t.Fatalf("request inputs=%d,%d", parsed.Records[0].Delta.RequestInputTokens, parsed.Records[1].Delta.RequestInputTokens)
+	}
+	if parsed.Records[1].Delta.TotalTokens != 272101 {
+		t.Fatalf("second delta=%+v", parsed.Records[1].Delta)
+	}
+}
+
+func TestCodexUnchangedCumulativeCountersAdvanceCursorWithoutUsageRecord(t *testing.T) {
+	content := []byte(
+		`{"timestamp":"2026-07-10T00:00:00Z","type":"turn_context","payload":{"model":"gpt-5.6-sol"}}` + "\n" +
+			`{"timestamp":"2026-07-10T00:01:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":80,"output_tokens":20,"total_tokens":120}}}}` + "\n" +
+			`{"timestamp":"2026-07-10T00:02:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":80,"output_tokens":20,"total_tokens":120}}}}` + "\n",
+	)
+	parsed, err := ParseProviderChunk("codex", bytes.NewReader(content), 0, ParseState{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Records) != 1 || parsed.EndCursor != int64(len(content)) {
+		t.Fatalf("records=%d end=%d want=%d", len(parsed.Records), parsed.EndCursor, len(content))
+	}
+	if parsed.State.PreviousCodexCounters == nil || parsed.State.PreviousCodexCounters.TotalTokens != 120 {
+		t.Fatalf("state=%+v", parsed.State)
+	}
+}
+
 func TestUsageParserRejectsIncompleteAndOversizedLines(t *testing.T) {
 	if _, err := ParseProviderChunk("codex", bytes.NewReader([]byte(`{"type":"event_msg"}`)), 0, ParseState{}); !errors.Is(err, ErrIncompleteLine) {
 		t.Fatalf("incomplete err=%v", err)

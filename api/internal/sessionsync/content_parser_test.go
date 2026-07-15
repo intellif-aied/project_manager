@@ -2,6 +2,7 @@ package sessionsync
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -63,5 +64,32 @@ func TestContentParserRejectsIncompleteOrOversizedLine(t *testing.T) {
 	oversized := strings.Repeat("x", MaxContentProjectionLineBytes+1) + "\n"
 	if _, err := ParseContentChunk(strings.NewReader(oversized), 0, nil); !errors.Is(err, ErrContentLineTooLarge) {
 		t.Fatalf("oversized err=%v", err)
+	}
+}
+
+func TestContentParserSanitizesPostgresUnsupportedNullCharacters(t *testing.T) {
+	content := []byte(`{"type":"user","timestamp":"2026-07-14T00:00:00Z","payload":{"type":"message","message":"before\u0000after","literal":"\\u0000"}}` + "\n")
+	result, err := ParseContentChunk(bytes.NewReader(content), 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Events) != 1 || result.MalformedEventCount != 0 {
+		t.Fatalf("result=%+v", result)
+	}
+	event := result.Events[0]
+	if event.Summary != "before\uFFFDafter" || strings.ContainsRune(event.Summary, '\x00') {
+		t.Fatalf("summary=%q", event.Summary)
+	}
+	var payload struct {
+		Payload struct {
+			Message string `json:"message"`
+			Literal string `json:"literal"`
+		} `json:"payload"`
+	}
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Payload.Message != "before\uFFFDafter" || payload.Payload.Literal != `\u0000` {
+		t.Fatalf("payload=%+v raw=%s", payload.Payload, event.Payload)
 	}
 }

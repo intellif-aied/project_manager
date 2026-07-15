@@ -36,6 +36,7 @@ export type DailyGenerateScope = "personal" | "team" | "department";
 interface DailyReportGenerateModalProps {
   open: boolean;
   scope: DailyGenerateScope;
+  departmentId?: string;
   reportId?: string;
   reportDate?: string;
   title?: string;
@@ -65,9 +66,11 @@ function dailyReportType(scope: DailyGenerateScope): ReportType {
   return "personal_daily";
 }
 
-function dailyReportTarget(scope: DailyGenerateScope) {
+function dailyReportTarget(scope: DailyGenerateScope, departmentId?: string) {
   if (scope === "team") return { type: "team" as const };
-  if (scope === "department") return { type: "department" as const };
+  if (scope === "department") {
+    return { type: "department" as const, department_id: departmentId };
+  }
   return { type: "self" as const };
 }
 
@@ -92,6 +95,7 @@ function reportStatus(report: DailyReport | TeamReport | DepartmentReport | null
 export function DailyReportGenerateModal({
   open,
   scope,
+  departmentId,
   reportId,
   reportDate,
   title,
@@ -142,9 +146,19 @@ export function DailyReportGenerateModal({
   });
 
   const departmentReportQuery = useQuery({
-    queryKey: ["reports", "daily", "manage-modal", "department-report", reportId, date],
+    queryKey: [
+      "reports",
+      "daily",
+      "manage-modal",
+      "department-report",
+      reportId,
+      date,
+      departmentId
+    ],
     queryFn: () =>
-      reportId ? fetchDepartmentReport(reportId) : fetchDepartmentReportTodayOrNull(date),
+      reportId
+        ? fetchDepartmentReport(reportId, departmentId)
+        : fetchDepartmentReportTodayOrNull(date, departmentId),
     enabled: open && scope === "department",
     staleTime: 0
   });
@@ -258,9 +272,10 @@ export function DailyReportGenerateModal({
         return updateDepartmentReport(currentReport.id, {
           content: nextContent,
           next_day_plan: editorNextDayPlan.trim()
-        });
+        }, departmentId);
       }
       return saveDepartmentReportCurrent({
+        department_id: departmentId,
         report_date: date,
         content: nextContent,
         next_day_plan: editorNextDayPlan.trim()
@@ -326,7 +341,7 @@ export function DailyReportGenerateModal({
             <ReportAIGenerateControls
               reportType={dailyReportType(scope)}
               period={{ date }}
-              target={dailyReportTarget(scope)}
+              target={dailyReportTarget(scope, departmentId)}
               allowSessionSelection={allowSessionSettings}
               settingsOpen={showSessionSettings}
               selectedSessionSources={selectedSessionSources}

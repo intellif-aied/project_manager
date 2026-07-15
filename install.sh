@@ -102,8 +102,9 @@ VERSION="$(fetch_text "$RELEASE_URL/aida-latest.txt" | tr -d '[:space:]')"
 mkdir -p "$INSTALL_DIR"
 
 NEED_INSTALL=1
-if command -v aida >/dev/null 2>&1; then
-    CURRENT="$(aida version 2>/dev/null | awk '{print $2}' || true)"
+TARGET_BINARY="$INSTALL_DIR/aida"
+if [ -x "$TARGET_BINARY" ]; then
+    CURRENT="$("$TARGET_BINARY" version 2>/dev/null | awk '{print $2}' || true)"
     if [ "$CURRENT" = "$VERSION" ]; then
         echo "aida v$VERSION already installed, skipping binary download"
         NEED_INSTALL=0
@@ -125,8 +126,8 @@ if [ "$NEED_INSTALL" -eq 1 ]; then
         die "downloaded binary is too small (${SIZE} bytes). Check $RELEASE_URL/$BINARY_NAME"
     fi
     chmod 755 "$TMP"
-    mv "$TMP" "$INSTALL_DIR/aida"
-    echo "installed aida v$VERSION -> $INSTALL_DIR/aida"
+    mv "$TMP" "$TARGET_BINARY"
+    echo "installed aida v$VERSION -> $TARGET_BINARY"
 fi
 
 upsert_config_value() {

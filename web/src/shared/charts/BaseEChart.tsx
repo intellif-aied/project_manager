@@ -68,21 +68,23 @@ export function BaseEChart({
     return () => resizeObserver.disconnect();
   }, []);
 
-  if (error) {
-    return (
-      <div className="base-echart__state" style={{ height }}>
-        <Alert type="error" showIcon message={errorMessage} />
-      </div>
-    );
-  }
-
-  if (empty) {
-    return (
-      <div className="base-echart__state" style={{ height }}>
-        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无图表数据" />
-      </div>
-    );
-  }
-
-  return <div ref={containerRef} className={className} style={{ height }} />;
+  return (
+    <div className={`base-echart${className ? ` ${className}` : ""}`} style={{ height }}>
+      <div
+        ref={containerRef}
+        className="base-echart__canvas"
+        style={{ display: empty || error ? "none" : undefined, height }}
+      />
+      {error ? (
+        <div className="base-echart__state" style={{ height }}>
+          <Alert type="error" showIcon message={errorMessage} />
+        </div>
+      ) : null}
+      {empty && !error ? (
+        <div className="base-echart__state" style={{ height }}>
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无图表数据" />
+        </div>
+      ) : null}
+    </div>
+  );
 }

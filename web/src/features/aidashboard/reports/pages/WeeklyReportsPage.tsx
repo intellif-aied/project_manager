@@ -10,6 +10,7 @@ import {
   Modal,
   Pagination,
   Segmented,
+  Select,
   Skeleton,
   Space,
   Tag,
@@ -29,6 +30,7 @@ import dayjs from "dayjs";
 import {
   fetchDepartmentWeeklyReportCurrentOrNull,
   fetchDepartmentWeeklyReports,
+  fetchDepartments,
   fetchMemberWeeklyReport,
   fetchMemberWeeklyReports,
   fetchPersonalWeeklyReportCurrentOrNull,
@@ -123,9 +125,11 @@ function weeklyReportType(scope: WeeklyReportScope): ReportType {
   return "personal_weekly";
 }
 
-function weeklyReportTarget(scope: WeeklyReportScope) {
+function weeklyReportTarget(scope: WeeklyReportScope, departmentId?: string) {
   if (scope === "team") return { type: "team" as const };
-  if (scope === "department") return { type: "department" as const };
+  if (scope === "department") {
+    return { type: "department" as const, department_id: departmentId };
+  }
   return { type: "self" as const };
 }
 
@@ -405,6 +409,7 @@ function WeeklyReportEditorModal({
   weekEnd,
   readOnly = false,
   allowWeekSwitch = false,
+  departmentId,
   onClose,
   onDone
 }: {
@@ -414,6 +419,7 @@ function WeeklyReportEditorModal({
   weekEnd: string;
   readOnly?: boolean;
   allowWeekSwitch?: boolean;
+  departmentId?: string;
   onClose: () => void;
   onDone?: () => void;
 }) {
@@ -428,11 +434,11 @@ function WeeklyReportEditorModal({
   const selectedWeekEnd = selectedWeekStart === weekStart ? weekEnd : weekEndOf(selectedWeekStart);
 
   const reportQuery = useQuery<WeeklyReportData | null>({
-    queryKey: ["reports", "weekly", "editor", scope, selectedWeekStart],
+    queryKey: ["reports", "weekly", "editor", scope, selectedWeekStart, departmentId],
     queryFn: async () => {
       if (scope === "team") return fetchTeamWeeklyReportCurrentOrNull(selectedWeekStart);
       if (scope === "department")
-        return fetchDepartmentWeeklyReportCurrentOrNull(selectedWeekStart);
+        return fetchDepartmentWeeklyReportCurrentOrNull(selectedWeekStart, departmentId);
       return fetchPersonalWeeklyReportCurrentOrNull(selectedWeekStart);
     },
     enabled: open,
@@ -503,6 +509,7 @@ function WeeklyReportEditorModal({
       }
       if (scope === "department") {
         return saveDepartmentWeeklyReportCurrent({
+          department_id: departmentId,
           week_start: selectedWeekStart,
           content: nextContent
         });
@@ -568,7 +575,7 @@ function WeeklyReportEditorModal({
             <ReportAIGenerateControls
               reportType={weeklyReportType(scope)}
               period={{ week_start: selectedWeekStart, week_end: selectedWeekEnd }}
-              target={weeklyReportTarget(scope)}
+              target={weeklyReportTarget(scope, departmentId)}
               allowSessionSelection={allowSessionSettings}
               settingsOpen={showSessionSettings}
               selectedSessionSources={selectedSessionSources}
@@ -708,12 +715,25 @@ export function WeeklyReportsPage() {
   const queryClient = useQueryClient();
   const [roleTab, setRoleTab] = useState<"mine" | "member" | "team" | "department">("mine");
   const [memberWeekStart, setMemberWeekStart] = useState(() => weekStartOf(dayjs()));
+  const [selectedDepartmentID, setSelectedDepartmentID] = useState<string>();
   const [modalTarget, setModalTarget] = useState<{
     scope: "mine" | "team" | "department";
     weekStart: string;
     mode: "view" | "edit";
     allowWeekSwitch?: boolean;
+    departmentId?: string;
   } | null>(null);
+
+  const canSelectDepartment = user?.role === "admin";
+  const departmentsQuery = useQuery({
+    queryKey: ["departments", "reports-weekly"],
+    queryFn: fetchDepartments,
+    enabled: canSelectDepartment,
+    staleTime: 60_000
+  });
+  const effectiveDepartmentID = canSelectDepartment
+    ? selectedDepartmentID ?? departmentsQuery.data?.[0]?.id
+    : undefined;
 
   if (!user) return null;
 
@@ -769,17 +789,29 @@ export function WeeklyReportsPage() {
                 onChange={(value) => value && setMemberWeekStart(weekStartOf(value))}
               />
             ) : null}
+            {canSelectDepartment && (activeTab === "member" || activeTab === "department") ? (
+              <Select
+                className="reports-member-team-select"
+                value={effectiveDepartmentID}
+                loading={departmentsQuery.isLoading}
+                placeholder="选择部门"
+                options={(departmentsQuery.data ?? []).map((item) => ({ label: item.name, value: item.id }))}
+                onChange={setSelectedDepartmentID}
+              />
+            ) : null}
           </Space>
           {activeTab !== "member" ? (
             <Button
               type="primary"
               icon={<FileTextOutlined />}
+              disabled={activeTab === "department" && canSelectDepartment && !effectiveDepartmentID}
               onClick={() =>
                 setModalTarget({
                   scope: activeTab,
                   weekStart: currentWeekStart,
                   mode: "edit",
-                  allowWeekSwitch: true
+                  allowWeekSwitch: true,
+                  departmentId: activeTab === "department" ? effectiveDepartmentID : undefined
                 })
               }
             >
@@ -803,11 +835,24 @@ export function WeeklyReportsPage() {
           }
         />
       ) : null}
-      {activeTab === "member" ? <MemberWeeklyTable weekStart={memberWeekStart} /> : null}
+      {activeTab === "member" ? (
+        <MemberWeeklyTable
+          weekStart={memberWeekStart}
+          departmentId={effectiveDepartmentID}
+          requireDepartmentId={canSelectDepartment}
+        />
+      ) : null}
       {activeTab === "department" ? (
         <DepartmentWeeklyRecordsTable
+          departmentId={effectiveDepartmentID}
+          requireDepartmentId={canSelectDepartment}
           onEdit={(recordWeekStart) =>
-            setModalTarget({ scope: "department", weekStart: recordWeekStart, mode: "edit" })
+            setModalTarget({
+              scope: "department",
+              weekStart: recordWeekStart,
+              mode: "edit",
+              departmentId: effectiveDepartmentID
+            })
           }
         />
       ) : null}
@@ -841,6 +886,7 @@ export function WeeklyReportsPage() {
           weekEnd={weekEndOf(modalTarget.weekStart)}
           readOnly={modalTarget.mode === "view"}
           allowWeekSwitch={modalTarget.allowWeekSwitch}
+          departmentId={modalTarget.departmentId}
           onClose={() => setModalTarget(null)}
           onDone={invalidateWeekly}
         />
@@ -1080,11 +1126,20 @@ function PersonalWeeklyRecordsTable({ onEdit }: { onEdit: (weekStart: string) =>
   );
 }
 
-function MemberWeeklyTable({ weekStart }: { weekStart: string }) {
+function MemberWeeklyTable({
+  weekStart,
+  departmentId,
+  requireDepartmentId
+}: {
+  weekStart: string;
+  departmentId?: string;
+  requireDepartmentId?: boolean;
+}) {
   const reportsQuery = useQuery({
-    queryKey: ["reports", "weekly", "member-list", weekStart],
-    queryFn: () => fetchMemberWeeklyReports(weekStart),
-    staleTime: 30_000
+    queryKey: ["reports", "weekly", "member-list", weekStart, departmentId],
+    queryFn: () => fetchMemberWeeklyReports(weekStart, departmentId),
+    staleTime: 30_000,
+    enabled: !requireDepartmentId || Boolean(departmentId)
   });
   return (
     <MemberReportBrowser
@@ -1142,13 +1197,23 @@ function TeamWeeklyRecordsTable({ onEdit }: { onEdit: (weekStart: string) => voi
   );
 }
 
-function DepartmentWeeklyRecordsTable({ onEdit }: { onEdit: (weekStart: string) => void }) {
+function DepartmentWeeklyRecordsTable({
+  departmentId,
+  requireDepartmentId,
+  onEdit
+}: {
+  departmentId?: string;
+  requireDepartmentId?: boolean;
+  onEdit: (weekStart: string) => void;
+}) {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const reportsQuery = useQuery<DepartmentWeeklyReport[]>({
-    queryKey: ["reports", "weekly", "department", "history"],
-    queryFn: () => fetchDepartmentWeeklyReports(),
-    staleTime: 30_000
+    queryKey: ["reports", "weekly", "department", "history", departmentId],
+    queryFn: () =>
+      fetchDepartmentWeeklyReports(departmentId ? { department_id: departmentId } : undefined),
+    staleTime: 30_000,
+    enabled: !requireDepartmentId || Boolean(departmentId)
   });
   const reports = reportsQuery.data ?? [];
   return (
@@ -1178,7 +1243,7 @@ function DepartmentWeeklyRecordsTable({ onEdit }: { onEdit: (weekStart: string) 
         record.content?.trim() || `已汇总 ${record.source_team_weekly_report_ids.length} 个小组周报`
       }
       fetchDetail={async (record) =>
-        fetchDepartmentWeeklyReportCurrentOrNull(formatWeekDate(record.week_start))
+        fetchDepartmentWeeklyReportCurrentOrNull(formatWeekDate(record.week_start), departmentId)
       }
       onEdit={(record) => onEdit(formatWeekDate(record.week_start))}
     />
@@ -1760,6 +1825,7 @@ export function DepartmentWeeklyReportModal({
   weekEnd,
   readOnly = false,
   allowWeekSwitch = false,
+  departmentId,
   onClose,
   onDone
 }: {
@@ -1768,6 +1834,7 @@ export function DepartmentWeeklyReportModal({
   weekEnd: string;
   readOnly?: boolean;
   allowWeekSwitch?: boolean;
+  departmentId?: string;
   onClose: () => void;
   onDone?: () => void;
 }) {
@@ -1779,6 +1846,7 @@ export function DepartmentWeeklyReportModal({
       weekEnd={weekEnd}
       readOnly={readOnly}
       allowWeekSwitch={allowWeekSwitch}
+      departmentId={departmentId}
       onClose={onClose}
       onDone={onDone}
     />

@@ -11,13 +11,14 @@ const roleLabels: Record<string, string> = {
   director: "总监", pm: "PM", team_leader: "TL", employee: "员工", admin: "管理员"
 };
 
-type MemberReportBrowserProps<T extends { content: string }> = {
+type MemberReportBrowserProps<T extends { content: string; next_day_plan?: string }> = {
   items: MemberPersonalReport[];
   loading: boolean;
   error?: string;
   queryKey: string;
   fetchDetail: (id: string) => Promise<T>;
   displayMode?: "split" | "content-list";
+  showNextDayPlan?: boolean;
 };
 
 function textPreview(value?: string) {
@@ -54,17 +55,18 @@ async function copyText(value: string) {
   if (!copied) throw new Error("copy failed");
 }
 
-export function MemberReportBrowser<T extends { content: string }>({
+export function MemberReportBrowser<T extends { content: string; next_day_plan?: string }>({
   displayMode = "split",
+  showNextDayPlan = false,
   ...props
 }: MemberReportBrowserProps<T>) {
   if (displayMode === "content-list") {
-    return <MemberReportContentList {...props} />;
+    return <MemberReportContentList {...props} showNextDayPlan={showNextDayPlan} />;
   }
   return <MemberReportSplitBrowser {...props} />;
 }
 
-function MemberReportSplitBrowser<T extends { content: string }>({
+function MemberReportSplitBrowser<T extends { content: string; next_day_plan?: string }>({
   items, loading, error, queryKey, fetchDetail
 }: Omit<MemberReportBrowserProps<T>, "displayMode">) {
   const [teamID, setTeamID] = useState("all");
@@ -112,8 +114,8 @@ function MemberReportSplitBrowser<T extends { content: string }>({
   </div>;
 }
 
-function MemberReportContentList<T extends { content: string }>({
-  items, loading, error, queryKey, fetchDetail
+function MemberReportContentList<T extends { content: string; next_day_plan?: string }>({
+  items, loading, error, queryKey, fetchDetail, showNextDayPlan
 }: Omit<MemberReportBrowserProps<T>, "displayMode">) {
   const { message } = App.useApp();
   const [teamID, setTeamID] = useState("all");
@@ -246,6 +248,12 @@ function MemberReportContentList<T extends { content: string }>({
                     ) : (
                       <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无日报内容" />
                     )}
+                    {showNextDayPlan && !detail.isLoading && !detail.isError ? (
+                      <div className="member-report-content-item__plan">
+                        <strong>明日计划</strong>
+                        <p>{detail.data?.next_day_plan?.trim() || "未填写"}</p>
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
               </article>

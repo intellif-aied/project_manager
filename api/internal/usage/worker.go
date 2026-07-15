@@ -100,7 +100,8 @@ func (w *Worker) RunOnce(ctx context.Context, now time.Time) error {
 			continue
 		}
 		retryAfter := usageJobRetryDelay(job.Attempts, processErr)
-		ok, failErr := w.queue.Fail(ctx, job.ID, w.owner, finishedAt, retryAfter, processErr.Error())
+		preserveAttempt := errors.Is(processErr, ErrUsageOutOfOrder)
+		ok, failErr := w.queue.Fail(ctx, job.ID, w.owner, finishedAt, retryAfter, preserveAttempt, processErr.Error())
 		if failErr != nil && firstError == nil {
 			firstError = failErr
 		} else if !ok && firstError == nil {

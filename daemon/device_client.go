@@ -256,7 +256,7 @@ func printSessionListHeader() {
 
 func writeSessionListHeader(output io.Writer) {
 	fmt.Fprintf(output, "  %-4s  %-6s  %-19s  %-9s  %-9s  %-10s  %-22s  %-36s  %s\n",
-		"#", "Agent", "最近活动", "Tokens", "Duration", "Model", "Project/CWD", "Session", "Summary")
+		"#", "Agent", "最近活动", "总Tokens", "Duration", "Model", "Project/CWD", "Session", "Summary")
 	fmt.Fprintln(output, "  "+strings.Repeat("-", 156))
 }
 
@@ -285,8 +285,12 @@ func formatSessionListRow(index int, s *SessionInfo) string {
 		truncateMiddle(firstNonEmpty(s.Model, "-"), 10),
 		truncateMiddle(sessionProjectDisplay(s), 22),
 		firstNonEmpty(s.SessionRef, "-"),
-		truncate(firstNonEmpty(s.Summary, "暂无摘要"), 48),
+		truncate(compactSessionText(firstNonEmpty(s.Summary, "暂无摘要")), 48),
 	)
+}
+
+func compactSessionText(value string) string {
+	return strings.Join(strings.Fields(value), " ")
 }
 
 func sessionProjectDisplay(s *SessionInfo) string {
@@ -414,9 +418,7 @@ func cmdSessions(args []string) {
 	claudeDir := filepath.Join(home, ".claude", "projects")
 	codexDir := filepath.Join(home, ".codex", "sessions")
 
-	sessions := scanSessions(claudeDir, showAll)
-	sessions = append(sessions, scanCodexSessions(codexDir, showAll)...)
-	sortSessionsNewestFirst(sessions)
+	sessions := scanSessionsForCommand(claudeDir, codexDir, showAll, !jsonOutput)
 	if projectFilter != "" {
 		var filtered []*SessionInfo
 		for _, s := range sessions {
@@ -483,9 +485,7 @@ func cmdUpload(args []string) {
 	}
 
 	home, _ := os.UserHomeDir()
-	sessions := scanSessions(filepath.Join(home, ".claude", "projects"), true)
-	sessions = append(sessions, scanCodexSessions(filepath.Join(home, ".codex", "sessions"), true)...)
-	sortSessionsNewestFirst(sessions)
+	sessions := scanSessionsForCommand(filepath.Join(home, ".claude", "projects"), filepath.Join(home, ".codex", "sessions"), true, true)
 
 	if len(sessions) == 0 {
 		fmt.Println("No sessions found to upload.")

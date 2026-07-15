@@ -14,6 +14,7 @@ type fakeUsageQueue struct {
 	completed    []string
 	failed       []string
 	retryDelays  []time.Duration
+	preserved    []bool
 }
 
 func (queue *fakeUsageQueue) ClaimTypes(_ context.Context, _ string, _ time.Time, _ time.Duration, _ int, types []string) ([]sessionsync.ProcessingJob, error) {
@@ -30,9 +31,10 @@ func (queue *fakeUsageQueue) Complete(_ context.Context, jobID, _ string, _ time
 	return true, nil
 }
 
-func (queue *fakeUsageQueue) Fail(_ context.Context, jobID, _ string, _ time.Time, retry time.Duration, _ string) (bool, error) {
+func (queue *fakeUsageQueue) Fail(_ context.Context, jobID, _ string, _ time.Time, retry time.Duration, preserveAttempt bool, _ string) (bool, error) {
 	queue.failed = append(queue.failed, jobID)
 	queue.retryDelays = append(queue.retryDelays, retry)
+	queue.preserved = append(queue.preserved, preserveAttempt)
 	return true, nil
 }
 
@@ -59,8 +61,9 @@ func TestUsageWorkerOnlyClaimsUsageJobs(t *testing.T) {
 		t.Fatalf("claimed types=%v", queue.claimedTypes)
 	}
 	if len(queue.completed) != 1 || queue.completed[0] != "parsed" ||
-		len(queue.failed) != 1 || queue.failed[0] != "waiting" || queue.retryDelays[0] != 2*time.Second {
-		t.Fatalf("completed=%v failed=%v delays=%v", queue.completed, queue.failed, queue.retryDelays)
+		len(queue.failed) != 1 || queue.failed[0] != "waiting" ||
+		queue.retryDelays[0] != 2*time.Second || !queue.preserved[0] {
+		t.Fatalf("completed=%v failed=%v delays=%v preserved=%v", queue.completed, queue.failed, queue.retryDelays, queue.preserved)
 	}
 }
 

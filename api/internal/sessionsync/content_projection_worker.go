@@ -12,7 +12,7 @@ type ContentJobQueue interface {
 	ClaimTypes(context.Context, string, time.Time, time.Duration, int, []string) ([]ProcessingJob, error)
 	Heartbeat(context.Context, string, string, time.Time, time.Duration) (bool, error)
 	Complete(context.Context, string, string, time.Time) (bool, error)
-	Fail(context.Context, string, string, time.Time, time.Duration, string) (bool, error)
+	Fail(context.Context, string, string, time.Time, time.Duration, bool, string) (bool, error)
 }
 
 type ContentJobProcessor interface {
@@ -80,7 +80,8 @@ func (w *ContentProjectionWorker) RunOnce(ctx context.Context, now time.Time) er
 			continue
 		}
 		retryAfter := contentJobRetryDelay(job.Attempts, processErr)
-		ok, failErr := w.queue.Fail(ctx, job.ID, w.owner, finishedAt, retryAfter, processErr.Error())
+		preserveAttempt := errors.Is(processErr, ErrProjectionOutOfOrder)
+		ok, failErr := w.queue.Fail(ctx, job.ID, w.owner, finishedAt, retryAfter, preserveAttempt, processErr.Error())
 		if failErr != nil && firstError == nil {
 			firstError = failErr
 		} else if !ok && firstError == nil {

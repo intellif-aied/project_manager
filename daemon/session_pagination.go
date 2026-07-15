@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-const defaultSessionPageSize = 20
+const defaultSessionPageSize = 10
 
 var allowedSessionPageSizes = map[int]bool{10: true, 20: true, 50: true, 100: true}
 
@@ -93,7 +93,7 @@ func writeNarrowSessionRow(output io.Writer, marker string, index int, session *
 	}
 	agent := firstNonEmpty(session.AgentType, "claude")
 	fmt.Fprintf(output, "%s %-4d %-6s %-11s %s\n", marker, index, truncate(agent, 6), activeAt, firstNonEmpty(session.SessionRef, "-"))
-	fmt.Fprintf(output, "    %s\n", truncate(firstNonEmpty(session.Summary, "暂无摘要"), max(20, sessionTerminalWidth()-6)))
+	fmt.Fprintf(output, "    %s\n", truncate(compactSessionText(firstNonEmpty(session.Summary, "暂无摘要")), max(20, sessionTerminalWidth()-6)))
 	fmt.Fprintf(output, "    %s · %s · %s · %s Token · %d sub-agent\n",
 		truncateMiddle(sessionProjectDisplay(session), 20), truncateMiddle(firstNonEmpty(session.Model, "-"), 14),
 		duration, session.FormatTokens(), len(session.SubFiles))
@@ -162,13 +162,20 @@ func selectSessionsInteractively(
 	}
 	pageNumber := 1
 	selected := map[int]bool{}
+	pageRendered := false
+	restoreScreen := enterInteractiveScreen(output)
+	defer restoreScreen()
 	for {
 		page, err := paginateSessions(sessions, pageNumber, pageSize)
 		if err != nil {
 			return nil, err
 		}
+		if pageRendered {
+			clearInteractivePage(output)
+		}
 		writeSessionPage(output, "选择要上传的 Session", page, selected)
-		fmt.Fprintf(output, "命令：编号切换选择，n 下一页，p 上一页，g <页码> 跳转，s <10|20|50|100> 每页条数，all 选择全部 %d 条，done 确认，q 取消\n> ", len(sessions))
+		pageRendered = true
+		fmt.Fprintf(output, "命令：编号切换选择，n 下一页，p 上一页，g <页码> 跳转，s <10|20|50|100> 每页条数，all 选择全部 %d 条，d 完成，q 取消\n> ", len(sessions))
 		input, readErr := reader.ReadString('\n')
 		input = strings.TrimSpace(input)
 		if readErr != nil && input == "" {
@@ -234,5 +241,24 @@ func selectSessionsInteractively(
 				fmt.Fprintln(output, "未识别命令。")
 			}
 		}
+	}
+}
+
+func clearInteractivePage(output io.Writer) {
+	// Erase the previous interactive page so pagination replaces it in-place.
+	fmt.Fprint(output, "\x1b[H\x1b[2J")
+}
+
+func enterInteractiveScreen(output io.Writer) func() {
+	file, ok := output.(*os.File)
+	if !ok || file != os.Stdout {
+		return func() {}
+	}
+	if info, err := file.Stat(); err != nil || info.Mode()&os.ModeCharDevice == 0 {
+		return func() {}
+	}
+	fmt.Fprint(output, "\x1b[?1049h\x1b[H\x1b[2J")
+	return func() {
+		fmt.Fprint(output, "\x1b[?1049l")
 	}
 }

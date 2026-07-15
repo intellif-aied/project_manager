@@ -57,6 +57,18 @@ func TestContentProjectionProcessorOrdersAndActivatesIntegration(t *testing.T) {
 	if status != "active" || cursor != fixture.endCursor || eventCount != 2 || rows != 2 {
 		t.Fatalf("status=%s cursor=%d eventCount=%d rows=%d", status, cursor, eventCount, rows)
 	}
+	var summary, message, literal string
+	if err := database.QueryRow(`
+		SELECT summary, content_payload #>> '{payload,message}', content_payload #>> '{payload,literal}'
+		FROM session_content_events
+		WHERE content_projection_revision_id = $1
+		ORDER BY source_start_cursor
+		LIMIT 1`, fixture.revisionID).Scan(&summary, &message, &literal); err != nil {
+		t.Fatal(err)
+	}
+	if summary != "before\uFFFDafter" || message != "before\uFFFDafter" || literal != `\u0000` {
+		t.Fatalf("summary=%q message=%q literal=%q", summary, message, literal)
+	}
 }
 
 func TestContentProjectionProcessorRejectsStaleEpochIntegration(t *testing.T) {
@@ -125,7 +137,7 @@ func createProjectionFixture(t *testing.T, database *sql.DB, userID int64, sessi
 	}
 
 	contents := [][]byte{
-		[]byte("{\"type\":\"user\",\"timestamp\":\"2026-07-14T01:00:00Z\"}\n"),
+		[]byte(`{"type":"user","timestamp":"2026-07-14T01:00:00Z","payload":{"type":"message","message":"before\u0000after","literal":"\\u0000"}}` + "\n"),
 		[]byte("{\"type\":\"assistant\",\"timestamp\":\"2026-07-14T01:01:00Z\"}\n"),
 	}
 	fixture.store = memoryContentStore{}

@@ -379,6 +379,15 @@
   border-radius: 999px;
 }
 
+.base-echart {
+  width: 100%;
+  min-width: 0;
+}
+
+.base-echart__canvas {
+  width: 100%;
+}
+
 .chart-card__state,
 .base-echart__state {
   display: flex;

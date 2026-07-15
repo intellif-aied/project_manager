@@ -45,7 +45,7 @@
 - 已实现：`clear-content` 受理后递增 `content_epoch`、立即关闭内容读取并投递 `build_metering_envelope`；`restore-content` 只在 `cleared` 后建立限时恢复授权，CLI 自动建立 restore generation。
 - 已由 Token 专题实现：Usage Parser、Metering Envelope、原始对象物理删除及其完整性门禁；本专题不重复定义 Token 统计口径。
 - `clear-content` 对认证用户统一开放，并受 Metering Envelope 完整性门禁保护；不得人工改状态或提前删除对象。
-- `AIDA_SESSION_SYNC_CONTENT_WORKER_ENABLED` 和 `AIDA_SESSION_SYNC_USAGE_WORKER_ENABLED` 仅用于后台 worker 启停，默认 `false`；它们不控制用户是否可访问 Session Sync API。
+- Content Projection、Usage 和 Metering worker 属于 Session 上传主链路，API 启动后必须同步启动；禁止以环境开关形成“上传成功但内容和 Token 永久不处理”的状态。
 
 ## 2. 目标行为
 
@@ -458,7 +458,7 @@ Finalize 只切换 raw/write generation，不直接切换 `active_content_projec
 - Prepare/Chunk/Finalize 是认证用户的统一当前链路，不设置用户级白名单，也不按环境区分两套产品行为。
 - Session Sync、Token 查询和 Report MCP 必须遵循同一 Source/Revision 契约；不得通过前端回退把新旧统计结果相加。
 - 一旦某 Session 已创建 `session_sources`，旧 `/sessions/batch` 对该 Session 返回 `CLI_UPGRADE_REQUIRED`，避免整包上传覆盖增量状态；未进入 V2 的 Session 继续走旧链路。
-- Content Projection worker 和 Usage worker 分别由 `AIDA_SESSION_SYNC_CONTENT_WORKER_ENABLED`、`AIDA_SESSION_SYNC_USAGE_WORKER_ENABLED` 控制；开关只用于运行维护、故障止损和任务排查，不参与用户授权。
+- Content Projection、Usage 和 Metering worker 随 API 常驻运行。运行维护应依赖任务租约、重试和 dead-letter 机制，不提供会静默积压主链路任务的产品开关。
 
 ### 6.5 Processing Job 租约
 
@@ -473,7 +473,7 @@ Content Projection worker 按 revision 串行检查 cursor：乱序任务进入�
 - `aida sessions`：显示最近 48 小时有活动的 Session；
 - `aida sessions --all`：显示全部本地历史；
 - 排序：`last_activity_at DESC, session_ref ASC`；
-- 默认每页 20 条，支持上一页、下一页和跳页；
+- 默认每页 10 条，支持上一页、下一页和跳页；
 - Session 超过 500 条仍按流式索引或分页读取，不能一次完整载入全部日志内容。
 
 ### 7.2 固定展示字段

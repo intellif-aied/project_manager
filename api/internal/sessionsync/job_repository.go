@@ -83,8 +83,8 @@ func (r *PostgresJobRepository) ClaimTypes(
 	}
 
 	rows, err := tx.QueryContext(ctx, `
-		WITH candidates AS (
-			SELECT id
+		WITH candidates AS MATERIALIZED (
+			SELECT id, created_at
 			FROM session_processing_jobs
 			WHERE attempts < max_attempts
 			  AND job_type = ANY($5)
@@ -96,7 +96,7 @@ func (r *PostgresJobRepository) ClaimTypes(
 			ORDER BY created_at, id
 			FOR UPDATE SKIP LOCKED
 			LIMIT $2
-		)
+		), updated AS (
 		UPDATE session_processing_jobs j
 		SET status = 'leased', attempts = attempts + 1, lease_owner = $3,
 			lease_until = $4, heartbeat_at = $1, next_retry_at = NULL,
@@ -106,7 +106,15 @@ func (r *PostgresJobRepository) ClaimTypes(
 		RETURNING j.id, j.job_type, j.session_id, j.generation_id, j.chunk_id,
 			j.target_revision_id, j.target_metrics_revision_id,
 			j.content_epoch, j.payload, j.attempts,
-			j.max_attempts, j.lease_owner, j.lease_until`,
+			j.max_attempts, j.lease_owner, j.lease_until
+		)
+		SELECT updated.id, updated.job_type, updated.session_id, updated.generation_id, updated.chunk_id,
+			updated.target_revision_id, updated.target_metrics_revision_id,
+			updated.content_epoch, updated.payload, updated.attempts,
+			updated.max_attempts, updated.lease_owner, updated.lease_until
+		FROM updated
+		JOIN candidates ON candidates.id = updated.id
+		ORDER BY candidates.created_at, candidates.id`,
 		now, limit, owner, now.Add(leaseTTL), pq.Array(jobTypes))
 	if err != nil {
 		return nil, err
@@ -167,6 +175,7 @@ func (r *PostgresJobRepository) Fail(
 	jobID, owner string,
 	now time.Time,
 	retryAfter time.Duration,
+	preserveAttempt bool,
 	failure string,
 ) (bool, error) {
 	if retryAfter < 0 {
@@ -174,12 +183,13 @@ func (r *PostgresJobRepository) Fail(
 	}
 	result, err := r.db.ExecContext(ctx, `
 		UPDATE session_processing_jobs
-		SET status = CASE WHEN attempts >= max_attempts THEN 'dead' ELSE 'retry_wait' END,
+		SET status = CASE WHEN $2 OR attempts < max_attempts THEN 'retry_wait' ELSE 'dead' END,
+			attempts = CASE WHEN $2 THEN GREATEST(attempts - 1, 0) ELSE attempts END,
 			lease_owner = NULL, lease_until = NULL,
-			next_retry_at = CASE WHEN attempts >= max_attempts THEN NULL ELSE $1::timestamptz END,
-			last_error = $2
-		WHERE id = $3 AND status = 'leased' AND lease_owner = $4 AND lease_until > $5`,
-		now.Add(retryAfter), failure, jobID, owner, now)
+			next_retry_at = CASE WHEN $2 OR attempts < max_attempts THEN $1::timestamptz ELSE NULL END,
+			last_error = $3
+		WHERE id = $4 AND status = 'leased' AND lease_owner = $5 AND lease_until > $6`,
+		now.Add(retryAfter), preserveAttempt, failure, jobID, owner, now)
 	return oneRowChanged(result, err)
 }
 

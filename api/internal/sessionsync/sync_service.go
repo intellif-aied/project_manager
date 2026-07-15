@@ -27,6 +27,7 @@ type PrepareSessionRequest struct {
 	SessionRef       string                 `json:"session_ref"`
 	AgentType        string                 `json:"agent_type"`
 	ParentSessionRef string                 `json:"parent_session_ref,omitempty"`
+	Summary          string                 `json:"summary,omitempty"`
 	StartedAt        *time.Time             `json:"started_at,omitempty"`
 	LastActivityAt   *time.Time             `json:"last_activity_at,omitempty"`
 	CWD              string                 `json:"cwd,omitempty"`
@@ -84,6 +85,7 @@ func NewSyncService(database *sql.DB) (*SyncService, error) {
 func (s *SyncService) Prepare(ctx context.Context, userID string, request PrepareSessionRequest) ([]PrepareSourceResponse, error) {
 	request.SessionRef = strings.TrimSpace(request.SessionRef)
 	request.AgentType = strings.TrimSpace(request.AgentType)
+	request.Summary = strings.ReplaceAll(strings.TrimSpace(request.Summary), "\x00", "\uFFFD")
 	if request.AgentType == "" {
 		request.AgentType = "claude_code"
 	}
@@ -143,9 +145,10 @@ func lockOrCreateSession(
 			SET parent_session_ref = COALESCE(NULLIF($1, ''), parent_session_ref),
 				cwd = COALESCE(NULLIF($2, ''), cwd),
 				project_name = COALESCE(NULLIF($3, ''), project_name),
-				last_activity_at = CASE WHEN $4::timestamptz IS NULL THEN last_activity_at ELSE GREATEST(last_activity_at, $4) END,
+				summary = COALESCE(NULLIF($4, ''), summary),
+				last_activity_at = CASE WHEN $5::timestamptz IS NULL THEN last_activity_at ELSE GREATEST(last_activity_at, $5) END,
 				updated_at = now()
-			WHERE id = $5`, request.ParentSessionRef, request.CWD, request.ProjectName, lastActivity, sessionID)
+			WHERE id = $6`, request.ParentSessionRef, request.CWD, request.ProjectName, request.Summary, lastActivity, sessionID)
 		return sessionID, contentStatus, err
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -164,11 +167,11 @@ func lockOrCreateSession(
 	err = tx.QueryRowContext(ctx, `
 		INSERT INTO sessions (
 			session_ref, user_id, agent_type, parent_session_ref, started_at,
-			last_activity_at, cwd, project_name
-		) VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, NULLIF($7, ''), NULLIF($8, ''))
+			last_activity_at, cwd, project_name, summary
+		) VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, NULLIF($7, ''), NULLIF($8, ''), NULLIF($9, ''))
 		RETURNING id, content_status`,
 		request.SessionRef, userID, request.AgentType, request.ParentSessionRef,
-		startedAt, lastActivityAt, request.CWD, request.ProjectName,
+		startedAt, lastActivityAt, request.CWD, request.ProjectName, request.Summary,
 	).Scan(&sessionID, &contentStatus)
 	return sessionID, contentStatus, err
 }

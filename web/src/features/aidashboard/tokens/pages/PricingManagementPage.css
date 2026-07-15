@@ -40,7 +40,36 @@
   gap: 0 16px;
 }
 
+.pricing-management-modal .ant-modal-container {
+  overflow: hidden;
+}
+
+.pricing-management-modal .ant-modal-header {
+  margin: 0;
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid #e5eaf0;
+}
+
+.pricing-management-modal .ant-modal-body {
+  padding: 20px 24px;
+}
+
+.pricing-management-modal .ant-modal-footer {
+  margin: 0;
+  padding: 12px 24px 16px;
+  border-top: 1px solid #e5eaf0;
+}
+
 @media (max-width: 720px) {
+  .pricing-management-modal .ant-modal-header,
+  .pricing-management-modal .ant-modal-body {
+    padding: 16px;
+  }
+
+  .pricing-management-modal .ant-modal-footer {
+    padding: 12px 16px 16px;
+  }
+
   .pricing-form-grid {
     grid-template-columns: minmax(0, 1fr);
   }

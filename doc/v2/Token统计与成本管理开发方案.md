@@ -18,7 +18,7 @@
 - 已实现服务端物化查询快照、个人/管理分析 API、价格管理 API 和页面；快照固定 Token、成本、显示名称和组织名称，追加、revision 切换、重计价或 Session 删除不会改变有效快照。
 - 已完成空数据库 001 至 022 migration、历史调组、总监/TL 权限、精确成本、价格修正、查询快照稳定、无 component pending Source 和 HTTP feature gate 集成验证。
 - 未完成旧数据回填、全量 Golden Fixture 对账、全部 `TOK-*` 验收、真实用户验收和部署切换。
-- Token 分析 API 和页面不设置用户级开关，统一按用户角色及组织资源鉴权。`AIDA_SESSION_SYNC_USAGE_WORKER_ENABLED` 默认 `false`，仅控制后台解析任务是否消费，不改变接口授权或查询口径。
+- Token 分析 API 和页面不设置用户级开关，统一按用户角色及组织资源鉴权。Usage 和 Metering worker 随 API 常驻运行，上传成功后必须持续消费 Token 解析任务。
 
 ### 本专题负责
 
@@ -562,6 +562,8 @@ generation_id + token_count event source cursor
 7. `reasoning_output_tokens` 是 output 明细子集，不重复加入 output/total。
 8. 如果 Provider `total_tokens` 可用，必须与归一化总量对账。
 9. 模型切换事件必须先更新 active model，再把后续 Token 差值归给对应模型；缺少 Token 快照边界时标记 estimated。
+10. `last_token_usage.input_tokens` 仅用于识别单次请求的计价档位，不参与累计 Token；输入超过 272,000 的请求标记为 `billing_variant=long_context`，边界值 272,000 仍使用普通档位。
+11. 累计 counters 与上一快照完全相同的事件只推进 parser cursor/checkpoint，不生成零 Token usage component。
 
 ## 5. Token Normalizer
 
@@ -599,6 +601,7 @@ output_tokens = output_tokens
 - 新 Provider schema 不得在旧 normalizer 中猜测映射。
 - 未知字段导致可能漏算时 revision 为 incomplete。
 - 修复映射通过新 Metrics Revision 重放原始 Chunk；内容已清除时只允许重放 Metering Envelope，不更新旧 component。
+- Parser 行为或计价档位识别发生变化时必须提升 parser version；不得复用旧 version 让历史 revision 看似已完成。
 
 ## 6. 解析、对账和激活
 
@@ -695,6 +698,8 @@ cost_cny = cost_usd * usd_cny_rate
 ```
 
 使用 Logical Usage Event 当前 Observation 的 Activity Date 匹配价格和汇率版本。数据库计算使用固定精度 `NUMERIC/DECIMAL`，禁止 float/double；分项先以未展示舍入值求和，最后按产品展示精度舍入。保存实际单价、汇率、舍入规则和 calculator version 快照。
+
+价格/汇率重算预览使用只读事务，不得执行 `FOR UPDATE`。幂等比较按十进制数值比较，不能因数据库返回的 scale 不同把 `0.1` 与 `0.100000` 判为价格变化。
 
 ### 9.3 计价状态
 
@@ -912,6 +917,9 @@ PM 和工程师不显示入口，直接请求返回 403。
 - `TOK-028`：unpriced 返回 `null`，不显示 0 元。
 - `TOK-029`：外部价格建议未经管理员发布不影响任何成本。
 - `TOK-030`：USD/CNY 公式、分项、Session、人员、小组和部门汇总一致。
+- `TOK-051`：Codex 请求输入 272,000 使用普通价格，272,001 使用 long-context 价格；Token 总量不因计价档位拆分而变化。
+- `TOK-052`：重复且累计值未变化的 Codex `token_count` 不生成零 Token component，但 parser cursor 正常推进。
+- `TOK-053`：成本重算预览可在只读事务执行；连续预览或 apply 后预览对相同 decimal 值返回 `changed=0`。
 
 ### 并发、清除与接口一致性
 

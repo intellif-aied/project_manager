@@ -24,6 +24,72 @@ func requestWithReportID(req *http.Request, id string) *http.Request {
 	return req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 }
 
+func TestResolveReportDepartmentIDUsesExplicitDepartmentForAdmin(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	mock.ExpectQuery(`SELECT id::text FROM departments WHERE id::text = \$1`).
+		WithArgs("department-1").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("department-1"))
+
+	h := NewReportHandler(db)
+	departmentID, err := h.resolveReportDepartmentID(
+		&model.User{ID: "admin-1", Role: "admin"},
+		"department-1",
+		"",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if departmentID != "department-1" {
+		t.Fatalf("department id = %q", departmentID)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestGetDepartmentReportSourcesFiltersSelectedDepartment(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	mock.ExpectQuery(`SELECT id::text FROM departments WHERE id::text = \$1`).
+		WithArgs("department-1").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("department-1"))
+	mock.ExpectQuery(`(?s)SELECT t\.id::text.*WHERE t\.department_id = \$2.*ORDER BY t\.name`).
+		WithArgs("2026-07-14", "department-1").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"team_id", "team_name", "leader_id", "leader_name", "report_id", "content", "submitted_at", "has_report",
+		}).AddRow("team-1", "平台组", "leader-1", "组长", "report-1", "日报正文", time.Now(), true))
+
+	h := NewReportHandler(db)
+	req := httptest.NewRequest(http.MethodGet, "/reports/department/sources?date=2026-07-14&department_id=department-1", nil)
+	req = requestWithUser(req, &model.User{ID: "admin-1", Role: "admin"})
+	rec := httptest.NewRecorder()
+
+	h.GetDepartmentReportSources(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var got model.DepartmentReportSources
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.TotalTeamCount != 1 || got.SubmittedTeamCount != 1 || len(got.SubmittedTeamReports) != 1 {
+		t.Fatalf("unexpected department sources: %#v", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
 func TestUpdateReportPersistsSessionIDsOnSave(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

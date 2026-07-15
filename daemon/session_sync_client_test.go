@@ -36,6 +36,7 @@ func TestIncrementalUploadRetriesResponseLossAndResumes(t *testing.T) {
 	session := &SessionInfo{
 		SessionRef: "sync-client", AgentType: "codex", FilePath: sourcePath,
 		StartedAt: startedAt, EndedAt: endedAt, Cwd: "/workspace/project", ProjectDir: "project",
+		Summary: "session summary",
 	}
 	cfg := &Config{APIURL: server.URL, Token: "test-token"}
 	results, err := uploadSessionGroupIncremental(cfg, []sessionWithFile{{info: session, filePath: sourcePath}}, session.SessionRef)
@@ -46,7 +47,8 @@ func TestIncrementalUploadRetriesResponseLossAndResumes(t *testing.T) {
 		t.Fatalf("results=%+v", results)
 	}
 	serverState.mu.Lock()
-	if serverState.chunkRequests != 2 || serverState.acceptedChunks != 1 || serverState.finalizeRequests != 1 || string(serverState.content) != string(content) {
+	if serverState.chunkRequests != 2 || serverState.acceptedChunks != 1 || serverState.finalizeRequests != 1 ||
+		serverState.prepareSummary != session.Summary || string(serverState.content) != string(content) {
 		t.Fatalf("server state: chunk_requests=%d accepted_chunks=%d finalize_requests=%d content_bytes=%d",
 			serverState.chunkRequests, serverState.acceptedChunks, serverState.finalizeRequests, len(serverState.content))
 	}
@@ -112,6 +114,7 @@ type fakeSessionSyncServer struct {
 	chunkRequests          int
 	acceptedChunks         int
 	finalizeRequests       int
+	prepareSummary         string
 	failFirstChunkResponse bool
 }
 
@@ -129,6 +132,7 @@ func (s *fakeSessionSyncServer) serveHTTP(w http.ResponseWriter, r *http.Request
 			http.Error(w, "invalid prepare", http.StatusBadRequest)
 			return
 		}
+		s.prepareSummary = request.Sessions[0].Summary
 		source := request.Sessions[0].Sources[0]
 		action := "rebuild_required"
 		status := "staging"

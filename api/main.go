@@ -96,7 +96,9 @@ func main() {
 	defer stopScheduler()
 	handler.NewManagedAgentScheduleRunner(managedAgentH).Start(schedulerCtx)
 	service.NewManagedAgentRunStatusSyncer(database, managedAgentClient).Start(schedulerCtx)
-	if cfg.SessionSyncContentWorkerEnabled {
+	// Session content and usage processing are core services. Leaving either worker
+	// stopped accepts uploads that can never appear in reports or Token analytics.
+	{
 		if minioStore == nil {
 			log.Fatal("Session content projection worker requires MinIO")
 		}
@@ -116,7 +118,7 @@ func main() {
 		contentWorker.Start(schedulerCtx)
 		log.Println("Session content projection worker started")
 	}
-	if cfg.SessionSyncUsageWorkerEnabled {
+	{
 		if minioStore == nil {
 			log.Fatal("Session usage projection worker requires MinIO")
 		}

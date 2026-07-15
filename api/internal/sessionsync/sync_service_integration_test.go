@@ -70,6 +70,7 @@ func TestSyncServicePrepareAcceptFinalizeIntegration(t *testing.T) {
 	}
 
 	request.Sources[0].PrefixCheckpointHash = HashBytes(content)
+	request.Summary = "updated session summary"
 	preparedAgain, err := service.Prepare(context.Background(), fmt.Sprint(userID), request)
 	if err != nil {
 		t.Fatal(err)
@@ -93,6 +94,13 @@ func TestSyncServicePrepareAcceptFinalizeIntegration(t *testing.T) {
 	}
 	if sourceCount != 1 || activeCount != 1 || stagingCount != 0 || chunkCount != 1 || jobCount != 4 || revisionCount != 1 {
 		t.Fatalf("sources=%d active=%d staging=%d chunks=%d jobs=%d revisions=%d", sourceCount, activeCount, stagingCount, chunkCount, jobCount, revisionCount)
+	}
+	var summary string
+	if err := database.QueryRow(`SELECT summary FROM sessions WHERE user_id = $1 AND session_ref = $2`, userID, request.SessionRef).Scan(&summary); err != nil {
+		t.Fatal(err)
+	}
+	if summary != request.Summary {
+		t.Fatalf("summary=%q want=%q", summary, request.Summary)
 	}
 
 	secondContent := []byte("{\"type\":\"message\",\"value\":2}\n")
@@ -191,7 +199,7 @@ func integrationPrepareRequest(sessionRef string, content []byte) PrepareSession
 	startedAt := time.Date(2026, 7, 14, 9, 0, 0, 0, time.UTC)
 	return PrepareSessionRequest{
 		SessionRef: sessionRef, AgentType: "codex", StartedAt: &startedAt, LastActivityAt: &startedAt,
-		CWD: "/tmp/project", ProjectName: "project",
+		CWD: "/tmp/project", ProjectName: "project", Summary: "initial session summary",
 		Sources: []PrepareSourceRequest{{
 			SourceRole: "main", SourceKey: "codex:" + sessionRef + ":main", LocalSize: int64(len(content)),
 			PrefixCheckpointHash: HashBytes(nil), PrefixCheckpointAlgorithmVersion: PrefixCheckpointAlgorithm,

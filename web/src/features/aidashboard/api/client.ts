@@ -524,21 +524,29 @@ export const updateTeamReport = (
 ) => unwrap(api.put<TeamReport>(`/reports/team/${id}`, data));
 export const submitTeamReport = (id: string, data?: { content?: string }) =>
   unwrap(api.post<TeamReport>(`/reports/team/${id}/submit`, data));
-export const fetchDepartmentReportSources = (date: string) =>
-  unwrap(api.get<DepartmentReportSources>("/reports/department/sources", { date }));
-export const fetchDepartmentReportToday = (reportDate?: string) =>
+export const fetchDepartmentReportSources = (date: string, departmentId?: string) =>
   unwrap(
-    api.get<DepartmentReport>(
-      "/reports/department/today",
-      reportDate ? { report_date: reportDate } : undefined
-    )
+    api.get<DepartmentReportSources>("/reports/department/sources", {
+      date,
+      ...(departmentId ? { department_id: departmentId } : {})
+    })
   );
-export async function fetchDepartmentReportTodayOrNull(reportDate?: string) {
+export const fetchDepartmentReportToday = (reportDate?: string, departmentId?: string) =>
+  unwrap(
+    api.get<DepartmentReport>("/reports/department/today", {
+      ...(reportDate ? { report_date: reportDate } : {}),
+      ...(departmentId ? { department_id: departmentId } : {})
+    })
+  );
+export async function fetchDepartmentReportTodayOrNull(reportDate?: string, departmentId?: string) {
   try {
     return await unwrap(
       api.get<DepartmentReport>(
         "/reports/department/today",
-        reportDate ? { report_date: reportDate } : undefined,
+        {
+          ...(reportDate ? { report_date: reportDate } : {}),
+          ...(departmentId ? { department_id: departmentId } : {})
+        },
         { skipErrorHandler: true }
       )
     );
@@ -550,6 +558,7 @@ export async function fetchDepartmentReportTodayOrNull(reportDate?: string) {
   }
 }
 export const saveDepartmentReportCurrent = (data: {
+  department_id?: string;
   report_date: string;
   content?: string;
   next_day_plan?: string;
@@ -557,12 +566,26 @@ export const saveDepartmentReportCurrent = (data: {
 }) => unwrap(api.put<DepartmentReport>("/reports/department/today", data));
 export const fetchDepartmentReports = (params?: Record<string, string>) =>
   unwrap(api.get<PaginatedDepartmentReports>("/reports/department", params));
-export const fetchDepartmentReport = (id: string) =>
-  unwrap(api.get<DepartmentReport>(`/reports/department/${id}`));
+export const fetchDepartmentReport = (id: string, departmentId?: string) =>
+  unwrap(
+    api.get<DepartmentReport>(
+      `/reports/department/${id}`,
+      departmentId ? { department_id: departmentId } : undefined
+    )
+  );
 export const updateDepartmentReport = (
   id: string,
-  data: { content?: string; next_day_plan?: string; archive?: boolean }
-) => unwrap(api.put<DepartmentReport>(`/reports/department/${id}`, data));
+  data: { content?: string; next_day_plan?: string; archive?: boolean },
+  departmentId?: string
+) =>
+  unwrap(
+    api.put<DepartmentReport>(
+      departmentId
+        ? `/reports/department/${id}?department_id=${encodeURIComponent(departmentId)}`
+        : `/reports/department/${id}`,
+      data
+    )
+  );
 
 export const fetchPersonalWeeklyReports = (params?: Record<string, string>) =>
   unwrap(api.get<PaginatedPersonalWeeklyReports>("/reports/weekly/mine", params));
@@ -648,22 +671,32 @@ export const submitTeamWeeklyReport = (id: string) =>
 export const fetchTeamWeeklyReports = (params?: Record<string, string>) =>
   unwrap(api.get<TeamWeeklyReport[]>("/reports/team/weekly", params));
 
-export const fetchDepartmentWeeklyReportSources = (weekStart: string) =>
+export const fetchDepartmentWeeklyReportSources = (weekStart: string, departmentId?: string) =>
   unwrap(
     api.get<DepartmentWeeklyReportSources>("/reports/department/weekly/sources", {
-      week_start: weekStart
+      week_start: weekStart,
+      ...(departmentId ? { department_id: departmentId } : {})
     })
   );
-export const fetchDepartmentWeeklyReportCurrent = (weekStart: string) =>
+export const fetchDepartmentWeeklyReportCurrent = (weekStart: string, departmentId?: string) =>
   unwrap(
-    api.get<DepartmentWeeklyReport>("/reports/department/weekly/current", { week_start: weekStart })
+    api.get<DepartmentWeeklyReport>("/reports/department/weekly/current", {
+      week_start: weekStart,
+      ...(departmentId ? { department_id: departmentId } : {})
+    })
   );
-export async function fetchDepartmentWeeklyReportCurrentOrNull(weekStart: string) {
+export async function fetchDepartmentWeeklyReportCurrentOrNull(
+  weekStart: string,
+  departmentId?: string
+) {
   try {
     return await unwrap(
       api.get<DepartmentWeeklyReport>(
         "/reports/department/weekly/current",
-        { week_start: weekStart },
+        {
+          week_start: weekStart,
+          ...(departmentId ? { department_id: departmentId } : {})
+        },
         { skipErrorHandler: true }
       )
     );
@@ -675,6 +708,7 @@ export async function fetchDepartmentWeeklyReportCurrentOrNull(weekStart: string
   }
 }
 export const saveDepartmentWeeklyReportCurrent = (data: {
+  department_id?: string;
   week_start: string;
   content: string;
   archive?: boolean;

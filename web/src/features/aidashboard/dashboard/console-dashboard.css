@@ -1082,6 +1082,26 @@
   font-weight: 650;
 }
 
+.console-task-progress-modal .ant-modal-container {
+  overflow: hidden;
+}
+
+.console-task-progress-modal .ant-modal-header {
+  margin: 0;
+  padding: 18px 22px 14px;
+  border-bottom: 1px solid #e5ebf3;
+}
+
+.console-task-progress-modal .ant-modal-body {
+  padding: 18px 22px;
+}
+
+.console-task-progress-modal .ant-modal-footer {
+  margin: 0;
+  padding: 12px 22px 16px;
+  border-top: 1px solid #e5ebf3;
+}
+
 .console-report-modal .ant-steps {
   padding: 8px 12px;
   border: 1px solid #e9f0f8;

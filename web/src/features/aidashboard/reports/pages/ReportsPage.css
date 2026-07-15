@@ -315,6 +315,25 @@
   text-align: center;
 }
 
+.member-report-content-item__plan {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid #edf2f7;
+}
+
+.member-report-content-item__plan strong {
+  color: #4b5563;
+  font-size: 12px;
+}
+
+.member-report-content-item__plan p {
+  margin: 6px 0 0;
+  color: #475569;
+  font-size: 14px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
 .member-report-content-list .markdown-viewer,
 .member-report-content-list .markdown-viewer .toastui-editor-contents {
   color: #374151;

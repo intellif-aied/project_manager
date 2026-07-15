@@ -33,6 +33,35 @@ func TestInteractiveSessionSelectionPersistsAcrossPages(t *testing.T) {
 	if !strings.Contains(output.String(), "第 2 / 2 页") || !strings.Contains(output.String(), "已选择 2 条") {
 		t.Fatalf("output does not show page/selection state:\n%s", output.String())
 	}
+	if !strings.Contains(output.String(), "d 完成") {
+		t.Fatalf("interactive prompt should use the single-letter completion command: %q", output.String())
+	}
+	if strings.Count(output.String(), "\x1b[H\x1b[2J") < 1 {
+		t.Fatalf("pagination should clear the previous page before rendering, output=%q", output.String())
+	}
+}
+
+func TestInteractiveSessionSelectionUsesTenRowsByDefaultAtCallSite(t *testing.T) {
+	if defaultSessionPageSize != 10 {
+		t.Fatalf("default session page size = %d, want 10", defaultSessionPageSize)
+	}
+}
+
+func TestSessionPageRowsStaySingleLineWhenSummaryContainsMarkdown(t *testing.T) {
+	session := fakeSessionList(1)[0]
+	session.Summary = "第一行\n\n第二行  - 明细\n第三行"
+	page, err := paginateSessions([]*SessionInfo{session}, 1, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	writeSessionPage(&output, "Session 列表", page, nil)
+	if strings.Contains(output.String(), "第一行\n") {
+		t.Fatalf("summary must be compacted to one row: %q", output.String())
+	}
+	if !strings.Contains(output.String(), "第一行 第二行 - 明细 第三行") {
+		t.Fatalf("compacted summary missing: %q", output.String())
+	}
 }
 
 func TestInteractiveSelectAllCoversEveryPage(t *testing.T) {

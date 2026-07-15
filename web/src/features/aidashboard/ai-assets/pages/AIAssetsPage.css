@@ -400,6 +400,26 @@
   border-radius: 8px;
 }
 
+.ai-assets-skill-modal .ant-modal-container {
+  overflow: hidden;
+}
+
+.ai-assets-skill-modal .ant-modal-header {
+  margin: 0;
+  padding: 18px 22px 14px;
+  border-bottom: 1px solid #e5ebf3;
+}
+
+.ai-assets-skill-modal .ant-modal-body {
+  padding: 18px 22px;
+}
+
+.ai-assets-skill-modal .ant-modal-footer {
+  margin: 0;
+  padding: 12px 22px 16px;
+  border-top: 1px solid #e5ebf3;
+}
+
 @media (max-width: 720px) {
   .ai-assets-page .page-nav {
     display: grid;

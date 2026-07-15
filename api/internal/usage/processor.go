@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	ParserVersion     = "usage-parser-v1"
+	ParserVersion     = "usage-parser-v2"
 	NormalizerVersion = "token-normalizer-v1"
 )
 
@@ -555,12 +555,17 @@ func (p *Processor) replaceComponent(
 	billingVariant := "unknown"
 	if record.Provider == "claude_code" && record.Delta.CacheCreationTokens > 0 {
 		billingVariant = p.claudeCacheWriteVariant
+	} else if record.Provider == "codex" && record.Delta.RequestInputTokens > CodexLongContextInputThreshold {
+		billingVariant = "long_context"
 	}
 	componentQuality := record.Quality
 	if normalized.IsEstimated && componentQuality == QualityExact {
 		componentQuality = QualityEstimated
 	}
-	assumptions, _ := json.Marshal(map[string]string{"quality_reason": record.QualityReason})
+	assumptions, _ := json.Marshal(map[string]any{
+		"quality_reason":       record.QualityReason,
+		"request_input_tokens": record.Delta.RequestInputTokens,
+	})
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO session_usage_components (
 			revision_id, logical_usage_event_id, observation_id, chunk_id,

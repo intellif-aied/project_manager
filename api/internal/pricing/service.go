@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"strings"
 	"time"
 )
@@ -117,7 +118,7 @@ func (s *Service) Preview(ctx context.Context, filter RecalculateFilter) (Recalc
 		} else {
 			result.Unpriced++
 		}
-		current, err := loadActiveCost(ctx, tx, component.ID)
+		current, err := loadActiveCost(ctx, tx, component.ID, false)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return RecalculateResult{}, err
 		}
@@ -200,7 +201,7 @@ func RecalculateTx(ctx context.Context, tx *sql.Tx, filter RecalculateFilter) (R
 		} else {
 			result.Unpriced++
 		}
-		current, err := loadActiveCost(ctx, tx, component.ID)
+		current, err := loadActiveCost(ctx, tx, component.ID, true)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return RecalculateResult{}, err
 		}
@@ -418,28 +419,35 @@ func unpricedCandidate(component usageComponent, reason, model string) costCandi
 	}
 }
 
-func loadActiveCost(ctx context.Context, tx *sql.Tx, componentID string) (activeCost, error) {
+func loadActiveCost(ctx context.Context, tx *sql.Tx, componentID string, lock bool) (activeCost, error) {
 	var item activeCost
-	err := tx.QueryRowContext(ctx, `
+	err := tx.QueryRowContext(ctx, activeCostQuery(lock), componentID, CalculatorVersion).Scan(&item.ID, &item.PriceVersionID,
+		&item.RateVersionID, &item.UnitPricesJSON, &item.RateSnapshot, &item.CostUSD,
+		&item.CostCNY, &item.PricingStatus, &item.Confidence, &item.AssumptionsJSON, &item.Reason)
+	return item, err
+}
+
+func activeCostQuery(lock bool) string {
+	query := `
 		SELECT id, price_version_id::text, rate_version_id::text,
 			unit_price_snapshot_json, usd_cny_rate_snapshot::text,
 			estimated_cost_usd::text, estimated_cost_cny::text,
 			pricing_status, confidence, assumptions_json, calculation_reason
 		FROM session_activity_costs
-		WHERE usage_component_id = $1 AND calculator_version = $2 AND superseded_at IS NULL
-		FOR UPDATE`, componentID, CalculatorVersion).Scan(&item.ID, &item.PriceVersionID,
-		&item.RateVersionID, &item.UnitPricesJSON, &item.RateSnapshot, &item.CostUSD,
-		&item.CostCNY, &item.PricingStatus, &item.Confidence, &item.AssumptionsJSON, &item.Reason)
-	return item, err
+		WHERE usage_component_id = $1 AND calculator_version = $2 AND superseded_at IS NULL`
+	if lock {
+		query += " FOR UPDATE"
+	}
+	return query
 }
 
 func candidatesEqual(current activeCost, candidate costCandidate) bool {
 	return nullStringsEqual(current.PriceVersionID, candidate.PriceVersionID) &&
 		nullStringsEqual(current.RateVersionID, candidate.RateVersionID) &&
 		jsonEqual(current.UnitPricesJSON, candidate.UnitPricesJSON) &&
-		nullStringsEqual(current.RateSnapshot, candidate.RateSnapshot) &&
-		nullStringsEqual(current.CostUSD, candidate.CostUSD) &&
-		nullStringsEqual(current.CostCNY, candidate.CostCNY) &&
+		nullDecimalsEqual(current.RateSnapshot, candidate.RateSnapshot) &&
+		nullDecimalsEqual(current.CostUSD, candidate.CostUSD) &&
+		nullDecimalsEqual(current.CostCNY, candidate.CostCNY) &&
 		current.PricingStatus == candidate.PricingStatus && current.Confidence == candidate.Confidence &&
 		jsonEqual(current.AssumptionsJSON, candidate.AssumptionsJSON) &&
 		nullStringsEqual(current.Reason, candidate.Reason)
@@ -457,6 +465,18 @@ func jsonEqual(left, right []byte) bool {
 
 func nullStringsEqual(left, right sql.NullString) bool {
 	return left.Valid == right.Valid && (!left.Valid || left.String == right.String)
+}
+
+func nullDecimalsEqual(left, right sql.NullString) bool {
+	if left.Valid != right.Valid {
+		return false
+	}
+	if !left.Valid {
+		return true
+	}
+	leftValue, leftOK := new(big.Rat).SetString(left.String)
+	rightValue, rightOK := new(big.Rat).SetString(right.String)
+	return leftOK && rightOK && leftValue.Cmp(rightValue) == 0
 }
 
 func nullStringValue(value sql.NullString) string {

@@ -103,7 +103,7 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Print(`aida - CLI for uploading Claude Code sessions to Aida
+	fmt.Print(`aida - CLI for uploading AI coding sessions to Aida
 
 Usage:
   aida <command> [options]
@@ -111,7 +111,7 @@ Usage:
 Commands:
   login    --server <url> --token <token>   Login with server URL and API token
   sessions [--all] [--project <dir>] [--page N] [--page-size N] [--json]
-                                            List local Claude Code sessions
+                                            List local Claude Code and Codex sessions
   upload   [numbers...] [--all] [--page-size N]
                                             Upload sessions to server
   status                                     Show current login status
@@ -150,6 +150,7 @@ Examples:
 
 Session logs location:
   ~/.claude/projects/
+  ~/.codex/sessions/
 
 Documentation:
   PRD:        See PRD.md in the project repository

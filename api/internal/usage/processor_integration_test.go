@@ -101,6 +101,107 @@ func TestProcessorCodexCumulativeAcrossChunksIntegration(t *testing.T) {
 	assertDailyUsage(t, database, fixture.sessionID, 2, 220, "estimated", 2)
 }
 
+func TestProcessorCodexLongContextBillingBoundaryIntegration(t *testing.T) {
+	database := openUsageIntegrationDatabase(t)
+	fixture := newUsageFixture(t, database, 990033, "usage-codex-long-context", "codex")
+	defer fixture.cleanup(t)
+	content := []byte(
+		`{"timestamp":"2026-07-10T00:00:00Z","type":"turn_context","payload":{"model":"gpt-5.6-sol"}}` + "\n" +
+			`{"timestamp":"2026-07-10T00:01:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":272000,"cached_input_tokens":270000,"output_tokens":100,"total_tokens":272100},"last_token_usage":{"input_tokens":272000,"cached_input_tokens":270000,"output_tokens":100,"total_tokens":272100}}}}` + "\n" +
+			`{"timestamp":"2026-07-10T00:02:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":544001,"cached_input_tokens":540000,"output_tokens":200,"total_tokens":544201},"last_token_usage":{"input_tokens":272001,"cached_input_tokens":270000,"output_tokens":100,"total_tokens":272101}}}}` + "\n",
+	)
+	fixture.appendChunk(t, content)
+	processor, _ := NewProcessor(database, fixture.store, "")
+	if err := processor.Process(context.Background(), fixture.jobs[0]); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := database.Query(`
+		SELECT billing_variant, normalized_total_tokens
+		FROM session_usage_components
+		WHERE session_id = $1 AND valid_to IS NULL
+		ORDER BY occurred_at`, fixture.sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	wantVariants := []string{"unknown", "long_context"}
+	wantTotals := []int64{272100, 272101}
+	index := 0
+	for rows.Next() {
+		var variant string
+		var total int64
+		if err := rows.Scan(&variant, &total); err != nil {
+			t.Fatal(err)
+		}
+		if index >= len(wantVariants) || variant != wantVariants[index] || total != wantTotals[index] {
+			t.Fatalf("row[%d] variant=%s total=%d", index, variant, total)
+		}
+		index++
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if index != len(wantVariants) {
+		t.Fatalf("rows=%d want=%d", index, len(wantVariants))
+	}
+}
+
+func TestProcessorDailyUsagePreservesOrganizationHistoryIntegration(t *testing.T) {
+	database := openUsageIntegrationDatabase(t)
+	fixture := newUsageFixture(t, database, 990031, "usage-codex-org-history", "codex")
+	defer fixture.cleanup(t)
+
+	teamBefore := "10000000-0000-4000-8000-000000000001"
+	teamAfter := "10000000-0000-4000-8000-000000000002"
+	departmentBefore := "20000000-0000-4000-8000-000000000001"
+	departmentAfter := "20000000-0000-4000-8000-000000000002"
+	if _, err := database.Exec(`DELETE FROM team_department_memberships WHERE team_id IN ($1, $2)`, teamBefore, teamAfter); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if _, err := database.Exec(`DELETE FROM team_department_memberships WHERE team_id IN ($1, $2)`, teamBefore, teamAfter); err != nil {
+			t.Errorf("cleanup team department memberships: %v", err)
+		}
+	}()
+	if _, err := database.Exec(`
+		INSERT INTO user_team_memberships(user_id, team_id, effective_from, effective_to, source)
+		VALUES ($1, $2, '2026-07-10T00:00:00Z', '2026-07-10T01:30:00Z', 'test'),
+		       ($1, $3, '2026-07-10T01:30:00Z', NULL, 'test')`,
+		fixture.userID, teamBefore, teamAfter); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`
+		INSERT INTO team_department_memberships(team_id, department_id, effective_from, source)
+		VALUES ($1, $2, '2026-07-10T00:00:00Z', 'test'),
+		       ($3, $4, '2026-07-10T00:00:00Z', 'test')`,
+		teamBefore, departmentBefore, teamAfter, departmentAfter); err != nil {
+		t.Fatal(err)
+	}
+	content := []byte(
+		`{"timestamp":"2026-07-10T00:59:00Z","type":"turn_context","payload":{"model":"gpt-test"}}` + "\n" +
+			`{"timestamp":"2026-07-10T01:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20,"reasoning_output_tokens":5,"total_tokens":120}}}}` + "\n" +
+			`{"timestamp":"2026-07-10T02:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":180,"cached_input_tokens":50,"output_tokens":40,"reasoning_output_tokens":10,"total_tokens":220}}}}` + "\n",
+	)
+	fixture.appendChunk(t, content)
+	processor, _ := NewProcessor(database, fixture.store, "")
+	if err := processor.Process(context.Background(), fixture.jobs[0]); err != nil {
+		t.Fatal(err)
+	}
+	var rows, total, teams, departments int64
+	if err := database.QueryRow(`
+		SELECT COUNT(*), COALESCE(SUM(total_tokens), 0),
+			COUNT(DISTINCT team_id_snapshot), COUNT(DISTINCT department_id_snapshot)
+		FROM session_daily_usage
+		WHERE session_id = $1 AND valid_to IS NULL`, fixture.sessionID).Scan(
+		&rows, &total, &teams, &departments,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 2 || total != 220 || teams != 2 || departments != 2 {
+		t.Fatalf("rows=%d total=%d teams=%d departments=%d", rows, total, teams, departments)
+	}
+}
+
 func TestProcessorConflictDoesNotActivateIntegration(t *testing.T) {
 	database := openUsageIntegrationDatabase(t)
 	fixture := newUsageFixture(t, database, 990023, "usage-claude-conflict", "claude-code")

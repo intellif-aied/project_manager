@@ -58,6 +58,7 @@ type prepareSessionRequest struct {
 	SessionRef       string                 `json:"session_ref"`
 	AgentType        string                 `json:"agent_type"`
 	ParentSessionRef string                 `json:"parent_session_ref,omitempty"`
+	Summary          string                 `json:"summary,omitempty"`
 	StartedAt        *time.Time             `json:"started_at,omitempty"`
 	LastActivityAt   *time.Time             `json:"last_activity_at,omitempty"`
 	CWD              string                 `json:"cwd,omitempty"`
@@ -247,7 +248,7 @@ func prepareSessionSource(
 			ClientVersion: Version,
 			Sessions: []prepareSessionRequest{{
 				SessionRef: session.SessionRef, AgentType: normalizedAgentType(session.AgentType),
-				ParentSessionRef: parentSessionRef, StartedAt: timePointer(session.StartedAt),
+				ParentSessionRef: parentSessionRef, Summary: session.Summary, StartedAt: timePointer(session.StartedAt),
 				LastActivityAt: timePointer(session.LastActiveAt()), CWD: session.Cwd,
 				ProjectName: sessionProjectDisplay(session),
 				Sources: []prepareSourceRequest{{

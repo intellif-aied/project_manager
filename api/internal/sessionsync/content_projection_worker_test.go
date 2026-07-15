@@ -13,6 +13,7 @@ type fakeContentJobQueue struct {
 	completed    []string
 	failed       []string
 	retryDelays  []time.Duration
+	preserved    []bool
 }
 
 func (q *fakeContentJobQueue) Heartbeat(_ context.Context, _, _ string, _ time.Time, _ time.Duration) (bool, error) {
@@ -29,9 +30,10 @@ func (q *fakeContentJobQueue) Complete(_ context.Context, jobID, _ string, _ tim
 	return true, nil
 }
 
-func (q *fakeContentJobQueue) Fail(_ context.Context, jobID, _ string, _ time.Time, retry time.Duration, _ string) (bool, error) {
+func (q *fakeContentJobQueue) Fail(_ context.Context, jobID, _ string, _ time.Time, retry time.Duration, preserveAttempt bool, _ string) (bool, error) {
 	q.failed = append(q.failed, jobID)
 	q.retryDelays = append(q.retryDelays, retry)
+	q.preserved = append(q.preserved, preserveAttempt)
 	return true, nil
 }
 
@@ -61,8 +63,9 @@ func TestContentProjectionWorkerOnlyClaimsContentJobsAndHandlesStale(t *testing.
 	if len(queue.claimedTypes) != 2 || queue.claimedTypes[0] != JobIndexContentChunk || queue.claimedTypes[1] != JobRebuildContentRevision {
 		t.Fatalf("claimed types=%v", queue.claimedTypes)
 	}
-	if len(queue.completed) != 2 || len(queue.failed) != 1 || queue.failed[0] != "later" || queue.retryDelays[0] != 2*time.Second {
-		t.Fatalf("completed=%v failed=%v delays=%v", queue.completed, queue.failed, queue.retryDelays)
+	if len(queue.completed) != 2 || len(queue.failed) != 1 || queue.failed[0] != "later" ||
+		queue.retryDelays[0] != 2*time.Second || !queue.preserved[0] {
+		t.Fatalf("completed=%v failed=%v delays=%v preserved=%v", queue.completed, queue.failed, queue.retryDelays, queue.preserved)
 	}
 }
 

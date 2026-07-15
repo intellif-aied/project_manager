@@ -1597,6 +1597,7 @@ export function AIAssetsPage() {
       />
 
       <Modal
+        className="ai-assets-skill-modal"
         title={viewingSkill ? `${viewingSkill.name || viewingSkill.slug} / SKILL.md` : "SKILL.md"}
         open={Boolean(viewingSkill)}
         width={860}

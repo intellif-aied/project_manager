@@ -5303,6 +5303,7 @@ function TaskEditModal({
 
   return (
     <Modal
+      className="requirements-task-modal"
       title={`编辑任务 · ${task.title}`}
       open={open}
       width={520}

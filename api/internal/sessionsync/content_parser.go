@@ -112,7 +112,12 @@ func projectContentLine(
 		return ProjectedContentEvent{}, false
 	}
 	eventType, summary := eventTypeAndSummary(envelope)
+	eventType = sanitizeProjectionText(eventType)
 	if eventType == "" {
+		return ProjectedContentEvent{}, false
+	}
+	payload, err := sanitizeProjectionJSON(trimmed)
+	if err != nil {
 		return ProjectedContentEvent{}, false
 	}
 	sum := sha256.Sum256(rawLine)
@@ -121,11 +126,61 @@ func projectContentLine(
 		SourceEndCursor:   endCursor,
 		OccurredAt:        occurredAt,
 		EventType:         eventType,
-		Summary:           truncateProjectionText(summary, 500),
-		Excerpt:           truncateProjectionText(summary, 2000),
-		Payload:           append(json.RawMessage(nil), trimmed...),
+		Summary:           truncateProjectionText(sanitizeProjectionText(summary), 500),
+		Excerpt:           truncateProjectionText(sanitizeProjectionText(summary), 2000),
+		Payload:           payload,
 		ContentSHA256:     hex.EncodeToString(sum[:]),
 	}, true
+}
+
+func sanitizeProjectionJSON(raw json.RawMessage) (json.RawMessage, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, err
+	}
+	sanitized, err := sanitizeProjectionJSONValue(value)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(sanitized)
+}
+
+func sanitizeProjectionJSONValue(value any) (any, error) {
+	switch typed := value.(type) {
+	case string:
+		return sanitizeProjectionText(typed), nil
+	case []any:
+		for index, item := range typed {
+			sanitized, err := sanitizeProjectionJSONValue(item)
+			if err != nil {
+				return nil, err
+			}
+			typed[index] = sanitized
+		}
+		return typed, nil
+	case map[string]any:
+		sanitizedMap := make(map[string]any, len(typed))
+		for key, item := range typed {
+			sanitizedKey := sanitizeProjectionText(key)
+			if _, exists := sanitizedMap[sanitizedKey]; exists {
+				return nil, errors.New("content projection JSON keys collide after sanitization")
+			}
+			sanitized, err := sanitizeProjectionJSONValue(item)
+			if err != nil {
+				return nil, err
+			}
+			sanitizedMap[sanitizedKey] = sanitized
+		}
+		return sanitizedMap, nil
+	default:
+		return value, nil
+	}
+}
+
+func sanitizeProjectionText(value string) string {
+	return strings.ReplaceAll(value, "\x00", "\uFFFD")
 }
 
 func eventTime(value string, fallback *time.Time) (time.Time, bool) {

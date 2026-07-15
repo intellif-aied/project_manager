@@ -3279,6 +3279,7 @@ function TaskProgressEditModal({
 
   return (
     <Modal
+      className="console-task-progress-modal"
       title="修改任务进展"
       open={open}
       width={560}

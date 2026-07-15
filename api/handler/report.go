@@ -1534,6 +1534,15 @@ func (h *ReportHandler) GetDepartmentReportSources(w http.ResponseWriter, r *htt
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "access denied"})
 		return
 	}
+	departmentID, err := h.resolveReportDepartmentID(
+		u,
+		r.URL.Query().Get("department_id"),
+		r.URL.Query().Get("director_user_id"),
+	)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 
 	date := r.URL.Query().Get("date")
 	if date == "" {
@@ -1551,7 +1560,8 @@ func (h *ReportHandler) GetDepartmentReportSources(w http.ResponseWriter, r *htt
 			AND tr.status IS NOT NULL
 			AND NULLIF(TRIM(COALESCE(NULLIF(tr.submitted_content, ''), tr.content, '')), '') IS NOT NULL
 		LEFT JOIN users u ON u.id = tr.leader_id
-		ORDER BY t.name`, date)
+		WHERE t.department_id = $2
+		ORDER BY t.name`, date, departmentID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -1598,7 +1608,7 @@ func (h *ReportHandler) GetDepartmentReportSources(w http.ResponseWriter, r *htt
 	writeJSON(w, http.StatusOK, sources)
 }
 
-func (h *ReportHandler) resolveReportDepartmentID(u *model.User, requested string) (string, error) {
+func (h *ReportHandler) resolveReportDepartmentID(u *model.User, requestedDepartmentID, requestedDirectorUserID string) (string, error) {
 	var departmentID string
 	if u.Role == "director" {
 		err := h.db.QueryRow(`SELECT id::text FROM departments WHERE director_user_id = $1`, u.ID).Scan(&departmentID)
@@ -1607,10 +1617,18 @@ func (h *ReportHandler) resolveReportDepartmentID(u *model.User, requested strin
 		}
 		return departmentID, err
 	}
-	if strings.TrimSpace(requested) == "" {
-		return "", fmt.Errorf("director_user_id is required")
+	if requestedDepartmentID = strings.TrimSpace(requestedDepartmentID); requestedDepartmentID != "" {
+		err := h.db.QueryRow(`SELECT id::text FROM departments WHERE id::text = $1`, requestedDepartmentID).Scan(&departmentID)
+		if err == sql.ErrNoRows {
+			return "", fmt.Errorf("department not found")
+		}
+		return departmentID, err
 	}
-	err := h.db.QueryRow(`SELECT id::text FROM departments WHERE director_user_id = $1`, requested).Scan(&departmentID)
+	requestedDirectorUserID = strings.TrimSpace(requestedDirectorUserID)
+	if requestedDirectorUserID == "" {
+		return "", fmt.Errorf("department_id is required")
+	}
+	err := h.db.QueryRow(`SELECT id::text FROM departments WHERE director_user_id = $1`, requestedDirectorUserID).Scan(&departmentID)
 	if err == sql.ErrNoRows {
 		return "", fmt.Errorf("department not found")
 	}
@@ -1623,7 +1641,7 @@ func (h *ReportHandler) GetDepartmentReportToday(w http.ResponseWriter, r *http.
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "access denied"})
 		return
 	}
-	departmentID, err := h.resolveReportDepartmentID(u, r.URL.Query().Get("director_user_id"))
+	departmentID, err := h.resolveReportDepartmentID(u, r.URL.Query().Get("department_id"), r.URL.Query().Get("director_user_id"))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -1656,6 +1674,7 @@ func (h *ReportHandler) SaveDepartmentReportToday(w http.ResponseWriter, r *http
 		return
 	}
 	var req struct {
+		DepartmentID   string  `json:"department_id,omitempty"`
 		DirectorUserID string  `json:"director_user_id,omitempty"`
 		ReportDate     string  `json:"report_date"`
 		Content        string  `json:"content"`
@@ -1670,7 +1689,7 @@ func (h *ReportHandler) SaveDepartmentReportToday(w http.ResponseWriter, r *http
 	if strings.TrimSpace(reportDate) == "" {
 		reportDate = biztime.Today()
 	}
-	departmentID, err := h.resolveReportDepartmentID(u, req.DirectorUserID)
+	departmentID, err := h.resolveReportDepartmentID(u, req.DepartmentID, req.DirectorUserID)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -1728,7 +1747,7 @@ func (h *ReportHandler) GetDepartmentReport(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "access denied"})
 		return
 	}
-	departmentID, err := h.resolveReportDepartmentID(u, r.URL.Query().Get("director_user_id"))
+	departmentID, err := h.resolveReportDepartmentID(u, r.URL.Query().Get("department_id"), r.URL.Query().Get("director_user_id"))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -1757,7 +1776,7 @@ func (h *ReportHandler) UpdateDepartmentReport(w http.ResponseWriter, r *http.Re
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
 		return
 	}
-	departmentID, err := h.resolveReportDepartmentID(u, r.URL.Query().Get("director_user_id"))
+	departmentID, err := h.resolveReportDepartmentID(u, r.URL.Query().Get("department_id"), r.URL.Query().Get("director_user_id"))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -1916,7 +1935,7 @@ func (h *ReportHandler) ListDepartmentReports(w http.ResponseWriter, r *http.Req
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "access denied"})
 		return
 	}
-	departmentID, err := h.resolveReportDepartmentID(u, r.URL.Query().Get("director_user_id"))
+	departmentID, err := h.resolveReportDepartmentID(u, r.URL.Query().Get("department_id"), r.URL.Query().Get("director_user_id"))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -2221,7 +2240,7 @@ func (h *ReportHandler) GetDepartmentWeeklyReportSources(w http.ResponseWriter, 
 	if !ok {
 		return
 	}
-	departmentID, err := h.resolveReportDepartmentID(u, r.URL.Query().Get("director_user_id"))
+	departmentID, err := h.resolveReportDepartmentID(u, r.URL.Query().Get("department_id"), r.URL.Query().Get("director_user_id"))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -2244,7 +2263,7 @@ func (h *ReportHandler) GetDepartmentWeeklyReportCurrent(w http.ResponseWriter, 
 	if !ok {
 		return
 	}
-	departmentID, err := h.resolveReportDepartmentID(u, r.URL.Query().Get("director_user_id"))
+	departmentID, err := h.resolveReportDepartmentID(u, r.URL.Query().Get("department_id"), r.URL.Query().Get("director_user_id"))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -2264,6 +2283,7 @@ func (h *ReportHandler) SaveDepartmentWeeklyReportCurrent(w http.ResponseWriter,
 		return
 	}
 	var req struct {
+		DepartmentID   string `json:"department_id,omitempty"`
 		DirectorUserID string `json:"director_user_id,omitempty"`
 		WeekStart      string `json:"week_start"`
 		Content        string `json:"content"`
@@ -2277,7 +2297,7 @@ func (h *ReportHandler) SaveDepartmentWeeklyReportCurrent(w http.ResponseWriter,
 	if !ok {
 		return
 	}
-	departmentID, err := h.resolveReportDepartmentID(u, req.DirectorUserID)
+	departmentID, err := h.resolveReportDepartmentID(u, req.DepartmentID, req.DirectorUserID)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -2336,7 +2356,7 @@ func (h *ReportHandler) UpdateDepartmentWeeklyReport(w http.ResponseWriter, r *h
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
 		return
 	}
-	departmentID, err := h.resolveReportDepartmentID(u, r.URL.Query().Get("director_user_id"))
+	departmentID, err := h.resolveReportDepartmentID(u, r.URL.Query().Get("department_id"), r.URL.Query().Get("director_user_id"))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -2377,7 +2397,7 @@ func (h *ReportHandler) ListDepartmentWeeklyReports(w http.ResponseWriter, r *ht
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "access denied"})
 		return
 	}
-	departmentID, err := h.resolveReportDepartmentID(u, r.URL.Query().Get("director_user_id"))
+	departmentID, err := h.resolveReportDepartmentID(u, r.URL.Query().Get("department_id"), r.URL.Query().Get("director_user_id"))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return

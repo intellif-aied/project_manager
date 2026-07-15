@@ -15,6 +15,8 @@ import (
 
 const MaxUsageLineBytes = 8 << 20
 
+const CodexLongContextInputThreshold int64 = 272000
+
 var (
 	ErrUsageLineTooLarge = errors.New("usage parser line exceeds limit")
 	ErrIncompleteLine    = errors.New("usage parser chunk ends with an incomplete JSONL line")
@@ -36,6 +38,7 @@ type TokenCounters struct {
 	OutputTokens        int64 `json:"output_tokens"`
 	ReasoningTokens     int64 `json:"reasoning_output_tokens"`
 	TotalTokens         int64 `json:"total_tokens"`
+	RequestInputTokens  int64 `json:"request_input_tokens,omitempty"`
 }
 
 type ParseState struct {
@@ -225,6 +228,7 @@ func parseClaudeLine(
 
 type codexTokenInfo struct {
 	Total json.RawMessage `json:"total_token_usage"`
+	Last  json.RawMessage `json:"last_token_usage"`
 }
 
 type codexTokenCounters struct {
@@ -277,6 +281,12 @@ func parseCodexLine(
 		OutputTokens: *total.OutputTokens, ReasoningTokens: optionalInt64(total.ReasoningTokens),
 		TotalTokens: *total.TotalTokens,
 	}
+	if len(info.Last) > 0 {
+		var last codexTokenCounters
+		if json.Unmarshal(info.Last, &last) == nil && last.InputTokens != nil && *last.InputTokens >= 0 {
+			counters.RequestInputTokens = *last.InputTokens
+		}
+	}
 	if countersHaveNegative(counters) || counters.CachedInputTokens > counters.InputTokens {
 		return UsageRecord{}, lineUnknownUsage
 	}
@@ -298,6 +308,9 @@ func parseCodexLine(
 	occurredAt, err := time.Parse(time.RFC3339Nano, envelope.Timestamp)
 	if err != nil {
 		return UsageRecord{}, lineUnknownUsage
+	}
+	if delta.InputTokens == 0 && delta.CachedInputTokens == 0 && delta.OutputTokens == 0 && delta.TotalTokens == 0 {
+		return UsageRecord{}, lineIgnored
 	}
 	rawUsage := compactJSON(info.Total)
 	lineHash := hashBytes(rawLine)
@@ -331,12 +344,13 @@ func subtractCounters(current, previous TokenCounters) TokenCounters {
 		OutputTokens:        current.OutputTokens - previous.OutputTokens,
 		ReasoningTokens:     current.ReasoningTokens - previous.ReasoningTokens,
 		TotalTokens:         current.TotalTokens - previous.TotalTokens,
+		RequestInputTokens:  current.RequestInputTokens,
 	}
 }
 
 func countersHaveNegative(counters TokenCounters) bool {
 	return counters.InputTokens < 0 || counters.CachedInputTokens < 0 || counters.CacheCreationTokens < 0 ||
-		counters.OutputTokens < 0 || counters.ReasoningTokens < 0 || counters.TotalTokens < 0
+		counters.OutputTokens < 0 || counters.ReasoningTokens < 0 || counters.TotalTokens < 0 || counters.RequestInputTokens < 0
 }
 
 func optionalInt64(value *int64) int64 {

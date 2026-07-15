@@ -4,7 +4,7 @@ import { defineConfig, loadEnv } from "vite";
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
-  const hmrHost = env.VITE_DEV_HMR_HOST ?? "192.168.28.25";
+  const hmrHost = env.VITE_DEV_HMR_HOST;
   const apiTarget = env.VITE_DEV_API_TARGET ?? "http://127.0.0.1:18090";
   const devPort = Number(env.VITE_DEV_PORT ?? 5173);
 
@@ -26,9 +26,7 @@ export default defineConfig(({ mode }) => {
       port: devPort,
       strictPort: true,
       allowedHosts: true,
-      hmr: {
-        host: hmrHost
-      },
+      hmr: hmrHost ? { host: hmrHost } : true,
       proxy: {
         "/api/v1": {
           target: apiTarget,

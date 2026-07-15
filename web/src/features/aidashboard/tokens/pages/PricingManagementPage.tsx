@@ -541,6 +541,7 @@ export function PricingManagementPage() {
       />
 
       <Modal
+        className="pricing-management-modal"
         title={editingBook ? "编辑价格手册" : "新建价格手册"}
         open={bookOpen}
         onCancel={() => setBookOpen(false)}
@@ -570,6 +571,7 @@ export function PricingManagementPage() {
       </Modal>
 
       <Modal
+        className="pricing-management-modal"
         title="新增模型映射"
         open={aliasOpen}
         onCancel={() => setAliasOpen(false)}
@@ -603,6 +605,7 @@ export function PricingManagementPage() {
       </Modal>
 
       <Modal
+        className="pricing-management-modal"
         title={correctingPrice ? "修正模型价格" : "新增模型价格"}
         open={priceOpen}
         onCancel={() => setPriceOpen(false)}
@@ -703,6 +706,7 @@ export function PricingManagementPage() {
       </Modal>
 
       <Modal
+        className="pricing-management-modal"
         title={correctingRate ? "修正汇率" : "新增汇率"}
         open={rateOpen}
         onCancel={() => setRateOpen(false)}
@@ -751,6 +755,7 @@ export function PricingManagementPage() {
       </Modal>
 
       <Modal
+        className="pricing-management-modal"
         title="成本重算"
         open={recalculateOpen}
         onCancel={() => setRecalculateOpen(false)}
