@@ -167,6 +167,12 @@ excluded_models:
   # provider + raw_model is exact. Re-run inventory after Ledger backfill and
   # stop publication if a pair is absent from both this list and aliases.
   - provider: "codex"
+    raw_model: "unknown"
+    reason: "Legacy source events do not contain a model identity; keep Token statistics but do not estimate cost."
+  - provider: "claude_code"
+    raw_model: "unknown"
+    reason: "Legacy source events do not contain a model identity; keep Token statistics but do not estimate cost."
+  - provider: "codex"
     raw_model: "gpt-5.3-codex-spark"
     reason: "Research preview has no final API-equivalent price. Do not map to gpt-5.3-codex."
   - provider: "codex"
