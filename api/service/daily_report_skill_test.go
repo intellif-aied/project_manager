@@ -17,10 +17,8 @@ func TestReportSkillMarkdownUsesDeterministicDisplayContext(t *testing.T) {
 		"total_members is roster size only",
 		"A submitted team report proves only that the team report exists",
 		"2/2 team reports submitted must not be rewritten as all department members active",
-		"selected_session_slice_keys, when non-empty, are the explicit source selection",
-		"selected sessions are the mandatory primary source",
-		"The report period controls where the report is saved",
-		"include every returned selected slice in the report's work summary",
+		"report_source_selection_id snapshot is the authoritative Session source",
+		"Read every page through has_more=false",
 	}
 	for _, expected := range required {
 		if !strings.Contains(markdown, expected) {
@@ -29,5 +27,8 @@ func TestReportSkillMarkdownUsesDeterministicDisplayContext(t *testing.T) {
 	}
 	if strings.Contains(markdown, `"report_kind": "weekly", "date_range": date_range`) {
 		t.Fatal("weekly inventory instructions must not use date_range")
+	}
+	if strings.Contains(markdown, "selected_session_slice_keys") || strings.Contains(markdown, "legacy") {
+		t.Fatal("default report skill must not contain the legacy Session source path")
 	}
 }
