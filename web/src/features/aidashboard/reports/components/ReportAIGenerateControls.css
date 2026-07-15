@@ -269,44 +269,6 @@
   -webkit-line-clamp: 2;
 }
 
-.report-ai-source-ranges {
-  display: grid;
-  gap: 8px;
-  min-width: 0;
-  padding: 2px 0;
-}
-
-.report-ai-source-ranges > .ant-picker {
-  width: min(100%, 360px);
-}
-
-.report-ai-source-ranges__list {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-
-.report-ai-source-ranges__list > span {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-width: 0;
-  padding: 3px 8px;
-  border-radius: 4px;
-  color: #475569;
-  background: #f8fafc;
-  font-size: 12px;
-  gap: 8px;
-}
-
-.report-ai-source-ranges__list .ant-btn {
-  flex: 0 0 auto;
-  height: 24px;
-  padding-inline: 4px;
-  color: #b42318;
-  font-size: 12px;
-}
-
 .report-ai-settings-panel .ant-table-wrapper,
 .report-ai-settings-panel .ant-spin-nested-loading,
 .report-ai-settings-panel .ant-spin-container,
