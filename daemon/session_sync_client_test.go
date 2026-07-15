@@ -124,6 +124,60 @@ func TestIncrementalUploadFallsBackOnlyForExplicitDisabledCode(t *testing.T) {
 	}
 }
 
+func TestIncrementalUploadFinalizesSnapshotWhenSourceGrowsDuringUpload(t *testing.T) {
+	initial := []byte("{\"type\":\"user\",\"sessionId\":\"growing\",\"timestamp\":\"2026-07-15T01:00:00Z\"}\n")
+	appended := []byte("{\"type\":\"assistant\",\"sessionId\":\"growing\",\"timestamp\":\"2026-07-15T01:01:00Z\"}\n")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, "growing.jsonl")
+	if err := os.WriteFile(path, initial, 0600); err != nil {
+		t.Fatal(err)
+	}
+	serverState := &fakeSessionSyncServer{generationID: "22222222-2222-4222-8222-222222222222"}
+	serverState.afterFirstAccepted = func() {
+		file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer file.Close()
+		if _, err := file.Write(appended); err != nil {
+			t.Error(err)
+		}
+	}
+	server := httptest.NewServer(http.HandlerFunc(serverState.serveHTTP))
+	defer server.Close()
+	session := &SessionInfo{SessionRef: "growing", AgentType: "codex", FilePath: path}
+	cfg := &Config{APIURL: server.URL, Token: "test-token"}
+
+	results, err := uploadSessionGroupIncremental(cfg, []sessionWithFile{{info: session, filePath: path}}, session.SessionRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].UploadedChunks != 1 {
+		t.Fatalf("first results=%+v", results)
+	}
+	serverState.mu.Lock()
+	if serverState.finalizeRequests != 1 || string(serverState.content) != string(initial) {
+		serverState.mu.Unlock()
+		t.Fatalf("first snapshot finalize=%d content=%d", serverState.finalizeRequests, len(serverState.content))
+	}
+	serverState.mu.Unlock()
+
+	results, err = uploadSessionGroupIncremental(cfg, []sessionWithFile{{info: session, filePath: path}}, session.SessionRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].UploadedChunks != 1 {
+		t.Fatalf("second results=%+v", results)
+	}
+	serverState.mu.Lock()
+	defer serverState.mu.Unlock()
+	if serverState.finalizeRequests != 2 || string(serverState.content) != string(append(initial, appended...)) {
+		t.Fatalf("second snapshot finalize=%d content=%d", serverState.finalizeRequests, len(serverState.content))
+	}
+}
+
 type fakeSessionSyncServer struct {
 	mu                     sync.Mutex
 	generationID           string
@@ -134,6 +188,7 @@ type fakeSessionSyncServer struct {
 	finalizeRequests       int
 	prepareSummary         string
 	failFirstChunkResponse bool
+	afterFirstAccepted     func()
 }
 
 func (s *fakeSessionSyncServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
@@ -197,6 +252,9 @@ func (s *fakeSessionSyncServer) serveHTTP(w http.ResponseWriter, r *http.Request
 		if chunk.StartCursor == int64(len(s.content)) && chunk.EndCursor == chunk.StartCursor+int64(len(chunkContent)) && chunk.ContentSHA256 == hashTestBytes(chunkContent) {
 			s.content = append(s.content, chunkContent...)
 			s.acceptedChunks++
+			if s.acceptedChunks == 1 && s.afterFirstAccepted != nil {
+				s.afterFirstAccepted()
+			}
 		} else if chunk.EndCursor <= int64(len(s.content)) && chunk.ContentSHA256 == hashTestBytes(chunkContent) {
 			responseStatus = "duplicate"
 		} else {
