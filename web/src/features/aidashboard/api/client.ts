@@ -445,6 +445,7 @@ export const fetchTodayReport = (reportDate?: string) =>
     api.get<DailyReport>("/reports/today", reportDate ? { report_date: reportDate } : undefined)
   );
 export const fetchReport = (id: string) => unwrap(api.get<DailyReport>(`/reports/${id}`));
+export const deleteReport = (id: string) => unwrap(api.delete<void>(`/reports/${id}`));
 export const updateReport = (
   id: string,
   data: {
@@ -518,6 +519,8 @@ export const saveTeamReportCurrent = (data: {
 export const fetchTeamReports = (params?: Record<string, string>) =>
   unwrap(api.get<PaginatedTeamReports>("/reports/team", params));
 export const fetchTeamReport = (id: string) => unwrap(api.get<TeamReport>(`/reports/team/${id}`));
+export const deleteTeamReport = (id: string) =>
+  unwrap(api.delete<void>(`/reports/team/${id}`));
 export const updateTeamReport = (
   id: string,
   data: { content?: string; next_day_plan?: string; feishu_doc_url?: string }
@@ -586,9 +589,19 @@ export const updateDepartmentReport = (
       data
     )
   );
+export const deleteDepartmentReport = (id: string, departmentId?: string) =>
+  unwrap(
+    api.delete<void>(
+      departmentId
+        ? `/reports/department/${id}?department_id=${encodeURIComponent(departmentId)}`
+        : `/reports/department/${id}`
+    )
+  );
 
 export const fetchPersonalWeeklyReports = (params?: Record<string, string>) =>
   unwrap(api.get<PaginatedPersonalWeeklyReports>("/reports/weekly/mine", params));
+export const deletePersonalWeeklyReport = (id: string) =>
+  unwrap(api.delete<void>(`/reports/weekly/mine/${id}`));
 export const fetchPersonalWeeklyReportSources = (weekStart: string) =>
   unwrap(
     api.get<PersonalWeeklyReportSources>("/reports/weekly/mine/sources", { week_start: weekStart })
@@ -670,6 +683,8 @@ export const submitTeamWeeklyReport = (id: string) =>
   unwrap(api.post<TeamWeeklyReport>(`/reports/team/weekly/${id}/submit`));
 export const fetchTeamWeeklyReports = (params?: Record<string, string>) =>
   unwrap(api.get<TeamWeeklyReport[]>("/reports/team/weekly", params));
+export const deleteTeamWeeklyReport = (id: string) =>
+  unwrap(api.delete<void>(`/reports/team/weekly/${id}`));
 
 export const fetchDepartmentWeeklyReportSources = (weekStart: string, departmentId?: string) =>
   unwrap(
@@ -719,6 +734,14 @@ export const updateDepartmentWeeklyReport = (
 ) => unwrap(api.put<DepartmentWeeklyReport>(`/reports/department/weekly/${id}`, data));
 export const fetchDepartmentWeeklyReports = (params?: Record<string, string>) =>
   unwrap(api.get<DepartmentWeeklyReport[]>("/reports/department/weekly", params));
+export const deleteDepartmentWeeklyReport = (id: string, departmentId?: string) =>
+  unwrap(
+    api.delete<void>(
+      departmentId
+        ? `/reports/department/weekly/${id}?department_id=${encodeURIComponent(departmentId)}`
+        : `/reports/department/weekly/${id}`
+    )
+  );
 
 // ───────────────────────── Managed AI assets ─────────────────────────
 

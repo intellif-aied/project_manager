@@ -1324,6 +1324,9 @@ func (h *RequirementHandler) normalizeRequirementResponsibleUserIDs(rawIDs []str
 		seen[value] = struct{}{}
 		values = append(values, value)
 	}
+	if len(values) == 0 {
+		return nil, fmt.Errorf("responsible_user_ids is required")
+	}
 	return values, nil
 }
 

@@ -19,6 +19,7 @@ import {
 import {
   CalendarOutlined,
   CopyOutlined,
+  DeleteOutlined,
   DownOutlined,
   EditOutlined,
   UpOutlined,
@@ -28,6 +29,9 @@ import { useEffect, useState, type ReactNode } from "react";
 import dayjs from "dayjs";
 
 import {
+  deleteDepartmentWeeklyReport,
+  deletePersonalWeeklyReport,
+  deleteTeamWeeklyReport,
   fetchDepartmentWeeklyReportCurrentOrNull,
   fetchDepartmentWeeklyReports,
   fetchDepartments,
@@ -45,6 +49,7 @@ import type {
   DepartmentWeeklyReport,
   PaginatedPersonalWeeklyReports,
   PersonalWeeklyReport,
+  PersonalWeeklyReportListItem,
   ReportSourceInput,
   ReportType,
   TeamWeeklyReport
@@ -712,6 +717,7 @@ function PersonalWeeklyHistory({
 
 export function WeeklyReportsPage() {
   const { user } = useAuth();
+  const { message, modal } = App.useApp();
   const queryClient = useQueryClient();
   const [roleTab, setRoleTab] = useState<"mine" | "member" | "team" | "department">("mine");
   const [memberWeekStart, setMemberWeekStart] = useState(() => weekStartOf(dayjs()));
@@ -734,6 +740,43 @@ export function WeeklyReportsPage() {
   const effectiveDepartmentID = canSelectDepartment
     ? selectedDepartmentID ?? departmentsQuery.data?.[0]?.id
     : undefined;
+
+  const deleteMutation = useMutation({
+    mutationFn: ({
+      scope,
+      id,
+      departmentId
+    }: {
+      scope: "mine" | "team" | "department";
+      id: string;
+      departmentId?: string;
+    }) => {
+      if (scope === "team") return deleteTeamWeeklyReport(id);
+      if (scope === "department") return deleteDepartmentWeeklyReport(id, departmentId);
+      return deletePersonalWeeklyReport(id);
+    },
+    onSuccess: () => {
+      message.success("周报已删除");
+      void queryClient.invalidateQueries({ queryKey: ["reports", "weekly"] });
+      void queryClient.invalidateQueries({ queryKey: ["reports"] });
+    },
+    onError: (error) => message.error(errorMessage(error))
+  });
+
+  const confirmDelete = (
+    scope: "mine" | "team" | "department",
+    id: string,
+    departmentId?: string
+  ) => {
+    modal.confirm({
+      title: "删除周报？",
+      content: "删除后不可恢复。",
+      okText: "删除",
+      okButtonProps: { danger: true },
+      cancelText: "取消",
+      onOk: () => deleteMutation.mutateAsync({ scope, id, departmentId })
+    });
+  };
 
   if (!user) return null;
 
@@ -826,6 +869,7 @@ export function WeeklyReportsPage() {
           onEdit={(recordWeekStart) =>
             setModalTarget({ scope: "mine", weekStart: recordWeekStart, mode: "edit" })
           }
+          onDelete={(record) => confirmDelete("mine", record.id)}
         />
       ) : null}
       {activeTab === "team" ? (
@@ -833,6 +877,7 @@ export function WeeklyReportsPage() {
           onEdit={(recordWeekStart) =>
             setModalTarget({ scope: "team", weekStart: recordWeekStart, mode: "edit" })
           }
+          onDelete={(record) => confirmDelete("team", record.id)}
         />
       ) : null}
       {activeTab === "member" ? (
@@ -854,6 +899,7 @@ export function WeeklyReportsPage() {
               departmentId: effectiveDepartmentID
             })
           }
+          onDelete={(record) => confirmDelete("department", record.id, effectiveDepartmentID)}
         />
       ) : null}
 
@@ -934,7 +980,9 @@ function InlineWeeklyContentList<TRecord extends InlineWeeklyRecord>({
   getMeta,
   getPreview,
   fetchDetail,
-  onEdit
+  onEdit,
+  onDelete,
+  canDelete = () => true
 }: {
   title: string;
   items: TRecord[];
@@ -947,6 +995,8 @@ function InlineWeeklyContentList<TRecord extends InlineWeeklyRecord>({
   getPreview: (record: TRecord) => string;
   fetchDetail: (record: TRecord) => Promise<{ content: string } | null>;
   onEdit: (record: TRecord) => void;
+  onDelete: (record: TRecord) => void;
+  canDelete?: (record: TRecord) => boolean;
 }) {
   return (
     <Card
@@ -969,6 +1019,8 @@ function InlineWeeklyContentList<TRecord extends InlineWeeklyRecord>({
               preview={getPreview(record)}
               fetchDetail={fetchDetail}
               onEdit={() => onEdit(record)}
+              onDelete={() => onDelete(record)}
+              canDelete={canDelete(record)}
             />
           ))}
         </div>
@@ -990,7 +1042,9 @@ function InlineWeeklyContentItem<TRecord extends InlineWeeklyRecord>({
   meta,
   preview,
   fetchDetail,
-  onEdit
+  onEdit,
+  onDelete,
+  canDelete
 }: {
   record: TRecord;
   getRange: (record: TRecord) => string;
@@ -998,6 +1052,8 @@ function InlineWeeklyContentItem<TRecord extends InlineWeeklyRecord>({
   preview: string;
   fetchDetail: (record: TRecord) => Promise<{ content: string } | null>;
   onEdit: () => void;
+  onDelete: () => void;
+  canDelete: boolean;
 }) {
   const { message } = App.useApp();
   const [expanded, setExpanded] = useState(false);
@@ -1038,6 +1094,11 @@ function InlineWeeklyContentItem<TRecord extends InlineWeeklyRecord>({
           >
             编辑
           </Button>
+          {canDelete ? (
+            <Button type="text" size="small" danger icon={<DeleteOutlined />} onClick={onDelete}>
+              删除
+            </Button>
+          ) : null}
           <Button
             className="member-report-content-item__toggle"
             type="text"
@@ -1083,7 +1144,13 @@ function InlineWeeklyContentItem<TRecord extends InlineWeeklyRecord>({
   );
 }
 
-function PersonalWeeklyRecordsTable({ onEdit }: { onEdit: (weekStart: string) => void }) {
+function PersonalWeeklyRecordsTable({
+  onEdit,
+  onDelete
+}: {
+  onEdit: (weekStart: string) => void;
+  onDelete: (record: PersonalWeeklyReportListItem) => void;
+}) {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const reportsQuery = useQuery<PaginatedPersonalWeeklyReports>({
@@ -1122,6 +1189,7 @@ function PersonalWeeklyRecordsTable({ onEdit }: { onEdit: (weekStart: string) =>
         fetchPersonalWeeklyReportCurrentOrNull(formatWeekDate(record.week_start))
       }
       onEdit={(record) => onEdit(formatWeekDate(record.week_start))}
+      onDelete={onDelete}
     />
   );
 }
@@ -1153,7 +1221,14 @@ function MemberWeeklyTable({
   );
 }
 
-function TeamWeeklyRecordsTable({ onEdit }: { onEdit: (weekStart: string) => void }) {
+function TeamWeeklyRecordsTable({
+  onEdit,
+  onDelete
+}: {
+  onEdit: (weekStart: string) => void;
+  onDelete: (record: TeamWeeklyReport) => void;
+}) {
+  const { user } = useAuth();
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const reportsQuery = useQuery<TeamWeeklyReport[]>({
@@ -1193,6 +1268,8 @@ function TeamWeeklyRecordsTable({ onEdit }: { onEdit: (weekStart: string) => voi
         fetchTeamWeeklyReportCurrentOrNull(formatWeekDate(record.week_start))
       }
       onEdit={(record) => onEdit(formatWeekDate(record.week_start))}
+      onDelete={onDelete}
+      canDelete={(record) => record.leader_id === user?.id}
     />
   );
 }
@@ -1200,11 +1277,13 @@ function TeamWeeklyRecordsTable({ onEdit }: { onEdit: (weekStart: string) => voi
 function DepartmentWeeklyRecordsTable({
   departmentId,
   requireDepartmentId,
-  onEdit
+  onEdit,
+  onDelete
 }: {
   departmentId?: string;
   requireDepartmentId?: boolean;
   onEdit: (weekStart: string) => void;
+  onDelete: (record: DepartmentWeeklyReport) => void;
 }) {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -1246,6 +1325,7 @@ function DepartmentWeeklyRecordsTable({
         fetchDepartmentWeeklyReportCurrentOrNull(formatWeekDate(record.week_start), departmentId)
       }
       onEdit={(record) => onEdit(formatWeekDate(record.week_start))}
+      onDelete={onDelete}
     />
   );
 }

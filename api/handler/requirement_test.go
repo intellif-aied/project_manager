@@ -69,3 +69,23 @@ func TestAppendRequirementRiskFilterDateBasedRisksAddDateArg(t *testing.T) {
 		})
 	}
 }
+
+func TestNormalizeRequirementResponsibleUserIDsRequiresAtLeastOneOwner(t *testing.T) {
+	h := &RequirementHandler{}
+	for _, input := range [][]string{nil, {}, {"", " "}} {
+		if _, err := h.normalizeRequirementResponsibleUserIDs(input); err == nil {
+			t.Fatalf("normalizeRequirementResponsibleUserIDs(%#v) error = nil, want required error", input)
+		}
+	}
+}
+
+func TestNormalizeRequirementResponsibleUserIDsDeduplicatesOwners(t *testing.T) {
+	h := &RequirementHandler{}
+	got, err := h.normalizeRequirementResponsibleUserIDs([]string{"12", " 12 ", "34"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0] != "12" || got[1] != "34" {
+		t.Fatalf("normalized owners = %#v, want [12 34]", got)
+	}
+}

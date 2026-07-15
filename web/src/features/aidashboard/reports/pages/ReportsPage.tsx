@@ -1,6 +1,5 @@
-﻿import { EditOutlined } from "@ant-design/icons";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { CopyOutlined, DownOutlined, UpOutlined } from "@ant-design/icons";
+﻿import { CopyOutlined, DeleteOutlined, DownOutlined, EditOutlined, UpOutlined } from "@ant-design/icons";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Alert,
   App,
@@ -36,7 +35,10 @@ import {
   fetchMyReports,
   fetchReport,
   fetchTeamReport,
-  fetchTeamReports
+  fetchTeamReports,
+  deleteDepartmentReport,
+  deleteReport,
+  deleteTeamReport
 } from "../../api/client";
 import { DailyReportGenerateModal, type DailyGenerateScope } from "../components/DailyReportGenerateModal";
 import { MemberReportBrowser } from "../MemberReportBrowser";
@@ -115,6 +117,7 @@ export function DailyReportsPage() {
 
 export function ReportsPage() {
   const { user } = useAuth();
+  const { message, modal } = App.useApp();
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const [dateRange, setDateRange] = useState<[Dayjs, Dayjs] | null>(null);
@@ -138,6 +141,43 @@ export function ReportsPage() {
   });
   const effectiveDepartmentID = canSelectDepartment
     ? selectedDepartmentID ?? departmentsQuery.data?.[0]?.id : undefined;
+
+  const deleteMutation = useMutation({
+    mutationFn: ({
+      scope,
+      id,
+      departmentId
+    }: {
+      scope: "personal" | "team" | "department";
+      id: string;
+      departmentId?: string;
+    }) => {
+      if (scope === "team") return deleteTeamReport(id);
+      if (scope === "department") return deleteDepartmentReport(id, departmentId);
+      return deleteReport(id);
+    },
+    onSuccess: () => {
+      message.success("日报已删除");
+      void queryClient.invalidateQueries({ queryKey: ["reports", "daily"] });
+      void queryClient.invalidateQueries({ queryKey: ["reports"] });
+    },
+    onError: (error) => message.error(errorMessage(error))
+  });
+
+  const confirmDelete = (
+    scope: "personal" | "team" | "department",
+    id: string,
+    departmentId?: string
+  ) => {
+    modal.confirm({
+      title: "删除日报？",
+      content: "删除后不可恢复。",
+      okText: "删除",
+      okButtonProps: { danger: true },
+      cancelText: "取消",
+      onOk: () => deleteMutation.mutateAsync({ scope, id, departmentId })
+    });
+  };
 
   const options =
     user?.role === "director" || user?.role === "admin"
@@ -235,6 +275,7 @@ export function ReportsPage() {
           onEdit={(record) =>
             setGenerateTarget({ scope: "personal", reportId: record.id, reportDate: record.report_date })
           }
+          onDelete={(record) => confirmDelete("personal", record.id)}
         />
       ) : null}
       {activeTab === "team" ? (
@@ -248,6 +289,7 @@ export function ReportsPage() {
           onEdit={(record) =>
             setGenerateTarget({ scope: "team", reportId: record.id, reportDate: record.report_date })
           }
+          onDelete={(record) => confirmDelete("team", record.id)}
         />
       ) : null}
       {activeTab === "member" ? (
@@ -272,6 +314,7 @@ export function ReportsPage() {
               departmentId: effectiveDepartmentID
             })
           }
+          onDelete={(record) => confirmDelete("department", record.id, effectiveDepartmentID)}
         />
       ) : null}
       {generateTarget ? (
@@ -351,7 +394,8 @@ function InlineDailyContentList<TRecord extends InlineDailyRecord, TDetail exten
   fetchDetail,
   renderStatus,
   renderMeta,
-  onEdit
+  onEdit,
+  onDelete
 }: {
   title: string;
   items: TRecord[];
@@ -363,6 +407,7 @@ function InlineDailyContentList<TRecord extends InlineDailyRecord, TDetail exten
   renderStatus: (record: TRecord) => ReactNode;
   renderMeta: (record: TRecord) => string;
   onEdit: (record: TRecord) => void;
+  onDelete: (record: TRecord) => void;
 }) {
   return (
     <Card className="member-report-content-list reports-inline-content-list" title={title}>
@@ -383,6 +428,7 @@ function InlineDailyContentList<TRecord extends InlineDailyRecord, TDetail exten
               status={renderStatus(record)}
               meta={renderMeta(record)}
               onEdit={() => onEdit(record)}
+              onDelete={() => onDelete(record)}
             />
           ))}
         </div>
@@ -398,7 +444,8 @@ function InlineDailyContentItem<TRecord extends InlineDailyRecord, TDetail exten
   fetchDetail,
   status,
   meta,
-  onEdit
+  onEdit,
+  onDelete
 }: {
   record: TRecord;
   title: string;
@@ -406,6 +453,7 @@ function InlineDailyContentItem<TRecord extends InlineDailyRecord, TDetail exten
   status: ReactNode;
   meta: string;
   onEdit: () => void;
+  onDelete: () => void;
 }) {
   const { message } = App.useApp();
   const [expanded, setExpanded] = useState(false);
@@ -441,6 +489,9 @@ function InlineDailyContentItem<TRecord extends InlineDailyRecord, TDetail exten
           <Button className="member-report-content-item__edit" type="text" size="small" onClick={onEdit}>
             编辑
           </Button>
+          <Button type="text" size="small" danger icon={<DeleteOutlined />} onClick={onDelete}>
+            删除
+          </Button>
           <Button className="member-report-content-item__toggle" type="text" size="small" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>
             {expanded ? <UpOutlined /> : <DownOutlined />}
             {expanded ? "收起" : "展开"}
@@ -472,11 +523,13 @@ function InlineDailyContentItem<TRecord extends InlineDailyRecord, TDetail exten
 function PersonalDailyTable({
   from,
   to,
-  onEdit
+  onEdit,
+  onDelete
 }: {
   from?: string;
   to?: string;
   onEdit: (record: DailyReportListItem) => void;
+  onDelete: (record: DailyReportListItem) => void;
 }) {
   const { page, pageSize, tablePagination } = useTablePagination();
 
@@ -504,6 +557,7 @@ function PersonalDailyTable({
       renderStatus={() => null}
       renderMeta={() => "我的日报"}
       onEdit={onEdit}
+      onDelete={onDelete}
     />
   );
 }
@@ -512,13 +566,16 @@ function TeamDailyTable({
   from,
   to,
   onOpen,
-  onEdit
+  onEdit,
+  onDelete
 }: {
   from?: string;
   to?: string;
   onOpen: (record: TeamReportListItem) => void;
   onEdit: (record: TeamReportListItem) => void;
+  onDelete: (record: TeamReportListItem) => void;
 }) {
+  const { user } = useAuth();
   const { page, pageSize, tablePagination } = useTablePagination();
 
   const reportsQuery = useQuery({
@@ -545,7 +602,7 @@ function TeamDailyTable({
     {
       title: "操作",
       key: "actions",
-      width: 140,
+      width: 190,
       render: (_, record) => (
         <Space size={4}>
           <Button size="small" type="link" onClick={() => onOpen(record)}>
@@ -554,6 +611,11 @@ function TeamDailyTable({
           <Button size="small" type="link" onClick={() => onEdit(record)}>
             编辑
           </Button>
+          {record.leader_id === user?.id ? (
+            <Button size="small" type="link" danger onClick={() => onDelete(record)}>
+              删除
+            </Button>
+          ) : null}
         </Space>
       )
     }
@@ -583,13 +645,15 @@ function DepartmentDailyTable({
   to,
   departmentId,
   requireDepartmentId,
-  onEdit
+  onEdit,
+  onDelete
 }: {
   from?: string;
   to?: string;
   departmentId?: string;
   requireDepartmentId?: boolean;
   onEdit: (record: DepartmentReportListItem) => void;
+  onDelete: (record: DepartmentReportListItem) => void;
 }) {
   const { page, pageSize, tablePagination } = useTablePagination();
 
@@ -619,6 +683,7 @@ function DepartmentDailyTable({
       renderStatus={() => null}
       renderMeta={(record) => `共 ${record.team_count} 个小组 · 已提交 ${record.submitted_team_count} · 未提交 ${record.missing_team_count}`}
       onEdit={onEdit}
+      onDelete={onDelete}
     />
   );
 }

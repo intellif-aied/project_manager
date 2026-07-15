@@ -209,7 +209,7 @@ export function RequirementCreatePage() {
             <section className="aidashboard-form__section">
               <div className="aidashboard-form__section-head">
                 <h2>交付信息</h2>
-                <p>负责人和参与团队都可以稍后补充。</p>
+                <p>指定需求负责人；参与团队可以稍后补充。</p>
               </div>
               <div className="aidashboard-form__grid aidashboard-form__grid--simple">
                 <Form.Item
@@ -229,13 +229,16 @@ export function RequirementCreatePage() {
                 <Form.Item label="截止日期" name="deadline">
                   <DatePicker />
                 </Form.Item>
-                <Form.Item label="负责人" name="responsible_user_ids">
+                <Form.Item
+                  label="负责人"
+                  name="responsible_user_ids"
+                  rules={requiredSelectRules("负责人")}
+                >
                   <Select
-                    allowClear
                     mode="multiple"
                     showSearch
                     loading={assigneesQuery.isLoading}
-                    placeholder={assigneesQuery.isError ? "负责人加载失败" : "可稍后指定"}
+                    placeholder={assigneesQuery.isError ? "负责人加载失败" : "选择负责人"}
                     optionFilterProp="label"
                     maxTagCount="responsive"
                     options={(assigneesQuery.data ?? []).map((assignee) => ({
