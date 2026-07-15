@@ -122,6 +122,8 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 			ctx, tx, u.ID, selectionID, run.ID, args.ReportType, period,
 		); err != nil {
 			switch {
+			case errors.Is(err, reportsource.ErrSourceIncomplete):
+				return nil, mcpErr("REPORT_SOURCE_INCOMPLETE", "report source pages must be read completely before writing the report")
 			case errors.Is(err, reportsource.ErrSourceUnavailable):
 				return nil, mcpErr("CONTENT_CLEARED", "report source content is no longer available")
 			case errors.Is(err, reportsource.ErrSelectionMismatch), errors.Is(err, reportsource.ErrSelectionNotFound):
@@ -429,9 +431,9 @@ func selectForUpdateQuery(reportType, date, ws, we string, target reportTarget) 
 	case reportTypeTeamWeekly:
 		return `SELECT id::text, edited, updated_at FROM team_weekly_reports WHERE team_id = $1 AND week_start = $2 AND week_end = $3 FOR UPDATE`, []any{target.TeamID, ws, we}
 	case reportTypeDepartmentDaily:
-		return `SELECT id::text, edited, updated_at FROM department_reports WHERE department_id=(SELECT id FROM departments WHERE director_user_id::text=$1) AND report_date=$2 FOR UPDATE`, []any{target.DepartmentID, date}
+		return `SELECT id::text, edited, updated_at FROM department_reports WHERE department_id=$1 AND report_date=$2 FOR UPDATE`, []any{target.DepartmentID, date}
 	case reportTypeDepartmentWeekly:
-		return `SELECT id::text, edited, updated_at FROM department_weekly_reports WHERE department_id=(SELECT id FROM departments WHERE director_user_id::text=$1) AND week_start=$2 AND week_end=$3 FOR UPDATE`, []any{target.DepartmentID, ws, we}
+		return `SELECT id::text, edited, updated_at FROM department_weekly_reports WHERE department_id=$1 AND week_start=$2 AND week_end=$3 FOR UPDATE`, []any{target.DepartmentID, ws, we}
 	}
 	return "", nil
 }
@@ -514,7 +516,7 @@ func upsertReportContent(ctx context.Context, tx *sql.Tx, reportType, date, ws, 
 		var reportID string
 		err := tx.QueryRowContext(ctx, `
 			INSERT INTO department_reports (department_id, report_date, content, generation_mode, managed_agent_run_id, agent_id, model_id, edited, status, saved_at)
-			VALUES ((SELECT id FROM departments WHERE director_user_id::text=$1), $2, $3, 'managed_agent', $4, $5, $6, false, 'saved', now())
+			VALUES ($1, $2, $3, 'managed_agent', $4, $5, $6, false, 'saved', now())
 			ON CONFLICT (department_id, report_date) WHERE department_id IS NOT NULL DO UPDATE
 			SET content = EXCLUDED.content,
 			    generation_mode = 'managed_agent',
@@ -531,7 +533,7 @@ func upsertReportContent(ctx context.Context, tx *sql.Tx, reportType, date, ws, 
 		var reportID string
 		err := tx.QueryRowContext(ctx, `
 			INSERT INTO department_weekly_reports (department_id, week_start, week_end, content, generation_mode, managed_agent_run_id, agent_id, model_id, edited)
-			VALUES ((SELECT id FROM departments WHERE director_user_id::text=$1), $2, $3, $4, 'managed_agent', $5, $6, $7, false)
+			VALUES ($1, $2, $3, $4, 'managed_agent', $5, $6, $7, false)
 			ON CONFLICT (department_id, week_start) WHERE department_id IS NOT NULL DO UPDATE
 			SET content = EXCLUDED.content,
 			    week_end = EXCLUDED.week_end,

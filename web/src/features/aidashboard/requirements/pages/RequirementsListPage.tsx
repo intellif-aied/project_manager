@@ -2585,6 +2585,7 @@ export function RequirementDrawer({
   };
 
   const saveQuickOwner = () => {
+    if (draftOwnerIds.length === 0) return;
     quickUpdateMutation.mutate({
       field: "owner",
       data: { responsible_user_ids: draftOwnerIds }
@@ -2685,7 +2686,6 @@ export function RequirementDrawer({
   const ownerQuickEditor = (
     <div className="requirements-quick-edit">
       <Select
-        allowClear
         mode="multiple"
         showSearch
         value={draftOwnerIds}
@@ -2705,6 +2705,7 @@ export function RequirementDrawer({
           loading={
             quickUpdateMutation.isPending && quickUpdateMutation.variables?.field === "owner"
           }
+          disabled={draftOwnerIds.length === 0}
           onClick={saveQuickOwner}
         >
           保存
@@ -3416,13 +3417,16 @@ function RequirementEditModal({
         <Form.Item label="截止日期" name="deadline">
           <DatePicker style={{ width: "100%" }} />
         </Form.Item>
-        <Form.Item label="负责人" name="responsible_user_ids">
+        <Form.Item
+          label="负责人"
+          name="responsible_user_ids"
+          rules={requiredSelectRules("负责人")}
+        >
           <Select
-            allowClear
             mode="multiple"
             showSearch
             loading={assigneesQuery.isLoading}
-            placeholder={assigneesQuery.isError ? "负责人加载失败" : "可稍后指定"}
+            placeholder={assigneesQuery.isError ? "负责人加载失败" : "选择负责人"}
             optionFilterProp="label"
             maxTagCount="responsive"
             options={assigneeOptions}

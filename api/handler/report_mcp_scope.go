@@ -84,13 +84,16 @@ func resolveScope(ctx context.Context, db *sql.DB, u *model.User, in reportScope
 	case "department":
 		// Director: own managed department. Admin: optional department_id.
 		if u.Role == "director" {
-			rs.DepartmentID = u.ID
+			if u.DepartmentID == nil || *u.DepartmentID == "" {
+				return nil, errForbidden
+			}
+			rs.DepartmentID = *u.DepartmentID
 		} else if u.Role == "admin" {
 			if in.DepartmentID != "" {
 				rs.DepartmentID = in.DepartmentID
 			}
 		}
-		ids, err := userIDsForDepartment(ctx, db, u, rs.DepartmentID)
+		ids, err := userIDsForDepartment(ctx, db, rs.DepartmentID)
 		if err != nil {
 			return nil, errMCPInternal
 		}
@@ -206,8 +209,8 @@ func resolveTarget(u *model.User, in reportTarget, reportType string, write bool
 		return t, nil
 	case "department":
 		if t.DepartmentID == "" {
-			if u.Role == "director" {
-				t.DepartmentID = u.ID
+			if u.Role == "director" && u.DepartmentID != nil {
+				t.DepartmentID = *u.DepartmentID
 			} else {
 				return reportTarget{}, errInvalidTarget
 			}
@@ -215,7 +218,7 @@ func resolveTarget(u *model.User, in reportTarget, reportType string, write bool
 		if write {
 			// department_daily / department_weekly: Director writes own department; Admin any.
 			if u.Role == "director" {
-				if t.DepartmentID != u.ID {
+				if u.DepartmentID == nil || t.DepartmentID != *u.DepartmentID {
 					return reportTarget{}, errForbidden
 				}
 			} else if u.Role == "admin" {
@@ -250,9 +253,9 @@ func validateSelfTargetAccess(u *model.User, target reportTarget, reportType str
 		return errForbidden
 	case "department_daily", "department_weekly":
 		if target.DepartmentID == "" {
-			return nil
+			return errForbidden
 		}
-		if u.Role == "director" && target.DepartmentID == u.ID {
+		if u.Role == "director" && u.DepartmentID != nil && target.DepartmentID == *u.DepartmentID {
 			return nil
 		}
 		return errForbidden
@@ -271,7 +274,11 @@ func resolveSelfTarget(u *model.User, reportType string) reportTarget {
 		}
 		return reportTarget{Type: "team", TeamID: teamID}
 	case "department_daily", "department_weekly":
-		return reportTarget{Type: "department", DepartmentID: u.ID}
+		departmentID := ""
+		if u.DepartmentID != nil {
+			departmentID = *u.DepartmentID
+		}
+		return reportTarget{Type: "department", DepartmentID: departmentID}
 	}
 	return reportTarget{Type: "self"}
 }
@@ -299,7 +306,7 @@ func userIDsForTeam(ctx context.Context, db *sql.DB, teamID string) ([]string, e
 	return ids, rows.Err()
 }
 
-func userIDsForDepartment(ctx context.Context, db *sql.DB, u *model.User, departmentID string) ([]string, error) {
+func userIDsForDepartment(ctx context.Context, db *sql.DB, departmentID string) ([]string, error) {
 	if db == nil {
 		return nil, fmt.Errorf("db unavailable")
 	}
@@ -308,7 +315,7 @@ func userIDsForDepartment(ctx context.Context, db *sql.DB, u *model.User, depart
 		FROM users u
 		LEFT JOIN teams t ON t.id = u.team_id
 		JOIN departments d ON d.id = COALESCE(u.department_id, t.department_id)
-		WHERE d.director_user_id::text = $1`, departmentID)
+		WHERE d.id = $1`, departmentID)
 	if err != nil {
 		return nil, err
 	}

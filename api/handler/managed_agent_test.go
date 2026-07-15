@@ -83,13 +83,13 @@ func requireContainsAll(t *testing.T, value string, expected ...string) {
 
 func TestBuildReportRunMessageIncludesSystemParams(t *testing.T) {
 	message := buildReportRunMessage(map[string]string{
-		"report_type":                      "personal_daily",
-		"period_json":                      `{"date":"2026-07-01"}`,
-		"calendar_context_json":            `{"type":"daily","day":{"date":"2026-07-01","weekday":"周三"}}`,
-		"target_json":                      `{"type":"self","user_id":"305"}`,
-		"selected_session_slice_keys_json": `["session-a:2026-06-01"]`,
-		"run_id":                           "run-report",
-		"mcp_url":                          "https://aida.example.com/api/v1/mcp/reports",
+		"report_type":                "personal_daily",
+		"period_json":                `{"date":"2026-07-01"}`,
+		"calendar_context_json":      `{"type":"daily","day":{"date":"2026-07-01","weekday":"周三"}}`,
+		"target_json":                `{"type":"self","user_id":"305"}`,
+		"report_source_selection_id": "selection-report-source",
+		"run_id":                     "run-report",
+		"mcp_url":                    "https://aida.example.com/api/v1/mcp/reports",
 	}, "请重点关注风险", reportMCPCredentialSlot)
 
 	requireContainsAll(t, message,
@@ -100,11 +100,27 @@ func TestBuildReportRunMessageIncludesSystemParams(t *testing.T) {
 		"run_id=run-report",
 		reportMCPCredentialSlot,
 		"请重点关注风险",
-		"必须把 MCP 返回的全部选中 Session 作为报告正文证据",
-		"period 只决定报告归档日期",
+		"report_source_selection_id=selection-report-source",
+		"不可变来源快照",
+		"持续使用 next_cursor 直到 has_more=false",
 	)
 	if strings.Contains(message, "mcp_url=") {
 		t.Fatalf("message should not expose mcp_url: %q", message)
+	}
+}
+
+func TestValidateReportSourceRunInputRejectsOrganizationSourceParameters(t *testing.T) {
+	if got := validateReportSourceRunInput(false, "", []string{"session:2026-07-14"}); got == nil || got.Code != "INVALID_REPORT_SOURCE" {
+		t.Fatalf("organization legacy source validation=%+v", got)
+	}
+	if got := validateReportSourceRunInput(false, "selection-id", nil); got == nil || got.Code != "INVALID_REPORT_SOURCE" {
+		t.Fatalf("organization selection validation=%+v", got)
+	}
+	if got := validateReportSourceRunInput(true, "selection-id", []string{"session:2026-07-14"}); got == nil || got.Code != "AMBIGUOUS_REPORT_SOURCE" {
+		t.Fatalf("ambiguous personal source validation=%+v", got)
+	}
+	if got := validateReportSourceRunInput(true, "selection-id", nil); got != nil {
+		t.Fatalf("valid personal selection rejected=%+v", got)
 	}
 }
 
@@ -129,9 +145,9 @@ func TestDefaultReportAgentInstructionsSeparateRosterFromActivity(t *testing.T) 
 		"成员总数仅表示名册范围",
 		"小组报告已提交仅证明该小组报告存在",
 		"缺少成员级证据时禁止输出活跃人数",
-		"最高优先级 Session 来源指令",
-		"必须把返回的所有选中切片作为报告正文证据",
-		"period 只决定报告归档日期",
+		"report_source_selection_id 调用 get_sessions",
+		"持续翻页直到 has_more=false",
+		"禁止同时传 date_range",
 		"全员参与",
 		"全部在岗",
 	)
@@ -2207,6 +2223,20 @@ func TestDailyReportIntegrationReturnsMCPAndSkill(t *testing.T) {
 	}
 	if len(got.MCP.Tools) != 9 {
 		t.Fatalf("tools = %#v", got.MCP.Tools)
+	}
+}
+
+func TestReportPromptDoesNotExposeResolvedTargetIDs(t *testing.T) {
+	target := reportTarget{Type: "department", DepartmentID: "11111111-1111-4111-8111-111111111111"}
+	values := reportAgentStartPromptValues(
+		"run-1", reportTypeDepartmentDaily, "2026-07-15", "", "", target, nil, "selection-1", "",
+	)
+	if values["target_json"] != `{"type":"department"}` {
+		t.Fatalf("target_json=%q", values["target_json"])
+	}
+	message := fallbackReportRunMessage(reportTypeDepartmentDaily, "2026-07-15", "", "", target)
+	if strings.Contains(message, target.DepartmentID) || strings.Contains(message, "target_department_id") {
+		t.Fatalf("fallback message leaked target id: %s", message)
 	}
 }
 

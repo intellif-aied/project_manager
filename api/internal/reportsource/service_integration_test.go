@@ -32,14 +32,19 @@ func TestReportSourceSelectionLifecycleIntegration(t *testing.T) {
 	ctx := context.Background()
 	userID := int64(990040)
 	otherUserID := int64(990041)
+	_, _ = database.Exec(`DELETE FROM report_source_selections WHERE user_id IN ($1, $2)`, userID, otherUserID)
+	_, _ = database.Exec(`DELETE FROM ai_runs WHERE user_id IN ($1, $2)`, userID, otherUserID)
 	_, _ = database.Exec(`DELETE FROM sessions WHERE user_id IN ($1, $2)`, userID, otherUserID)
 	_, _ = database.Exec(`DELETE FROM users WHERE id IN ($1, $2)`, userID, otherUserID)
 	if _, err := database.Exec(`
-		INSERT INTO users (id, username) VALUES ($1, 'v2-report-source'), ($2, 'v2-report-source-other')`,
+		INSERT INTO users (id, username) VALUES ($1, 'v2-report-source'), ($2, 'v2-report-source-other')
+		ON CONFLICT (id) DO UPDATE SET username = EXCLUDED.username`,
 		userID, otherUserID); err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
+		_, _ = database.Exec(`DELETE FROM report_source_selections WHERE user_id IN ($1, $2)`, userID, otherUserID)
+		_, _ = database.Exec(`DELETE FROM ai_runs WHERE user_id IN ($1, $2)`, userID, otherUserID)
 		_, _ = database.Exec(`DELETE FROM sessions WHERE user_id IN ($1, $2)`, userID, otherUserID)
 		_, _ = database.Exec(`DELETE FROM users WHERE id IN ($1, $2)`, userID, otherUserID)
 	}()
@@ -54,7 +59,7 @@ func TestReportSourceSelectionLifecycleIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if page.Total != 1 || len(page.Items) != 1 || page.Items[0].SessionRef != "report-source-e2e" ||
+	if page.Total != 2 || len(page.Items) != 2 || page.Items[0].SessionRef != "report-source-e2e" ||
 		page.Items[0].ContentIndexStatus != "ready" {
 		t.Fatalf("candidate page=%+v", page)
 	}
@@ -62,15 +67,16 @@ func TestReportSourceSelectionLifecycleIntegration(t *testing.T) {
 	selection, err := service.CreateExplicit(ctx, "990040", "personal_weekly", Period{
 		Start: "2026-07-06", End: "2026-07-12",
 	}, []SourceInput{
-		{SessionRef: "report-source-e2e", AgentType: "codex", ActivityStart: fixture.times[0], ActivityEnd: fixture.times[1]},
-		{SessionRef: "report-source-e2e", AgentType: "codex", ActivityStart: fixture.times[1], ActivityEnd: fixture.times[2]},
+		{SliceKey: fixture.sliceKeys[0]},
+		{SliceKey: fixture.sliceKeys[1]},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if selection.Mode != "explicit" || selection.Status != "prepared" || len(selection.Items) != 1 ||
-		selection.Items[0].StartCursor != 0 || selection.Items[0].EndCursor != 300 ||
-		selection.Items[0].ContentEventCount != 3 {
+	if selection.Mode != "explicit" || selection.Status != "prepared" || len(selection.Items) != 2 ||
+		selection.Items[0].StartCursor != 0 || selection.Items[0].EndCursor != 200 ||
+		selection.Items[1].StartCursor != 200 || selection.Items[1].EndCursor != 300 ||
+		selection.Items[0].ContentEventCount+selection.Items[1].ContentEventCount != 3 {
 		t.Fatalf("selection=%+v", selection)
 	}
 
@@ -104,7 +110,7 @@ func TestReportSourceSelectionLifecycleIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pageOne.SourceMode != "explicit" || pageOne.HasMore || pageOne.ReturnedEvents != 3 || len(pageOne.Items) != 1 {
+	if pageOne.SourceMode != "explicit" || pageOne.HasMore || pageOne.ReturnedEvents != 3 || len(pageOne.Items) != 2 {
 		t.Fatalf("selection content page=%+v", pageOne)
 	}
 	if _, err := json.Marshal(pageOne); err != nil {
@@ -124,7 +130,7 @@ func TestReportSourceSelectionLifecycleIntegration(t *testing.T) {
 	}
 	var snapEnd, snapCount int64
 	if err := database.QueryRow(`
-		SELECT end_cursor, content_event_count FROM report_source_selection_items WHERE selection_id = $1`,
+		SELECT MAX(end_cursor), SUM(content_event_count) FROM report_source_selection_items WHERE selection_id = $1`,
 		selection.ID).Scan(&snapEnd, &snapCount); err != nil {
 		t.Fatal(err)
 	}
@@ -173,8 +179,16 @@ func TestReportSourceSelectionLifecycleIntegration(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	var pagedSliceKey string
+	if err := database.QueryRow(`
+		INSERT INTO session_content_slices (session_id, source_id, generation_id, start_cursor, end_cursor)
+		SELECT $1, source_id, generation_id, 0, 1400
+		FROM session_content_slices WHERE id = $2
+		RETURNING id::text`, fixture.sessionID, fixture.sliceKeys[0]).Scan(&pagedSliceKey); err != nil {
+		t.Fatal(err)
+	}
 	pagedSelection, err := service.CreateExplicit(ctx, "990040", "personal_weekly", selection.Period,
-		[]SourceInput{{SessionRef: "report-source-e2e", AgentType: "codex", ActivityStart: fixture.times[0], ActivityEnd: lastPagedTime}})
+		[]SourceInput{{SliceKey: pagedSliceKey}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,6 +197,7 @@ func TestReportSourceSelectionLifecycleIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertAttachedSelectionValidationError(t, ctx, database, service, pagedAttached.ID, pagedRunID, selection.Period, ErrSourceIncomplete)
 	firstPage, err := service.ReadAttachedSelection(ctx, "990040", pagedAttached.ID, pagedRunID, "personal_weekly", selection.Period, "")
 	if err != nil {
 		t.Fatal(err)
@@ -190,6 +205,7 @@ func TestReportSourceSelectionLifecycleIntegration(t *testing.T) {
 	if !firstPage.HasMore || firstPage.NextCursor == nil || firstPage.ReturnedEvents != 100 || firstPage.Completeness != "partial" {
 		t.Fatalf("first paged read=%+v", firstPage)
 	}
+	assertAttachedSelectionValidationError(t, ctx, database, service, pagedAttached.ID, pagedRunID, selection.Period, ErrSourceIncomplete)
 	retriedFirstPage, err := service.ReadAttachedSelection(ctx, "990040", pagedAttached.ID, pagedRunID, "personal_weekly", selection.Period, "")
 	if err != nil {
 		t.Fatal(err)
@@ -205,6 +221,7 @@ func TestReportSourceSelectionLifecycleIntegration(t *testing.T) {
 	if secondPage.HasMore || secondPage.ReturnedEvents != 5 || secondPage.Completeness != "complete" {
 		t.Fatalf("second paged read=%+v", secondPage)
 	}
+	assertAttachedSelectionValidationError(t, ctx, database, service, pagedAttached.ID, pagedRunID, selection.Period, nil)
 	retriedSecondPage, err := service.ReadAttachedSelection(ctx, "990040", pagedAttached.ID, pagedRunID, "personal_weekly", selection.Period, *firstPage.NextCursor)
 	if err != nil || retriedSecondPage.HasMore || retriedSecondPage.ReturnedEvents != secondPage.ReturnedEvents {
 		t.Fatalf("second page retry changed contents page=%+v err=%v", retriedSecondPage, err)
@@ -253,8 +270,29 @@ func TestReportSourceSelectionLifecycleIntegration(t *testing.T) {
 	}
 
 	if _, err := service.CreateExplicit(ctx, "990041", "personal_daily", Period{Start: "2026-07-10", End: "2026-07-10"},
-		[]SourceInput{{SessionRef: "report-source-e2e", AgentType: "codex", ActivityStart: fixture.times[0], ActivityEnd: fixture.times[2]}}); !errors.Is(err, ErrSourceUnavailable) {
+		[]SourceInput{{SliceKey: fixture.sliceKeys[0]}}); !errors.Is(err, ErrSourceUnavailable) {
 		t.Fatalf("cross-user selection err=%v", err)
+	}
+}
+
+func assertAttachedSelectionValidationError(
+	t *testing.T,
+	ctx context.Context,
+	database *sql.DB,
+	service *Service,
+	selectionID, runID string,
+	period Period,
+	want error,
+) {
+	t.Helper()
+	tx, err := database.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	err = service.ValidateAttachedSelectionTx(ctx, tx, "990040", selectionID, runID, "personal_weekly", period)
+	if !errors.Is(err, want) {
+		t.Fatalf("validation error=%v want=%v", err, want)
 	}
 }
 
@@ -262,6 +300,7 @@ type reportSourceFixture struct {
 	sessionID  string
 	revisionID string
 	chunkID    string
+	sliceKeys  []string
 	times      []time.Time
 }
 
@@ -327,7 +366,18 @@ func insertReportSourceFixture(t *testing.T, database *sql.DB, userID int64) rep
 			t.Fatal(err)
 		}
 	}
-	return reportSourceFixture{sessionID: sessionID, revisionID: revisionID, chunkID: chunkID, times: times}
+	sliceKeys := make([]string, 0, 2)
+	for _, cursors := range [][2]int64{{0, 200}, {200, 300}} {
+		var sliceKey string
+		if err := database.QueryRow(`
+			INSERT INTO session_content_slices (session_id, source_id, generation_id, start_cursor, end_cursor)
+			VALUES ($1, $2, $3, $4, $5) RETURNING id::text`,
+			sessionID, sourceID, generationID, cursors[0], cursors[1]).Scan(&sliceKey); err != nil {
+			t.Fatal(err)
+		}
+		sliceKeys = append(sliceKeys, sliceKey)
+	}
+	return reportSourceFixture{sessionID: sessionID, revisionID: revisionID, chunkID: chunkID, sliceKeys: sliceKeys, times: times}
 }
 
 func hash64(seed string) string {

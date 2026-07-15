@@ -139,8 +139,8 @@ func reportSourceConsistencyIssues(ctx context.Context, db *sql.DB, reportType, 
 	case reportTypeDepartmentDaily:
 		zeroClaim = reportNoPersonalDailyPattern.MatchString(content)
 		table, periodColumn, periodValue = "daily_reports", "report_date", date
-		scopeClause, scopeID, sourceLabel = "(d.director_user_id::text = $2 OR d.id::text = $2)", target.DepartmentID, "个人日报"
-		rosterQuery = `SELECT COUNT(*) FROM users u LEFT JOIN teams t ON t.id = u.team_id JOIN departments d ON d.id = COALESCE(u.department_id, t.department_id) WHERE d.director_user_id::text = $1 OR d.id::text = $1`
+		scopeClause, scopeID, sourceLabel = "d.id = $2", target.DepartmentID, "个人日报"
+		rosterQuery = `SELECT COUNT(*) FROM users u LEFT JOIN teams t ON t.id = u.team_id JOIN departments d ON d.id = COALESCE(u.department_id, t.department_id) WHERE d.id = $1`
 	case reportTypeTeamWeekly:
 		zeroClaim = reportNoPersonalWeeklyPattern.MatchString(content)
 		table, periodColumn, periodValue = "personal_weekly_reports", "week_start", weekStart
@@ -149,8 +149,8 @@ func reportSourceConsistencyIssues(ctx context.Context, db *sql.DB, reportType, 
 	case reportTypeDepartmentWeekly:
 		zeroClaim = reportNoPersonalWeeklyPattern.MatchString(content)
 		table, periodColumn, periodValue = "personal_weekly_reports", "week_start", weekStart
-		scopeClause, scopeID, sourceLabel = "(d.director_user_id::text = $2 OR d.id::text = $2)", target.DepartmentID, "个人周报"
-		rosterQuery = `SELECT COUNT(*) FROM users u LEFT JOIN teams t ON t.id = u.team_id JOIN departments d ON d.id = COALESCE(u.department_id, t.department_id) WHERE d.director_user_id::text = $1 OR d.id::text = $1`
+		scopeClause, scopeID, sourceLabel = "d.id = $2", target.DepartmentID, "个人周报"
+		rosterQuery = `SELECT COUNT(*) FROM users u LEFT JOIN teams t ON t.id = u.team_id JOIN departments d ON d.id = COALESCE(u.department_id, t.department_id) WHERE d.id = $1`
 	default:
 		return nil, nil
 	}

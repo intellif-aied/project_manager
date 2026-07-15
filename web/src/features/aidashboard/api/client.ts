@@ -70,7 +70,6 @@ import type {
   PreviewManagedAgentScheduleResponse,
   RequirementBoardResponseDTO,
   ReportSourceCandidatePage,
-  ReportSourceInput,
   ReportSourceSelection,
   UpsertManagedAgentPayload,
   UpsertManagedAgentSchedulePayload
@@ -445,6 +444,7 @@ export const fetchTodayReport = (reportDate?: string) =>
     api.get<DailyReport>("/reports/today", reportDate ? { report_date: reportDate } : undefined)
   );
 export const fetchReport = (id: string) => unwrap(api.get<DailyReport>(`/reports/${id}`));
+export const deleteReport = (id: string) => unwrap(api.delete<void>(`/reports/${id}`));
 export const updateReport = (
   id: string,
   data: {
@@ -495,6 +495,17 @@ export const fetchTeamReportToday = (reportDate?: string) =>
     api.get<TeamReport>("/reports/team/today", reportDate ? { report_date: reportDate } : undefined)
   );
 export async function fetchTeamReportTodayOrNull(reportDate?: string) {
+  if (reportDate) {
+    const reports = await fetchTeamReports({
+      from: reportDate,
+      to: reportDate,
+      page: "1",
+      page_size: "1"
+    });
+    const report = reports.items[0];
+    return report ? fetchTeamReport(report.id) : null;
+  }
+
   try {
     return await unwrap(
       api.get<TeamReport>(
@@ -518,6 +529,8 @@ export const saveTeamReportCurrent = (data: {
 export const fetchTeamReports = (params?: Record<string, string>) =>
   unwrap(api.get<PaginatedTeamReports>("/reports/team", params));
 export const fetchTeamReport = (id: string) => unwrap(api.get<TeamReport>(`/reports/team/${id}`));
+export const deleteTeamReport = (id: string) =>
+  unwrap(api.delete<void>(`/reports/team/${id}`));
 export const updateTeamReport = (
   id: string,
   data: { content?: string; next_day_plan?: string; feishu_doc_url?: string }
@@ -539,6 +552,18 @@ export const fetchDepartmentReportToday = (reportDate?: string, departmentId?: s
     })
   );
 export async function fetchDepartmentReportTodayOrNull(reportDate?: string, departmentId?: string) {
+  if (reportDate) {
+    const reports = await fetchDepartmentReports({
+      from: reportDate,
+      to: reportDate,
+      page: "1",
+      page_size: "1",
+      ...(departmentId ? { department_id: departmentId } : {})
+    });
+    const report = reports.items[0];
+    return report ? fetchDepartmentReport(report.id, departmentId) : null;
+  }
+
   try {
     return await unwrap(
       api.get<DepartmentReport>(
@@ -586,9 +611,19 @@ export const updateDepartmentReport = (
       data
     )
   );
+export const deleteDepartmentReport = (id: string, departmentId?: string) =>
+  unwrap(
+    api.delete<void>(
+      departmentId
+        ? `/reports/department/${id}?department_id=${encodeURIComponent(departmentId)}`
+        : `/reports/department/${id}`
+    )
+  );
 
 export const fetchPersonalWeeklyReports = (params?: Record<string, string>) =>
   unwrap(api.get<PaginatedPersonalWeeklyReports>("/reports/weekly/mine", params));
+export const deletePersonalWeeklyReport = (id: string) =>
+  unwrap(api.delete<void>(`/reports/weekly/mine/${id}`));
 export const fetchPersonalWeeklyReportSources = (weekStart: string) =>
   unwrap(
     api.get<PersonalWeeklyReportSources>("/reports/weekly/mine/sources", { week_start: weekStart })
@@ -639,20 +674,12 @@ export const fetchTeamWeeklyReportCurrent = (weekStart: string, teamId?: string)
     )
   );
 export async function fetchTeamWeeklyReportCurrentOrNull(weekStart: string, teamId?: string) {
-  try {
-    return await unwrap(
-      api.get<TeamWeeklyReport>(
-        "/reports/team/weekly/current",
-        teamId ? { week_start: weekStart, team_id: teamId } : { week_start: weekStart },
-        { skipErrorHandler: true }
-      )
-    );
-  } catch (error) {
-    if (error instanceof HttpError && error.status === 404) {
-      return null;
-    }
-    throw error;
-  }
+  const reports = await fetchTeamWeeklyReports({
+    from_week: weekStart,
+    to_week: weekStart,
+    ...(teamId ? { team_id: teamId } : {})
+  });
+  return reports[0] ?? null;
 }
 export const saveTeamWeeklyReport = (data: {
   week_start: string;
@@ -670,6 +697,8 @@ export const submitTeamWeeklyReport = (id: string) =>
   unwrap(api.post<TeamWeeklyReport>(`/reports/team/weekly/${id}/submit`));
 export const fetchTeamWeeklyReports = (params?: Record<string, string>) =>
   unwrap(api.get<TeamWeeklyReport[]>("/reports/team/weekly", params));
+export const deleteTeamWeeklyReport = (id: string) =>
+  unwrap(api.delete<void>(`/reports/team/weekly/${id}`));
 
 export const fetchDepartmentWeeklyReportSources = (weekStart: string, departmentId?: string) =>
   unwrap(
@@ -689,23 +718,12 @@ export async function fetchDepartmentWeeklyReportCurrentOrNull(
   weekStart: string,
   departmentId?: string
 ) {
-  try {
-    return await unwrap(
-      api.get<DepartmentWeeklyReport>(
-        "/reports/department/weekly/current",
-        {
-          week_start: weekStart,
-          ...(departmentId ? { department_id: departmentId } : {})
-        },
-        { skipErrorHandler: true }
-      )
-    );
-  } catch (error) {
-    if (error instanceof HttpError && error.status === 404) {
-      return null;
-    }
-    throw error;
-  }
+  const reports = await fetchDepartmentWeeklyReports({
+    from_week: weekStart,
+    to_week: weekStart,
+    ...(departmentId ? { department_id: departmentId } : {})
+  });
+  return reports[0] ?? null;
 }
 export const saveDepartmentWeeklyReportCurrent = (data: {
   department_id?: string;
@@ -719,6 +737,14 @@ export const updateDepartmentWeeklyReport = (
 ) => unwrap(api.put<DepartmentWeeklyReport>(`/reports/department/weekly/${id}`, data));
 export const fetchDepartmentWeeklyReports = (params?: Record<string, string>) =>
   unwrap(api.get<DepartmentWeeklyReport[]>("/reports/department/weekly", params));
+export const deleteDepartmentWeeklyReport = (id: string, departmentId?: string) =>
+  unwrap(
+    api.delete<void>(
+      departmentId
+        ? `/reports/department/weekly/${id}?department_id=${encodeURIComponent(departmentId)}`
+        : `/reports/department/weekly/${id}`
+    )
+  );
 
 // ───────────────────────── Managed AI assets ─────────────────────────
 
@@ -847,7 +873,7 @@ export const fetchReportSourceCapability = () =>
 export const createReportSourceSelection = (payload: {
   report_type: "personal_daily" | "personal_weekly";
   period: { date?: string; week_start?: string; week_end?: string };
-  selected_session_sources: ReportSourceInput[];
+  selected_slice_keys: string[];
 }) => unwrap(api.post<ReportSourceSelection>("/report-source-selections", payload));
 export const fetchManagedAgentRuns = (params?: {
   agent_id?: string;

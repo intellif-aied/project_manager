@@ -646,6 +646,7 @@ export interface ManagedReportAgentRunPayload {
 }
 
 export interface ReportSourceCandidate {
+  slice_key: string;
   session_ref: string;
   agent_type: string;
   summary: string;
@@ -657,6 +658,7 @@ export interface ReportSourceCandidate {
   content_status: "available";
   content_index_status: "ready";
   available_through_at: string;
+  total_tokens: number;
 }
 
 export interface ReportSourceCandidatePage {
@@ -667,10 +669,7 @@ export interface ReportSourceCandidatePage {
 }
 
 export interface ReportSourceInput {
-  session_ref: string;
-  agent_type: string;
-  activity_start_at: string;
-  activity_end_at: string;
+  slice_key: string;
 }
 
 export interface ReportSourceSelection {

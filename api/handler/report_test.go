@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"testing"
 	"time"
 
@@ -13,6 +14,76 @@ import (
 	"github.com/aidashboard/api/model"
 	"github.com/go-chi/chi/v5"
 )
+
+func TestDeleteOwnedReports(t *testing.T) {
+	tests := []struct {
+		name       string
+		table      string
+		user       *model.User
+		deleteFunc func(*ReportHandler, http.ResponseWriter, *http.Request)
+		ownerField string
+		ownerID    string
+	}{
+		{"personal daily", "daily_reports", &model.User{ID: "user-1", Role: "employee"}, (*ReportHandler).DeletePersonalDailyReport, "user_id", "user-1"},
+		{"personal weekly", "personal_weekly_reports", &model.User{ID: "user-1", Role: "employee"}, (*ReportHandler).DeletePersonalWeeklyReport, "user_id", "user-1"},
+		{"team daily", "team_reports", &model.User{ID: "leader-1", Role: "team_leader"}, (*ReportHandler).DeleteTeamDailyReport, "leader_id", "leader-1"},
+		{"team weekly", "team_weekly_reports", &model.User{ID: "leader-1", Role: "team_leader"}, (*ReportHandler).DeleteTeamWeeklyReport, "leader_id", "leader-1"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			query := "DELETE FROM " + test.table + " WHERE id = $1 AND " + test.ownerField + " = $2"
+			mock.ExpectExec(regexp.QuoteMeta(query)).
+				WithArgs(testRequirementID, test.ownerID).
+				WillReturnResult(sqlmock.NewResult(0, 1))
+
+			h := NewReportHandler(db)
+			req := httptest.NewRequest(http.MethodDelete, "/reports/"+testRequirementID, nil)
+			req = requestWithUser(requestWithReportID(req, testRequirementID), test.user)
+			rec := httptest.NewRecorder()
+
+			test.deleteFunc(h, rec, req)
+			if rec.Code != http.StatusNoContent {
+				t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestDeleteDepartmentReportUsesDirectorDepartment(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id::text FROM departments WHERE director_user_id = $1")).
+		WithArgs("director-1").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("department-1"))
+	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM department_reports WHERE id = $1 AND department_id = $2")).
+		WithArgs(testRequirementID, "department-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	h := NewReportHandler(db)
+	req := httptest.NewRequest(http.MethodDelete, "/reports/department/"+testRequirementID, nil)
+	req = requestWithUser(requestWithReportID(req, testRequirementID), &model.User{ID: "director-1", Role: "director"})
+	rec := httptest.NewRecorder()
+	h.DeleteDepartmentDailyReport(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func requestWithUser(req *http.Request, user *model.User) *http.Request {
 	return req.WithContext(context.WithValue(req.Context(), userKey, user))

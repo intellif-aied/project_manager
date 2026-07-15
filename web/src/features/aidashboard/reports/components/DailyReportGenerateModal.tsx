@@ -130,7 +130,10 @@ export function DailyReportGenerateModal({
   });
 
   const personalReportId =
-    scope === "personal" ? (reportId ?? existingPersonalListQuery.data?.items[0]?.id) : undefined;
+    scope === "personal"
+      ? (reportId ??
+        (existingPersonalListQuery.isFetching ? undefined : existingPersonalListQuery.data?.items[0]?.id))
+      : undefined;
   const personalReportQuery = useQuery({
     queryKey: ["reports", "daily", "manage-modal", "personal-report", personalReportId],
     queryFn: () => fetchReport(personalReportId ?? ""),
@@ -171,7 +174,7 @@ export function DailyReportGenerateModal({
 
   const loading =
     (scope === "personal" &&
-      (existingPersonalListQuery.isLoading || personalReportQuery.isLoading)) ||
+      (existingPersonalListQuery.isFetching || personalReportQuery.isLoading)) ||
     (scope === "team" && teamReportQuery.isLoading) ||
     (scope === "department" && departmentReportQuery.isLoading);
 

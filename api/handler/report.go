@@ -2988,6 +2988,90 @@ func uniqueStringsPreserveOrder(values []string) []string {
 	return result
 }
 
+func (h *ReportHandler) DeletePersonalDailyReport(w http.ResponseWriter, r *http.Request) {
+	h.deletePersonalReport(w, r, "daily_reports")
+}
+
+func (h *ReportHandler) DeletePersonalWeeklyReport(w http.ResponseWriter, r *http.Request) {
+	h.deletePersonalReport(w, r, "personal_weekly_reports")
+}
+
+func (h *ReportHandler) deletePersonalReport(w http.ResponseWriter, r *http.Request, table string) {
+	id := chi.URLParam(r, "id")
+	if !validateUUIDParam(w, id, "report_id") {
+		return
+	}
+	u := getUser(r)
+	query := fmt.Sprintf("DELETE FROM %s WHERE id = $1 AND user_id = $2", table)
+	h.executeReportDelete(w, query, id, u.ID)
+}
+
+func (h *ReportHandler) DeleteTeamDailyReport(w http.ResponseWriter, r *http.Request) {
+	h.deleteTeamReport(w, r, "team_reports")
+}
+
+func (h *ReportHandler) DeleteTeamWeeklyReport(w http.ResponseWriter, r *http.Request) {
+	h.deleteTeamReport(w, r, "team_weekly_reports")
+}
+
+func (h *ReportHandler) deleteTeamReport(w http.ResponseWriter, r *http.Request, table string) {
+	id := chi.URLParam(r, "id")
+	if !validateUUIDParam(w, id, "report_id") {
+		return
+	}
+	u := getUser(r)
+	if u.Role != "team_leader" && u.Role != "pm" {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "only report owners can delete team reports"})
+		return
+	}
+	query := fmt.Sprintf("DELETE FROM %s WHERE id = $1 AND leader_id = $2", table)
+	h.executeReportDelete(w, query, id, u.ID)
+}
+
+func (h *ReportHandler) DeleteDepartmentDailyReport(w http.ResponseWriter, r *http.Request) {
+	h.deleteDepartmentReport(w, r, "department_reports")
+}
+
+func (h *ReportHandler) DeleteDepartmentWeeklyReport(w http.ResponseWriter, r *http.Request) {
+	h.deleteDepartmentReport(w, r, "department_weekly_reports")
+}
+
+func (h *ReportHandler) deleteDepartmentReport(w http.ResponseWriter, r *http.Request, table string) {
+	id := chi.URLParam(r, "id")
+	if !validateUUIDParam(w, id, "report_id") {
+		return
+	}
+	u := getUser(r)
+	if u.Role != "director" && u.Role != "admin" {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "only report owners can delete department reports"})
+		return
+	}
+	departmentID, err := h.resolveReportDepartmentID(
+		u,
+		r.URL.Query().Get("department_id"),
+		r.URL.Query().Get("director_user_id"),
+	)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	query := fmt.Sprintf("DELETE FROM %s WHERE id = $1 AND department_id = $2", table)
+	h.executeReportDelete(w, query, id, departmentID)
+}
+
+func (h *ReportHandler) executeReportDelete(w http.ResponseWriter, query string, args ...any) {
+	result, err := h.db.Exec(query, args...)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if rows, _ := result.RowsAffected(); rows == 0 {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func orderDraftSessions(sessions []model.ReportDraftSession, orderedIDs []string) []model.ReportDraftSession {
 	byID := make(map[string]model.ReportDraftSession, len(sessions))
 	for _, session := range sessions {

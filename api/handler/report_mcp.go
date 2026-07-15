@@ -233,3 +233,37 @@ func mcpTextResult(value any) map[string]any {
 		},
 	}
 }
+
+// mcpModelTextResult removes persistence identifiers from read-tool payloads.
+// Report generation needs names, content, dates and stable session references;
+// database IDs are authorization details and must not become report material.
+func mcpModelTextResult(value any) map[string]any {
+	payload, _ := json.Marshal(value)
+	var decoded any
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		return mcpTextResult(value)
+	}
+	return mcpTextResult(redactReportMCPIdentifiers(decoded))
+}
+
+func redactReportMCPIdentifiers(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		clean := make(map[string]any, len(typed))
+		for key, item := range typed {
+			if key == "id" || strings.HasSuffix(key, "_id") || strings.HasSuffix(key, "_ids") {
+				continue
+			}
+			clean[key] = redactReportMCPIdentifiers(item)
+		}
+		return clean
+	case []any:
+		clean := make([]any, len(typed))
+		for index, item := range typed {
+			clean[index] = redactReportMCPIdentifiers(item)
+		}
+		return clean
+	default:
+		return value
+	}
+}

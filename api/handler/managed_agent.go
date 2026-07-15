@@ -1247,11 +1247,10 @@ func defaultReportAgentInstructions(credentialSlot string) string {
 		defaultManagedAgentMarker,
 		"AIDA_REPORT_DEPLOYMENT:{{aida_deployment}}",
 		"你是 Aida 报告生成 Agent。根据 report_type 生成个人、小组或部门的日报/周报。",
-		"运行参数由 Aida 后端注入，包含 run_id、report_type、period、calendar_context、target，个人报告还可能包含 report_source_selection_id 或迁移期旧 selected_session_slice_keys。不要要求用户提供 session ids、urls、token 或 credential。",
+		"运行参数由 Aida 后端注入，包含 run_id、report_type、period、calendar_context、target，个人报告还包含 report_source_selection_id。不要要求用户提供 session ids、urls、token 或 credential。",
 		"Aida Report MCP 已通过 " + credentialSlot + " 凭据槽配置当前用户 Authorization。调用已绑定的 MCP tools，不要手工拼接管理员 token。",
 		"必须使用当前用户身份调用 Aida Report MCP，并尊重 MCP 返回的权限边界和缺失来源事实。",
-		"先调用 get_existing_report 获取已有内容，再根据 report_type 调用原子工具取数。若 report_source_selection_id 非空，个人报告必须使用 run_id、report_type、period 和该 selection 调用 get_sessions，持续翻页直到 has_more=false，且禁止同时传 date_range 或旧 slice keys。否则迁移期继续按 selected_session_slice_keys/date_range 旧契约执行。",
-		"迁移期若 selected_session_slice_keys 非空，它仍是个人报告的最高优先级 Session 来源指令，必须原样传入 get_sessions，必须把返回的所有选中切片作为报告正文证据；period 只决定报告归档日期。",
+		"先调用 get_existing_report 获取已有内容，再根据 report_type 调用原子工具取数。个人报告必须使用 run_id、report_type、period 和 report_source_selection_id 调用 get_sessions，持续翻页直到 has_more=false，且禁止同时传 date_range。",
 		"个人周报优先汇总已保存的个人日报；小组日报/周报优先汇总已保存的成员日报/周报；部门日报/周报优先汇总已保存的小组日报/周报。session、task、requirement 只作为补充证据，不要把 token 或 session 数量统计作为小组/部门报告主体。",
 		"成员总数仅表示名册范围，不代表出勤、参与或有工作产出。小组报告已提交仅证明该小组报告存在，不代表小组全员有活动。部门报告必须保留下级报告中的缺失成员和无报告事实；缺少成员级证据时禁止输出活跃人数，也禁止使用“全员参与”“全部在岗”“所有成员完成”“全部有记录”等结论。",
 		"日期对应的星期只能复制 calendar_context，禁止自行推算。报告正文不得展示 user_id、team_id、department_id、report_id、session_id、run_id、任何 ID/编号标签或 UUID。部门名称只能使用 MCP 返回的 department_name；为空时统一写“部门”，禁止猜测。",
@@ -1268,9 +1267,7 @@ func defaultReportAgentStartPromptTemplate(credentialSlot string) string {
 		"calendar_context={{ calendar_context_json }}",
 		"target={{ target_json }}",
 		"report_source_selection_id={{ report_source_selection_id }}",
-		"selected_session_slice_keys={{ selected_session_slice_keys_json }}",
-		"当 report_source_selection_id 非空时，必须使用该快照和 run_id 分页读完 get_sessions，禁止另传 date_range 或 selected_session_slice_keys。",
-		"当 selected_session_slice_keys 非空时，必须使用 get_sessions 返回的全部选中切片生成正文；这些切片允许跨出 period，禁止因日期不在报告周期内而忽略。",
+		"当 report_source_selection_id 非空时，必须使用该快照和 run_id 分页读完 get_sessions，禁止另传 date_range。",
 		"run_id={{ run_id }}",
 		"当前用户凭据已通过 " + credentialSlot + " credential slot 注入；优先调用已绑定的 Aida Report MCP tools 获取上下文并回写生成结果，不要手工拼接 Authorization。",
 	}, "\n")
@@ -1909,7 +1906,9 @@ func reportAgentStartPromptValues(runID, reportType, date, weekStart, weekEnd st
 		selectedSessionSliceKeys = []string{}
 	}
 	periodJSON, _ := json.Marshal(reportPeriodInputRef(reportType, date, weekStart, weekEnd))
-	targetJSON, _ := json.Marshal(target)
+	// The MCP resolves the concrete target from the authenticated run. Prompting
+	// with database IDs invites the model to copy them into user-facing reports.
+	targetJSON, _ := json.Marshal(reportTarget{Type: target.Type})
 	selectedKeysJSON, _ := json.Marshal(selectedSessionSliceKeys)
 	values := map[string]string{
 		"run_id":                           runID,
@@ -1970,19 +1969,13 @@ func buildReportRunMessage(startPromptValues map[string]string, message string, 
 		"period=" + strings.TrimSpace(startPromptValues["period_json"]),
 		"calendar_context=" + strings.TrimSpace(startPromptValues["calendar_context_json"]),
 		"target=" + strings.TrimSpace(startPromptValues["target_json"]),
-		"selected_session_slice_keys=" + strings.TrimSpace(startPromptValues["selected_session_slice_keys_json"]),
 		"report_source_selection_id=" + strings.TrimSpace(startPromptValues["report_source_selection_id"]),
 		"run_id=" + strings.TrimSpace(startPromptValues["run_id"]),
 		"当前用户凭据已通过 " + strings.TrimSpace(credentialSlot) + " credential slot 注入；优先调用已绑定的 Aida Report MCP tools 获取上下文并回写生成结果，不要手工拼接 Authorization。",
 	}
-	if selected := strings.TrimSpace(startPromptValues["selected_session_slice_keys_json"]); selected != "" && selected != "[]" && selected != "null" {
-		parts = append(parts,
-			"强制来源规则：selected_session_slice_keys 非空，必须调用 get_sessions 并原样传入这些 key。必须把 MCP 返回的全部选中 Session 作为报告正文证据，即使它们位于 period/date_range 之外；period 只决定报告归档日期。禁止因跨周期而忽略选中 Session，也禁止声称这些 Session 不可用。",
-		)
-	}
 	if selectionID := strings.TrimSpace(startPromptValues["report_source_selection_id"]); selectionID != "" {
 		parts = append(parts,
-			"强制来源规则：report_source_selection_id 是本次个人报告的不可变来源快照。必须携带 run_id、report_type、period 和该 ID 调用 get_sessions，持续使用 next_cursor 直到 has_more=false；禁止同时传 date_range 或 selected_session_slice_keys。",
+			"强制来源规则：report_source_selection_id 是本次个人报告的不可变来源快照。必须携带 run_id、report_type、period 和该 ID 调用 get_sessions，持续使用 next_cursor 直到 has_more=false；禁止同时传 date_range。",
 		)
 	}
 	message = strings.TrimSpace(message)
@@ -2008,15 +2001,6 @@ func fallbackReportRunMessage(reportType, date, weekStart, weekEnd string, targe
 	}
 	if target.Type != "" {
 		parts = append(parts, "target_type="+target.Type)
-	}
-	if target.UserID != "" {
-		parts = append(parts, "target_user_id="+target.UserID)
-	}
-	if target.TeamID != "" {
-		parts = append(parts, "target_team_id="+target.TeamID)
-	}
-	if target.DepartmentID != "" {
-		parts = append(parts, "target_department_id="+target.DepartmentID)
 	}
 	return strings.Join(parts, "\n")
 }
@@ -2526,15 +2510,9 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 	}
 	reportSourceSelectionID := strings.TrimSpace(req.ReportSourceSelectionID)
 	isPersonalReport := req.ReportType == reportTypePersonalDaily || req.ReportType == reportTypePersonalWeekly
-	if reportSourceSelectionID != "" && len(selectedSessionSliceKeys) > 0 {
+	if sourceErr := validateReportSourceRunInput(isPersonalReport, reportSourceSelectionID, selectedSessionSliceKeys); sourceErr != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"code": "AMBIGUOUS_REPORT_SOURCE", "error": "report_source_selection_id and selected_session_slice_keys are mutually exclusive",
-		})
-		return
-	}
-	if reportSourceSelectionID != "" && !isPersonalReport {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"code": "INVALID_REPORT_SOURCE", "error": "report source selection is only valid for personal reports",
+			"code": sourceErr.Code, "error": sourceErr.Message,
 		})
 		return
 	}
@@ -2644,6 +2622,27 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 		return
 	}
 	writeJSON(w, http.StatusOK, run)
+}
+
+type reportSourceRunInputError struct {
+	Code    string
+	Message string
+}
+
+func validateReportSourceRunInput(isPersonalReport bool, selectionID string, sliceKeys []string) *reportSourceRunInputError {
+	if strings.TrimSpace(selectionID) != "" && len(sliceKeys) > 0 {
+		return &reportSourceRunInputError{
+			Code:    "AMBIGUOUS_REPORT_SOURCE",
+			Message: "report_source_selection_id and selected_session_slice_keys are mutually exclusive",
+		}
+	}
+	if !isPersonalReport && (strings.TrimSpace(selectionID) != "" || len(sliceKeys) > 0) {
+		return &reportSourceRunInputError{
+			Code:    "INVALID_REPORT_SOURCE",
+			Message: "report source selection is only valid for personal reports",
+		}
+	}
+	return nil
 }
 
 func (h *ManagedAgentHandler) GetAgentRun(w http.ResponseWriter, r *http.Request) {

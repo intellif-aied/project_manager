@@ -65,7 +65,7 @@ func TestSyncServicePrepareAcceptFinalizeIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if finalized.Status != "active" || finalized.ExpectedCursor != int64(len(content)) {
+	if finalized.Status != "active" || finalized.ExpectedCursor != int64(len(content)) || !finalized.SliceCreated || finalized.SliceKey == "" {
 		t.Fatalf("finalized=%+v", finalized)
 	}
 
@@ -79,7 +79,7 @@ func TestSyncServicePrepareAcceptFinalizeIntegration(t *testing.T) {
 		t.Fatalf("preparedAgain=%+v", preparedAgain)
 	}
 
-	var sourceCount, activeCount, stagingCount, chunkCount, jobCount, revisionCount int
+	var sourceCount, activeCount, stagingCount, chunkCount, jobCount, revisionCount, sliceCount int
 	err = database.QueryRow(`
 		SELECT
 			(SELECT COUNT(*) FROM session_sources src JOIN sessions s ON s.id = src.session_id WHERE s.user_id = $1),
@@ -87,13 +87,14 @@ func TestSyncServicePrepareAcceptFinalizeIntegration(t *testing.T) {
 			(SELECT COUNT(*) FROM session_source_generations g JOIN session_sources src ON src.id = g.source_id JOIN sessions s ON s.id = src.session_id WHERE s.user_id = $1 AND g.status = 'staging'),
 			(SELECT COUNT(*) FROM session_upload_chunks c JOIN session_source_generations g ON g.id = c.generation_id JOIN session_sources src ON src.id = g.source_id JOIN sessions s ON s.id = src.session_id WHERE s.user_id = $1),
 			(SELECT COUNT(*) FROM session_processing_jobs j JOIN sessions s ON s.id = j.session_id WHERE s.user_id = $1),
-			(SELECT COUNT(*) FROM session_content_projection_revisions p JOIN session_source_generations g ON g.id = p.generation_id JOIN session_sources src ON src.id = g.source_id JOIN sessions s ON s.id = src.session_id WHERE s.user_id = $1)`, userID,
-	).Scan(&sourceCount, &activeCount, &stagingCount, &chunkCount, &jobCount, &revisionCount)
+			(SELECT COUNT(*) FROM session_content_projection_revisions p JOIN session_source_generations g ON g.id = p.generation_id JOIN session_sources src ON src.id = g.source_id JOIN sessions s ON s.id = src.session_id WHERE s.user_id = $1),
+			(SELECT COUNT(*) FROM session_content_slices sl JOIN sessions s ON s.id = sl.session_id WHERE s.user_id = $1)`, userID,
+	).Scan(&sourceCount, &activeCount, &stagingCount, &chunkCount, &jobCount, &revisionCount, &sliceCount)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sourceCount != 1 || activeCount != 1 || stagingCount != 0 || chunkCount != 1 || jobCount != 4 || revisionCount != 1 {
-		t.Fatalf("sources=%d active=%d staging=%d chunks=%d jobs=%d revisions=%d", sourceCount, activeCount, stagingCount, chunkCount, jobCount, revisionCount)
+	if sourceCount != 1 || activeCount != 1 || stagingCount != 0 || chunkCount != 1 || jobCount != 4 || revisionCount != 1 || sliceCount != 1 {
+		t.Fatalf("sources=%d active=%d staging=%d chunks=%d jobs=%d revisions=%d slices=%d", sourceCount, activeCount, stagingCount, chunkCount, jobCount, revisionCount, sliceCount)
 	}
 	var summary string
 	if err := database.QueryRow(`SELECT summary FROM sessions WHERE user_id = $1 AND session_ref = $2`, userID, request.SessionRef).Scan(&summary); err != nil {
@@ -133,6 +134,42 @@ func TestSyncServicePrepareAcceptFinalizeIntegration(t *testing.T) {
 	combined := append(append([]byte(nil), content...), secondContent...)
 	if finalCursor != int64(len(combined)) || finalHash != HashBytes(combined) {
 		t.Fatalf("finalCursor=%d finalHash=%s", finalCursor, finalHash)
+	}
+	secondFinalized, err := service.Finalize(context.Background(), fmt.Sprint(userID), prepared[0].GenerationID, FinalizeRequest{
+		DeclaredEndCursor: finalCursor, PrefixCheckpointHash: finalHash,
+		PrefixCheckpointAlgorithmVersion: PrefixCheckpointAlgorithm,
+	})
+	if err != nil || !secondFinalized.SliceCreated || secondFinalized.SliceKey == finalized.SliceKey {
+		t.Fatalf("secondFinalized=%+v err=%v", secondFinalized, err)
+	}
+	repeatedFinalized, err := service.Finalize(context.Background(), fmt.Sprint(userID), prepared[0].GenerationID, FinalizeRequest{
+		DeclaredEndCursor: finalCursor, PrefixCheckpointHash: finalHash,
+		PrefixCheckpointAlgorithmVersion: PrefixCheckpointAlgorithm,
+	})
+	if err != nil || repeatedFinalized.SliceCreated || repeatedFinalized.SliceKey != secondFinalized.SliceKey {
+		t.Fatalf("repeatedFinalized=%+v err=%v", repeatedFinalized, err)
+	}
+	rows, err := database.Query(`
+		SELECT start_cursor, end_cursor FROM session_content_slices
+		WHERE generation_id = $1 ORDER BY start_cursor`, prepared[0].GenerationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	wantRanges := [][2]int64{{0, int64(len(content))}, {int64(len(content)), int64(len(combined))}}
+	index := 0
+	for rows.Next() {
+		var start, end int64
+		if err := rows.Scan(&start, &end); err != nil {
+			t.Fatal(err)
+		}
+		if index >= len(wantRanges) || start != wantRanges[index][0] || end != wantRanges[index][1] {
+			t.Fatalf("slice %d=%d-%d want=%v", index, start, end, wantRanges)
+		}
+		index++
+	}
+	if index != len(wantRanges) {
+		t.Fatalf("slice count=%d want=%d", index, len(wantRanges))
 	}
 
 	request.Sources[0].SourceKey = "different-source-key"

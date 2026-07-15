@@ -19,6 +19,7 @@ var (
 	ErrSourceUnavailable   = errors.New("report source content is unavailable")
 	ErrSelectionConflict   = errors.New("report source selection cannot be attached")
 	ErrSelectionMismatch   = errors.New("report source selection does not match the managed report run")
+	ErrSourceIncomplete    = errors.New("report source selection has not been read completely")
 	ErrContentItemTooLarge = errors.New("report source content item exceeds the page limit")
 )
 
@@ -44,10 +45,7 @@ type Period struct {
 }
 
 type SourceInput struct {
-	SessionRef    string    `json:"session_ref"`
-	AgentType     string    `json:"agent_type"`
-	ActivityStart time.Time `json:"activity_start_at"`
-	ActivityEnd   time.Time `json:"activity_end_at"`
+	SliceKey string `json:"slice_key"`
 }
 
 type SelectionItem struct {
@@ -79,6 +77,7 @@ type Selection struct {
 }
 
 type Candidate struct {
+	SliceKey           string    `json:"slice_key"`
 	SessionRef         string    `json:"session_ref"`
 	AgentType          string    `json:"agent_type"`
 	Summary            string    `json:"summary"`
@@ -90,6 +89,7 @@ type Candidate struct {
 	ContentStatus      string    `json:"content_status"`
 	ContentIndexStatus string    `json:"content_index_status"`
 	AvailableThroughAt time.Time `json:"available_through_at"`
+	TotalTokens        int64     `json:"total_tokens"`
 }
 
 type CandidateQuery struct {
@@ -157,31 +157,62 @@ func (s *Service) ListCandidates(ctx context.Context, userID string, query Candi
 		to = query.ActivityTo.UTC()
 	}
 	const candidateCTE = `
-		WITH candidates AS (
-			SELECT s.id, s.session_ref, s.agent_type, COALESCE(s.summary, '') AS summary,
-				s.last_activity_at, COALESCE(s.cwd, '') AS cwd, COALESCE(s.models, '{}') AS models,
-				s.content_status, MIN(e.occurred_at) AS activity_start_at,
-				MAX(e.occurred_at) AS activity_end_at, MAX(e.occurred_at) AS available_through_at
-			FROM sessions s
-			JOIN session_sources src ON src.session_id = s.id
+		WITH all_candidates AS (
+			SELECT sl.id::text AS slice_key, s.session_ref, s.agent_type,
+				COALESCE((
+					SELECT NULLIF(btrim(e2.summary), '')
+					FROM session_content_events e2
+					WHERE e2.content_projection_revision_id = rev.id
+						AND e2.source_start_cursor >= sl.start_cursor
+						AND e2.source_end_cursor <= sl.end_cursor
+						AND NULLIF(btrim(e2.summary), '') IS NOT NULL
+						AND e2.event_type NOT IN ('response_item.custom_tool_call', 'response_item.function_call')
+					ORDER BY CASE e2.event_type
+						WHEN 'event_msg.user_message' THEN 0
+						WHEN 'event_msg.agent_message' THEN 1
+						WHEN 'response_item.message' THEN 2
+						ELSE 3
+					END, e2.source_start_cursor, e2.id
+					LIMIT 1
+				), 'Session 增量内容（' || COUNT(*)::text || ' 条记录）') AS summary,
+				MAX(e.occurred_at) AS last_activity_at,
+				MIN(e.occurred_at) AS activity_start_at,
+				MAX(e.occurred_at) AS activity_end_at,
+				COALESCE(s.cwd, '') AS cwd, COALESCE(s.models, '{}') AS models,
+				s.content_status, MAX(e.occurred_at) AS available_through_at,
+				COALESCE((
+					SELECT SUM(uc.normalized_total_tokens)
+					FROM session_usage_components uc
+					JOIN session_upload_chunks ch ON ch.id = uc.chunk_id
+					WHERE uc.valid_to IS NULL AND ch.generation_id = sl.generation_id
+						AND ch.start_cursor >= sl.start_cursor AND ch.end_cursor <= sl.end_cursor
+				), 0) AS total_tokens
+			FROM session_content_slices sl
+			JOIN sessions s ON s.id = sl.session_id
+			JOIN session_sources src ON src.id = sl.source_id AND src.session_id = s.id
 			JOIN session_content_projection_revisions rev
-				ON rev.id = src.active_content_projection_revision_id AND rev.status = 'active'
+				ON rev.id = src.active_content_projection_revision_id
+				AND rev.generation_id = sl.generation_id AND rev.status = 'active'
 			JOIN session_content_events e
 				ON e.content_projection_revision_id = rev.id
-				AND e.source_end_cursor <= rev.content_indexed_cursor
+				AND e.source_start_cursor >= sl.start_cursor
+				AND e.source_end_cursor <= sl.end_cursor
 			WHERE s.user_id = $1 AND s.content_status = 'available'
-				AND ($2 = '%%' OR lower(s.session_ref) LIKE $2 OR lower(COALESCE(s.summary, '')) LIKE $2)
-				AND ($3::timestamptz IS NULL OR e.occurred_at >= $3)
-				AND ($4::timestamptz IS NULL OR e.occurred_at <= $4)
-			GROUP BY s.id
+				AND rev.content_indexed_cursor >= sl.end_cursor
+			GROUP BY sl.id, s.id, rev.id
+		), candidates AS (
+			SELECT * FROM all_candidates
+			WHERE ($2 = '%%' OR lower(session_ref) LIKE $2 OR lower(summary) LIKE $2)
+				AND ($3::timestamptz IS NULL OR activity_end_at >= $3)
+				AND ($4::timestamptz IS NULL OR activity_start_at <= $4)
 		)`
 	var total int
 	if err := s.db.QueryRowContext(ctx, candidateCTE+` SELECT COUNT(*) FROM candidates`, userID, search, from, to).Scan(&total); err != nil {
 		return CandidatePage{}, err
 	}
 	rows, err := s.db.QueryContext(ctx, candidateCTE+`
-		SELECT session_ref, agent_type, summary, last_activity_at, activity_start_at,
-			activity_end_at, cwd, models, content_status, available_through_at
+		SELECT slice_key, session_ref, agent_type, summary, last_activity_at, activity_start_at,
+			activity_end_at, cwd, models, content_status, available_through_at, total_tokens
 		FROM candidates
 		ORDER BY last_activity_at DESC, session_ref ASC
 		LIMIT $5 OFFSET $6`, userID, search, from, to, query.PageSize, (query.Page-1)*query.PageSize)
@@ -193,9 +224,9 @@ func (s *Service) ListCandidates(ctx context.Context, userID string, query Candi
 	for rows.Next() {
 		var item Candidate
 		var models pq.StringArray
-		if err := rows.Scan(&item.SessionRef, &item.AgentType, &item.Summary, &item.LastActivityAt,
+		if err := rows.Scan(&item.SliceKey, &item.SessionRef, &item.AgentType, &item.Summary, &item.LastActivityAt,
 			&item.ActivityStartAt, &item.ActivityEndAt, &item.CWD, &models,
-			&item.ContentStatus, &item.AvailableThroughAt); err != nil {
+			&item.ContentStatus, &item.AvailableThroughAt, &item.TotalTokens); err != nil {
 			return CandidatePage{}, err
 		}
 		item.Models = []string(models)
@@ -461,6 +492,15 @@ func (s *Service) ReadAttachedSelection(
 		page.HasMore = true
 		page.Completeness = "partial"
 		page.NextCursor = &cursorID
+	} else {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE report_source_selections
+			SET read_completed_at = COALESCE(read_completed_at, now())
+			WHERE id = $1 AND user_id = $2 AND attached_run_id = $3 AND status = 'attached'`,
+			selectionID, userID, runID,
+		); err != nil {
+			return ContentPage{}, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return ContentPage{}, err
@@ -512,62 +552,53 @@ func parsePeriod(period Period) (time.Time, time.Time, error) {
 func resolveExplicitItems(ctx context.Context, tx *sql.Tx, userID string, inputs []SourceInput) ([]SelectionItem, error) {
 	resolved := make([]SelectionItem, 0, len(inputs))
 	for _, input := range inputs {
-		input.SessionRef = strings.TrimSpace(input.SessionRef)
-		input.AgentType = strings.TrimSpace(input.AgentType)
-		if input.SessionRef == "" || input.AgentType == "" || input.ActivityStart.IsZero() ||
-			input.ActivityEnd.IsZero() || input.ActivityEnd.Before(input.ActivityStart) {
+		input.SliceKey = strings.TrimSpace(input.SliceKey)
+		if input.SliceKey == "" {
 			return nil, ErrInvalidRequest
 		}
-		rows, err := tx.QueryContext(ctx, `
-			SELECT s.id::text, src.id::text, g.id::text, rev.id::text,
-				MIN(e.source_start_cursor), MAX(e.source_end_cursor), MIN(e.occurred_at), MAX(e.occurred_at),
-				COALESCE(s.summary, ''), s.content_status, s.content_epoch, COUNT(*)
+		var item SelectionItem
+		err := tx.QueryRowContext(ctx, `
+			SELECT s.id::text, s.session_ref, s.agent_type, src.id::text, g.id::text, rev.id::text,
+				sl.start_cursor, sl.end_cursor, MIN(e.occurred_at), MAX(e.occurred_at),
+				COALESCE((
+					SELECT NULLIF(btrim(e2.summary), '') FROM session_content_events e2
+					WHERE e2.content_projection_revision_id = rev.id
+						AND e2.source_start_cursor >= sl.start_cursor AND e2.source_end_cursor <= sl.end_cursor
+						AND NULLIF(btrim(e2.summary), '') IS NOT NULL
+						AND e2.event_type NOT IN ('response_item.custom_tool_call', 'response_item.function_call')
+					ORDER BY CASE e2.event_type
+						WHEN 'event_msg.user_message' THEN 0
+						WHEN 'event_msg.agent_message' THEN 1
+						WHEN 'response_item.message' THEN 2
+						ELSE 3
+					END, e2.source_start_cursor, e2.id LIMIT 1
+				), 'Session 增量内容（' || COUNT(*)::text || ' 条记录）'), s.content_status, s.content_epoch, COUNT(*)
 			FROM sessions s
 			JOIN session_sources src ON src.session_id = s.id
-			JOIN session_source_generations g ON g.id = src.active_generation_id AND g.status = 'active'
+			JOIN session_content_slices sl ON sl.id = $2 AND sl.session_id = s.id AND sl.source_id = src.id
+			JOIN session_source_generations g ON g.id = sl.generation_id AND g.status = 'active'
 			JOIN session_content_projection_revisions rev
 				ON rev.id = src.active_content_projection_revision_id AND rev.generation_id = g.id AND rev.status = 'active'
 			JOIN session_content_events e
-				ON e.content_projection_revision_id = rev.id AND e.source_end_cursor <= rev.content_indexed_cursor
-			WHERE s.user_id = $1 AND s.session_ref = $2 AND s.agent_type = $3
-				AND s.content_status = 'available' AND e.occurred_at >= $4 AND e.occurred_at <= $5
-			GROUP BY s.id, src.id, g.id, rev.id`, userID, input.SessionRef, input.AgentType,
-			input.ActivityStart.UTC(), input.ActivityEnd.UTC())
+				ON e.content_projection_revision_id = rev.id
+				AND e.source_start_cursor >= sl.start_cursor AND e.source_end_cursor <= sl.end_cursor
+			WHERE s.user_id = $1 AND s.content_status = 'available'
+				AND rev.content_indexed_cursor >= sl.end_cursor
+			GROUP BY s.id, src.id, g.id, rev.id, sl.id`, userID, input.SliceKey).Scan(
+			&item.SessionID, &item.SessionRef, &item.AgentType, &item.SourceID, &item.GenerationID,
+			&item.ProjectionRevision, &item.StartCursor, &item.EndCursor, &item.ActivityStart,
+			&item.ActivityEnd, &item.Summary, &item.ContentStatus, &item.ContentEpoch,
+			&item.ContentEventCount,
+		)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrSourceUnavailable
+		}
 		if err != nil {
 			return nil, err
 		}
-		found := false
-		for rows.Next() {
-			found = true
-			item := SelectionItem{SessionRef: input.SessionRef, AgentType: input.AgentType}
-			if err := rows.Scan(&item.SessionID, &item.SourceID, &item.GenerationID, &item.ProjectionRevision,
-				&item.StartCursor, &item.EndCursor, &item.ActivityStart, &item.ActivityEnd,
-				&item.Summary, &item.ContentStatus, &item.ContentEpoch, &item.ContentEventCount); err != nil {
-				rows.Close()
-				return nil, err
-			}
-			resolved = append(resolved, item)
-		}
-		if err := rows.Close(); err != nil {
-			return nil, err
-		}
-		if !found {
-			return nil, ErrSourceUnavailable
-		}
+		resolved = append(resolved, item)
 	}
-	merged := mergeItems(resolved)
-	for i := range merged {
-		if err := tx.QueryRowContext(ctx, `
-			SELECT COUNT(*), MIN(occurred_at), MAX(occurred_at)
-			FROM session_content_events
-			WHERE content_projection_revision_id = $1
-				AND source_start_cursor >= $2 AND source_end_cursor <= $3`,
-			merged[i].ProjectionRevision, merged[i].StartCursor, merged[i].EndCursor,
-		).Scan(&merged[i].ContentEventCount, &merged[i].ActivityStart, &merged[i].ActivityEnd); err != nil {
-			return nil, err
-		}
-	}
-	return merged, nil
+	return resolved, nil
 }
 
 func resolveDefaultItems(ctx context.Context, tx *sql.Tx, userID string, start, end time.Time) ([]SelectionItem, error) {
@@ -753,12 +784,13 @@ func (s *Service) ValidateAttachedSelectionTx(
 		return ErrSelectionMismatch
 	}
 	var status string
+	var readCompletedAt sql.NullTime
 	var storedStart, storedEnd time.Time
 	err = tx.QueryRowContext(ctx, `
-		SELECT status, period_start, period_end
+		SELECT status, period_start, period_end, read_completed_at
 		FROM report_source_selections
 		WHERE id = $1 AND user_id = $2 AND attached_run_id = $3`, selectionID, userID, runID).Scan(
-		&status, &storedStart, &storedEnd,
+		&status, &storedStart, &storedEnd, &readCompletedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) || status != "attached" {
 		return ErrSelectionMismatch
@@ -776,6 +808,9 @@ func (s *Service) ValidateAttachedSelectionTx(
 	}
 	if runReportType != reportType || !sameDate(storedStart, periodStart) || !sameDate(storedEnd, periodEnd) {
 		return ErrSelectionMismatch
+	}
+	if !readCompletedAt.Valid {
+		return ErrSourceIncomplete
 	}
 	return validateSelectionSourcesAvailable(ctx, tx, selectionID)
 }

@@ -720,9 +720,16 @@
 }
 
 .console-token-summary-metric strong {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   color: #182230;
   font-size: 20px;
+  font-variant-numeric: tabular-nums;
   line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .console-token-summary-metric--primary strong {
@@ -759,9 +766,15 @@
 }
 
 .console-token-total strong {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   color: #182230;
   font-size: 28px;
+  font-variant-numeric: tabular-nums;
   line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .console-token-state {

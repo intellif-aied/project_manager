@@ -7,10 +7,9 @@ import {
   RobotOutlined
 } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { App, Button, DatePicker, Drawer, Input, Modal, Space, Table, Tooltip } from "antd";
+import { App, Button, DatePicker, Drawer, Modal, Space, Table, Tooltip } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import type { Dayjs } from "dayjs";
-import dayjs from "dayjs";
 import { useEffect, useMemo, useState } from "react";
 
 import {
@@ -65,18 +64,30 @@ interface ReportAISettingsPanelProps {
   variant?: "panel" | "drawer";
 }
 
-const MAX_SELECTED_SESSION_RANGES = 200;
+const MAX_SELECTED_SESSIONS = 200;
 
-function candidateKey(record: Pick<ReportSourceCandidate, "agent_type" | "session_ref">) {
-  return `${record.agent_type}:${record.session_ref}`;
+function formatNumber(value?: number) {
+  return typeof value === "number" ? value.toLocaleString() : "-";
 }
 
-function sourceKey(record: Pick<ReportSourceInput, "agent_type" | "session_ref">) {
-  return `${record.agent_type}:${record.session_ref}`;
+function selectedSourceKey(source: ReportSourceInput) {
+  return source.slice_key;
 }
 
-function sourceRangeLabel(source: ReportSourceInput) {
-  return `${dayjs(source.activity_start_at).format("MM-DD HH:mm")} 至 ${dayjs(source.activity_end_at).format("MM-DD HH:mm")}`;
+function sessionActivityRange(record: ReportSourceCandidate) {
+  const start = record.activity_start_at?.slice(0, 10);
+  const end = record.activity_end_at?.slice(0, 10);
+  if (!start) return end || "-";
+  if (!end || end === start) return start;
+  return `${start} 至 ${end}`;
+}
+
+function sessionSourceInput(record: ReportSourceCandidate): ReportSourceInput {
+  return { slice_key: record.slice_key };
+}
+
+function sessionSourceKey(record: ReportSourceCandidate) {
+  return record.slice_key;
 }
 
 function reportRunStorageKey(
@@ -228,7 +239,7 @@ function ReportAIGenerateControlsState({
         const selection = await createReportSourceSelection({
           report_type: reportType as "personal_daily" | "personal_weekly",
           period,
-          selected_session_sources: selectedSessionSources
+          selected_slice_keys: selectedSessionSources.map((source) => source.slice_key)
         });
         reportSourceSelectionId = selection.selection_id;
       }
@@ -369,7 +380,7 @@ function ReportAIGenerateControlsState({
             onClick={onToggleSettings}
           >
             {selectedSessionSources.length > 0
-              ? `已选 ${selectedSessionSources.length} 个范围`
+              ? `已选 ${selectedSessionSources.length} 个 session`
               : "选择 session"}
           </Button>
         ) : null}
@@ -396,33 +407,20 @@ function SnapshotReportAISettingsPanel({
   const periodEnd = period.date ?? period.week_end ?? periodStart;
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
-  const [queryRange, setQueryRange] = useState<[Dayjs, Dayjs] | null>(() =>
-    periodStart && periodEnd ? [dayjs(periodStart), dayjs(periodEnd)] : null
-  );
-  const [search, setSearch] = useState("");
+  const [queryRange, setQueryRange] = useState<[Dayjs, Dayjs] | null>(null);
   const queryFrom = queryRange?.[0].format("YYYY-MM-DD");
   const queryTo = queryRange?.[1].format("YYYY-MM-DD");
 
   const sessionsQuery = useQuery({
-    queryKey: [
-      "report-ai-session-sources",
-      reportType,
-      periodStart,
-      periodEnd,
-      search,
-      queryFrom,
-      queryTo,
-      page,
-      pageSize
-    ],
+    queryKey: ["report-ai-session-slices", reportType, queryFrom, queryTo, page, pageSize],
     queryFn: () =>
       fetchReportSourceCandidates({
         report_type: reportType,
         period_start: periodStart,
         period_end: periodEnd,
-        q: search || undefined,
-        activity_from: queryFrom,
-        activity_to: queryTo,
+        ...(queryFrom && queryTo
+          ? { activity_from: queryFrom, activity_to: queryTo }
+          : {}),
         page: String(page),
         page_size: String(pageSize)
       }),
@@ -432,11 +430,10 @@ function SnapshotReportAISettingsPanel({
   const columns = useMemo<ColumnsType<ReportSourceCandidate>>(
     () => [
       {
-        title: "活动范围",
-        key: "activity_range",
-        width: 168,
-        render: (_, record) =>
-          `${dayjs(record.activity_start_at).format("MM-DD HH:mm")} - ${dayjs(record.activity_end_at).format("MM-DD HH:mm")}`
+        title: "活动时间",
+        key: "activity_date",
+        width: 176,
+        render: (_, record) => sessionActivityRange(record)
       },
       {
         title: "session / 摘要",
@@ -444,15 +441,18 @@ function SnapshotReportAISettingsPanel({
         render: (_, record) => (
           <span className="report-ai-session-cell">
             <span className="report-ai-session-id">{record.session_ref}</span>
-            <span className="report-ai-session-summary">{record.summary || "暂无摘要"}</span>
+            <Tooltip title={record.summary || "暂无摘要"} mouseEnterDelay={0.25}>
+              <span className="report-ai-session-summary">{record.summary || "暂无摘要"}</span>
+            </Tooltip>
           </span>
         )
       },
       {
-        title: "项目 / 模型",
-        key: "context",
-        width: 180,
-        render: (_, record) => `${record.cwd || "-"} · ${record.models?.join(", ") || "-"}`
+        title: "Token",
+        dataIndex: "total_tokens",
+        width: 88,
+        align: "right",
+        render: formatNumber
       }
     ],
     []
@@ -460,20 +460,11 @@ function SnapshotReportAISettingsPanel({
 
   const selectionSummary =
     selectedSources.length > 0
-      ? `已选 ${selectedSources.length} 个活动范围`
+      ? `已选 ${selectedSources.length} 个 session`
       : "未选择时按报告周期自动取数";
   const settingsBody = (
     <>
       <div className="report-ai-settings-panel__toolbar">
-        <Input.Search
-          size="small"
-          allowClear
-          placeholder="搜索 Session ID 或摘要"
-          onSearch={(value) => {
-            setSearch(value.trim());
-            setPage(1);
-          }}
-        />
         <DatePicker.RangePicker
           size="small"
           allowClear
@@ -497,105 +488,27 @@ function SnapshotReportAISettingsPanel({
         </Tooltip>
       </div>
       <Table<ReportSourceCandidate>
-        rowKey={candidateKey}
+        rowKey={sessionSourceKey}
         size="small"
         columns={columns}
         dataSource={sessionsQuery.data?.items ?? []}
         loading={sessionsQuery.isLoading}
         rowSelection={{
           preserveSelectedRowKeys: true,
-          selectedRowKeys: Array.from(new Set(selectedSources.map(sourceKey))),
+          selectedRowKeys: selectedSources.map(selectedSourceKey),
           onSelect: (record, selected) => {
-            const key = candidateKey(record);
-            const retained = selectedSources.filter((source) => sourceKey(source) !== key);
+            const source = sessionSourceInput(record);
+            const key = selectedSourceKey(source);
+            const retained = selectedSources.filter((item) => selectedSourceKey(item) !== key);
             if (!selected) {
               onSelectedSourcesChange(retained);
               return;
             }
-            const next = [
-              ...retained,
-              {
-                session_ref: record.session_ref,
-                agent_type: record.agent_type,
-                activity_start_at: record.activity_start_at,
-                activity_end_at: record.activity_end_at
-              }
-            ];
-            if (next.length > MAX_SELECTED_SESSION_RANGES) {
-              message.warning(`最多选择 ${MAX_SELECTED_SESSION_RANGES} 个 Session`);
+            const next = [...retained, source];
+            if (next.length > MAX_SELECTED_SESSIONS) {
+              message.warning(`最多选择 ${MAX_SELECTED_SESSIONS} 个 Session`);
             }
-            onSelectedSourcesChange(next.slice(0, MAX_SELECTED_SESSION_RANGES));
-          }
-        }}
-        expandable={{
-          expandedRowRender: (record) => {
-            const key = candidateKey(record);
-            const ranges = selectedSources
-              .map((source, sourceIndex) => ({ source, sourceIndex }))
-              .filter(({ source }) => sourceKey(source) === key);
-            return (
-              <div className="report-ai-source-ranges">
-                <DatePicker.RangePicker
-                  size="small"
-                  showTime
-                  allowClear
-                  minDate={dayjs(record.activity_start_at)}
-                  maxDate={dayjs(record.activity_end_at)}
-                  placeholder={["范围开始", "范围结束"]}
-                  onChange={(value) => {
-                    if (!value?.[0] || !value[1]) return;
-                    const availableStart = dayjs(record.activity_start_at);
-                    const availableEnd = dayjs(record.activity_end_at);
-                    if (
-                      value[0].isBefore(availableStart) ||
-                      value[1].isAfter(availableEnd) ||
-                      value[1].isBefore(value[0])
-                    ) {
-                      message.warning("选择范围必须位于该 Session 的可用活动范围内");
-                      return;
-                    }
-                    const nextRange: ReportSourceInput = {
-                      session_ref: record.session_ref,
-                      agent_type: record.agent_type,
-                      activity_start_at: value[0].toISOString(),
-                      activity_end_at: value[1].toISOString()
-                    };
-                    const withoutFullRange = selectedSources.filter(
-                      (source) =>
-                        sourceKey(source) !== key ||
-                        source.activity_start_at !== record.activity_start_at ||
-                        source.activity_end_at !== record.activity_end_at
-                    );
-                    if (withoutFullRange.length >= MAX_SELECTED_SESSION_RANGES) {
-                      message.warning(`最多选择 ${MAX_SELECTED_SESSION_RANGES} 个活动范围`);
-                      return;
-                    }
-                    onSelectedSourcesChange([...withoutFullRange, nextRange]);
-                  }}
-                />
-                <div className="report-ai-source-ranges__list">
-                  {ranges.map(({ source, sourceIndex }) => (
-                    <span
-                      key={`${source.activity_start_at}:${source.activity_end_at}:${sourceIndex}`}
-                    >
-                      {sourceRangeLabel(source)}
-                      <Button
-                        type="text"
-                        size="small"
-                        aria-label="删除活动范围"
-                        onClick={() =>
-                          onSelectedSourcesChange(
-                            selectedSources.filter((_, index) => index !== sourceIndex)
-                          )
-                        }
-                      >
-                        删除
-                      </Button>
-                    </span>
-                  ))}
-                </div>
-              </div>
-            );
+            onSelectedSourcesChange(next.slice(0, MAX_SELECTED_SESSIONS));
           }
         }}
         pagination={{
@@ -634,7 +547,7 @@ function SnapshotReportAISettingsPanel({
         }
         open={open}
         placement="right"
-        width={520}
+        width="min(680px, 94vw)"
         mask
         maskClosable
         zIndex={1100}

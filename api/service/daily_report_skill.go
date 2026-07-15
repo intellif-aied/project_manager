@@ -77,7 +77,7 @@ func ReportSkillMarkdownWithConfig(data ReportSkillTemplateData) string {
 	data = normalizeReportSkillTemplateData(data)
 	return fmt.Sprintf(`# Aida Report Skill
 
-Use this skill when generating Aida reports. The run input must include report_type, period, target, and run_id. Managed personal reports may include report_source_selection_id injected by Aida. This id identifies an immutable default or explicit Session source snapshot and must never be guessed or changed. During migration, selected_session_slice_keys may still appear as the legacy explicit source directive. Do not ask the user to provide session ids, urls, MCP tokens, or credentials.
+Use this skill when generating Aida reports. The run input must include report_type, period, target, and run_id. Managed personal reports include report_source_selection_id injected by Aida. This id identifies an immutable default or explicit Session source snapshot and must never be guessed or changed. Do not ask the user to provide session ids, urls, MCP tokens, or credentials.
 
 ## Supported report_type
 
@@ -108,8 +108,7 @@ Derive these shared values from run input:
 - date_range for daily reports or sessions: {"start": date, "end": date}
 - date_range for weekly context: {"start": week_start, "end": week_end}
 - week_range for weekly reports: {"week_start": week_start, "week_end": week_end}
-- report_source_selection_id: optional server-signed source snapshot id for managed personal reports. When present, call get_sessions in snapshot mode with run_id, report_type, period, and this id. Continue with next_cursor until has_more=false. Do not add date_range or selected_session_slice_keys to that call.
-- selected_session_slice_keys: optional JSON array of session slice keys in the form "session_id:YYYY-MM-DD"; when present and non-empty, it is the highest-priority user-selected session source set for personal reports. Pass it unchanged to get_sessions and use every returned selected slice as report-body evidence. The report period controls where the report is saved, not which explicitly selected sessions are usable. Do not drop, narrow, downgrade, or describe selected slices as unavailable because they are outside period/date_range.
+- report_source_selection_id: server-signed source snapshot id for managed personal reports. Call get_sessions in snapshot mode with run_id, report_type, period, and this id. Continue with next_cursor until has_more=false. Do not add date_range to that call.
 
 Use scope by report_type:
 
@@ -142,8 +141,7 @@ Use report_scope by source:
 
 Use this exact tool argument contract:
 
-- get_sessions for a managed personal report snapshot: {"scope": {"type":"self"}, "target": target, "report_type": report_type, "period": period, "run_id": run_id, "report_source_selection_id": report_source_selection_id, "include_summary": true, "page_cursor": optional_next_cursor}. Do not send date_range, week_range, user_ids, or selected_session_slice_keys in snapshot mode. Read every page through has_more=false.
-- get_sessions: {"scope": scope, "target": target, "date_range": date_range, "include_summary": true, "selected_session_slice_keys": optional_selected_session_slice_keys}. date_range is the default period window when no explicit session slices are selected; selected_session_slice_keys, when non-empty, are the explicit source selection.
+- get_sessions for a managed personal report snapshot: {"scope": {"type":"self"}, "target": target, "report_type": report_type, "period": period, "run_id": run_id, "report_source_selection_id": report_source_selection_id, "include_summary": true, "page_cursor": optional_next_cursor}. Do not send date_range, week_range, or user_ids in snapshot mode. Read every page through has_more=false.
 - get_daily_reports: {"scope": scope, "target": target, "date_range": date_range, "report_scope": report_scope, "include_content": true}.
 - get_weekly_reports: {"scope": scope, "target": target, "week_range": week_range, "report_scope": report_scope, "include_content": true}.
 - get_tasks: {"scope": scope, "target": target, "date_range": date_range, "include_requirement": true}.
@@ -158,16 +156,16 @@ Do not send period to read-list tools that require date_range or week_range. Do 
 
 ## Workflow
 
-1. Read report_type, period, target, run_id, optional report_source_selection_id, and optional selected_session_slice_keys from the run input.
+1. Read report_type, period, target, run_id, and report_source_selection_id from the run input.
 2. Call get_existing_report first with {"report_type": report_type, "period": period, "target": target}.
 3. Select context tools by report_type:
-   - personal_daily: when report_source_selection_id is present, call get_sessions in snapshot mode and read all pages; otherwise use the legacy date_range mode. Also call get_tasks and get_requirements with scope.type=self and date_range for period.date.
-   - personal_weekly: get_daily_reports(report_scope=personal), get_tasks, and get_requirements with scope.type=self and date_range for the week. When report_source_selection_id is present, also call get_sessions in snapshot mode and read all pages as the fixed Session supplement. Otherwise call legacy get_sessions only when selected_session_slice_keys is present or saved personal daily reports are insufficient.
+   - personal_daily: call get_sessions in snapshot mode and read all pages. Also call get_tasks and get_requirements with scope.type=self and date_range for period.date.
+   - personal_weekly: get_daily_reports(report_scope=personal), get_tasks, and get_requirements with scope.type=self and date_range for the week. Also call get_sessions in snapshot mode and read all pages as the fixed Session supplement.
    - team_daily: get_daily_reports(report_scope=personal), get_report_inventory(report_scope=personal, report_kind=daily), and optionally get_tasks/get_requirements with scope.type=team and date_range for period.date. Do not call get_sessions by default.
    - team_weekly: get_weekly_reports(report_scope=personal), get_daily_reports(report_scope=personal), get_report_inventory(report_scope=personal, report_kind=weekly), and optionally get_tasks/get_requirements with scope.type=team. Do not call get_sessions by default.
    - department_daily: get_daily_reports(report_scope=team), get_report_inventory(report_scope=team, report_kind=daily), and optionally get_requirements with scope.type=department and date_range for period.date. Do not call get_sessions by default.
    - department_weekly: get_weekly_reports(report_scope=team), get_daily_reports(report_scope=team), get_report_inventory(report_scope=team, report_kind=weekly), and optionally get_requirements with scope.type=department. Do not call get_sessions by default.
-4. report_source_selection_id applies only to managed personal reports and takes precedence over legacy Session-source behavior. Call get_sessions with the exact snapshot contract and consume all pages. If source_mode=explicit, its returned content is mandatory report evidence even outside the report period; if source_mode=default, it is the fixed period source snapshot. Never combine it with date_range or selected_session_slice_keys. When no report_source_selection_id exists, selected_session_slice_keys remains the legacy highest-priority personal Session source instruction: include every returned selected slice in the report's work summary. Do not apply either field to team or department reports.
+4. report_source_selection_id applies only to managed personal reports. Call get_sessions with the exact snapshot contract and consume all pages. If source_mode=explicit, its returned content is mandatory report evidence even outside the report period; if source_mode=default, it is the fixed period source snapshot. Never combine it with date_range. Do not apply it to team or department reports.
 5. Use source_state when present. If source_state.source_mode is reports_only, write that the report is based on saved reports. If it is sessions_only, write that it is based on session activity. If it is mixed, distinguish saved reports from supplemental data. If dependency_ready is false, list missing_names and do not invent missing lower-level report content.
 6. Use only facts returned by MCP tools. Do not invent tasks, sessions, blockers, progress, members, teams, or departments.
 7. For team and department reports, read scope_context from report/inventory MCP responses before writing the report. If a response has no scope_context, call get_report_inventory for the same scope/period to obtain roster context; do not call get_sessions just to obtain roster context.
@@ -186,8 +184,8 @@ Do not send period to read-list tools that require date_range or week_range. Do 
 
 ## Source Priority
 
-- personal_daily: when report_source_selection_id is present, the complete snapshot result is the authoritative Session source. Explicit snapshot work facts must appear in the report body regardless of Session date. Without it, retain legacy selected_session_slice_keys/date behavior; selected sessions are the mandatory primary source in that legacy explicit mode. Tasks and requirements remain supporting sources.
-- personal_weekly: saved personal daily reports returned by get_daily_reports are the primary source; the complete report_source_selection_id snapshot, tasks, and requirements are supplemental evidence. An explicit snapshot is the highest-priority Session supplement. Without it, retain legacy selected_session_slice_keys behavior.
+- personal_daily: the complete report_source_selection_id snapshot is the authoritative Session source. Explicit snapshot work facts must appear in the report body regardless of Session date. Tasks and requirements remain supporting sources.
+- personal_weekly: saved personal daily reports returned by get_daily_reports are the primary source; the complete report_source_selection_id snapshot, tasks, and requirements are supplemental evidence. An explicit snapshot is the highest-priority Session supplement.
 - team_daily / team_weekly: saved personal daily/weekly reports returned by get_daily_reports/get_weekly_reports are the primary source for member work. Do not scan team members' sessions by default. If member reports are missing, list missing reports instead of falling back to member sessions.
 - department_daily / department_weekly: saved team daily/weekly reports returned by get_daily_reports/get_weekly_reports are the primary source for team work. Do not scan all members' sessions by default. If team reports are missing, list missing teams instead of falling back to member sessions.
 - Token/session statistics are low-priority metrics. Do not make token totals, session counts, or model usage the main body of team or department reports.

@@ -82,9 +82,27 @@ func TestIncrementalUploadRetriesResponseLossAndResumes(t *testing.T) {
 		t.Fatalf("second results=%+v", results)
 	}
 	serverState.mu.Lock()
-	defer serverState.mu.Unlock()
 	if serverState.chunkRequests != 2 || serverState.finalizeRequests != 1 {
 		t.Fatalf("second upload sent data: chunks=%d finalize=%d", serverState.chunkRequests, serverState.finalizeRequests)
+	}
+	serverState.mu.Unlock()
+
+	newContent := []byte("{\"type\":\"user\",\"sessionId\":\"sync-client\",\"timestamp\":\"2026-07-14T01:02:00Z\"}\n")
+	if err := os.WriteFile(sourcePath, append(append([]byte(nil), content...), newContent...), 0600); err != nil {
+		t.Fatal(err)
+	}
+	results, err = uploadSessionGroupIncremental(cfg, []sessionWithFile{{info: session, filePath: sourcePath}}, session.SessionRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].Status != "uploaded" || results[0].UploadedChunks != 1 {
+		t.Fatalf("incremental results=%+v", results)
+	}
+	serverState.mu.Lock()
+	defer serverState.mu.Unlock()
+	if serverState.acceptedChunks != 2 || serverState.finalizeRequests != 2 || string(serverState.content) != string(append(content, newContent...)) {
+		t.Fatalf("incremental server state: accepted=%d finalize=%d content=%d",
+			serverState.acceptedChunks, serverState.finalizeRequests, len(serverState.content))
 	}
 }
 
@@ -106,6 +124,116 @@ func TestIncrementalUploadFallsBackOnlyForExplicitDisabledCode(t *testing.T) {
 	}
 }
 
+func TestIncrementalUploadFinalizesSnapshotWhenSourceGrowsDuringUpload(t *testing.T) {
+	initial := []byte("{\"type\":\"user\",\"sessionId\":\"growing\",\"timestamp\":\"2026-07-15T01:00:00Z\"}\n")
+	appended := []byte("{\"type\":\"assistant\",\"sessionId\":\"growing\",\"timestamp\":\"2026-07-15T01:01:00Z\"}\n")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, "growing.jsonl")
+	if err := os.WriteFile(path, initial, 0600); err != nil {
+		t.Fatal(err)
+	}
+	serverState := &fakeSessionSyncServer{generationID: "22222222-2222-4222-8222-222222222222"}
+	serverState.afterFirstAccepted = func() {
+		file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer file.Close()
+		if _, err := file.Write(appended); err != nil {
+			t.Error(err)
+		}
+	}
+	server := httptest.NewServer(http.HandlerFunc(serverState.serveHTTP))
+	defer server.Close()
+	session := &SessionInfo{SessionRef: "growing", AgentType: "codex", FilePath: path}
+	cfg := &Config{APIURL: server.URL, Token: "test-token"}
+
+	results, err := uploadSessionGroupIncremental(cfg, []sessionWithFile{{info: session, filePath: path}}, session.SessionRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].UploadedChunks != 1 {
+		t.Fatalf("first results=%+v", results)
+	}
+	serverState.mu.Lock()
+	if serverState.finalizeRequests != 1 || string(serverState.content) != string(initial) {
+		serverState.mu.Unlock()
+		t.Fatalf("first snapshot finalize=%d content=%d", serverState.finalizeRequests, len(serverState.content))
+	}
+	serverState.mu.Unlock()
+
+	results, err = uploadSessionGroupIncremental(cfg, []sessionWithFile{{info: session, filePath: path}}, session.SessionRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].UploadedChunks != 1 {
+		t.Fatalf("second results=%+v", results)
+	}
+	serverState.mu.Lock()
+	defer serverState.mu.Unlock()
+	if serverState.finalizeRequests != 2 || string(serverState.content) != string(append(initial, appended...)) {
+		t.Fatalf("second snapshot finalize=%d content=%d", serverState.finalizeRequests, len(serverState.content))
+	}
+}
+
+func TestIncrementalUploadFinalizesCompletePrefixBeforeIncompleteTail(t *testing.T) {
+	complete := []byte("{\"type\":\"user\",\"sessionId\":\"tail\",\"timestamp\":\"2026-07-15T01:00:00Z\"}\n")
+	incomplete := []byte("{\"type\":\"assistant\",\"sessionId\":\"tail\"")
+	remainder := []byte(",\"timestamp\":\"2026-07-15T01:01:00Z\"}\n")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, "tail.jsonl")
+	if err := os.WriteFile(path, append(append([]byte{}, complete...), incomplete...), 0600); err != nil {
+		t.Fatal(err)
+	}
+	serverState := &fakeSessionSyncServer{generationID: "33333333-3333-4333-8333-333333333333"}
+	server := httptest.NewServer(http.HandlerFunc(serverState.serveHTTP))
+	defer server.Close()
+	session := &SessionInfo{SessionRef: "tail", AgentType: "codex", FilePath: path}
+	cfg := &Config{APIURL: server.URL, Token: "test-token"}
+
+	results, err := uploadSessionGroupIncremental(cfg, []sessionWithFile{{info: session, filePath: path}}, session.SessionRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].UploadedChunks != 1 || !results[0].PendingTail {
+		t.Fatalf("first results=%+v", results)
+	}
+	serverState.mu.Lock()
+	if serverState.finalizeRequests != 1 || string(serverState.content) != string(complete) {
+		serverState.mu.Unlock()
+		t.Fatalf("first prefix finalize=%d content=%d", serverState.finalizeRequests, len(serverState.content))
+	}
+	serverState.mu.Unlock()
+
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Write(remainder); err != nil {
+		file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	results, err = uploadSessionGroupIncremental(cfg, []sessionWithFile{{info: session, filePath: path}}, session.SessionRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].UploadedChunks != 1 || results[0].PendingTail {
+		t.Fatalf("second results=%+v", results)
+	}
+	serverState.mu.Lock()
+	defer serverState.mu.Unlock()
+	want := append(append([]byte{}, complete...), append(incomplete, remainder...)...)
+	if serverState.finalizeRequests != 2 || string(serverState.content) != string(want) {
+		t.Fatalf("second prefix finalize=%d content=%d", serverState.finalizeRequests, len(serverState.content))
+	}
+}
+
 type fakeSessionSyncServer struct {
 	mu                     sync.Mutex
 	generationID           string
@@ -116,6 +244,7 @@ type fakeSessionSyncServer struct {
 	finalizeRequests       int
 	prepareSummary         string
 	failFirstChunkResponse bool
+	afterFirstAccepted     func()
 }
 
 func (s *fakeSessionSyncServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
@@ -136,8 +265,11 @@ func (s *fakeSessionSyncServer) serveHTTP(w http.ResponseWriter, r *http.Request
 		source := request.Sessions[0].Sources[0]
 		action := "rebuild_required"
 		status := "staging"
-		if s.active && source.LocalSize == int64(len(s.content)) && source.PrefixCheckpointHash == hashTestBytes(s.content) {
-			action = "unchanged"
+		if s.active && source.LocalSize >= int64(len(s.content)) && source.PrefixCheckpointHash == hashTestBytes(s.content) {
+			action = "append"
+			if source.LocalSize == int64(len(s.content)) {
+				action = "unchanged"
+			}
 			status = "active"
 		}
 		writeTestJSON(w, map[string]any{"results": []map[string]any{{
@@ -176,6 +308,9 @@ func (s *fakeSessionSyncServer) serveHTTP(w http.ResponseWriter, r *http.Request
 		if chunk.StartCursor == int64(len(s.content)) && chunk.EndCursor == chunk.StartCursor+int64(len(chunkContent)) && chunk.ContentSHA256 == hashTestBytes(chunkContent) {
 			s.content = append(s.content, chunkContent...)
 			s.acceptedChunks++
+			if s.acceptedChunks == 1 && s.afterFirstAccepted != nil {
+				s.afterFirstAccepted()
+			}
 		} else if chunk.EndCursor <= int64(len(s.content)) && chunk.ContentSHA256 == hashTestBytes(chunkContent) {
 			responseStatus = "duplicate"
 		} else {
