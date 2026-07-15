@@ -496,6 +496,17 @@ export const fetchTeamReportToday = (reportDate?: string) =>
     api.get<TeamReport>("/reports/team/today", reportDate ? { report_date: reportDate } : undefined)
   );
 export async function fetchTeamReportTodayOrNull(reportDate?: string) {
+  if (reportDate) {
+    const reports = await fetchTeamReports({
+      from: reportDate,
+      to: reportDate,
+      page: "1",
+      page_size: "1"
+    });
+    const report = reports.items[0];
+    return report ? fetchTeamReport(report.id) : null;
+  }
+
   try {
     return await unwrap(
       api.get<TeamReport>(
@@ -542,6 +553,18 @@ export const fetchDepartmentReportToday = (reportDate?: string, departmentId?: s
     })
   );
 export async function fetchDepartmentReportTodayOrNull(reportDate?: string, departmentId?: string) {
+  if (reportDate) {
+    const reports = await fetchDepartmentReports({
+      from: reportDate,
+      to: reportDate,
+      page: "1",
+      page_size: "1",
+      ...(departmentId ? { department_id: departmentId } : {})
+    });
+    const report = reports.items[0];
+    return report ? fetchDepartmentReport(report.id, departmentId) : null;
+  }
+
   try {
     return await unwrap(
       api.get<DepartmentReport>(
@@ -652,20 +675,12 @@ export const fetchTeamWeeklyReportCurrent = (weekStart: string, teamId?: string)
     )
   );
 export async function fetchTeamWeeklyReportCurrentOrNull(weekStart: string, teamId?: string) {
-  try {
-    return await unwrap(
-      api.get<TeamWeeklyReport>(
-        "/reports/team/weekly/current",
-        teamId ? { week_start: weekStart, team_id: teamId } : { week_start: weekStart },
-        { skipErrorHandler: true }
-      )
-    );
-  } catch (error) {
-    if (error instanceof HttpError && error.status === 404) {
-      return null;
-    }
-    throw error;
-  }
+  const reports = await fetchTeamWeeklyReports({
+    from_week: weekStart,
+    to_week: weekStart,
+    ...(teamId ? { team_id: teamId } : {})
+  });
+  return reports[0] ?? null;
 }
 export const saveTeamWeeklyReport = (data: {
   week_start: string;
@@ -704,23 +719,12 @@ export async function fetchDepartmentWeeklyReportCurrentOrNull(
   weekStart: string,
   departmentId?: string
 ) {
-  try {
-    return await unwrap(
-      api.get<DepartmentWeeklyReport>(
-        "/reports/department/weekly/current",
-        {
-          week_start: weekStart,
-          ...(departmentId ? { department_id: departmentId } : {})
-        },
-        { skipErrorHandler: true }
-      )
-    );
-  } catch (error) {
-    if (error instanceof HttpError && error.status === 404) {
-      return null;
-    }
-    throw error;
-  }
+  const reports = await fetchDepartmentWeeklyReports({
+    from_week: weekStart,
+    to_week: weekStart,
+    ...(departmentId ? { department_id: departmentId } : {})
+  });
+  return reports[0] ?? null;
 }
 export const saveDepartmentWeeklyReportCurrent = (data: {
   department_id?: string;

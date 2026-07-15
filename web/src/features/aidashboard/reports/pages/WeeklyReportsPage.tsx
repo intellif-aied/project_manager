@@ -758,7 +758,6 @@ export function WeeklyReportsPage() {
     onSuccess: () => {
       message.success("周报已删除");
       void queryClient.invalidateQueries({ queryKey: ["reports", "weekly"] });
-      void queryClient.invalidateQueries({ queryKey: ["reports"] });
     },
     onError: (error) => message.error(errorMessage(error))
   });

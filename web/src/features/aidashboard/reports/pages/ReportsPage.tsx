@@ -156,10 +156,26 @@ export function ReportsPage() {
       if (scope === "department") return deleteDepartmentReport(id, departmentId);
       return deleteReport(id);
     },
-    onSuccess: () => {
+    onSuccess: (_, { scope }) => {
       message.success("日报已删除");
+      if (scope === "personal") {
+        queryClient.removeQueries({ queryKey: ["reports", "dashboard-today"] });
+        queryClient.removeQueries({
+          queryKey: ["reports", "daily", "manage-modal", "personal-existing"]
+        });
+        void queryClient.invalidateQueries({ queryKey: ["reports", "dashboard-today"] });
+      } else if (scope === "team") {
+        queryClient.removeQueries({ queryKey: ["team-report-today"] });
+        queryClient.removeQueries({ queryKey: ["reports", "daily", "manage-modal", "team-report"] });
+        void queryClient.invalidateQueries({ queryKey: ["team-report-today"] });
+        void queryClient.invalidateQueries({ queryKey: ["team-report-sources"] });
+      } else {
+        queryClient.removeQueries({ queryKey: ["department-report-today"] });
+        queryClient.removeQueries({ queryKey: ["reports", "daily", "manage-modal", "department-report"] });
+        void queryClient.invalidateQueries({ queryKey: ["department-report-today"] });
+        void queryClient.invalidateQueries({ queryKey: ["department-report-sources"] });
+      }
       void queryClient.invalidateQueries({ queryKey: ["reports", "daily"] });
-      void queryClient.invalidateQueries({ queryKey: ["reports"] });
     },
     onError: (error) => message.error(errorMessage(error))
   });
