@@ -70,7 +70,6 @@ import type {
   PreviewManagedAgentScheduleResponse,
   RequirementBoardResponseDTO,
   ReportSourceCandidatePage,
-  ReportSourceInput,
   ReportSourceSelection,
   UpsertManagedAgentPayload,
   UpsertManagedAgentSchedulePayload
@@ -874,7 +873,7 @@ export const fetchReportSourceCapability = () =>
 export const createReportSourceSelection = (payload: {
   report_type: "personal_daily" | "personal_weekly";
   period: { date?: string; week_start?: string; week_end?: string };
-  selected_session_sources: ReportSourceInput[];
+  selected_slice_keys: string[];
 }) => unwrap(api.post<ReportSourceSelection>("/report-source-selections", payload));
 export const fetchManagedAgentRuns = (params?: {
   agent_id?: string;

@@ -17,7 +17,7 @@ import {
   createDefaultReportAgent,
   createReportSourceSelection,
   fetchManagedAgentRun,
-  fetchSessionTokens,
+  fetchReportSourceCandidates,
   startReportAgentRun
 } from "../../api/client";
 import type {
@@ -25,9 +25,9 @@ import type {
   ManagedReportAgentUnavailable,
   ManagedReportAgentRunResponse,
   ManagedReportAgentRunPayload,
+  ReportSourceCandidate,
   ReportSourceInput,
-  ReportType,
-  SessionTokens
+  ReportType
 } from "../../api/types";
 import { errorMessage } from "../../ai-assets/utils/agentAssets";
 import { useAuth } from "@/shared/auth/authContext";
@@ -72,31 +72,19 @@ function formatNumber(value?: number) {
 }
 
 function selectedSourceKey(source: ReportSourceInput) {
-  return `${source.agent_type}:${source.session_ref}:${source.activity_start_at}:${source.activity_end_at}`;
+  return source.slice_key;
 }
 
-function sessionActivityDate(record: SessionTokens) {
-  return (
-    record.activity_date ||
-    record.activity_start_at?.slice(0, 10) ||
-    record.started_at?.slice(0, 10) ||
-    "-"
-  );
+function sessionActivityDate(record: ReportSourceCandidate) {
+  return record.activity_start_at?.slice(0, 10) || "-";
 }
 
-function sessionSourceInput(record: SessionTokens): ReportSourceInput {
-  const activityDate = record.activity_date || record.started_at.slice(0, 10);
-  return {
-    session_ref: record.session_ref,
-    agent_type: record.agent_type,
-    activity_start_at:
-      record.activity_start_at || dayjs(activityDate).startOf("day").toISOString(),
-    activity_end_at: record.activity_end_at || dayjs(activityDate).endOf("day").toISOString()
-  };
+function sessionSourceInput(record: ReportSourceCandidate): ReportSourceInput {
+  return { slice_key: record.slice_key };
 }
 
-function sessionSourceKey(record: SessionTokens) {
-  return selectedSourceKey(sessionSourceInput(record));
+function sessionSourceKey(record: ReportSourceCandidate) {
+  return record.slice_key;
 }
 
 function reportRunStorageKey(
@@ -248,7 +236,7 @@ function ReportAIGenerateControlsState({
         const selection = await createReportSourceSelection({
           report_type: reportType as "personal_daily" | "personal_weekly",
           period,
-          selected_session_sources: selectedSessionSources
+          selected_slice_keys: selectedSessionSources.map((source) => source.slice_key)
         });
         reportSourceSelectionId = selection.selection_id;
       }
@@ -425,16 +413,20 @@ function SnapshotReportAISettingsPanel({
   const sessionsQuery = useQuery({
     queryKey: ["report-ai-session-slices", reportType, queryFrom, queryTo, page, pageSize],
     queryFn: () =>
-      fetchSessionTokens({
-        ...(queryFrom && queryTo ? { from: queryFrom, to: queryTo } : {}),
-        scope: "mine",
+      fetchReportSourceCandidates({
+        report_type: reportType,
+        period_start: periodStart,
+        period_end: periodEnd,
+        ...(queryFrom && queryTo
+          ? { activity_from: queryFrom, activity_to: queryTo }
+          : {}),
         page: String(page),
         page_size: String(pageSize)
       }),
     enabled: open,
     staleTime: 15_000
   });
-  const columns = useMemo<ColumnsType<SessionTokens>>(
+  const columns = useMemo<ColumnsType<ReportSourceCandidate>>(
     () => [
       {
         title: "日期",
@@ -492,7 +484,7 @@ function SnapshotReportAISettingsPanel({
           />
         </Tooltip>
       </div>
-      <Table<SessionTokens>
+      <Table<ReportSourceCandidate>
         rowKey={sessionSourceKey}
         size="small"
         columns={columns}

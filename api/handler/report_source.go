@@ -84,12 +84,7 @@ func (h *ReportSourceHandler) CreateSelection(w http.ResponseWriter, r *http.Req
 			WeekStart string `json:"week_start,omitempty"`
 			WeekEnd   string `json:"week_end,omitempty"`
 		} `json:"period"`
-		Selected []struct {
-			SessionRef    string    `json:"session_ref"`
-			AgentType     string    `json:"agent_type"`
-			ActivityStart time.Time `json:"activity_start_at"`
-			ActivityEnd   time.Time `json:"activity_end_at"`
-		} `json:"selected_session_sources"`
+		SelectedSliceKeys []string `json:"selected_slice_keys"`
 	}
 	if err := readJSON(r, &request); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REPORT_SOURCE", "error": "invalid request"})
@@ -100,12 +95,13 @@ func (h *ReportSourceHandler) CreateSelection(w http.ResponseWriter, r *http.Req
 		writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REPORT_SOURCE", "error": err.Error()})
 		return
 	}
-	inputs := make([]reportsource.SourceInput, 0, len(request.Selected))
-	for _, selected := range request.Selected {
-		inputs = append(inputs, reportsource.SourceInput{
-			SessionRef: selected.SessionRef, AgentType: selected.AgentType,
-			ActivityStart: selected.ActivityStart, ActivityEnd: selected.ActivityEnd,
-		})
+	inputs := make([]reportsource.SourceInput, 0, len(request.SelectedSliceKeys))
+	for _, sliceKey := range request.SelectedSliceKeys {
+		if !isValidUUID(strings.TrimSpace(sliceKey)) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REPORT_SOURCE", "error": "invalid slice key"})
+			return
+		}
+		inputs = append(inputs, reportsource.SourceInput{SliceKey: sliceKey})
 	}
 	selection, err := h.service.CreateExplicit(r.Context(), u.ID, request.ReportType, period, inputs)
 	if err != nil {
