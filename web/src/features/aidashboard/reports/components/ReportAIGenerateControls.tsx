@@ -10,7 +10,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { App, Button, DatePicker, Drawer, Modal, Space, Table, Tooltip } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import type { Dayjs } from "dayjs";
-import dayjs from "dayjs";
 import { useEffect, useMemo, useState } from "react";
 
 import {
@@ -404,9 +403,7 @@ function SnapshotReportAISettingsPanel({
   const periodEnd = period.date ?? period.week_end ?? periodStart;
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
-  const [queryRange, setQueryRange] = useState<[Dayjs, Dayjs] | null>(() =>
-    periodStart && periodEnd ? [dayjs(periodStart), dayjs(periodEnd)] : null
-  );
+  const [queryRange, setQueryRange] = useState<[Dayjs, Dayjs] | null>(null);
   const queryFrom = queryRange?.[0].format("YYYY-MM-DD");
   const queryTo = queryRange?.[1].format("YYYY-MM-DD");
 
