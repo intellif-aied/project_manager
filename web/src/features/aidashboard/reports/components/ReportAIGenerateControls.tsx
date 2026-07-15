@@ -441,7 +441,9 @@ function SnapshotReportAISettingsPanel({
         render: (_, record) => (
           <span className="report-ai-session-cell">
             <span className="report-ai-session-id">{record.session_ref}</span>
-            <span className="report-ai-session-summary">{record.summary || "暂无摘要"}</span>
+            <Tooltip title={record.summary || "暂无摘要"} mouseEnterDelay={0.25}>
+              <span className="report-ai-session-summary">{record.summary || "暂无摘要"}</span>
+            </Tooltip>
           </span>
         )
       },
