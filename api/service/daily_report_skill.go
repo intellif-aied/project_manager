@@ -154,10 +154,17 @@ Use this exact tool argument contract:
 
 Do not send period to read-list tools that require date_range or week_range. Do not send date_range or week_range to write_report_result, write_report_failure, or get_existing_report.
 
+## Non-negotiable Scope Matrix
+
+- personal_daily / personal_weekly: use scope.type=self.
+- team_daily / team_weekly: use scope.type=team and report_scope=personal when reading lower-level reports and inventory. Never retry with self or all.
+- department_daily / department_weekly: use scope.type=department and report_scope=team when reading lower-level reports and inventory. Never retry with self or all.
+- If the required scope is forbidden or unavailable, call write_report_failure. Do not substitute data from another scope.
+
 ## Workflow
 
 1. Read report_type, period, target, run_id, and report_source_selection_id from the run input.
-2. Call get_existing_report first with {"report_type": report_type, "period": period, "target": target}.
+2. Call get_existing_report first with {"report_type": report_type, "period": period, "target": target}. Existing content is editing context only; it must not replace facts from the current period sources or Session snapshot.
 3. Select context tools by report_type:
    - personal_daily: call get_sessions in snapshot mode and read all pages. Also call get_tasks and get_requirements with scope.type=self and date_range for period.date.
    - personal_weekly: get_daily_reports(report_scope=personal), get_tasks, and get_requirements with scope.type=self and date_range for the week. Also call get_sessions in snapshot mode and read all pages as the fixed Session supplement.
@@ -165,7 +172,7 @@ Do not send period to read-list tools that require date_range or week_range. Do 
    - team_weekly: get_weekly_reports(report_scope=personal), get_daily_reports(report_scope=personal), get_report_inventory(report_scope=personal, report_kind=weekly), and optionally get_tasks/get_requirements with scope.type=team. Do not call get_sessions by default.
    - department_daily: get_daily_reports(report_scope=team), get_report_inventory(report_scope=team, report_kind=daily), and optionally get_requirements with scope.type=department and date_range for period.date. Do not call get_sessions by default.
    - department_weekly: get_weekly_reports(report_scope=team), get_daily_reports(report_scope=team), get_report_inventory(report_scope=team, report_kind=weekly), and optionally get_requirements with scope.type=department. Do not call get_sessions by default.
-4. report_source_selection_id applies only to managed personal reports. Call get_sessions with the exact snapshot contract and consume all pages. If source_mode=explicit, its returned content is mandatory report evidence even outside the report period; if source_mode=default, it is the fixed period source snapshot. Never combine it with date_range. Do not apply it to team or department reports.
+4. report_source_selection_id applies only to managed personal reports. Call get_sessions with the exact snapshot contract and consume all pages. Work facts from both source_mode=default and source_mode=explicit are mandatory report evidence and must appear in the final body; explicit facts remain mandatory even outside the report period, while default is the fixed period source snapshot. MCP timestamps are RFC3339 values; interpret report dates in Asia/Shanghai and never discard a frozen full slice because its raw UTC date differs. If the snapshot contains work events, never claim there was no activity or no record. Never combine it with date_range. Do not apply it to team or department reports.
 5. Use source_state when present. If source_state.source_mode is reports_only, write that the report is based on saved reports. If it is sessions_only, write that it is based on session activity. If it is mixed, distinguish saved reports from supplemental data. If dependency_ready is false, list missing_names and do not invent missing lower-level report content.
 6. Use only facts returned by MCP tools. Do not invent tasks, sessions, blockers, progress, members, teams, or departments.
 7. For team and department reports, read scope_context from report/inventory MCP responses before writing the report. If a response has no scope_context, call get_report_inventory for the same scope/period to obtain roster context; do not call get_sessions just to obtain roster context.
@@ -189,6 +196,7 @@ Do not send period to read-list tools that require date_range or week_range. Do 
 - team_daily / team_weekly: saved personal daily/weekly reports returned by get_daily_reports/get_weekly_reports are the primary source for member work. Do not scan team members' sessions by default. If member reports are missing, list missing reports instead of falling back to member sessions.
 - department_daily / department_weekly: saved team daily/weekly reports returned by get_daily_reports/get_weekly_reports are the primary source for team work. Do not scan all members' sessions by default. If team reports are missing, list missing teams instead of falling back to member sessions.
 - Token/session statistics are low-priority metrics. Do not make token totals, session counts, or model usage the main body of team or department reports.
+- Raw Token values inside Session events are cumulative telemetry, not additive usage. Never add them together or derive a report Token total from them. If MCP does not provide an explicit normalized total, omit the Token total.
 
 ## Output Rules
 

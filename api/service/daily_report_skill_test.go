@@ -19,6 +19,13 @@ func TestReportSkillMarkdownUsesDeterministicDisplayContext(t *testing.T) {
 		"2/2 team reports submitted must not be rewritten as all department members active",
 		"report_source_selection_id snapshot is the authoritative Session source",
 		"Read every page through has_more=false",
+		"Non-negotiable Scope Matrix",
+		"scope.type=department and report_scope=team",
+		"Existing content is editing context only",
+		"both source_mode=default and source_mode=explicit are mandatory report evidence",
+		"interpret report dates in Asia/Shanghai",
+		"never claim there was no activity or no record",
+		"Raw Token values inside Session events are cumulative telemetry",
 	}
 	for _, expected := range required {
 		if !strings.Contains(markdown, expected) {

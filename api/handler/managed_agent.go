@@ -1251,7 +1251,9 @@ func defaultReportAgentInstructions(credentialSlot string) string {
 		"Aida Report MCP 已通过 " + credentialSlot + " 凭据槽配置当前用户 Authorization。调用已绑定的 MCP tools，不要手工拼接管理员 token。",
 		"必须使用当前用户身份调用 Aida Report MCP，并尊重 MCP 返回的权限边界和缺失来源事实。",
 		"先调用 get_existing_report 获取已有内容，再根据 report_type 调用原子工具取数。个人报告必须使用 run_id、report_type、period 和 report_source_selection_id 调用 get_sessions，持续翻页直到 has_more=false，且禁止同时传 date_range。",
+		"固定范围规则：个人报告使用 self；小组报告读取个人报告时使用 team + report_scope=personal；部门报告读取小组报告时使用 department + report_scope=team。禁止将小组或部门报告降级为 self，也禁止改用 all。",
 		"个人周报优先汇总已保存的个人日报；小组日报/周报优先汇总已保存的成员日报/周报；部门日报/周报优先汇总已保存的小组日报/周报。session、task、requirement 只作为补充证据，不要把 token 或 session 数量统计作为小组/部门报告主体。",
+		"get_existing_report 仅是编辑参考，不能覆盖本次来源事实。无论 source_mode=default 或 explicit，Session 快照中的工作事实都必须进入个人报告正文，禁止在快照包含工作记录时声称无活动。MCP 时间戳为 RFC3339，按 Asia/Shanghai 解释报告日期；不得因原始 UTC 日期不同而丢弃已冻结的完整切片。禁止累加 Session 原始事件中的累计 Token 值；没有后端归一化值时省略 Token 总量。",
 		"成员总数仅表示名册范围，不代表出勤、参与或有工作产出。小组报告已提交仅证明该小组报告存在，不代表小组全员有活动。部门报告必须保留下级报告中的缺失成员和无报告事实；缺少成员级证据时禁止输出活跃人数，也禁止使用“全员参与”“全部在岗”“所有成员完成”“全部有记录”等结论。",
 		"日期对应的星期只能复制 calendar_context，禁止自行推算。报告正文不得展示 user_id、team_id、department_id、report_id、session_id、run_id、任何 ID/编号标签或 UUID。部门名称只能使用 MCP 返回的 department_name；为空时统一写“部门”，禁止猜测。",
 		"生成成功后调用 write_report_result，传入相同 run_id、report_type、period、target 和 content。",
@@ -1268,6 +1270,7 @@ func defaultReportAgentStartPromptTemplate(credentialSlot string) string {
 		"target={{ target_json }}",
 		"report_source_selection_id={{ report_source_selection_id }}",
 		"当 report_source_selection_id 非空时，必须使用该快照和 run_id 分页读完 get_sessions，禁止另传 date_range。",
+		"固定工具范围：个人报告使用 self；小组报告使用 team + report_scope=personal；部门报告使用 department + report_scope=team。禁止将小组或部门报告改用 self 或 all。",
 		"run_id={{ run_id }}",
 		"当前用户凭据已通过 " + credentialSlot + " credential slot 注入；优先调用已绑定的 Aida Report MCP tools 获取上下文并回写生成结果，不要手工拼接 Authorization。",
 	}, "\n")
@@ -1973,9 +1976,12 @@ func buildReportRunMessage(startPromptValues map[string]string, message string, 
 		"run_id=" + strings.TrimSpace(startPromptValues["run_id"]),
 		"当前用户凭据已通过 " + strings.TrimSpace(credentialSlot) + " credential slot 注入；优先调用已绑定的 Aida Report MCP tools 获取上下文并回写生成结果，不要手工拼接 Authorization。",
 	}
+	if instruction := reportRunScopeInstruction(startPromptValues["report_type"]); instruction != "" {
+		parts = append(parts, instruction)
+	}
 	if selectionID := strings.TrimSpace(startPromptValues["report_source_selection_id"]); selectionID != "" {
 		parts = append(parts,
-			"强制来源规则：report_source_selection_id 是本次个人报告的不可变来源快照。必须携带 run_id、report_type、period 和该 ID 调用 get_sessions，持续使用 next_cursor 直到 has_more=false；禁止同时传 date_range。",
+			"强制来源规则：report_source_selection_id 是本次个人报告的不可变来源快照。必须携带 run_id、report_type、period 和该 ID 调用 get_sessions，持续使用 next_cursor 直到 has_more=false；禁止同时传 date_range。get_existing_report 只能作为编辑参考，不能覆盖快照事实；无论 source_mode=default 或 explicit，快照中的工作事实都必须进入正文，禁止在有工作记录时声称无活动。MCP 时间戳按 Asia/Shanghai 解释报告日期，不得因原始 UTC 日期不同而丢弃完整切片。禁止累加原始事件中的累计 Token 值。",
 		)
 	}
 	message = strings.TrimSpace(message)
@@ -1983,6 +1989,19 @@ func buildReportRunMessage(startPromptValues map[string]string, message string, 
 		parts = append(parts, "", "用户补充说明：", message)
 	}
 	return strings.Join(parts, "\n")
+}
+
+func reportRunScopeInstruction(reportType string) string {
+	switch strings.TrimSpace(reportType) {
+	case reportTypePersonalDaily, reportTypePersonalWeekly:
+		return "强制工具范围：个人报告使用 scope.type=self。"
+	case reportTypeTeamDaily, reportTypeTeamWeekly:
+		return "强制工具范围：小组报告读取下级报告时必须使用 scope.type=team、report_scope=personal；禁止改用 self 或 all。"
+	case reportTypeDepartmentDaily, reportTypeDepartmentWeekly:
+		return "强制工具范围：部门报告读取下级报告时必须使用 scope.type=department、report_scope=team；禁止改用 self 或 all。"
+	default:
+		return ""
+	}
 }
 
 func fallbackReportRunMessage(reportType, date, weekStart, weekEnd string, target reportTarget) string {

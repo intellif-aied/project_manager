@@ -103,10 +103,30 @@ func TestBuildReportRunMessageIncludesSystemParams(t *testing.T) {
 		"report_source_selection_id=selection-report-source",
 		"不可变来源快照",
 		"持续使用 next_cursor 直到 has_more=false",
+		"get_existing_report 只能作为编辑参考",
+		"source_mode=default 或 explicit",
+		"Asia/Shanghai",
+		"累计 Token",
 	)
 	if strings.Contains(message, "mcp_url=") {
 		t.Fatalf("message should not expose mcp_url: %q", message)
 	}
+}
+
+func TestBuildReportRunMessagePinsDepartmentScope(t *testing.T) {
+	message := buildReportRunMessage(map[string]string{
+		"report_type":           "department_weekly",
+		"period_json":           `{"week_start":"2026-07-13","week_end":"2026-07-19"}`,
+		"calendar_context_json": `{}`,
+		"target_json":           `{"type":"department"}`,
+		"run_id":                "run-department-weekly",
+	}, "", reportMCPCredentialSlot)
+
+	requireContainsAll(t, message,
+		"scope.type=department",
+		"report_scope=team",
+		"禁止改用 self 或 all",
+	)
 }
 
 func TestValidateReportSourceRunInputRejectsOrganizationSourceParameters(t *testing.T) {
@@ -150,6 +170,12 @@ func TestDefaultReportAgentInstructionsSeparateRosterFromActivity(t *testing.T) 
 		"禁止同时传 date_range",
 		"全员参与",
 		"全部在岗",
+		"team + report_scope=personal",
+		"department + report_scope=team",
+		"get_existing_report 仅是编辑参考",
+		"source_mode=default 或 explicit",
+		"Asia/Shanghai",
+		"累计 Token",
 	)
 }
 

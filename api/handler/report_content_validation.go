@@ -16,8 +16,11 @@ var (
 	reportIDLabelPattern                  = regexp.MustCompile(`(?i)(?:用户|成员|团队|小组|部门|负责人|总监|报告|会话|运行)\s*(?:id|编号)`)
 	reportISOWeekdayPattern               = regexp.MustCompile(`(20[0-9]{2})-([0-9]{1,2})-([0-9]{1,2})\s*(?:[（(]\s*)?(?:周|星期)([一二三四五六日天])\s*[）)]?`)
 	reportChineseWeekdayPattern           = regexp.MustCompile(`(?:(20[0-9]{2})\s*年\s*)?([0-9]{1,2})\s*月\s*([0-9]{1,2})\s*日\s*(?:[（(]\s*)?(?:周|星期)([一二三四五六日天])\s*[）)]?`)
-	reportNoPersonalDailyPattern          = regexp.MustCompile(`(?:无(?:任何)?个人日报(?:记录)?|个人日报\s*[:：]?\s*(?:0\s*份|零份|无人提交|均未提交))`)
-	reportNoPersonalWeeklyPattern         = regexp.MustCompile(`(?:无(?:任何)?个人周报(?:记录)?|个人周报\s*[:：]?\s*(?:0\s*份|零份|无人提交|均未提交))`)
+	reportNoPersonalDailyPattern          = regexp.MustCompile(`(?m)(?:(?:^|[。；;\n])\s*(?:(?:本)?(?:小组|团队)(?:当日|本周)?\s*)?无(?:任何)?个人日报(?:记录)?|个人日报\s*[:：]?\s*(?:0\s*份|零份|无人提交|均未提交))`)
+	reportNoPersonalWeeklyPattern         = regexp.MustCompile(`(?m)(?:(?:^|[。；;\n])\s*(?:(?:本)?(?:小组|团队)(?:当日|本周)?\s*)?无(?:任何)?个人周报(?:记录)?|个人周报\s*[:：]?\s*(?:0\s*份|零份|无人提交|均未提交))`)
+	reportNoTeamDailyPattern              = regexp.MustCompile(`(?m)(?:(?:^|[。；;\n])\s*(?:(?:本)?部门(?:当日|本周)?\s*)?无(?:任何)?(?:小组|团队)日报(?:记录)?|(?:小组|团队)日报\s*[:：]?\s*(?:0\s*份|零份|无人提交|均未提交))`)
+	reportNoTeamWeeklyPattern             = regexp.MustCompile(`(?m)(?:(?:^|[。；;\n])\s*(?:(?:本)?部门(?:当日|本周)?\s*)?无(?:任何)?(?:小组|团队)周报(?:记录)?|(?:小组|团队)周报\s*[:：]?\s*(?:0\s*份|零份|无人提交|均未提交))`)
+	reportNoSessionActivityPattern        = regexp.MustCompile(`(?im)(?:^|[。；;\n])\s*(?:(?:今日|本日|本周)\s*)?(?:无|暂无)(?:直接)?(?:工作|活动|会话|session)?(?:详细)?记录`)
 	reportFullParticipationPattern        = regexp.MustCompile(`(?:全员参与|全部在岗|所有成员(?:均|都)?(?:参与|完成|有(?:工作|记录|产出))|全体成员(?:均|都)?(?:参与|完成|有(?:工作|记录|产出)))`)
 	reportDailyCrossPeriodCoveragePattern = regexp.MustCompile(`(?:个人|小组|团队|部门)周报[^\n]{0,24}(?:缺失|提交|覆盖|无人|无记录)`)
 )
@@ -75,6 +78,39 @@ func reportContentValidationIssues(content, date, weekStart, weekEnd string) []s
 	return issues
 }
 
+func reportPersonalSourceActivityIssues(ctx context.Context, db *sql.DB, inputRef map[string]any, reportType, content string) ([]string, error) {
+	if reportType != reportTypePersonalDaily && reportType != reportTypePersonalWeekly {
+		return nil, nil
+	}
+	if !reportNoSessionActivityPattern.MatchString(content) {
+		return nil, nil
+	}
+	selectionID := strings.TrimSpace(stringFromAny(inputRef["report_source_selection_id"]))
+	if selectionID == "" {
+		return nil, nil
+	}
+	var hasWorkActivity bool
+	err := db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM report_source_selection_items i
+			JOIN session_content_events e
+				ON e.content_projection_revision_id = i.content_projection_revision_id
+				AND e.source_start_cursor >= i.start_cursor
+				AND e.source_end_cursor <= i.end_cursor
+			WHERE i.selection_id = $1
+				AND e.event_type IN ('event_msg.user_message', 'event_msg.agent_message', 'response_item.message')
+				AND NULLIF(btrim(COALESCE(e.summary, e.excerpt, '')), '') IS NOT NULL
+		)`, selectionID).Scan(&hasWorkActivity)
+	if err != nil {
+		return nil, err
+	}
+	if !hasWorkActivity {
+		return nil, nil
+	}
+	return []string{"本次 Session 来源快照包含工作记录，正文不能声称无活动或无记录；请依据完整快照事实重新生成"}, nil
+}
+
 func reportValidationPeriodBounds(date, weekStart, weekEnd string) (time.Time, time.Time) {
 	if date != "" {
 		value, _ := time.Parse("2006-01-02", date)
@@ -128,29 +164,52 @@ func addWeekdayValidationIssue(add func(string), value time.Time, shown string) 
 
 func reportSourceConsistencyIssues(ctx context.Context, db *sql.DB, reportType, date, weekStart, weekEnd string, target reportTarget, content string) ([]string, error) {
 	issues := []string{}
-	var table, periodColumn, periodValue, scopeClause, scopeID, sourceLabel, rosterQuery string
+	var periodValue, scopeID, sourceLabel, countQuery, rosterQuery, rosterUnit string
 	zeroClaim := false
 	switch reportType {
 	case reportTypeTeamDaily:
 		zeroClaim = reportNoPersonalDailyPattern.MatchString(content)
-		table, periodColumn, periodValue = "daily_reports", "report_date", date
-		scopeClause, scopeID, sourceLabel = "u.team_id::text = $2", target.TeamID, "个人日报"
+		periodValue, scopeID, sourceLabel, rosterUnit = date, target.TeamID, "个人日报", "人"
+		countQuery = `
+			SELECT COUNT(*)
+			FROM daily_reports r
+			JOIN users u ON u.id = r.user_id
+			WHERE r.report_date = $1 AND u.team_id::text = $2
+				AND r.status IS NOT NULL
+				AND NULLIF(TRIM(COALESCE(r.content, '')), '') IS NOT NULL`
 		rosterQuery = `SELECT COUNT(*) FROM users u WHERE u.team_id::text = $1`
 	case reportTypeDepartmentDaily:
-		zeroClaim = reportNoPersonalDailyPattern.MatchString(content)
-		table, periodColumn, periodValue = "daily_reports", "report_date", date
-		scopeClause, scopeID, sourceLabel = "d.id = $2", target.DepartmentID, "个人日报"
-		rosterQuery = `SELECT COUNT(*) FROM users u LEFT JOIN teams t ON t.id = u.team_id JOIN departments d ON d.id = COALESCE(u.department_id, t.department_id) WHERE d.id = $1`
+		zeroClaim = reportNoTeamDailyPattern.MatchString(content)
+		periodValue, scopeID, sourceLabel, rosterUnit = date, target.DepartmentID, "小组日报", "个小组"
+		countQuery = `
+			SELECT COUNT(*)
+			FROM team_reports r
+			JOIN teams t ON t.id = r.team_id
+			WHERE r.report_date = $1 AND t.department_id::text = $2
+				AND r.status IS NOT NULL
+				AND NULLIF(TRIM(COALESCE(r.content, '')), '') IS NOT NULL`
+		rosterQuery = `SELECT COUNT(*) FROM teams t WHERE t.department_id::text = $1`
 	case reportTypeTeamWeekly:
 		zeroClaim = reportNoPersonalWeeklyPattern.MatchString(content)
-		table, periodColumn, periodValue = "personal_weekly_reports", "week_start", weekStart
-		scopeClause, scopeID, sourceLabel = "u.team_id::text = $2", target.TeamID, "个人周报"
+		periodValue, scopeID, sourceLabel, rosterUnit = weekStart, target.TeamID, "个人周报", "人"
+		countQuery = `
+			SELECT COUNT(*)
+			FROM personal_weekly_reports r
+			JOIN users u ON u.id = r.user_id
+			WHERE r.week_start = $1 AND u.team_id::text = $2
+				AND r.status IS NOT NULL
+				AND NULLIF(TRIM(COALESCE(r.content, '')), '') IS NOT NULL`
 		rosterQuery = `SELECT COUNT(*) FROM users u WHERE u.team_id::text = $1`
 	case reportTypeDepartmentWeekly:
-		zeroClaim = reportNoPersonalWeeklyPattern.MatchString(content)
-		table, periodColumn, periodValue = "personal_weekly_reports", "week_start", weekStart
-		scopeClause, scopeID, sourceLabel = "d.id = $2", target.DepartmentID, "个人周报"
-		rosterQuery = `SELECT COUNT(*) FROM users u LEFT JOIN teams t ON t.id = u.team_id JOIN departments d ON d.id = COALESCE(u.department_id, t.department_id) WHERE d.id = $1`
+		zeroClaim = reportNoTeamWeeklyPattern.MatchString(content)
+		periodValue, scopeID, sourceLabel, rosterUnit = weekStart, target.DepartmentID, "小组周报", "个小组"
+		countQuery = `
+			SELECT COUNT(*)
+			FROM team_weekly_reports r
+			JOIN teams t ON t.id = r.team_id
+			WHERE r.week_start = $1 AND t.department_id::text = $2
+				AND NULLIF(TRIM(COALESCE(r.content, '')), '') IS NOT NULL`
+		rosterQuery = `SELECT COUNT(*) FROM teams t WHERE t.department_id::text = $1`
 	default:
 		return nil, nil
 	}
@@ -165,18 +224,8 @@ func reportSourceConsistencyIssues(ctx context.Context, db *sql.DB, reportType, 
 		return issues, nil
 	}
 
-	query := fmt.Sprintf(`
-		SELECT COUNT(*)
-		FROM %s r
-		JOIN users u ON u.id = r.user_id
-		LEFT JOIN teams t ON t.id = u.team_id
-		LEFT JOIN departments d ON d.id = COALESCE(u.department_id, t.department_id)
-		WHERE r.%s = $1
-		  AND %s
-		  AND r.status IS NOT NULL
-		  AND NULLIF(TRIM(COALESCE(r.content, '')), '') IS NOT NULL`, table, periodColumn, scopeClause)
 	var count int
-	if err := db.QueryRowContext(ctx, query, periodValue, scopeID).Scan(&count); err != nil {
+	if err := db.QueryRowContext(ctx, countQuery, periodValue, scopeID).Scan(&count); err != nil {
 		return nil, err
 	}
 	period := periodValue
@@ -192,7 +241,7 @@ func reportSourceConsistencyIssues(ctx context.Context, db *sql.DB, reportType, 
 			return nil, err
 		}
 		if count < rosterCount {
-			issues = append(issues, fmt.Sprintf("名册共有 %d 人，但 %s 数据源仅覆盖 %d 人；禁止声称全员参与、全部在岗或所有成员均有产出", rosterCount, sourceLabel, count))
+			issues = append(issues, fmt.Sprintf("范围共有 %d%s，但 %s数据源仅覆盖 %d%s；禁止声称全部范围均有产出", rosterCount, rosterUnit, sourceLabel, count, rosterUnit))
 		}
 	}
 	return issues, nil
