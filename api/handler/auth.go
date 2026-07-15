@@ -807,15 +807,39 @@ func loadAidaUserByID(db *sql.DB, id string) (*model.User, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	if !rows.Next() {
+		rows.Close()
 		return nil, sql.ErrNoRows
 	}
 	var u model.User
 	if err := scanUser(rows, &u); err != nil {
+		rows.Close()
 		return nil, err
 	}
-	return &u, rows.Err()
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if u.Role == "director" {
+		var departmentID, departmentName string
+		err := db.QueryRow(`
+			SELECT id::text, name
+			FROM departments
+			WHERE director_user_id = $1
+			ORDER BY id
+			LIMIT 1`, u.ID).Scan(&departmentID, &departmentName)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+		if err == nil {
+			u.DepartmentID = &departmentID
+			u.DepartmentName = &departmentName
+		}
+	}
+	return &u, nil
 }
 
 func queryUsers(db *sql.DB, query string, args ...any) ([]model.User, error) {

@@ -1909,7 +1909,9 @@ func reportAgentStartPromptValues(runID, reportType, date, weekStart, weekEnd st
 		selectedSessionSliceKeys = []string{}
 	}
 	periodJSON, _ := json.Marshal(reportPeriodInputRef(reportType, date, weekStart, weekEnd))
-	targetJSON, _ := json.Marshal(target)
+	// The MCP resolves the concrete target from the authenticated run. Prompting
+	// with database IDs invites the model to copy them into user-facing reports.
+	targetJSON, _ := json.Marshal(reportTarget{Type: target.Type})
 	selectedKeysJSON, _ := json.Marshal(selectedSessionSliceKeys)
 	values := map[string]string{
 		"run_id":                           runID,
@@ -2008,15 +2010,6 @@ func fallbackReportRunMessage(reportType, date, weekStart, weekEnd string, targe
 	}
 	if target.Type != "" {
 		parts = append(parts, "target_type="+target.Type)
-	}
-	if target.UserID != "" {
-		parts = append(parts, "target_user_id="+target.UserID)
-	}
-	if target.TeamID != "" {
-		parts = append(parts, "target_team_id="+target.TeamID)
-	}
-	if target.DepartmentID != "" {
-		parts = append(parts, "target_department_id="+target.DepartmentID)
 	}
 	return strings.Join(parts, "\n")
 }
@@ -2526,15 +2519,9 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 	}
 	reportSourceSelectionID := strings.TrimSpace(req.ReportSourceSelectionID)
 	isPersonalReport := req.ReportType == reportTypePersonalDaily || req.ReportType == reportTypePersonalWeekly
-	if reportSourceSelectionID != "" && len(selectedSessionSliceKeys) > 0 {
+	if sourceErr := validateReportSourceRunInput(isPersonalReport, reportSourceSelectionID, selectedSessionSliceKeys); sourceErr != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"code": "AMBIGUOUS_REPORT_SOURCE", "error": "report_source_selection_id and selected_session_slice_keys are mutually exclusive",
-		})
-		return
-	}
-	if reportSourceSelectionID != "" && !isPersonalReport {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"code": "INVALID_REPORT_SOURCE", "error": "report source selection is only valid for personal reports",
+			"code": sourceErr.Code, "error": sourceErr.Message,
 		})
 		return
 	}
@@ -2644,6 +2631,27 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 		return
 	}
 	writeJSON(w, http.StatusOK, run)
+}
+
+type reportSourceRunInputError struct {
+	Code    string
+	Message string
+}
+
+func validateReportSourceRunInput(isPersonalReport bool, selectionID string, sliceKeys []string) *reportSourceRunInputError {
+	if strings.TrimSpace(selectionID) != "" && len(sliceKeys) > 0 {
+		return &reportSourceRunInputError{
+			Code:    "AMBIGUOUS_REPORT_SOURCE",
+			Message: "report_source_selection_id and selected_session_slice_keys are mutually exclusive",
+		}
+	}
+	if !isPersonalReport && (strings.TrimSpace(selectionID) != "" || len(sliceKeys) > 0) {
+		return &reportSourceRunInputError{
+			Code:    "INVALID_REPORT_SOURCE",
+			Message: "report source selection is only valid for personal reports",
+		}
+	}
+	return nil
 }
 
 func (h *ManagedAgentHandler) GetAgentRun(w http.ResponseWriter, r *http.Request) {

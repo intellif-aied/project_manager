@@ -19,6 +19,7 @@ var (
 	ErrSourceUnavailable   = errors.New("report source content is unavailable")
 	ErrSelectionConflict   = errors.New("report source selection cannot be attached")
 	ErrSelectionMismatch   = errors.New("report source selection does not match the managed report run")
+	ErrSourceIncomplete    = errors.New("report source selection has not been read completely")
 	ErrContentItemTooLarge = errors.New("report source content item exceeds the page limit")
 )
 
@@ -461,6 +462,15 @@ func (s *Service) ReadAttachedSelection(
 		page.HasMore = true
 		page.Completeness = "partial"
 		page.NextCursor = &cursorID
+	} else {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE report_source_selections
+			SET read_completed_at = COALESCE(read_completed_at, now())
+			WHERE id = $1 AND user_id = $2 AND attached_run_id = $3 AND status = 'attached'`,
+			selectionID, userID, runID,
+		); err != nil {
+			return ContentPage{}, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return ContentPage{}, err
@@ -753,12 +763,13 @@ func (s *Service) ValidateAttachedSelectionTx(
 		return ErrSelectionMismatch
 	}
 	var status string
+	var readCompletedAt sql.NullTime
 	var storedStart, storedEnd time.Time
 	err = tx.QueryRowContext(ctx, `
-		SELECT status, period_start, period_end
+		SELECT status, period_start, period_end, read_completed_at
 		FROM report_source_selections
 		WHERE id = $1 AND user_id = $2 AND attached_run_id = $3`, selectionID, userID, runID).Scan(
-		&status, &storedStart, &storedEnd,
+		&status, &storedStart, &storedEnd, &readCompletedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) || status != "attached" {
 		return ErrSelectionMismatch
@@ -776,6 +787,9 @@ func (s *Service) ValidateAttachedSelectionTx(
 	}
 	if runReportType != reportType || !sameDate(storedStart, periodStart) || !sameDate(storedEnd, periodEnd) {
 		return ErrSelectionMismatch
+	}
+	if !readCompletedAt.Valid {
+		return ErrSourceIncomplete
 	}
 	return validateSelectionSourcesAvailable(ctx, tx, selectionID)
 }

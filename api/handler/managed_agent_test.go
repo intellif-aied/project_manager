@@ -108,6 +108,21 @@ func TestBuildReportRunMessageIncludesSystemParams(t *testing.T) {
 	}
 }
 
+func TestValidateReportSourceRunInputRejectsOrganizationSourceParameters(t *testing.T) {
+	if got := validateReportSourceRunInput(false, "", []string{"session:2026-07-14"}); got == nil || got.Code != "INVALID_REPORT_SOURCE" {
+		t.Fatalf("organization legacy source validation=%+v", got)
+	}
+	if got := validateReportSourceRunInput(false, "selection-id", nil); got == nil || got.Code != "INVALID_REPORT_SOURCE" {
+		t.Fatalf("organization selection validation=%+v", got)
+	}
+	if got := validateReportSourceRunInput(true, "selection-id", []string{"session:2026-07-14"}); got == nil || got.Code != "AMBIGUOUS_REPORT_SOURCE" {
+		t.Fatalf("ambiguous personal source validation=%+v", got)
+	}
+	if got := validateReportSourceRunInput(true, "selection-id", nil); got != nil {
+		t.Fatalf("valid personal selection rejected=%+v", got)
+	}
+}
+
 func TestReportCalendarContextJSONUsesDeterministicWeekdays(t *testing.T) {
 	daily := reportCalendarContextJSON(reportTypePersonalDaily, "2026-06-08", "", "")
 	requireContainsAll(t, daily, `"date":"2026-06-08"`, `"weekday":"周一"`)
@@ -2207,6 +2222,20 @@ func TestDailyReportIntegrationReturnsMCPAndSkill(t *testing.T) {
 	}
 	if len(got.MCP.Tools) != 9 {
 		t.Fatalf("tools = %#v", got.MCP.Tools)
+	}
+}
+
+func TestReportPromptDoesNotExposeResolvedTargetIDs(t *testing.T) {
+	target := reportTarget{Type: "department", DepartmentID: "11111111-1111-4111-8111-111111111111"}
+	values := reportAgentStartPromptValues(
+		"run-1", reportTypeDepartmentDaily, "2026-07-15", "", "", target, nil, "selection-1", "",
+	)
+	if values["target_json"] != `{"type":"department"}` {
+		t.Fatalf("target_json=%q", values["target_json"])
+	}
+	message := fallbackReportRunMessage(reportTypeDepartmentDaily, "2026-07-15", "", "", target)
+	if strings.Contains(message, target.DepartmentID) || strings.Contains(message, "target_department_id") {
+		t.Fatalf("fallback message leaked target id: %s", message)
 	}
 }
 

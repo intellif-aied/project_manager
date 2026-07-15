@@ -71,8 +71,15 @@ func reportMCPTools() []map[string]any {
 						"type":        "string",
 						"description": "Attached source snapshot id injected by Aida for managed personal reports.",
 					},
-					"page_cursor": map[string]any{"type": "string"},
-					"user_ids":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+					"page_cursor": map[string]any{
+						"type":        "string",
+						"description": "Cursor for the next page. Set this to the previous response's next_cursor value.",
+					},
+					"next_cursor": map[string]any{
+						"type":        "string",
+						"description": "Compatibility alias for page_cursor. Do not send both fields with different values.",
+					},
+					"user_ids": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 					"selected_session_slice_keys": map[string]any{
 						"type":        "array",
 						"items":       map[string]any{"type": "string"},

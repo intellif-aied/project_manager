@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/aidashboard/api/internal/reportsource"
 	"github.com/aidashboard/api/model"
 )
 
@@ -163,6 +164,29 @@ func TestReportMCPToolsListReturns9AtomicTools(t *testing.T) {
 	}
 }
 
+func TestNormalizeReportSourcePageCursorAcceptsResponseAlias(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		pageCursor string
+		nextCursor string
+		want       string
+	}{
+		{name: "page cursor", pageCursor: "page-1", want: "page-1"},
+		{name: "response alias", nextCursor: "page-2", want: "page-2"},
+		{name: "matching aliases", pageCursor: "page-3", nextCursor: "page-3", want: "page-3"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := normalizeReportSourcePageCursor(test.pageCursor, test.nextCursor)
+			if err != nil || got != test.want {
+				t.Fatalf("cursor=%q err=%v, want %q", got, err, test.want)
+			}
+		})
+	}
+	if _, err := normalizeReportSourcePageCursor("page-1", "page-2"); err == nil {
+		t.Fatal("different page_cursor and next_cursor must fail")
+	}
+}
+
 func TestReportMCPInventorySchemaUsesRangeForSelectedKind(t *testing.T) {
 	tools := reportMCPTools()
 	for _, tool := range tools {
@@ -219,6 +243,95 @@ func TestReportContentDefaultsToIncludedUnlessExplicitlyDisabled(t *testing.T) {
 	falseValue := false
 	if reportContentIncluded(&falseValue) {
 		t.Fatal("include_content=false must omit content")
+	}
+}
+
+func TestReportMCPReadResultRedactsPersistenceIdentifiers(t *testing.T) {
+	result := mcpModelTextResult(map[string]any{
+		"id":       "report-uuid",
+		"user_id":  "308",
+		"user_ids": []string{"308", "309"},
+		"username": "test06",
+		"items": []map[string]any{{
+			"session_id":  "session-uuid",
+			"session_ref": "local-session-ref",
+			"content":     "work summary",
+		}},
+	})
+	serialized, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wireResult map[string]any
+	if err := json.Unmarshal(serialized, &wireResult); err != nil {
+		t.Fatal(err)
+	}
+	payload := reportMCPTextPayload(t, wireResult)
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(encoded)
+	for _, forbidden := range []string{"report-uuid", "\"user_id\"", "\"user_ids\"", "session-uuid"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("read result leaked %q: %s", forbidden, text)
+		}
+	}
+	for _, required := range []string{"test06", "local-session-ref", "work summary"} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("read result lost %q: %s", required, text)
+		}
+	}
+}
+
+func TestResolveAttachedReportSourceContractUsesRunAsAuthority(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mock.ExpectQuery("SELECT input_ref_json").
+		WithArgs("run-1", "308", reportAgentRunBusinessType).
+		WillReturnRows(sqlmock.NewRows([]string{"input_ref_json"}).AddRow([]byte(`{
+			"report_source_selection_id":"selection-1",
+			"report_type":"personal_weekly",
+			"period":{"week_start":"2026-07-13","week_end":"2026-07-19"}
+		}`)))
+	handler := NewReportMCPHandler(db)
+	selectionID, reportType, period, found, err := handler.resolveAttachedReportSourceContract(
+		context.Background(), "308", sessionsArgs{RunID: "run-1"},
+	)
+	if err != nil || !found || selectionID != "selection-1" || reportType != "personal_weekly" ||
+		period.Start != "2026-07-13" || period.End != "2026-07-19" {
+		t.Fatalf("selection=%q type=%q period=%+v found=%v err=%v", selectionID, reportType, period, found, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReportSourcePageKeepsCursorBeforeLargeItems(t *testing.T) {
+	cursor := "cursor-2"
+	result := reportSourceContentPageResult(reportsource.ContentPage{
+		HasMore: true, NextCursor: &cursor,
+		Items: []reportsource.ContentItem{{Summary: strings.Repeat("x", 4096)}},
+	})
+	payload, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(payload, &wire); err != nil {
+		t.Fatal(err)
+	}
+	content := wire["content"].([]any)[0].(map[string]any)["text"].(string)
+	cursorIndex := strings.Index(content, `"next_cursor":"cursor-2"`)
+	itemsIndex := strings.Index(content, `"items"`)
+	if cursorIndex < 0 || itemsIndex < 0 || cursorIndex > itemsIndex {
+		t.Fatalf("cursor must precede items: %s", content[:min(len(content), 300)])
+	}
+	if strings.Contains(content, "selection_id") {
+		t.Fatalf("selection id must not be model-visible: %s", content[:min(len(content), 300)])
 	}
 }
 
@@ -541,18 +654,18 @@ func TestReportMCPScopeForbiddenForPM(t *testing.T) {
 	}
 }
 
-func TestUserIDsForDepartmentUsesDirectorUserIDAsAuthority(t *testing.T) {
+func TestUserIDsForDepartmentUsesDepartmentIDAsAuthority(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
 
-	mock.ExpectQuery(`(?s)JOIN departments d ON d\.id = COALESCE\(u\.department_id, t\.department_id\)\s+WHERE d\.director_user_id::text = \$1\s*$`).
-		WithArgs("304").
+	mock.ExpectQuery(`(?s)JOIN departments d ON d\.id = COALESCE\(u\.department_id, t\.department_id\)\s+WHERE d\.id = \$1\s*$`).
+		WithArgs("department-1").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("304").AddRow("305"))
 
-	ids, err := userIDsForDepartment(context.Background(), db, &model.User{}, "304")
+	ids, err := userIDsForDepartment(context.Background(), db, "department-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -638,7 +751,7 @@ func TestReportMCPTargetMatrix(t *testing.T) {
 		// 6. Director 读部门员工 personal report → OK (defer membership check)
 		{
 			name:       "director read dept employee personal_daily",
-			user:       &model.User{ID: "u-dir", Role: "director"},
+			user:       &model.User{ID: "u-dir", Role: "director", DepartmentID: strPtr("d-1")},
 			target:     reportTarget{Type: "user", UserID: "u-emp-dept"},
 			reportType: "personal_daily",
 			write:      false,
@@ -647,7 +760,7 @@ func TestReportMCPTargetMatrix(t *testing.T) {
 		// 7. Director 写部门员工 personal report → FORBIDDEN
 		{
 			name:       "director write dept employee personal_daily",
-			user:       &model.User{ID: "u-dir", Role: "director"},
+			user:       &model.User{ID: "u-dir", Role: "director", DepartmentID: strPtr("d-1")},
 			target:     reportTarget{Type: "user", UserID: "u-emp-dept"},
 			reportType: "personal_daily",
 			write:      true,
@@ -656,7 +769,7 @@ func TestReportMCPTargetMatrix(t *testing.T) {
 		// 8. Director 写 team_daily → FORBIDDEN
 		{
 			name:       "director write team_daily",
-			user:       &model.User{ID: "u-dir", Role: "director"},
+			user:       &model.User{ID: "u-dir", Role: "director", DepartmentID: strPtr("d-1")},
 			target:     reportTarget{Type: "team", TeamID: "t-1"},
 			reportType: "team_daily",
 			write:      true,
@@ -665,7 +778,7 @@ func TestReportMCPTargetMatrix(t *testing.T) {
 		// 9a. Director 写 department_daily (defaulted) → OK
 		{
 			name:       "director write own department_daily defaulted",
-			user:       &model.User{ID: "u-dir", Role: "director"},
+			user:       &model.User{ID: "u-dir", Role: "director", DepartmentID: strPtr("d-1")},
 			target:     reportTarget{Type: "department"},
 			reportType: "department_daily",
 			write:      true,
@@ -674,7 +787,7 @@ func TestReportMCPTargetMatrix(t *testing.T) {
 		// 9b. Director 写别的 department_daily → FORBIDDEN
 		{
 			name:       "director write other department_daily",
-			user:       &model.User{ID: "u-dir", Role: "director"},
+			user:       &model.User{ID: "u-dir", Role: "director", DepartmentID: strPtr("d-1")},
 			target:     reportTarget{Type: "department", DepartmentID: "u-other"},
 			reportType: "department_daily",
 			write:      true,
@@ -732,7 +845,7 @@ func TestReportMCPTargetMatrix(t *testing.T) {
 		},
 		{
 			name:       "director write own department_weekly via self target",
-			user:       &model.User{ID: "u-dir", Role: "director"},
+			user:       &model.User{ID: "u-dir", Role: "director", DepartmentID: strPtr("d-1")},
 			target:     reportTarget{Type: "self"},
 			reportType: "department_weekly",
 			write:      true,
@@ -956,10 +1069,10 @@ func TestReportMCPGetSessionsReturnsScopeContextRoster(t *testing.T) {
 	foundLeaderRole := false
 	for _, raw := range members {
 		m := raw.(map[string]any)
-		if m["user_id"] == "311" && m["active"] == false {
+		if m["username"] == "测试05" && m["active"] == false {
 			foundInactive = true
 		}
-		if m["user_id"] == "305" && m["role_label"] == "小组组长" && m["is_team_leader"] == true {
+		if m["username"] == "测试03" && m["role_label"] == "小组组长" && m["is_team_leader"] == true {
 			foundLeaderRole = true
 		}
 	}
@@ -1046,7 +1159,7 @@ func TestReportMCPInventoryTeamsRespectDepartmentScope(t *testing.T) {
 	h := NewReportMCPHandler(db)
 
 	mock.ExpectQuery("SELECT u.id::text").
-		WithArgs("303").
+		WithArgs("department-1").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("305").AddRow("306").AddRow("308"))
 	mock.ExpectQuery("SELECT u.id::text,").
 		WithArgs(sqlmock.AnyArg()).
@@ -1058,8 +1171,8 @@ func TestReportMCPInventoryTeamsRespectDepartmentScope(t *testing.T) {
 		WithArgs("2026-07-06", "2026-07-12", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "team_id", "week_start", "generation_mode", "edited"}).
 			AddRow("r-a", "team-a", "2026-07-06", "managed_agent", false))
-	mock.ExpectQuery("SELECT id::text, name FROM teams WHERE director_user_id").
-		WithArgs("303").
+	mock.ExpectQuery("SELECT id::text, name FROM teams WHERE department_id").
+		WithArgs("department-1").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "name"}).AddRow("team-a", "测试小组A").AddRow("team-b", "测试小组B"))
 
 	req := newReportMCPRequest("tools/call", map[string]any{
@@ -1076,7 +1189,7 @@ func TestReportMCPInventoryTeamsRespectDepartmentScope(t *testing.T) {
 			},
 		},
 	})
-	req = requestWithUser(req, &model.User{ID: "303", Role: "director"})
+	req = requestWithUser(req, &model.User{ID: "303", Role: "director", DepartmentID: strPtr("department-1")})
 	rec := httptest.NewRecorder()
 	h.Serve(rec, req)
 	payload := reportMCPTextPayload(t, reportMCPBody(t, rec))
@@ -1086,7 +1199,7 @@ func TestReportMCPInventoryTeamsRespectDepartmentScope(t *testing.T) {
 	if len(expected) != 2 {
 		t.Fatalf("expected teams=%d, want 2: %#v", len(expected), expected)
 	}
-	if len(missing) != 1 || missing[0].(map[string]any)["owner_id"] != "team-b" {
+	if len(missing) != 1 || missing[0].(map[string]any)["team_name"] != "测试小组B" {
 		t.Fatalf("missing=%#v, want only team-b", missing)
 	}
 	scopeContext := payload["scope_context"].(map[string]any)

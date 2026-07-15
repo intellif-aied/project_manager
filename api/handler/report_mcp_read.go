@@ -217,6 +217,7 @@ type sessionsArgs struct {
 	RunID                    string        `json:"run_id,omitempty"`
 	ReportSourceSelectionID  string        `json:"report_source_selection_id,omitempty"`
 	PageCursor               string        `json:"page_cursor,omitempty"`
+	NextCursor               string        `json:"next_cursor,omitempty"`
 	UserIDs                  []string      `json:"user_ids,omitempty"`
 	SelectedSessionSliceKeys []string      `json:"selected_session_slice_keys,omitempty"`
 	Limit                    int           `json:"limit,omitempty"`
@@ -270,7 +271,15 @@ func (h *ReportMCPHandler) toolGetSessions(ctx context.Context, r *http.Request,
 	if err := decodeArguments(rawArgs, &args); err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(args.ReportSourceSelectionID) != "" {
+	pageCursor, err := normalizeReportSourcePageCursor(args.PageCursor, args.NextCursor)
+	if err != nil {
+		return nil, mcpErr("INVALID_ARGUMENT", err.Error())
+	}
+	selectionID, reportType, snapshotPeriod, hasSnapshot, err := h.resolveAttachedReportSourceContract(ctx, u.ID, args)
+	if err != nil {
+		return nil, mcpErr("REPORT_SOURCE_MISMATCH", err.Error())
+	}
+	if hasSnapshot {
 		if h.reportSource == nil {
 			return nil, mcpErr("REPORT_SOURCE_MISMATCH", "report source selection is unavailable")
 		}
@@ -280,13 +289,8 @@ func (h *ReportMCPHandler) toolGetSessions(ctx context.Context, r *http.Request,
 		if args.Scope.Type != "self" || (args.Target.Type != "" && args.Target.Type != "self") || len(args.UserIDs) > 0 {
 			return nil, mcpErr("REPORT_SOURCE_MISMATCH", "personal report source requires self scope")
 		}
-		period, err := reportsource.ReportPeriod(args.ReportType, args.Period.Date, args.Period.WeekStart, args.Period.WeekEnd)
-		if err != nil {
-			return nil, mcpErr("REPORT_SOURCE_MISMATCH", "report period does not match selection")
-		}
 		page, err := h.reportSource.ReadAttachedSelection(
-			ctx, u.ID, strings.TrimSpace(args.ReportSourceSelectionID), strings.TrimSpace(args.RunID),
-			strings.TrimSpace(args.ReportType), period, strings.TrimSpace(args.PageCursor),
+			ctx, u.ID, selectionID, strings.TrimSpace(args.RunID), reportType, snapshotPeriod, pageCursor,
 		)
 		if err != nil {
 			switch {
@@ -300,7 +304,7 @@ func (h *ReportMCPHandler) toolGetSessions(ctx context.Context, r *http.Request,
 				return nil, errMCPInternal
 			}
 		}
-		return mcpTextResult(page), nil
+		return reportSourceContentPageResult(page), nil
 	}
 	start, end, err := parseDateRange(args.DateRange)
 	if err != nil {
@@ -448,7 +452,104 @@ func (h *ReportMCPHandler) toolGetSessions(ctx context.Context, r *http.Request,
 			"truncated": len(sessions) == limit,
 		}
 	}
-	return mcpTextResult(payload), nil
+	return mcpModelTextResult(payload), nil
+}
+
+func reportSourceContentPageResult(page reportsource.ContentPage) map[string]any {
+	// Keep pagination metadata before potentially large item payloads. Converting
+	// this response through a map sorts "items" ahead of "next_cursor", which
+	// makes persisted MCP output hide the cursor behind hundreds of KB of text.
+	payload := struct {
+		SourceMode      string                     `json:"source_mode"`
+		ContentSnapshot time.Time                  `json:"content_snapshot_at"`
+		Completeness    string                     `json:"completeness"`
+		ReturnedCount   int                        `json:"returned_item_count"`
+		ReturnedEvents  int                        `json:"returned_event_count"`
+		HasMore         bool                       `json:"has_more"`
+		NextCursor      *string                    `json:"next_cursor"`
+		Items           []reportsource.ContentItem `json:"items"`
+	}{
+		SourceMode: page.SourceMode, ContentSnapshot: page.ContentSnapshot,
+		Completeness: page.Completeness, ReturnedCount: page.ReturnedCount,
+		ReturnedEvents: page.ReturnedEvents, HasMore: page.HasMore,
+		NextCursor: page.NextCursor, Items: page.Items,
+	}
+	return mcpTextResult(payload)
+}
+
+func (h *ReportMCPHandler) resolveAttachedReportSourceContract(
+	ctx context.Context,
+	userID string,
+	args sessionsArgs,
+) (string, string, reportsource.Period, bool, error) {
+	runID := strings.TrimSpace(args.RunID)
+	requestedSelectionID := strings.TrimSpace(args.ReportSourceSelectionID)
+	if runID == "" {
+		if requestedSelectionID != "" {
+			return "", "", reportsource.Period{}, false, errors.New("run_id is required for an attached report source")
+		}
+		return "", "", reportsource.Period{}, false, nil
+	}
+	var raw []byte
+	err := h.db.QueryRowContext(ctx, `
+		SELECT input_ref_json
+		FROM ai_runs
+		WHERE id = $1 AND user_id = $2 AND business_type = $3`, runID, userID, reportAgentRunBusinessType,
+	).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		if requestedSelectionID != "" {
+			return "", "", reportsource.Period{}, false, errors.New("report run does not match attached source")
+		}
+		return "", "", reportsource.Period{}, false, nil
+	}
+	if err != nil {
+		return "", "", reportsource.Period{}, false, err
+	}
+	var input map[string]any
+	if err := json.Unmarshal(raw, &input); err != nil {
+		return "", "", reportsource.Period{}, false, err
+	}
+	selectionID := strings.TrimSpace(stringFromAny(input["report_source_selection_id"]))
+	if selectionID == "" {
+		if requestedSelectionID != "" {
+			return "", "", reportsource.Period{}, false, errors.New("report run has no attached source")
+		}
+		return "", "", reportsource.Period{}, false, nil
+	}
+	if requestedSelectionID != "" && requestedSelectionID != selectionID {
+		return "", "", reportsource.Period{}, false, errors.New("report source selection does not match run")
+	}
+	reportType := strings.TrimSpace(stringFromAny(input["report_type"]))
+	periodMap, _ := input["period"].(map[string]any)
+	date := strings.TrimSpace(stringFromAny(periodMap["date"]))
+	weekStart := strings.TrimSpace(stringFromAny(periodMap["week_start"]))
+	weekEnd := strings.TrimSpace(stringFromAny(periodMap["week_end"]))
+	period, err := reportsource.ReportPeriod(reportType, date, weekStart, weekEnd)
+	if err != nil {
+		return "", "", reportsource.Period{}, false, errors.New("stored report period is invalid")
+	}
+	if suppliedType := strings.TrimSpace(args.ReportType); suppliedType != "" && suppliedType != reportType {
+		return "", "", reportsource.Period{}, false, errors.New("report_type does not match run")
+	}
+	if args.Period.Date != "" || args.Period.WeekStart != "" || args.Period.WeekEnd != "" {
+		supplied, suppliedErr := reportsource.ReportPeriod(reportType, args.Period.Date, args.Period.WeekStart, args.Period.WeekEnd)
+		if suppliedErr != nil || supplied != period {
+			return "", "", reportsource.Period{}, false, errors.New("report period does not match run")
+		}
+	}
+	return selectionID, reportType, period, true, nil
+}
+
+func normalizeReportSourcePageCursor(pageCursor, nextCursor string) (string, error) {
+	pageCursor = strings.TrimSpace(pageCursor)
+	nextCursor = strings.TrimSpace(nextCursor)
+	if pageCursor != "" && nextCursor != "" && pageCursor != nextCursor {
+		return "", errors.New("page_cursor and next_cursor must match when both are provided")
+	}
+	if pageCursor != "" {
+		return pageCursor, nil
+	}
+	return nextCursor, nil
 }
 
 type dailyReportsArgs struct {
@@ -592,7 +693,7 @@ func (h *ReportMCPHandler) toolGetDailyReports(ctx context.Context, r *http.Requ
 			SELECT dr.id::text, dr.report_date::text, dr.content, COALESCE(dr.generation_mode,'default'), dr.edited, COALESCE(dr.managed_agent_run_id::text,''), dr.updated_at
 			FROM department_reports dr
 			WHERE dr.report_date >= $1 AND dr.report_date <= $2
-			  AND dr.department_id = (SELECT id FROM departments WHERE director_user_id::text = $3)
+			  AND dr.department_id = $3
 			  AND dr.status IS NOT NULL
 			  AND NULLIF(TRIM(COALESCE(dr.content, '')), '') IS NOT NULL
 			ORDER BY dr.report_date DESC`, start, end, rs.DepartmentID)
@@ -630,7 +731,7 @@ func (h *ReportMCPHandler) toolGetDailyReports(ctx context.Context, r *http.Requ
 			"total_missing":  len(missing),
 		},
 	}
-	return mcpTextResult(payload), nil
+	return mcpModelTextResult(payload), nil
 }
 
 type weeklyReportsArgs struct {
@@ -776,7 +877,7 @@ func (h *ReportMCPHandler) toolGetWeeklyReports(ctx context.Context, r *http.Req
 			SELECT r.id::text, r.week_start, r.week_end, r.content, COALESCE(r.generation_mode,'default'), r.edited, COALESCE(r.managed_agent_run_id::text,''), r.updated_at
 			FROM department_weekly_reports r
 			WHERE r.week_start >= $1 AND r.week_end <= $2
-			  AND r.department_id = (SELECT id FROM departments WHERE director_user_id::text = $3)
+			  AND r.department_id = $3
 			  AND NULLIF(TRIM(COALESCE(r.content, '')), '') IS NOT NULL
 			ORDER BY r.week_start DESC`, ws, we, rs.DepartmentID)
 		if err != nil {
@@ -824,7 +925,7 @@ func (h *ReportMCPHandler) toolGetWeeklyReports(ctx context.Context, r *http.Req
 			"total_missing":  len(missing),
 		},
 	}
-	return mcpTextResult(payload), nil
+	return mcpModelTextResult(payload), nil
 }
 
 type tasksArgs struct {
@@ -956,7 +1057,7 @@ func (h *ReportMCPHandler) toolGetTasks(ctx context.Context, r *http.Request, ra
 		return nil, errMCPInternal
 	}
 	payload := map[string]any{"tasks": tasks, "summary": summary}
-	return mcpTextResult(payload), nil
+	return mcpModelTextResult(payload), nil
 }
 
 type requirementsArgs struct {
@@ -1048,7 +1149,7 @@ func (h *ReportMCPHandler) toolGetRequirements(ctx context.Context, r *http.Requ
 		"requirements": reqs,
 		"summary":      map[string]int{"total": len(reqs), "risk_count": riskCount},
 	}
-	return mcpTextResult(payload), nil
+	return mcpModelTextResult(payload), nil
 }
 
 type existingReportArgs struct {
@@ -1096,7 +1197,7 @@ func (h *ReportMCPHandler) toolGetExistingReport(ctx context.Context, r *http.Re
 	productStatus := computeProductStatus(snapshot, lastRun)
 
 	if snapshot == nil {
-		return mcpTextResult(map[string]any{"report": nil, "product_status": productStatus}), nil
+		return mcpModelTextResult(map[string]any{"report": nil, "product_status": productStatus}), nil
 	}
 	report := map[string]any{
 		"id":                   snapshot.ID,
@@ -1114,7 +1215,7 @@ func (h *ReportMCPHandler) toolGetExistingReport(ctx context.Context, r *http.Re
 	if snapshot.Content != "" {
 		report["content"] = snapshot.Content
 	}
-	return mcpTextResult(map[string]any{"report": report, "product_status": productStatus}), nil
+	return mcpModelTextResult(map[string]any{"report": report, "product_status": productStatus}), nil
 }
 
 type reportInventoryArgs struct {
@@ -1171,7 +1272,7 @@ func (h *ReportMCPHandler) toolGetReportInventory(ctx context.Context, r *http.R
 			return nil, errMCPInternal
 		}
 		missing := computeMissing(expected, existing)
-		return mcpTextResult(map[string]any{
+		return mcpModelTextResult(map[string]any{
 			"inventory": map[string]any{
 				"expected": expected,
 				"existing": existing,
@@ -1200,7 +1301,7 @@ func (h *ReportMCPHandler) toolGetReportInventory(ctx context.Context, r *http.R
 		return nil, errMCPInternal
 	}
 	missing := computeMissing(expected, existing)
-	return mcpTextResult(map[string]any{
+	return mcpModelTextResult(map[string]any{
 		"inventory": map[string]any{
 			"expected": expected,
 			"existing": existing,
@@ -1260,14 +1361,14 @@ func loadReportSnapshot(ctx context.Context, db *sql.DB, reportType, date, ws, w
 	case reportTypeDepartmentDaily:
 		return loadSnapshotRow(ctx, db, `SELECT id::text, content, COALESCE(generation_mode,'default'), edited, COALESCE(managed_agent_run_id::text,''), updated_at
 			FROM department_reports
-			WHERE department_id = (SELECT id FROM departments WHERE director_user_id::text = $1)
+			WHERE department_id = $1
 			  AND report_date = $2
 			  AND status IS NOT NULL
 			  AND NULLIF(TRIM(COALESCE(content, '')), '') IS NOT NULL`, target.DepartmentID, date)
 	case reportTypeDepartmentWeekly:
 		return loadSnapshotRow(ctx, db, `SELECT id::text, content, COALESCE(generation_mode,'default'), edited, COALESCE(managed_agent_run_id::text,''), updated_at
 			FROM department_weekly_reports
-			WHERE department_id = (SELECT id FROM departments WHERE director_user_id::text = $1)
+			WHERE department_id = $1
 			  AND week_start = $2 AND week_end = $3
 			  AND NULLIF(TRIM(COALESCE(content, '')), '') IS NOT NULL`, target.DepartmentID, ws, we)
 	}
@@ -1526,7 +1627,7 @@ func loadDailyInventoryExisting(ctx context.Context, db *sql.DB, reportScope str
 			SELECT id::text, report_date::text, COALESCE(generation_mode,'default'), edited
 			FROM department_reports
 			WHERE report_date >= $1 AND report_date <= $2
-			  AND department_id = (SELECT id FROM departments WHERE director_user_id::text = $3)
+			  AND department_id = $3
 			  AND status IS NOT NULL
 			  AND NULLIF(TRIM(COALESCE(content, '')), '') IS NOT NULL`, start, end, rs.DepartmentID)
 		if err != nil {
@@ -1667,7 +1768,7 @@ func loadWeeklyInventoryExisting(ctx context.Context, db *sql.DB, reportScope st
 			SELECT id::text, week_start::text, COALESCE(generation_mode,'default'), edited
 			FROM department_weekly_reports
 			WHERE week_start >= $1 AND week_end <= $2
-			  AND department_id = (SELECT id FROM departments WHERE director_user_id::text = $3)
+			  AND department_id = $3
 			  AND NULLIF(TRIM(COALESCE(content, '')), '') IS NOT NULL`, ws, we, rs.DepartmentID)
 		if err != nil {
 			return nil, err
@@ -1755,7 +1856,7 @@ func loadInventoryTeams(ctx context.Context, db *sql.DB, rs *resolvedScope) ([]i
 		query += ` WHERE id = $1`
 		args = append(args, rs.TeamID)
 	} else if rs != nil && rs.Type == "department" && rs.DepartmentID != "" {
-		query += ` WHERE director_user_id = $1`
+		query += ` WHERE department_id = $1`
 		args = append(args, rs.DepartmentID)
 	}
 	query += ` ORDER BY name`

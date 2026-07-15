@@ -183,6 +183,7 @@ func TestReportSourceSelectionLifecycleIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertAttachedSelectionValidationError(t, ctx, database, service, pagedAttached.ID, pagedRunID, selection.Period, ErrSourceIncomplete)
 	firstPage, err := service.ReadAttachedSelection(ctx, "990040", pagedAttached.ID, pagedRunID, "personal_weekly", selection.Period, "")
 	if err != nil {
 		t.Fatal(err)
@@ -190,6 +191,7 @@ func TestReportSourceSelectionLifecycleIntegration(t *testing.T) {
 	if !firstPage.HasMore || firstPage.NextCursor == nil || firstPage.ReturnedEvents != 100 || firstPage.Completeness != "partial" {
 		t.Fatalf("first paged read=%+v", firstPage)
 	}
+	assertAttachedSelectionValidationError(t, ctx, database, service, pagedAttached.ID, pagedRunID, selection.Period, ErrSourceIncomplete)
 	retriedFirstPage, err := service.ReadAttachedSelection(ctx, "990040", pagedAttached.ID, pagedRunID, "personal_weekly", selection.Period, "")
 	if err != nil {
 		t.Fatal(err)
@@ -205,6 +207,7 @@ func TestReportSourceSelectionLifecycleIntegration(t *testing.T) {
 	if secondPage.HasMore || secondPage.ReturnedEvents != 5 || secondPage.Completeness != "complete" {
 		t.Fatalf("second paged read=%+v", secondPage)
 	}
+	assertAttachedSelectionValidationError(t, ctx, database, service, pagedAttached.ID, pagedRunID, selection.Period, nil)
 	retriedSecondPage, err := service.ReadAttachedSelection(ctx, "990040", pagedAttached.ID, pagedRunID, "personal_weekly", selection.Period, *firstPage.NextCursor)
 	if err != nil || retriedSecondPage.HasMore || retriedSecondPage.ReturnedEvents != secondPage.ReturnedEvents {
 		t.Fatalf("second page retry changed contents page=%+v err=%v", retriedSecondPage, err)
@@ -255,6 +258,27 @@ func TestReportSourceSelectionLifecycleIntegration(t *testing.T) {
 	if _, err := service.CreateExplicit(ctx, "990041", "personal_daily", Period{Start: "2026-07-10", End: "2026-07-10"},
 		[]SourceInput{{SessionRef: "report-source-e2e", AgentType: "codex", ActivityStart: fixture.times[0], ActivityEnd: fixture.times[2]}}); !errors.Is(err, ErrSourceUnavailable) {
 		t.Fatalf("cross-user selection err=%v", err)
+	}
+}
+
+func assertAttachedSelectionValidationError(
+	t *testing.T,
+	ctx context.Context,
+	database *sql.DB,
+	service *Service,
+	selectionID, runID string,
+	period Period,
+	want error,
+) {
+	t.Helper()
+	tx, err := database.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	err = service.ValidateAttachedSelectionTx(ctx, tx, "990040", selectionID, runID, "personal_weekly", period)
+	if !errors.Is(err, want) {
+		t.Fatalf("validation error=%v want=%v", err, want)
 	}
 }
 
