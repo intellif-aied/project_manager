@@ -176,7 +176,9 @@ function MemberReportContentList<T extends { content: string; next_day_plan?: st
       if (event.key === "Escape") closeReport();
     };
     document.addEventListener("keydown", handleEscape);
-    return () => document.removeEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("keydown", handleEscape);
+    };
   }, [effectiveSelectedID]);
 
   return (
@@ -316,7 +318,9 @@ function MemberReportContentList<T extends { content: string; next_day_plan?: st
               aria-label="复制日报全文"
               disabled={!detail.data?.content?.trim()}
               onClick={() => void copyCurrentReport()}
-            />
+            >
+              复制
+            </Button>
           </header>
           <div className="member-report-mobile-detail__meta">
             <span>日报全文</span>

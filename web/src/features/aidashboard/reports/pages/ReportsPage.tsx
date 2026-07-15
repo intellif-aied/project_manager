@@ -1,5 +1,6 @@
 ﻿import { CopyOutlined, DeleteOutlined, DownOutlined, EditOutlined, UpOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { LeftOutlined } from "@ant-design/icons";
 import {
   Alert,
   App,
@@ -18,7 +19,7 @@ import {
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import type { Dayjs } from "dayjs";
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import dayjs from "dayjs";
 
@@ -473,6 +474,7 @@ function InlineDailyContentItem<TRecord extends InlineDailyRecord, TDetail exten
 }) {
   const { message } = App.useApp();
   const [expanded, setExpanded] = useState(false);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
   const detailQuery = useQuery({
     queryKey: ["reports", "daily-inline-detail", title, record.id],
     queryFn: () => fetchDetail(record.id),
@@ -489,6 +491,45 @@ function InlineDailyContentItem<TRecord extends InlineDailyRecord, TDetail exten
       void message.error("复制失败，请稍后重试");
     }
   };
+
+  const closeReport = () => {
+    setExpanded(false);
+    requestAnimationFrame(() => returnFocusRef.current?.focus({ preventScroll: true }));
+  };
+
+  const toggleReport = () => {
+    if (expanded) {
+      closeReport();
+      return;
+    }
+    returnFocusRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setExpanded(true);
+  };
+
+  useEffect(() => {
+    if (!expanded) return;
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeReport();
+    };
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, [expanded]);
+
+  const reportBody = (
+    <>
+      {detailQuery.isLoading ? <div className="member-report-content-item__loading">正在加载日报全文…</div> : null}
+      {detailQuery.isError ? <Alert type="error" showIcon message="日报加载失败" /> : null}
+      {!detailQuery.isLoading && !detailQuery.isError && detailQuery.data?.content?.trim() ? <MarkdownViewer value={detailQuery.data.content} /> : null}
+      {!detailQuery.isLoading && !detailQuery.isError && !detailQuery.data?.content?.trim() ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无日报内容" /> : null}
+      <div className="member-report-content-item__plan">
+        <strong>明日计划</strong>
+        <p>{record.next_day_plan?.trim() || "未填写"}</p>
+      </div>
+    </>
+  );
 
   return (
     <article className={`member-report-content-item${expanded ? " is-expanded" : ""}`}>
@@ -508,7 +549,7 @@ function InlineDailyContentItem<TRecord extends InlineDailyRecord, TDetail exten
           <Button type="text" size="small" danger icon={<DeleteOutlined />} onClick={onDelete}>
             删除
           </Button>
-          <Button className="member-report-content-item__toggle" type="text" size="small" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>
+          <Button className="member-report-content-item__toggle" type="text" size="small" aria-expanded={expanded} onClick={toggleReport}>
             {expanded ? <UpOutlined /> : <DownOutlined />}
             {expanded ? "收起" : "展开"}
           </Button>
@@ -522,15 +563,47 @@ function InlineDailyContentItem<TRecord extends InlineDailyRecord, TDetail exten
               <Button className="member-report-content-item__copy" type="text" size="small" icon={<CopyOutlined />} aria-label="复制日报全文" disabled={!detailQuery.data?.content?.trim()} onClick={() => void copyCurrentReport()} />
             </Tooltip>
           </div>
-          {detailQuery.isLoading ? <div className="member-report-content-item__loading">正在加载日报全文…</div> : null}
-          {detailQuery.isError ? <Alert type="error" showIcon message="日报加载失败" /> : null}
-          {!detailQuery.isLoading && !detailQuery.isError && detailQuery.data?.content?.trim() ? <MarkdownViewer value={detailQuery.data.content} /> : null}
-          {!detailQuery.isLoading && !detailQuery.isError && !detailQuery.data?.content?.trim() ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无日报内容" /> : null}
-          <div className="member-report-content-item__plan">
-            <strong>明日计划</strong>
-            <p>{record.next_day_plan?.trim() || "未填写"}</p>
-          </div>
+          {reportBody}
         </div>
+      ) : null}
+      {expanded ? (
+        <section
+          className="member-report-mobile-detail reports-inline-mobile-detail"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={`inline-daily-mobile-title-${record.id}`}
+        >
+          <header className="member-report-mobile-detail__header">
+            <Button
+              className="member-report-mobile-detail__back"
+              type="text"
+              icon={<LeftOutlined />}
+              aria-label={`返回${title}`}
+              onClick={closeReport}
+            >
+              返回
+            </Button>
+            <div className="member-report-mobile-detail__identity">
+              <strong id={`inline-daily-mobile-title-${record.id}`}>{formatDate(record.report_date)}</strong>
+              <span>{meta}</span>
+            </div>
+            <Button
+              className="member-report-mobile-detail__copy"
+              type="text"
+              icon={<CopyOutlined />}
+              aria-label="复制日报全文"
+              disabled={!detailQuery.data?.content?.trim()}
+              onClick={() => void copyCurrentReport()}
+            >
+              复制
+            </Button>
+          </header>
+          <div className="member-report-mobile-detail__meta">
+            <span>日报全文</span>
+            <span>{formatDateTime(record.updated_at)}</span>
+          </div>
+          <div className="member-report-mobile-detail__body">{reportBody}</div>
+        </section>
       ) : null}
     </article>
   );

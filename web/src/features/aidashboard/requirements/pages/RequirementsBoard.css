@@ -5653,6 +5653,14 @@
     align-items: flex-start;
   }
 
+  .requirements-drawer__close,
+  .requirements-drawer__header-main > .requirements-drawer__favorite {
+    flex-basis: 36px;
+    width: 36px;
+    height: 36px;
+    border-radius: 9px;
+  }
+
   .requirements-drawer__title strong {
     display: -webkit-box;
     overflow: hidden;
@@ -5662,12 +5670,21 @@
   }
 
   .requirements-drawer__header-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
     width: 100%;
-    justify-content: flex-end;
+    gap: 8px;
   }
 
   .requirements-drawer__header-actions .ant-btn {
-    min-height: 34px;
+    width: 100%;
+    min-height: 36px;
+    padding-inline: 10px;
+  }
+
+  .requirements-drawer__header-actions .ant-btn[aria-label="更多操作"] {
+    width: 36px;
+    padding: 0;
   }
 
   .requirements-drawer__overview {
@@ -5729,7 +5746,8 @@
   }
 
   .requirements-drawer__tabs .ant-tabs-tab {
-    padding: 8px 0;
+    min-height: 40px;
+    padding: 9px 0;
   }
 
   .requirements-drawer__tabs .ant-tabs-extra-content {
@@ -5766,6 +5784,11 @@
 
   .requirements-drawer__task-row {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-areas:
+      "title title"
+      "state owner"
+      "date risk"
+      "action action";
     gap: 8px 12px;
     min-height: 0;
     padding: 12px;
@@ -5778,9 +5801,25 @@
   }
 
   .requirements-drawer__task-title {
-    grid-column: 1 / -1;
+    grid-area: title;
     padding-bottom: 7px;
     border-bottom: 1px solid #f0f4f8;
+  }
+
+  .requirements-drawer__task-state {
+    grid-area: state;
+  }
+
+  .requirements-drawer__task-owner {
+    grid-area: owner;
+  }
+
+  .requirements-drawer__task-date {
+    grid-area: date;
+  }
+
+  .requirements-drawer__task-risk {
+    grid-area: risk;
   }
 
   .requirements-drawer__task-title strong {
@@ -5797,7 +5836,10 @@
   }
 
   .requirements-drawer__task-action {
+    grid-area: action;
     align-self: center;
+    justify-self: end;
+    padding-top: 2px;
   }
 
   .requirements-drawer__progress-editor {
@@ -5811,5 +5853,266 @@
   .requirements-quick-edit,
   .requirements-quick-edit--wide {
     width: min(310px, calc(100vw - 32px));
+  }
+
+  .requirements-task-detail-modal {
+    top: max(8px, env(safe-area-inset-top)) !important;
+    width: calc(100vw - 16px) !important;
+    max-width: calc(100vw - 16px);
+    padding-bottom: max(8px, env(safe-area-inset-bottom));
+  }
+
+  .requirements-task-detail-modal .ant-modal-header {
+    min-height: 56px;
+    padding: 10px 48px 9px 14px;
+  }
+
+  .requirements-task-detail-modal .ant-modal-close {
+    top: 10px;
+    inset-inline-end: 10px;
+    width: 36px;
+    height: 36px;
+  }
+
+  .requirements-task-detail-modal__title {
+    align-items: flex-start;
+    min-height: 36px;
+  }
+
+  .requirements-task-detail-modal__title strong {
+    display: -webkit-box;
+    overflow: hidden;
+    font-size: 15px;
+    line-height: 1.35;
+    white-space: normal;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .requirements-task-detail-modal__favorite {
+    width: 34px;
+    height: 34px;
+  }
+
+  .requirements-task-detail-modal .ant-modal-body {
+    max-height: calc(100dvh - 80px) !important;
+    padding: 12px !important;
+    overscroll-behavior: contain;
+  }
+
+  .requirements-task-detail__hero {
+    padding: 11px;
+  }
+
+  .requirements-task-detail__hero-head {
+    align-items: flex-start;
+  }
+
+  .requirements-task-detail__hero .requirements-drawer__actions {
+    flex: 0 0 auto;
+    gap: 6px;
+  }
+
+  .requirements-task-detail__hero .requirements-drawer__actions .ant-btn {
+    min-height: 36px;
+    padding-inline: 10px;
+  }
+
+  .requirements-task-detail__meta-strip {
+    margin-top: 9px;
+    padding: 7px 8px;
+  }
+
+  .requirements-task-detail__meta-strip > div {
+    padding: 0 8px;
+  }
+
+  .requirements-task-detail__progress-control {
+    padding: 9px;
+    margin-top: 9px;
+  }
+
+  .requirements-task-detail__progress-row {
+    grid-template-columns: minmax(0, 1fr) 84px;
+    grid-template-areas:
+      "label input"
+      "slider slider"
+      "status save";
+    gap: 8px 10px;
+    width: 100%;
+  }
+
+  .requirements-task-detail__progress-label {
+    grid-area: label;
+  }
+
+  .requirements-task-detail__progress-row > .requirements-task-detail__progress-slider {
+    grid-area: slider;
+    width: auto;
+    min-height: 22px;
+    margin: 4px 6px;
+  }
+
+  .requirements-task-detail__progress-row > .ant-space-compact {
+    grid-area: input;
+    width: 84px;
+    min-width: 0;
+  }
+
+  .requirements-task-detail__progress-row .ant-input-number {
+    width: 100%;
+  }
+
+  .requirements-task-detail__progress-row > .ant-btn {
+    grid-area: save;
+    width: 84px;
+    height: 34px;
+  }
+
+  .requirements-task-detail__status-switch {
+    display: grid;
+    grid-area: status;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    width: 100%;
+    min-width: 0;
+  }
+
+  .requirements-task-detail__status-switch .ant-btn {
+    width: 100%;
+    min-width: 0;
+    height: 28px;
+    padding: 0 5px;
+  }
+
+  .requirements-task-detail__field-row {
+    grid-template-columns: 68px minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  .requirements-task-detail__field-row > strong {
+    display: -webkit-box;
+    white-space: normal;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .requirements-task-detail__healthy-risk {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 3px 8px;
+  }
+
+  .requirements-task-detail__healthy-risk span {
+    flex: 1 1 180px;
+    overflow: visible;
+    line-height: 1.5;
+    text-overflow: clip;
+    white-space: normal;
+  }
+
+  .requirements-task-detail__events-panel .requirements-event-timeline__main,
+  .requirements-task-detail__events-panel .requirements-event-timeline__meta {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 2px 8px;
+  }
+
+  .requirements-task-edit-panel {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+    width: 100%;
+    min-width: 0;
+    padding: 12px;
+  }
+
+  .requirements-task-edit-panel > *,
+  .requirements-task-edit-panel form {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .requirements-task-edit-panel__head {
+    align-items: flex-start;
+    gap: 10px;
+    padding-bottom: 10px;
+  }
+
+  .requirements-task-edit-panel__head .requirements-modal-title {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .requirements-task-edit-panel__head .requirements-modal-title strong {
+    font-size: 15px;
+  }
+
+  .requirements-task-edit-panel__head .requirements-modal-title span {
+    display: -webkit-box;
+    min-width: 0;
+    overflow: hidden;
+    line-height: 1.45;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .requirements-task-edit-panel__head > .ant-btn {
+    flex: 0 0 auto;
+    min-height: 36px;
+    padding-inline: 10px;
+  }
+
+  .requirements-task-edit-panel__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0 10px;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .requirements-task-edit-panel__grid > .ant-form-item:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .requirements-task-edit-panel .ant-form-item {
+    min-width: 0;
+    margin-bottom: 12px;
+  }
+
+  .requirements-task-edit-panel .ant-select,
+  .requirements-task-edit-panel .ant-picker,
+  .requirements-task-edit-panel .ant-input,
+  .requirements-task-edit-panel .requirements-dependency-picker-trigger,
+  .requirements-task-edit-panel .acceptance-criteria-editor {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .requirements-task-edit-panel .requirements-dependency-picker-trigger {
+    gap: 8px;
+    padding: 9px 10px;
+  }
+
+  .requirements-task-edit-panel .requirements-dependency-picker-trigger > span:last-child {
+    padding-inline: 9px;
+  }
+
+  .requirements-task-edit-panel__footer {
+    position: sticky;
+    bottom: -12px;
+    z-index: 3;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+    margin: 0 -12px -12px;
+    background: rgba(255, 255, 255, 0.98);
+    border-top: 1px solid #e5ebf3;
+    box-shadow: 0 -8px 18px rgba(15, 23, 42, 0.05);
+  }
+
+  .requirements-task-edit-panel__footer .ant-btn {
+    width: 100%;
+    min-height: 38px;
+    margin: 0;
   }
 }
