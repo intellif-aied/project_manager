@@ -166,9 +166,15 @@ func (s *Service) ListCandidates(ctx context.Context, userID string, query Candi
 						AND e2.source_start_cursor >= sl.start_cursor
 						AND e2.source_end_cursor <= sl.end_cursor
 						AND NULLIF(btrim(e2.summary), '') IS NOT NULL
-					ORDER BY e2.source_start_cursor, e2.id
+						AND e2.event_type NOT IN ('response_item.custom_tool_call', 'response_item.function_call')
+					ORDER BY CASE e2.event_type
+						WHEN 'event_msg.user_message' THEN 0
+						WHEN 'event_msg.agent_message' THEN 1
+						WHEN 'response_item.message' THEN 2
+						ELSE 3
+					END, e2.source_start_cursor, e2.id
 					LIMIT 1
-				), '') AS summary,
+				), 'Session 增量内容（' || COUNT(*)::text || ' 条记录）') AS summary,
 				MAX(e.occurred_at) AS last_activity_at,
 				MIN(e.occurred_at) AS activity_start_at,
 				MAX(e.occurred_at) AS activity_end_at,
@@ -559,8 +565,14 @@ func resolveExplicitItems(ctx context.Context, tx *sql.Tx, userID string, inputs
 					WHERE e2.content_projection_revision_id = rev.id
 						AND e2.source_start_cursor >= sl.start_cursor AND e2.source_end_cursor <= sl.end_cursor
 						AND NULLIF(btrim(e2.summary), '') IS NOT NULL
-					ORDER BY e2.source_start_cursor, e2.id LIMIT 1
-				), ''), s.content_status, s.content_epoch, COUNT(*)
+						AND e2.event_type NOT IN ('response_item.custom_tool_call', 'response_item.function_call')
+					ORDER BY CASE e2.event_type
+						WHEN 'event_msg.user_message' THEN 0
+						WHEN 'event_msg.agent_message' THEN 1
+						WHEN 'response_item.message' THEN 2
+						ELSE 3
+					END, e2.source_start_cursor, e2.id LIMIT 1
+				), 'Session 增量内容（' || COUNT(*)::text || ' 条记录）'), s.content_status, s.content_epoch, COUNT(*)
 			FROM sessions s
 			JOIN session_sources src ON src.session_id = s.id
 			JOIN session_content_slices sl ON sl.id = $2 AND sl.session_id = s.id AND sl.source_id = src.id
