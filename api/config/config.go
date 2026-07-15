@@ -11,6 +11,7 @@ type Config struct {
 	AIHubHost                           string
 	AIHubSecret                         string
 	AIHubToken                          string
+	AIGatewayModelsURL                  string
 	BootstrapAdminUIDs                  string
 	AIAPIURL                            string
 	AIAPIKey                            string
@@ -57,6 +58,7 @@ func Load() *Config {
 		AIHubHost:                           getEnv("AIHUB_HOST", ""),
 		AIHubSecret:                         getEnv("AIHUB_SECRET", getEnv("JWT_SECRET", "dev-jwt-secret")),
 		AIHubToken:                          getEnv("AIHUB_SERVICE_TOKEN", getEnv("AIHUB_TOKEN", "")),
+		AIGatewayModelsURL:                  getEnv("AI_GATEWAY_MODELS_URL", "http://192.168.11.18:30054/api/v2/models"),
 		BootstrapAdminUIDs:                  getEnv("AIDA_BOOTSTRAP_ADMIN_UIDS", ""),
 		AIAPIURL:                            getEnv("AI_API_URL", ""),
 		AIAPIKey:                            getEnv("AI_API_KEY", ""),

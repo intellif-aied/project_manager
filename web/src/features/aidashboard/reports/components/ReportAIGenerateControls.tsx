@@ -406,7 +406,7 @@ function SnapshotReportAISettingsPanel({
   const periodStart = period.date ?? period.week_start ?? "";
   const periodEnd = period.date ?? period.week_end ?? periodStart;
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [pageSize, setPageSize] = useState(5);
   const [queryRange, setQueryRange] = useState<[Dayjs, Dayjs] | null>(null);
   const queryFrom = queryRange?.[0].format("YYYY-MM-DD");
   const queryTo = queryRange?.[1].format("YYYY-MM-DD");

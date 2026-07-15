@@ -9,6 +9,7 @@ import type {
   UpsertManagedAgentPayload
 } from "../../api/types";
 import { MCPResourcePicker } from "./MCPResourcePicker";
+import { ManagedModelSelect } from "./ManagedModelSelect";
 import { SkillResourcePicker } from "./SkillResourcePicker";
 import {
   buildAgentResourcePayload,
@@ -90,7 +91,7 @@ export function AgentEditor({
             engine: values.engine,
             business_type: businessType,
             instructions: values.instructions,
-            default_model_id: values.default_model_id,
+            default_model_id: values.default_model_id?.trim() || undefined,
             start_prompt_template: values.start_prompt_template,
             ...resources
           };
@@ -132,10 +133,14 @@ export function AgentEditor({
             </Form.Item>
             <Form.Item
               name="default_model_id"
-              label="默认模型 ID"
-              extra="可选。填写后运行页默认使用该模型；未填写时，运行时需要手动输入模型 ID。"
+              label="默认模型"
+              extra="可选。选择后运行页默认使用该模型；未选择时，运行前需要选择模型。"
             >
-              <Input placeholder="例如 MiniMax-M2.5" />
+              <ManagedModelSelect
+                allowClear
+                preservedModelId={agent?.default_model_id}
+                placeholder="选择默认模型"
+              />
             </Form.Item>
           </div>
         </Card>

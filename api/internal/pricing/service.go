@@ -13,6 +13,19 @@ import (
 
 const CalculatorVersion = "aida-cost-v1"
 
+const calculateCostQuery = `
+		SELECT calculated.cost_usd::numeric(30,12)::text,
+			(calculated.cost_usd * $11::numeric)::numeric(30,12)::text
+		FROM (
+			SELECT (
+				$1::numeric * $6::numeric +
+					$2::numeric * $7::numeric +
+					$3::numeric * $8::numeric +
+					$4::numeric * $9::numeric +
+					$5::numeric * $10::numeric
+			) / 1000000::numeric AS cost_usd
+		) calculated`
+
 type Service struct {
 	db *sql.DB
 }
@@ -356,17 +369,7 @@ func buildCandidate(ctx context.Context, tx *sql.Tx, component usageComponent) (
 	}
 
 	var costUSD, costCNY string
-	err = tx.QueryRowContext(ctx, `
-		SELECT calculated.cost_usd::text, (calculated.cost_usd * $11::numeric)::text
-		FROM (
-			SELECT (
-				$1::numeric * $6::numeric +
-				$2::numeric * $7::numeric +
-				$3::numeric * $8::numeric +
-				$4::numeric * $9::numeric +
-				$5::numeric * $10::numeric
-			) / 1000000::numeric AS cost_usd
-		) calculated`, component.UncachedInputTokens, component.CacheReadTokens,
+	err = tx.QueryRowContext(ctx, calculateCostQuery, component.UncachedInputTokens, component.CacheReadTokens,
 		component.CacheWrite5mTokens, component.CacheWrite1hTokens, component.OutputTokens,
 		price.Input, price.CacheRead, price.CacheWrite5m, price.CacheWrite1h, price.Output, rate.Rate).Scan(&costUSD, &costCNY)
 	if err != nil {

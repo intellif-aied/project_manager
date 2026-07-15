@@ -93,7 +93,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
       },
       {
         title: "3. 登录客户端",
-        steps: ["执行 aida login。", "输入 AIDA 服务地址和刚复制的个人 Token。", "执行 aida status，核对当前登录账号。"],
+        steps: ["执行 aida login。", "按提示粘贴刚复制的个人 Token；服务环境已由安装脚本自动配置。", "执行 aida status，核对当前登录账号。"],
         codeBlocks: [{ label: "登录并检查状态", code: "aida login\naida status" }]
       },
       {
@@ -103,7 +103,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
           { label: "查看本地 Session", code: "aida sessions" },
           { label: "交互选择并上传", code: "aida upload" }
         ],
-        screenshotPlaceholders: [{ title: "aida sessions 与 upload", description: "等待你提供已检查敏感内容的真实上传过程截图后替换。" }]
+        screenshots: [{ alt: "aida upload 交互选择 Session", caption: "真实 aida upload 交互界面。输入编号选择记录，确认已选数量后使用 d 开始上传；截图使用专用安全测试 Session。", src: "/help-center/screenshots/v1/quickstart/04-aida-cli-upload.png" }]
       },
       {
         title: "5. 从工作台进入日报",
@@ -114,10 +114,10 @@ export const HELP_ARTICLES: HelpArticle[] = [
         title: "6. 生成并保存日报",
         steps: [
           "点击日报日期旁的日历图标，选择这份日报的归属日期。这里设置的是日报日期，不是 Session 筛选日期。",
-          "可以直接选择“AI 生成”；不选择 Session 时，报告 Agent 会按照日报日期查找相对应的工作记录。",
+          "可以直接选择“AI 生成”；不选择 Session 时，系统会按日报日期冻结相对应的 Session 来源快照，再交给报告 Agent。",
           "如果只想总结指定工作，打开“选择 session”抽屉；抽屉里的开始日期和结束日期只用于筛选候选 Session。",
           "勾选需要的 Session 切片并关闭抽屉，再选择“AI 生成”。",
-          "检查生成内容和明日计划，确认事实无误后保存。"
+          "AI 生成完成后正文已自动保存。检查生成内容；明日计划仅由用户人工填写，修改后再选择“保存”。"
         ],
         screenshots: [
           { alt: "日报日期与 AI 生成入口", caption: "弹窗顶部的日历选择日报归属日期；AI 生成和选择 Session 是并列操作，Session 选择不是必选步骤。", src: "/help-center/screenshots/v1/dir/13-daily-ai-generate.png" },
@@ -146,7 +146,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
           "确认 aida upload 已经成功完成，而不是只执行了 aida sessions。",
           "确认日报弹窗顶部选择的是要生成的日报日期；这不是 Session 筛选条件。",
           "手动选择 Session 时，再在抽屉内使用开始日期和结束日期筛选候选记录。",
-          "未手动选择 Session 时，重新执行 AI 生成，让报告 Agent 按日期查找记录。",
+          "未手动选择 Session 时，重新执行 AI 生成，让系统按日报日期重新冻结来源快照。",
           "手动选择过 Session 时，检查是否勾选了正确切片；也可清空选择恢复按日期取数。",
           "仍无内容时执行 aida status，确认客户端登录账号与当前网页账号一致。"
         ]
@@ -172,51 +172,12 @@ export const HELP_ARTICLES: HelpArticle[] = [
           "找不到 aida：重新执行安装，关闭终端后再打开，并用 aida --version 检查。",
           "身份不正确：重新执行 aida login，并用 aida status 核对账号。",
           "Session 列表为空：确认本机已使用 Claude Code 或 Codex 产生工作记录，必要时使用 --all 查看更早记录。",
-          "上传失败：先减少选择数量重试，并检查网络与 AIDA 服务地址。"
+          "上传失败：先减少选择数量重试，并确认网络可以访问当前 AIDA 平台。"
         ]
       },
       {
         title: "继续阅读",
         paragraphs: ["更完整的安装、登录、上传参数和故障说明，请进入“AIDA 客户端”栏目。"]
-      }
-    ]
-  },
-  {
-    id: "client-quick-start",
-    module: "client",
-    title: "第一次上传 Session",
-    summary: "从安装、登录到上传，用四步把本地 Claude Code 或 Codex 工作记录同步到 AIDA。",
-    route: "/sessions",
-    roles: ALL_BUSINESS_ROLES,
-    keywords: ["AIDA", "客户端", "CLI", "Session", "上传", "安装", "Claude Code", "Codex"],
-    sections: [
-      {
-        title: "开始前确认",
-        bullets: [
-          "本机已经使用 Claude Code 或 Codex 完成过工作，客户端会扫描对应的本地 Session。",
-          "你可以访问 AIDA，并可从右上角个人菜单选择“复制 Token”取得自己的访问令牌。",
-          "令牌只用于本人设备登录，不要粘贴到群聊、需求描述或截图中。"
-        ]
-      },
-      {
-        title: "四步完成上传",
-        steps: [
-          "按操作系统安装 AIDA 客户端，安装后重新打开终端。",
-          "执行 aida login，输入 AIDA 服务地址和个人访问令牌。",
-          "执行 aida sessions，确认待上传记录的项目、时间和摘要。",
-          "执行 aida upload 进入交互选择；确认后再上传需要的 Session。"
-        ],
-        codeBlocks: [
-          { label: "检查本地 Session", code: "aida sessions" },
-          { label: "交互选择并上传", code: "aida upload" }
-        ],
-        note: "首次使用建议交互选择，不建议直接使用 --all；这样可以先排除无关项目或包含敏感上下文的 Session。"
-      },
-      {
-        title: "上传成功后",
-        paragraphs: [
-          "前往 Session 页面确认记录已出现。日报和周报在选择 Session 时，也会读取这些已上传记录。重复上传同一条 Session 时，客户端会跳过或更新已有记录，不会生成两条完全相同的数据。"
-        ]
       }
     ]
   },
@@ -270,22 +231,114 @@ export const HELP_ARTICLES: HelpArticle[] = [
     sections: [
       {
         title: "登录",
-        paragraphs: ["在 AIDA 右上角打开个人菜单，选择“复制 Token”；再把 <AIDA 服务地址> 和 <个人令牌> 替换为真实值。"],
+        paragraphs: ["安装脚本已经自动配置当前 AIDA 服务环境。先在 AIDA 右上角打开个人菜单并选择“复制 Token”，然后执行下面的命令并按提示粘贴 Token。"],
         codeBlocks: [
           {
             label: "登录命令",
-            code: "aida login --server <AIDA 服务地址>/api/v1 --token <个人令牌>"
+            code: "aida login"
           }
         ],
-        note: "命令历史可能保留参数。更重视安全时，只执行 aida login --server <地址>/api/v1，再按提示输入令牌。"
+        note: "不要把 Token 直接写在命令参数中，避免被终端命令历史保存；按交互提示粘贴即可。"
       },
       {
         title: "核对身份",
         codeBlocks: [{ label: "查看登录状态", code: "aida status" }],
         bullets: [
-          "Server 应指向当前使用的 AIDA 环境。",
+          "Server 由安装脚本自动配置，普通用户无需填写或修改。",
           "User 应是你自己的姓名和角色。",
           "如果身份不符，不要继续上传，重新登录正确账号。"
+        ]
+      }
+    ]
+  },
+  {
+    id: "client-quick-start",
+    module: "client",
+    title: "第一次上传 Session",
+    summary: "完成安装和登录后，把本地 Claude Code 或 Codex 工作记录同步到 AIDA。",
+    route: "/sessions",
+    roles: ALL_BUSINESS_ROLES,
+    keywords: ["AIDA", "客户端", "CLI", "Session", "上传", "安装", "Claude Code", "Codex"],
+    sections: [
+      {
+        title: "开始前确认",
+        bullets: [
+          "已经安装 AIDA 客户端，并通过 aida status 确认当前登录身份正确。",
+          "本机已经使用 Claude Code 或 Codex 完成过工作，客户端会扫描对应的本地 Session。",
+          "令牌只用于本人设备登录，不要粘贴到群聊、需求描述或截图中。"
+        ]
+      },
+      {
+        title: "选择并上传",
+        steps: [
+          "执行 aida sessions，确认待上传记录的项目、时间和摘要。",
+          "执行 aida upload 进入交互选择。",
+          "检查待上传范围，确认后上传需要的 Session。"
+        ],
+        codeBlocks: [
+          { label: "检查本地 Session", code: "aida sessions" },
+          { label: "交互选择并上传", code: "aida upload" }
+        ],
+        note: "首次使用建议交互选择，不建议直接使用 --all；这样可以先排除无关项目或包含敏感上下文的 Session。"
+      },
+      {
+        title: "交互选择命令",
+        bullets: [
+          "输入单个编号切换该条记录的选中状态；也可以输入 1,3,5 一次切换多条。再次输入同一编号会取消选择。",
+          "使用 n 进入下一页、p 返回上一页；翻页不会清空已经选择的记录。",
+          "使用 g <页码> 直接跳转，字母和页码之间必须有空格，例如 g 3（不要输入 g3）；使用 s <每页条数> 调整分页，同样需要空格，例如 s 20，只支持 10、20、50、100。",
+          "使用 all 或 a 选择全部本地可发现 Session，不是只选择当前页；执行前必须确认没有无关或敏感记录。",
+          "页面顶部持续显示已选择数量。确认范围后输入 d 或 done 开始上传；输入 q 或 quit 取消且不上传。"
+        ],
+        screenshots: [{ alt: "aida upload 分页与选择命令", caption: "默认每页 10 条；编号选择支持跨页保留，all 表示全部本地可发现 Session。", src: "/help-center/screenshots/v1/quickstart/04-aida-cli-upload.png" }]
+      },
+      {
+        title: "上传成功后",
+        paragraphs: [
+          "前往 Session 页面确认记录已出现。首次成功上传会形成一个可选切片；同一 Session 有新增内容后再次上传，会只上传新增内容并形成新的独立切片。没有新增内容时客户端会跳过，上传失败或重复操作不会产生可选的重复切片。一次上传即使包含跨天内容，也仍形成一个完整切片。"
+        ]
+      }
+    ]
+  },
+  {
+    id: "client-session-slice-rules",
+    module: "client",
+    title: "Session 切片如何形成",
+    summary: "了解首次上传、后续增量上传、跨天内容与报告选择之间的关系。",
+    route: "/sessions",
+    roles: ALL_BUSINESS_ROLES,
+    keywords: ["Session", "切片", "增量上传", "跨天", "重复上传", "报告来源", "Token"],
+    sections: [
+      {
+        title: "什么是 Session 切片",
+        paragraphs: [
+          "Session 切片是一次成功上传的内容范围。首次上传某个本地 Session 时，当前已有内容形成第一个切片；以后再次上传同一 Session 时，只把上次成功上传之后的新增内容形成新切片。"
+        ],
+        note: "切片不是“一个 Session 的全部内容”，也不是“每个自然日一个切片”。"
+      },
+      {
+        title: "固定形成规则",
+        bullets: [
+          "一次成功上传最多形成一个切片；同一 Session 多次成功增量上传，可以形成多个独立切片。",
+          "切片不按自然日拆分。一次上传的新增内容即使横跨多天，仍然只形成一个完整切片。",
+          "没有新增内容时会跳过，不会形成新切片。",
+          "上传失败不会形成可选切片；重复操作同一段内容也不会形成重复切片。",
+          "每个切片的摘要只描述该切片自身包含的内容。"
+        ]
+      },
+      {
+        title: "切片如何用于个人报告",
+        bullets: [
+          "同一 Session 形成的多个切片，会在个人日报和个人周报的 Session 选择列表中显示为多条可独立选择的记录。",
+          "手动选择切片后，已选切片是本次报告的权威 Session 来源；未选切片不会混入。",
+          "候选列表的日期范围只用于筛选记录。跨天切片只要与筛选日期相交，就会作为完整切片使用，不会按日期裁剪。",
+          "不手动选择切片时，系统会按日报日期或周报周期冻结默认的 Session 来源快照。"
+        ]
+      },
+      {
+        title: "与 Token 统计的区别",
+        paragraphs: [
+          "报告 Session 切片用于决定 AI 报告读取哪些工作内容；Token 页面则按实际使用时间统计 Token 和成本。两者用途和日期口径不同，不能用报告切片数量或列表中的 Token 直接代替 Token 统计结果。"
         ]
       }
     ]
@@ -305,7 +358,15 @@ export const HELP_ARTICLES: HelpArticle[] = [
           { label: "查看最近 Session", code: "aida sessions" },
           { label: "按项目筛选", code: "aida sessions --project <项目目录关键词>" },
           { label: "上传指定序号", code: "aida upload 1 3 5" },
-          { label: "上传全部最近 Session", code: "aida upload --all" }
+          { label: "上传全部本地可发现 Session", code: "aida upload --all" }
+        ]
+      },
+      {
+        title: "交互模式与直接模式",
+        bullets: [
+          "直接执行 aida upload 会进入分页交互选择，适合首次上传和需要核对范围的场景。",
+          "aida upload 1 3 5 会直接处理指定编号，不再进入交互确认。",
+          "aida upload --all 会直接处理全部本地可发现 Session，不是最近一页；无变化的 Session 会跳过，但仍应先检查上传范围。"
         ]
       },
       {
@@ -319,7 +380,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
       {
         title: "上传失败或超时",
         steps: [
-          "先执行 aida status，确认服务地址和身份。",
+          "先执行 aida status，确认安装配置存在且登录身份正确。",
           "确认网络可以访问 AIDA，再重试单条 Session。",
           "较大的 Session 解析时间更长；不要在上传过程中重复启动多次相同命令。",
           "仍失败时保留终端中的错误摘要和发生时间，联系平台负责人排查。"
@@ -840,21 +901,22 @@ export const HELP_ARTICLES: HelpArticle[] = [
     sections: [
       {
         title: "生成步骤",
-        steps: ["打开日报管理弹窗，通过日历图标确认或切换目标日期。", "个人日报可直接选择“AI 生成”，也可先选择 session 缩小上下文范围。", "生成完成后分别检查报告正文和明日计划，修正事实、结构或遗漏内容。", "确认无误后保存。"],
+        steps: ["打开日报管理弹窗，通过日历图标确认或切换目标日期。", "个人日报可直接选择“AI 生成”，也可先选择 session 精确指定 Session 来源。", "生成完成后正文已经自动保存；检查事实、结构和遗漏内容。", "明日计划不会由 AI 填写、修改或清空；需要时人工填写，修改正文或明日计划后再选择“保存”。"],
         screenshots: [{ alt: "日报 AI 生成入口", caption: "AI 生成与 Session 选择是并列操作；不选择 Session 也可以直接生成。", src: "/help-center/screenshots/v1/dir/13-daily-ai-generate.png" }]
       },
       {
         title: "AI 如何取得上下文",
         bullets: [
-          "未选择 session：系统把目标日期交给报告 Agent，由 Agent 按日期查找和选择相对应的已上传 Session。",
-          "已选择 session：AI 只使用当前勾选的 Session 切片作为个人日报上下文。",
+          "未选择 session：系统按目标日期冻结默认 Session 来源快照，报告 Agent 读取该快照。",
+          "已选择 session：当前勾选的切片是本次报告唯一允许使用的 Session 证据，即使切片跨天或位于报告日期之外也不会被日期再次过滤。",
+          "报告 Agent 仍可能读取报告日期范围内的事项、需求和已有报告；这些非 Session 业务数据不会改变已选切片的最高来源优先级。",
           "Session 选择是可选的范围控制，不是生成日报的前置条件。",
-          "小组或部门汇总日报不提供个人 Session 选择，AI 直接按目标日期和对应组织范围生成。"
+          "小组汇总日报读取本组成员已保存的个人日报，部门汇总日报读取所属小组已保存的小组日报；两者不提供个人 Session 选择，也不回退读取成员原始 Session。"
         ]
       },
       {
         title: "重要说明",
-        note: "AI 生成会替换当前编辑区正文；已有未保存内容时先确认是否继续。生成能力还依赖已配置的默认报告 Agent。"
+        note: "AI 生成会替换并自动保存报告正文，但不会填写、修改或清空明日计划。已有未保存内容时先确认是否继续；若当前账号尚未创建默认报告 Agent，页面会提示并在确认后直接初始化，无需跳转到 AI 资产页面。"
       }
     ]
   },
@@ -869,12 +931,12 @@ export const HELP_ARTICLES: HelpArticle[] = [
     sections: [
       {
         title: "操作步骤",
-        steps: ["在个人日报弹窗选择“选择 session”。", "按日期范围筛选记录。", "浏览摘要与 Token，用复选框选择相关记录。", "已选数量会立即更新，翻页不会丢失已选记录。", "关闭抽屉后选择“AI 生成”；无需额外确认按钮。"],
-        screenshots: [{ alt: "选择 Session 作为日报上下文", caption: "按日期筛选后勾选需要的 Session；顶部会显示已选数量。截图只保留经过安全检查的测试记录。", src: "/help-center/screenshots/v1/dir/12-daily-session-selection.png" }]
+        steps: ["在个人日报弹窗选择“选择 session”。", "默认不限制日期；需要缩小候选范围时再设置开始日期和结束日期。", "浏览切片活动时间、摘要与 Token，用复选框选择相关记录。", "列表默认每页 5 条；已选数量会立即更新，翻页不会丢失已选记录。", "关闭抽屉后选择“AI 生成”；无需额外确认按钮。"],
+        screenshots: [{ alt: "选择 Session 作为日报上下文", caption: "日期筛选为可选条件；勾选需要的 Session 后，顶部会显示已选数量。截图只保留经过安全检查的测试记录。", src: "/help-center/screenshots/v1/dir/12-daily-session-selection.png" }]
       },
       {
         title: "什么时候需要选择",
-        bullets: ["需要精确控制本次日报只总结哪些工作时选择 Session。", "不需要限定范围时可以不选，AI 会按日报日期自行查找相对应的 Session。", "选择后可使用清空按钮恢复“默认按日报日期取数”。"]
+        bullets: ["需要精确控制本次日报使用哪些 Session 工作证据时选择切片。", "可选择跨天或日报日期之外的切片；日期范围只筛选候选记录，不裁剪切片，也不修改日报归属日期。", "不需要限定 Session 来源时可以不选，系统会按日报日期创建默认来源快照。", "选择后可使用清空图标恢复“默认按日报日期取数”。"]
       },
       {
         title: "范围限制",
@@ -922,7 +984,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
     sections: [
       {
         title: "操作步骤",
-        steps: ["切换到“小组汇总日报”。", "使用日期范围查看历史记录。", "选择记录右侧的“打开”，可连续查看报告正文和下方的明日计划。", "选择“填写小组日报”并确认目标日期。", "直接编辑或使用 AI 基于小组范围数据生成。", "分别检查成员遗漏、风险和明日计划后保存。"],
+        steps: ["切换到“小组汇总日报”。", "使用日期范围查看历史记录。", "选择记录右侧的“打开”，可连续查看报告正文和下方的明日计划。", "选择“填写小组日报”并确认目标日期。", "直接编辑，或使用 AI 汇总本组成员已经保存的个人日报。", "检查成员遗漏和风险；明日计划需要人工维护，修改后再保存。"],
         screenshots: [{ alt: "小组汇总日报正文和明日计划", caption: "打开小组日报记录后，报告正文下方会显示明日计划。", src: "/help-center/screenshots/v1/tl/05-daily-team.png" }]
       }
     ]
@@ -938,7 +1000,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
     sections: [
       {
         title: "操作步骤",
-        steps: ["切换到“部门汇总日报”。", "使用日期范围查看历史记录。", "选择“展开”，可连续查看完整 Markdown 正文和下方的明日计划。", "选择“填写部门日报”并确认目标日期。", "直接编辑或使用 AI 基于部门范围数据生成。", "分别检查跨团队风险、重点进展和明日计划后保存。"],
+        steps: ["切换到“部门汇总日报”。", "使用日期范围查看历史记录。", "选择“展开”，可连续查看完整 Markdown 正文和下方的明日计划。", "选择“填写部门日报”并确认目标日期。", "直接编辑，或使用 AI 汇总所属小组已经保存的小组日报。", "检查缺失小组、跨团队风险和重点进展；明日计划需要人工维护，修改后再保存。"],
         screenshots: [{ alt: "部门汇总日报展开后的正文和明日计划", caption: "展开部门日报记录后，明日计划显示在完整正文下方。", src: "/help-center/screenshots/v1/dir/07-daily-department.png" }]
       }
     ]
@@ -1013,11 +1075,11 @@ export const HELP_ARTICLES: HelpArticle[] = [
     sections: [
       {
         title: "生成步骤",
-        steps: ["打开目标周的周报管理弹窗。", "个人周报需要时先选择 session。", "选择“AI 生成”。", "检查成果、风险、数据范围和下周计划。", "确认后保存。"]
+        steps: ["打开目标周的周报管理弹窗。", "个人周报需要时先选择 session；不选择时系统按目标周冻结默认 Session 来源快照。", "选择“AI 生成”。", "生成完成后正文已自动保存，检查成果、风险和数据范围。", "人工修改后再选择“保存”。"]
       },
       {
         title: "重要说明",
-        note: "AI 生成会替换当前正文。小组和部门周报按组织范围聚合，不使用个人 session。"
+        note: "AI 生成会替换并自动保存当前正文。小组周报汇总成员已保存的个人周报，部门周报汇总所属小组已保存的小组周报；两者不使用个人 session，也不会在下级报告缺失时回退读取成员原始 Session。"
       }
     ]
   },
@@ -1025,14 +1087,15 @@ export const HELP_ARTICLES: HelpArticle[] = [
     id: "weekly-session-selection",
     module: "weekly",
     title: "选择 session 作为周报上下文",
-    summary: "个人周报可从目标周内选择相关工作记录，让 AI 只汇总有效上下文。",
+    summary: "个人周报可自由选择相关 Session 切片，并将其固定为本次生成的权威 Session 来源。",
     route: "/reports/weekly",
     roles: ALL_BUSINESS_ROLES,
     keywords: ["选择 session", "周报", "工作记录", "Token", "日期范围"],
     sections: [
       {
         title: "操作步骤",
-        steps: ["打开个人周报管理弹窗。", "选择“选择 session”。", "按日期范围浏览目标周工作记录。", "勾选相关记录并确认。", "返回编辑区执行 AI 生成。"]
+        steps: ["打开个人周报管理弹窗。", "选择“选择 session”。", "默认不限制日期；需要时使用日期范围筛选候选切片。", "可选择目标周外或横跨多天的切片；列表默认每页 5 条，跨页选择不会丢失。", "勾选后直接关闭抽屉，无需确认按钮。", "返回编辑区执行 AI 生成；目标周仍是周报归属周期，但不会再次过滤已选切片。"],
+        screenshots: [{ alt: "选择 Session 作为周报上下文", caption: "周报 Session 候选默认不限制日期，每页显示 5 条；目标周不会过滤已经勾选的切片。", src: "/help-center/screenshots/v1/dir/15-weekly-session-selection.png" }]
       }
     ]
   },

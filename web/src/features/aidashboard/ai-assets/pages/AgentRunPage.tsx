@@ -26,8 +26,7 @@ import {
   fetchManagedAgentRun,
   fetchManagedAgents,
   fetchManagedCredentials,
-  fetchAllSessionTokens,
-  fetchSessionTokens,
+  fetchReportSourceCandidates,
   startManagedAgentRun,
   startReportAgentRun
 } from "../../api/client";
@@ -37,8 +36,8 @@ import type {
   ManagedCredential,
   ManagedReportAgentUnavailable,
   ManagedReportAgentRunResponse,
-  ReportType,
-  SessionTokens
+  ReportSourceCandidate,
+  ReportType
 } from "../../api/types";
 import {
   AI_ASSETS_HOME,
@@ -56,6 +55,7 @@ import {
 import { PagePanel } from "@/shared/components/PagePanel/PagePanel";
 import { useAuth } from "@/shared/auth/authContext";
 import type { UserRole } from "@/shared/auth/types";
+import { ManagedModelSelect } from "../components/ManagedModelSelect";
 
 import "../components/AgentWorkspace.css";
 
@@ -323,34 +323,23 @@ function formatDateTime(iso?: string) {
   });
 }
 
-function realSessionId(session: SessionTokens) {
-  return session.local_session_id || session.session_ref || session.session_id;
-}
-
-function sessionSliceKey(session: SessionTokens) {
-  return (
-    session.slice_key ||
-    `${session.session_id}:${session.activity_date || session.activity_start_at || session.started_at}`
-  );
-}
-
-function formatActivityRange(session: SessionTokens) {
-  const start = session.activity_start_at || session.started_at;
+function formatActivityRange(session: ReportSourceCandidate) {
+  const start = session.activity_start_at;
   const end = session.activity_end_at;
   if (!end || end === start) return formatDateTime(start);
   return `${formatDateTime(start)} ~ ${formatDateTime(end)}`;
 }
 
-function sessionSelectLabel(session: SessionTokens) {
+function sessionSelectLabel(session: ReportSourceCandidate) {
   const summary = session.summary ? ` · ${session.summary}` : "";
-  return `${realSessionId(session)} · ${formatActivityRange(session)}${summary}`;
+  return `${session.session_ref} · ${formatActivityRange(session)}${summary}`;
 }
 
 function compactSelectedRecords(
   keys: string[],
-  records: Record<string, SessionTokens>
-): Record<string, SessionTokens> {
-  const next: Record<string, SessionTokens> = {};
+  records: Record<string, ReportSourceCandidate>
+): Record<string, ReportSourceCandidate> {
+  const next: Record<string, ReportSourceCandidate> = {};
   for (const key of keys) {
     if (records[key]) next[key] = records[key];
   }
@@ -358,33 +347,36 @@ function compactSelectedRecords(
 }
 
 function SessionSliceSelector({
+  reportType,
   from,
   to,
   selectedKeys,
   selectedRecords,
   onChange
 }: {
+  reportType: "personal_daily" | "personal_weekly";
   from: string;
   to: string;
   selectedKeys: string[];
-  selectedRecords: Record<string, SessionTokens>;
-  onChange: (keys: string[], records: Record<string, SessionTokens>) => void;
+  selectedRecords: Record<string, ReportSourceCandidate>;
+  onChange: (keys: string[], records: Record<string, ReportSourceCandidate>) => void;
 }) {
   const { message } = App.useApp();
   const [open, setOpen] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(8);
-  const [queryRange, setQueryRange] = useState<[Dayjs, Dayjs]>(() => [dayjs(from), dayjs(to)]);
-  const queryFrom = queryRange[0].format("YYYY-MM-DD");
-  const queryTo = queryRange[1].format("YYYY-MM-DD");
+  const [queryRange, setQueryRange] = useState<[Dayjs, Dayjs] | null>(null);
+  const queryFrom = queryRange?.[0].format("YYYY-MM-DD");
+  const queryTo = queryRange?.[1].format("YYYY-MM-DD");
 
   const sessionsQuery = useQuery({
-    queryKey: ["report-session-slices", queryFrom, queryTo, page, pageSize],
+    queryKey: ["report-session-slices", reportType, from, to, queryFrom, queryTo, page, pageSize],
     queryFn: () =>
-      fetchSessionTokens({
-        from: queryFrom,
-        to: queryTo,
-        scope: "mine",
+      fetchReportSourceCandidates({
+        report_type: reportType,
+        period_start: from,
+        period_end: to,
+        ...(queryFrom && queryTo ? { activity_from: queryFrom, activity_to: queryTo } : {}),
         page: String(page),
         page_size: String(pageSize)
       }),
@@ -393,12 +385,31 @@ function SessionSliceSelector({
     staleTime: 30_000
   });
   const selectAllMutation = useMutation({
-    mutationFn: () => fetchAllSessionTokens({ from: queryFrom, to: queryTo, scope: "mine" }),
+    mutationFn: async () => {
+      const first = await fetchReportSourceCandidates({
+        report_type: reportType,
+        period_start: from,
+        period_end: to,
+        ...(queryFrom && queryTo ? { activity_from: queryFrom, activity_to: queryTo } : {}),
+        page: "1",
+        page_size: "100"
+      });
+      if (first.total <= first.items.length) return first.items;
+      const second = await fetchReportSourceCandidates({
+        report_type: reportType,
+        period_start: from,
+        period_end: to,
+        ...(queryFrom && queryTo ? { activity_from: queryFrom, activity_to: queryTo } : {}),
+        page: "2",
+        page_size: "100"
+      });
+      return [...first.items, ...second.items];
+    },
     onSuccess: (items) => {
       const nextKeys = new Set(selectedKeys);
       const nextRecords = { ...selectedRecords };
       items.forEach((item) => {
-        const key = sessionSliceKey(item);
+        const key = item.slice_key;
         nextKeys.add(key);
         nextRecords[key] = item;
       });
@@ -473,11 +484,9 @@ function SessionSliceSelector({
           <span>已选 {selectedKeys.length} 条</span>
           <Space size="small" wrap>
             <DatePicker.RangePicker
-              allowClear={false}
               value={queryRange}
               onChange={(value) => {
-                if (!value?.[0] || !value[1]) return;
-                setQueryRange([value[0], value[1]]);
+                setQueryRange(value?.[0] && value[1] ? [value[0], value[1]] : null);
                 setPage(1);
               }}
             />
@@ -498,8 +507,8 @@ function SessionSliceSelector({
             </Button>
           </Space>
         </div>
-        <Table<SessionTokens>
-          rowKey={sessionSliceKey}
+        <Table<ReportSourceCandidate>
+          rowKey="slice_key"
           dataSource={sessions}
           loading={sessionsQuery.isLoading || sessionsQuery.isFetching}
           size="middle"
@@ -513,7 +522,7 @@ function SessionSliceSelector({
               }
               const nextRecords = { ...selectedRecords };
               rows.forEach((row) => {
-                nextRecords[sessionSliceKey(row)] = row;
+                nextRecords[row.slice_key] = row;
               });
               Object.keys(nextRecords).forEach((key) => {
                 if (!normalized.includes(key)) delete nextRecords[key];
@@ -538,7 +547,7 @@ function SessionSliceSelector({
               key: "session",
               width: "36%",
               render: (_: unknown, session) => (
-                <span className="ai-assets-session-id">{realSessionId(session)}</span>
+                <span className="ai-assets-session-id">{session.session_ref}</span>
               )
             },
             {
@@ -793,7 +802,7 @@ function GenericAgentRunForm({ agent }: { agent: ManagedAgent }) {
       : activeRunQuery.isFetching
         ? "正在同步运行状态，请稍候。"
         : !modelId
-          ? "请先填写模型 ID，或在 Agent 配置中设置默认模型。"
+          ? "请先选择模型，或在 Agent 配置中设置默认模型。"
           : missingPromptVariables.length > 0
             ? missingPromptReason(missingPromptVariables)
             : !hasPromptInput
@@ -875,13 +884,15 @@ function GenericAgentRunForm({ agent }: { agent: ManagedAgent }) {
           )}
 
           <Card title={modelCardTitle(!defaultModelId)} className="ai-assets-editor-section">
-            <Input
-              value={runModelId}
-              onChange={(event) => setRunModelId(event.target.value)}
+            <ManagedModelSelect
+              allowClear={Boolean(defaultModelId)}
+              value={runModelId || undefined}
+              onChange={(value) => setRunModelId(value || "")}
+              preservedModelId={defaultModelId}
               placeholder={
                 defaultModelId
                   ? `留空使用 Agent 默认模型：${defaultModelId}`
-                  : "必填：请输入模型 ID"
+                  : "必选：请选择模型"
               }
             />
             <p className="ai-assets-field-help">
@@ -951,7 +962,7 @@ function ReportAgentRunForm({ agent }: { agent: ManagedAgent }) {
   const [credentialOverrides, setCredentialOverrides] = useState<Record<string, string>>({});
   const [selectedSessionSliceKeys, setSelectedSessionSliceKeys] = useState<string[]>([]);
   const [selectedSessionRecords, setSelectedSessionRecords] = useState<
-    Record<string, SessionTokens>
+    Record<string, ReportSourceCandidate>
   >({});
   const [selectedSessionRangeKey, setSelectedSessionRangeKey] = useState("");
 
@@ -978,7 +989,7 @@ function ReportAgentRunForm({ agent }: { agent: ManagedAgent }) {
   const sessionRangeKey = `${sessionRange.from}:${sessionRange.to}`;
   const selectedSessionsForRange = useMemo(() => {
     if (selectedSessionRangeKey !== sessionRangeKey) {
-      return { keys: [] as string[], records: {} as Record<string, SessionTokens> };
+      return { keys: [] as string[], records: {} as Record<string, ReportSourceCandidate> };
     }
     return { keys: selectedSessionSliceKeys, records: selectedSessionRecords };
   }, [selectedSessionRangeKey, selectedSessionRecords, selectedSessionSliceKeys, sessionRangeKey]);
@@ -1000,6 +1011,7 @@ function ReportAgentRunForm({ agent }: { agent: ManagedAgent }) {
       target_json: JSON.stringify({ type: "self" }),
       selected_session_slice_keys: selectedSessionSliceKeysForRange.join("\n"),
       selected_session_slice_keys_json: JSON.stringify(selectedSessionSliceKeysForRange),
+      report_source_selection_id: "运行时生成",
       run_id: "运行时生成",
       credential_slot: REPORT_SYSTEM_CREDENTIAL_SLOT
     }),
@@ -1035,7 +1047,7 @@ function ReportAgentRunForm({ agent }: { agent: ManagedAgent }) {
         : options.length === 0
           ? "当前账号没有该 Agent 支持的报告类型运行权限。"
           : !modelId
-            ? "请先填写模型 ID，或在 Agent 配置中设置默认模型。"
+            ? "请先选择模型，或在 Agent 配置中设置默认模型。"
             : missingPromptVariables.length > 0
               ? missingPromptReason(missingPromptVariables)
               : "";
@@ -1160,18 +1172,21 @@ function ReportAgentRunForm({ agent }: { agent: ManagedAgent }) {
             </Card>
           ) : null}
 
-          <SessionSliceSelector
-            key={sessionRangeKey}
-            from={sessionRange.from}
-            to={sessionRange.to}
-            selectedKeys={selectedSessionSliceKeysForRange}
-            selectedRecords={selectedSessionRecordsForRange}
-            onChange={(keys, records) => {
-              setSelectedSessionRangeKey(sessionRangeKey);
-              setSelectedSessionSliceKeys(keys);
-              setSelectedSessionRecords(records);
-            }}
-          />
+          {reportType === "personal_daily" || reportType === "personal_weekly" ? (
+            <SessionSliceSelector
+              key={sessionRangeKey}
+              reportType={reportType}
+              from={sessionRange.from}
+              to={sessionRange.to}
+              selectedKeys={selectedSessionSliceKeysForRange}
+              selectedRecords={selectedSessionRecordsForRange}
+              onChange={(keys, records) => {
+                setSelectedSessionRangeKey(sessionRangeKey);
+                setSelectedSessionSliceKeys(keys);
+                setSelectedSessionRecords(records);
+              }}
+            />
+          ) : null}
 
           <Card title="Initial Message" className="ai-assets-editor-section">
             <Input.TextArea
@@ -1183,13 +1198,15 @@ function ReportAgentRunForm({ agent }: { agent: ManagedAgent }) {
           </Card>
 
           <Card title={modelCardTitle(!defaultModelId)} className="ai-assets-editor-section">
-            <Input
-              value={runModelId}
-              onChange={(event) => setRunModelId(event.target.value)}
+            <ManagedModelSelect
+              allowClear={Boolean(defaultModelId)}
+              value={runModelId || undefined}
+              onChange={(value) => setRunModelId(value || "")}
+              preservedModelId={defaultModelId}
               placeholder={
                 defaultModelId
                   ? `留空使用 Agent 默认模型：${defaultModelId}`
-                  : "必填：请输入模型 ID"
+                  : "必选：请选择模型"
               }
             />
             <p className="ai-assets-field-help">

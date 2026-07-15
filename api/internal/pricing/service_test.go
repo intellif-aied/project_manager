@@ -26,3 +26,9 @@ func TestNullDecimalsEqualIgnoresScaleButNotValue(t *testing.T) {
 		t.Fatal("NULL and zero must not compare equal")
 	}
 }
+
+func TestCalculateCostQueryNormalizesToStoragePrecision(t *testing.T) {
+	if count := strings.Count(calculateCostQuery, "::numeric(30,12)::text"); count != 2 {
+		t.Fatalf("cost query must normalize USD and CNY to storage precision, casts = %d", count)
+	}
+}
