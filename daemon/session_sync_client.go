@@ -215,7 +215,9 @@ func uploadSessionSourceIncremental(
 	}
 
 	needsFinalize := result.UploadedChunks > 0 || prepared.GenerationStatus == "staging" || prepared.Action == "rebuild_required" || prepared.Action == "restore"
-	if needsFinalize && !pendingTail && state.LastAckedCursor == fileInfo.Size() {
+	completePrefixUploaded := result.UploadedChunks > 0 && state.LastAckedCursor > prepared.ExpectedCursor
+	completeSnapshotUploaded := !pendingTail && state.LastAckedCursor == fileInfo.Size()
+	if needsFinalize && (completePrefixUploaded || completeSnapshotUploaded) {
 		if err := finalizeSessionSource(cfg, prepared.GenerationID, state.LastAckedCursor, state.PrefixCheckpointHash); err != nil {
 			return incrementalUploadResult{}, err
 		}

@@ -178,6 +178,62 @@ func TestIncrementalUploadFinalizesSnapshotWhenSourceGrowsDuringUpload(t *testin
 	}
 }
 
+func TestIncrementalUploadFinalizesCompletePrefixBeforeIncompleteTail(t *testing.T) {
+	complete := []byte("{\"type\":\"user\",\"sessionId\":\"tail\",\"timestamp\":\"2026-07-15T01:00:00Z\"}\n")
+	incomplete := []byte("{\"type\":\"assistant\",\"sessionId\":\"tail\"")
+	remainder := []byte(",\"timestamp\":\"2026-07-15T01:01:00Z\"}\n")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, "tail.jsonl")
+	if err := os.WriteFile(path, append(append([]byte{}, complete...), incomplete...), 0600); err != nil {
+		t.Fatal(err)
+	}
+	serverState := &fakeSessionSyncServer{generationID: "33333333-3333-4333-8333-333333333333"}
+	server := httptest.NewServer(http.HandlerFunc(serverState.serveHTTP))
+	defer server.Close()
+	session := &SessionInfo{SessionRef: "tail", AgentType: "codex", FilePath: path}
+	cfg := &Config{APIURL: server.URL, Token: "test-token"}
+
+	results, err := uploadSessionGroupIncremental(cfg, []sessionWithFile{{info: session, filePath: path}}, session.SessionRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].UploadedChunks != 1 || !results[0].PendingTail {
+		t.Fatalf("first results=%+v", results)
+	}
+	serverState.mu.Lock()
+	if serverState.finalizeRequests != 1 || string(serverState.content) != string(complete) {
+		serverState.mu.Unlock()
+		t.Fatalf("first prefix finalize=%d content=%d", serverState.finalizeRequests, len(serverState.content))
+	}
+	serverState.mu.Unlock()
+
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Write(remainder); err != nil {
+		file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	results, err = uploadSessionGroupIncremental(cfg, []sessionWithFile{{info: session, filePath: path}}, session.SessionRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].UploadedChunks != 1 || results[0].PendingTail {
+		t.Fatalf("second results=%+v", results)
+	}
+	serverState.mu.Lock()
+	defer serverState.mu.Unlock()
+	want := append(append([]byte{}, complete...), append(incomplete, remainder...)...)
+	if serverState.finalizeRequests != 2 || string(serverState.content) != string(want) {
+		t.Fatalf("second prefix finalize=%d content=%d", serverState.finalizeRequests, len(serverState.content))
+	}
+}
+
 type fakeSessionSyncServer struct {
 	mu                     sync.Mutex
 	generationID           string
