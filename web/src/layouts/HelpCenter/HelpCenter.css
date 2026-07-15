@@ -196,6 +196,25 @@
 .help-center__figure img { display: block; width: 100%; height: auto; border: 1px solid #dce5ef; border-radius: 9px; box-shadow: 0 10px 28px rgba(15, 23, 42, 0.07); }
 .help-center__figure figcaption { margin-top: 8px; color: #8491a2; font-size: 11px; line-height: 1.55; text-align: center; }
 
+.help-center__screenshot-placeholder {
+  display: grid;
+  min-height: 88px;
+  margin-top: 16px;
+  padding: 16px;
+  color: #718096;
+  background: #f8fafc;
+  border: 1px dashed #bdcad9;
+  border-radius: 9px;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+}
+.help-center__screenshot-placeholder > svg { color: #8192a8; font-size: 22px; }
+.help-center__screenshot-placeholder > span { display: grid; gap: 4px; }
+.help-center__screenshot-placeholder strong { color: #475569; font-size: 12px; }
+.help-center__screenshot-placeholder small { color: #8a98aa; font-size: 11px; line-height: 1.55; }
+.help-center__screenshot-placeholder .ant-tag { margin: 0; color: #68788d; font-size: 10px; background: #eaf0f6; }
+
 .help-center__article-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-top: 20px; border-top: 1px solid #e7edf4; }
 .help-center__article-footer span { color: #94a3b8; font-size: 10px; }
 .help-center__article-link {
@@ -229,6 +248,8 @@
   .help-center__article-detail { padding: 18px 17px 34px; }
   .help-center__article-head h2 { font-size: 22px; }
   .help-center__article-footer { align-items: flex-start; flex-direction: column; }
+  .help-center__screenshot-placeholder { grid-template-columns: 28px minmax(0, 1fr); }
+  .help-center__screenshot-placeholder .ant-tag { display: none; }
 }
 
 @media (min-width: 769px) and (max-width: 960px) {

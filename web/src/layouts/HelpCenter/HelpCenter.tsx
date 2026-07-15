@@ -6,8 +6,10 @@ import {
   CopyOutlined,
   DashboardOutlined,
   FileTextOutlined,
+  PictureOutlined,
   ProjectOutlined,
   RightOutlined,
+  RocketOutlined,
   SearchOutlined
 } from "@ant-design/icons";
 import { Button, Drawer, Empty, Image, Input, Tag } from "antd";
@@ -36,6 +38,7 @@ interface HelpCenterProps {
 }
 
 const HELP_MODULES = [
+  { key: "quickstart", label: "快速开始", icon: <RocketOutlined /> },
   { key: "client", label: "AIDA 客户端", icon: <CloudUploadOutlined /> },
   { key: "workspace", label: "工作台", icon: <DashboardOutlined /> },
   { key: "requirements", label: "需求看板", icon: <ProjectOutlined /> },
@@ -174,6 +177,16 @@ export function HelpCenter({ currentModule, onClose, open }: HelpCenterProps) {
                 <Image src={screenshot.src} alt={screenshot.alt} preview={{ mask: "查看原图" }} />
                 <figcaption>{screenshot.caption}</figcaption>
               </figure>
+            ))}
+            {section.screenshotPlaceholders?.map((placeholder) => (
+              <div key={placeholder.title} className="help-center__screenshot-placeholder">
+                <PictureOutlined />
+                <span>
+                  <strong>{placeholder.title}</strong>
+                  <small>{placeholder.description}</small>
+                </span>
+                <Tag bordered={false}>等待截图</Tag>
+              </div>
             ))}
           </section>
         ))}

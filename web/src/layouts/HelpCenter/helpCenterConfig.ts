@@ -1,4 +1,4 @@
-export type HelpModuleKey = "client" | "workspace" | "requirements" | "daily" | "weekly";
+export type HelpModuleKey = "quickstart" | "client" | "workspace" | "requirements" | "daily" | "weekly";
 
 export function getHelpModuleByPath(pathname: string): HelpModuleKey | undefined {
   if (pathname.startsWith("/sessions")) return "client";
