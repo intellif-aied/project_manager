@@ -64,24 +64,42 @@ func RunMigrations(db *sql.DB) error {
 	})
 
 	for _, m := range migrations {
-		var exists bool
-		db.QueryRow("SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=$1)", m.version).Scan(&exists)
-		if exists {
-			continue
-		}
-
 		content, err := migrationsFS.ReadFile(m.path)
 		if err != nil {
 			return fmt.Errorf("read migration %s: %w", m.path, err)
 		}
 
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("begin migration %s: %w", m.path, err)
+		}
+		if _, err := tx.Exec("SELECT pg_advisory_xact_lock($1)", int64(417341771)); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("lock migration %d: %w", m.version, err)
+		}
+
+		var exists bool
+		if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=$1)", m.version).Scan(&exists); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("check migration %d: %w", m.version, err)
+		}
+		if exists {
+			_ = tx.Rollback()
+			continue
+		}
+
 		log.Printf("Running migration %s", m.path)
-		if _, err := db.Exec(string(content)); err != nil {
+		if _, err := tx.Exec(string(content)); err != nil {
+			_ = tx.Rollback()
 			return fmt.Errorf("run migration %s: %w", m.path, err)
 		}
 
-		if _, err := db.Exec("INSERT INTO schema_migrations (version) VALUES ($1)", m.version); err != nil {
+		if _, err := tx.Exec("INSERT INTO schema_migrations (version) VALUES ($1)", m.version); err != nil {
+			_ = tx.Rollback()
 			return fmt.Errorf("record migration %d: %w", m.version, err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit migration %d: %w", m.version, err)
 		}
 	}
 
