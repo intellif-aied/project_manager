@@ -76,6 +76,25 @@ func TestInteractiveSelectAllCoversEveryPage(t *testing.T) {
 	}
 }
 
+func TestSES008FiveHundredSessionsSupportPagingJumpAndCrossPageSelection(t *testing.T) {
+	sessions := fakeSessionList(500)
+	input := bufio.NewReader(strings.NewReader("1\ng 25\n250\ns 100\ng 5\n500\nd\n"))
+	var output bytes.Buffer
+	selected, err := selectSessionsInteractively(sessions, 10, input, &output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(selected) != 3 || selected[0].SessionRef != "session-001" ||
+		selected[1].SessionRef != "session-250" || selected[2].SessionRef != "session-500" {
+		t.Fatalf("selected=%+v", selected)
+	}
+	for _, expected := range []string{"第 25 / 50 页", "第 5 / 5 页", "已选择 3 条"} {
+		if !strings.Contains(output.String(), expected) {
+			t.Fatalf("500-session output missing %q", expected)
+		}
+	}
+}
+
 func TestSessionPaginationRejectsUnsupportedPageSize(t *testing.T) {
 	if _, err := paginateSessions(fakeSessionList(1), 1, 25); err == nil {
 		t.Fatal("expected unsupported page size to fail")

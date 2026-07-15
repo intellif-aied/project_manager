@@ -195,9 +195,8 @@ export function DailyReportGenerateModal({
   const shouldShowEditor = readOnly ? hasContent : showEditor;
 
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      if (open) setSelectedDate(normalizedDate(reportDate));
-    }, 0);
+    if (!open) return;
+    const timer = window.setTimeout(() => setSelectedDate(normalizedDate(reportDate)), 0);
     return () => window.clearTimeout(timer);
   }, [open, reportDate]);
 

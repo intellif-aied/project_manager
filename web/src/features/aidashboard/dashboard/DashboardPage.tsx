@@ -73,7 +73,6 @@ import type {
   PersonalWeeklyReport,
   Session,
   TaskDependencyDTO,
-  TaskProgressSuggestion as DraftTaskProgressSuggestion,
   TeamReport,
   TeamReportSources
 } from "../api/types";
@@ -322,7 +321,7 @@ function createReport(
 
 function applyTodayDailyReportState(
   report: ReportItem,
-  dailyReport: DailyReport | undefined,
+  dailyReport: Pick<DailyReport, "status" | "submitted_at" | "session_ids" | "updated_at"> | undefined,
   loaded: boolean
 ): ReportItem {
   if (!loaded) return report;
@@ -995,16 +994,16 @@ export function DashboardPage() {
   const [reportModalStep, setReportModalStep] = useState<ReportModalStep>("sessions");
   const [activeReportId, setActiveReportId] = useState<string>("employee-personal-daily");
   const [selectedSessionIds, setSelectedSessionIds] = useState<string[]>([]);
-  const [validatedDraftSessionIds, setValidatedDraftSessionIds] = useState<string[]>([]);
+  const [validatedDraftSessionIds] = useState<string[]>([]);
   const [sessionSelectionTouched, setSessionSelectionTouched] = useState(false);
-  const [reportSkillDraft, setReportSkillDraft] = useState<string>(REPORT_SKILL_OPTIONS[0].value);
-  const [uploadedReportSkills, setUploadedReportSkills] = useState<ReportSkillOption[]>([]);
+  const [, setReportSkillDraft] = useState<string>(REPORT_SKILL_OPTIONS[0].value);
+  const [, setUploadedReportSkills] = useState<ReportSkillOption[]>([]);
   const [draftMarkdown, setDraftMarkdown] = useState(DEFAULT_MARKDOWN);
   const [draftMarkdownTouched, setDraftMarkdownTouched] = useState(false);
   const [teamDraft, setTeamDraft] = useState<TeamReport | null>(null);
   const [departmentDraft, setDepartmentDraft] = useState<DepartmentReport | null>(null);
   const [taskSuggestions, setTaskSuggestions] = useState<TaskProgressSuggestion[]>([]);
-  const [draftError, setDraftError] = useState<string | null>(null);
+  const [draftError] = useState<string | null>(null);
   const [editingTaskKey, setEditingTaskKey] = useState<string | null>(null);
   const [editingTaskDraft, setEditingTaskDraft] = useState<TaskProgressSuggestion | null>(null);
   const [tokenRange, setTokenRange] = useState<TokenRange>("last3days");
@@ -1177,10 +1176,6 @@ export function DashboardPage() {
     enabled: shouldLoadTeamTokenGroups,
     staleTime: 60_000
   });
-  const reportSkillOptions = useMemo(
-    () => [...REPORT_SKILL_OPTIONS, ...uploadedReportSkills],
-    [uploadedReportSkills]
-  );
   const tokenReport = useMemo(
     () =>
       aggregateDashboardTokenReport(tokenSessionsQuery.data ?? [], tokenDateRange, {
@@ -1395,7 +1390,6 @@ export function DashboardPage() {
     () => reportSessions.map((session) => toSessionOption(session)),
     [reportSessions]
   );
-  const selectedSkill = reportSkillOptions.find((skill) => skill.value === reportSkillDraft);
   const effectiveSelectedSessionIds = sessionSelectionTouched
     ? selectedSessionIds
     : sessionOptions.map((session) => session.value);
@@ -3234,24 +3228,6 @@ function getAgentLabel(agentType: string) {
   return `${agentType || "AI"} session`;
 }
 
-function mapDraftTaskSuggestion(item: DraftTaskProgressSuggestion): TaskProgressSuggestion {
-  return {
-    key: item.task_id,
-    taskId: item.task_id,
-    taskName: item.task_title,
-    progress: clampTaskProgress(item.suggested_progress),
-    status: item.suggested_status,
-    sessionIds: item.evidence_session_ids,
-    evidenceSessionTitles: item.evidence_session_titles,
-    note: item.reason
-  };
-}
-
-function clampTaskProgress(progress: number) {
-  if (!Number.isFinite(progress)) return 0;
-  return Math.max(0, Math.min(100, Math.round(progress)));
-}
-
 function getTaskStatusLabel(status: DraftTaskStatus) {
   if (status === "done") return "已完成";
   if (status === "in_progress") return "进行中";
@@ -3915,7 +3891,7 @@ function getMyItemPeopleLine(item: FollowItem, requirement?: MockRequirement, ta
   return "";
 }
 
-function getMyItemSubline(item: FollowItem, requirement?: MockRequirement, task?: MockTask) {
+function getMyItemSubline(item: FollowItem) {
   const parts: string[] = [];
   const blockerLine = getMyItemBlockerLine(item);
   if (blockerLine) parts.push(blockerLine);
@@ -4029,7 +4005,7 @@ function FollowCard({
   const riskHint = getFollowRiskHint(item);
   const attention = showAttention ? getFollowAttentionConfig(item) : null;
   const peopleLine = getMyItemPeopleLine(item, requirement, task);
-  const subline = getMyItemSubline(item, requirement, task);
+  const subline = getMyItemSubline(item);
   const tone = riskHint?.tone ?? "muted";
   const className = [
     "console-follow-card",

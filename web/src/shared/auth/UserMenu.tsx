@@ -97,6 +97,7 @@ export function UserMenu() {
 
   return (
     <Dropdown
+      trigger={["click"]}
       menu={{
         items,
         onClick: ({ key }) => {

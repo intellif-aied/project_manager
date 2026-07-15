@@ -203,6 +203,18 @@ function ReportAIGenerateControlsState({
     }
   });
 
+  useEffect(() => {
+    const err = activeRunQuery.error;
+    if (!activeRunId || !(err instanceof HttpError)) return;
+    if (err.status !== 403 && err.status !== 404) return;
+    clearStoredRunId(storageKey, activeRunId);
+    const timer = window.setTimeout(() => {
+      setActiveRunId(undefined);
+      setHandledRunId(undefined);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [activeRunId, activeRunQuery.error, storageKey]);
+
   const runMutation = useMutation({
     mutationFn: async () => {
       if (onBeforeGenerate) {

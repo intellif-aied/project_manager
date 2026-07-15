@@ -53,7 +53,7 @@ import {
 import type { TableProps } from "antd";
 import dayjs from "dayjs";
 import type { ReactNode } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "@/shared/auth/authContext";
@@ -1076,7 +1076,7 @@ export function RequirementsListPage() {
     () => new Map(boardColumnData.map((column) => [column.status, column.total])),
     [boardColumnData]
   );
-  const getStatusMetricValue = (stage: RequirementStage) => {
+  const getStatusMetricValue = useCallback((stage: RequirementStage) => {
     if (view === "board") {
       return (
         boardColumnTotalMap.get(stage) ??
@@ -1084,7 +1084,7 @@ export function RequirementsListPage() {
       );
     }
     return requirements.filter((item) => item.status === stage).length;
-  };
+  }, [boardColumnTotalMap, requirements, view]);
 
   const selectedRequirementFromLatest = selectedRequirement
     ? (requirements.find((item) => item.id === selectedRequirement.id) ?? selectedRequirement)
@@ -1246,7 +1246,7 @@ export function RequirementsListPage() {
         icon: <WarningOutlined />
       }
     ],
-    [requirements, requirementsTotal, tasksByRequirement, view, boardColumnTotalMap]
+    [requirements, requirementsTotal, tasksByRequirement, view, getStatusMetricValue]
   );
 
   const visibleColumns = useMemo(() => {
@@ -2134,24 +2134,30 @@ function TokenSourcePicker({
   const rows = useMemo(() => sessions.filter((source) => source.total_tokens > 0), [sessions]);
   useEffect(() => {
     if (!open) return;
-    setSelected(selectedIds);
-    setSelectedRows({});
-    setPage(1);
-  }, [open, selectedIdsKey]);
+    const timer = window.setTimeout(() => {
+      setSelected(selectedIds);
+      setSelectedRows({});
+      setPage(1);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [open, selectedIds, selectedIdsKey]);
   useEffect(() => {
     if (!open || !rows.length) return;
-    setSelectedRows((prev) => {
-      let changed = false;
-      const next = { ...prev };
-      rows.forEach((row) => {
-        const key = sessionRowKey(row);
-        if ((selected.includes(key) || selectedIdSet.has(key)) && next[key] !== row) {
-          next[key] = row;
-          changed = true;
-        }
+    const timer = window.setTimeout(() => {
+      setSelectedRows((prev) => {
+        let changed = false;
+        const next = { ...prev };
+        rows.forEach((row) => {
+          const key = sessionRowKey(row);
+          if ((selected.includes(key) || selectedIdSet.has(key)) && next[key] !== row) {
+            next[key] = row;
+            changed = true;
+          }
+        });
+        return changed ? next : prev;
       });
-      return changed ? next : prev;
-    });
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [open, rows, selected, selectedIdSet]);
   const selectionChanged = useMemo(
     () => selected.length !== selectedIds.length || selected.some((id) => !selectedIdSet.has(id)),
@@ -4343,18 +4349,24 @@ function DependencyTaskPicker({
 
   useEffect(() => {
     if (!open) return;
-    setDraftSelected(selectedValues);
-    setKeyword("");
-    setLoadedDependencyTasks([]);
-    setDependencyTaskPage(1);
-    setActiveRequirementId(undefined);
-  }, [open, selectedValueKey]);
+    const timer = window.setTimeout(() => {
+      setDraftSelected(selectedValues);
+      setKeyword("");
+      setLoadedDependencyTasks([]);
+      setDependencyTaskPage(1);
+      setActiveRequirementId(undefined);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [open, selectedValueKey, selectedValues]);
 
   useEffect(() => {
     if (!open) return;
-    setLoadedDependencyTasks([]);
-    setDependencyTaskPage(1);
-    setActiveRequirementId(undefined);
+    const timer = window.setTimeout(() => {
+      setLoadedDependencyTasks([]);
+      setDependencyTaskPage(1);
+      setActiveRequirementId(undefined);
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [open, requirementKeyword]);
 
   useEffect(() => {
@@ -4362,7 +4374,11 @@ function DependencyTaskPicker({
     const activeStillVisible = groups.some((group) => group.id === activeRequirementId);
     if (activeStillVisible) return;
     const firstSelected = selectedValues.map((taskId) => taskMap.get(taskId)).find(Boolean);
-    setActiveRequirementId(firstSelected?.requirementId ?? groups[0]?.id);
+    const timer = window.setTimeout(
+      () => setActiveRequirementId(firstSelected?.requirementId ?? groups[0]?.id),
+      0
+    );
+    return () => window.clearTimeout(timer);
   }, [activeRequirementId, groups, open, selectedValues, taskMap]);
 
   const toggleTask = (taskId: string) => {
