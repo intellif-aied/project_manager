@@ -2512,6 +2512,24 @@ func TestCreateAgentScheduleRejectsInvalidTime(t *testing.T) {
 	}
 }
 
+func TestNormalizeReportSourceSliceKeysAcceptsUUIDs(t *testing.T) {
+	first := "fd46e4ca-9eef-4249-9184-d342d7754a4e"
+	second := "8ee3bf8b-42d6-47f5-8e45-feadad44017d"
+	got, err := normalizeReportSourceSliceKeys([]string{" " + first + " ", first, "", second})
+	if err != nil {
+		t.Fatalf("normalizeReportSourceSliceKeys() error = %v", err)
+	}
+	if len(got) != 2 || got[0] != first || got[1] != second {
+		t.Fatalf("normalizeReportSourceSliceKeys() = %#v", got)
+	}
+}
+
+func TestNormalizeReportSourceSliceKeysRejectsLegacyDateKeys(t *testing.T) {
+	if _, err := normalizeReportSourceSliceKeys([]string{"session-1:2026-07-15"}); err == nil {
+		t.Fatal("normalizeReportSourceSliceKeys() accepted a legacy date slice key")
+	}
+}
+
 func aiRunColumns() []string {
 	return []string{
 		"id", "user_id", "business_type", "business_id", "runtime_type",

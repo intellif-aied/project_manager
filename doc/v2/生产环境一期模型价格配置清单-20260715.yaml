@@ -1,0 +1,237 @@
+manifest_version: "1.0"
+manifest_id: "aida-production-model-pricing-phase1-20260715"
+checked_at: "2026-07-15T10:30:00Z"
+pricing_basis: "official_api_equivalent"
+
+target:
+  environment: "production"
+  ssh: "luoxian@192.168.14.182"
+  project_path: "/home/luoxian/aida"
+  public_base_url: "http://113.100.143.91:9180"
+  forbidden_source: "Do not read pricing rows from 14.157 as the publication source; this manifest is authoritative."
+
+# Codex publication contract:
+# 1. Read production provider/raw_model and earliest activity_date first.
+# 2. Stop if an observed model is absent from both alias_candidates and
+#    excluded_models, or if activity starts before 2026-07-01.
+# 3. Create one draft price book, publish aliases/rates/prices through Admin API, then activate it.
+# 4. Never copy UUIDs, created_by, published_by, or rows from the test database.
+# 5. Run recalculation preview before apply. Apply only after an operator approves the counts.
+
+price_book:
+  name: "AIDA 官方 API 等价价格 2026-07-15"
+  source_currency: "USD"
+  display_currency: "CNY"
+  initial_status: "draft"
+
+publication:
+  admin_api_base: "/api/v1/admin"
+  execution_mode: "existing Admin API only; do not edit production pricing tables directly"
+  endpoints:
+    price_books: "POST /price-books"
+    model_aliases: "POST /model-aliases"
+    exchange_rates: "POST /exchange-rate-versions"
+    model_prices: "POST /model-price-versions"
+    preview: "POST /pricing/recalculate/preview"
+    apply: "POST /pricing/recalculate/apply"
+  preflight_sql_intent:
+    - "List distinct active provider + raw_model and token totals from session_usage_components."
+    - "Find the earliest activity_date requiring pricing."
+    - "List existing active price books and published overlapping price/rate versions."
+  stop_conditions:
+    - "An observed provider/raw_model is absent from both alias_candidates and excluded_models."
+    - "Required activity_date is earlier than this manifest's supported date range."
+    - "A published overlapping interval has a different value."
+    - "GLM cost is required as exact native-CNY billing rather than phase-one USD-equivalent estimation."
+
+# Alias lookup is exact, not regex or wildcard. Publish only rows whose exact
+# provider + raw_model pair is observed in production. provider identifies the
+# session client (codex or claude_code), not the model vendor.
+alias_candidates:
+  - { provider: "codex", raw_model_pattern: "gpt-5.2", canonical_model: "gpt-5.2", status: "reviewed" }
+  - { provider: "codex", raw_model_pattern: "gpt-5.3-codex", canonical_model: "gpt-5.3-codex", status: "reviewed" }
+  - { provider: "codex", raw_model_pattern: "gpt-5.4", canonical_model: "gpt-5.4", status: "reviewed" }
+  - { provider: "codex", raw_model_pattern: "gpt-5.4-mini", canonical_model: "gpt-5.4-mini", status: "reviewed" }
+  - { provider: "codex", raw_model_pattern: "gpt-5.5", canonical_model: "gpt-5.5", status: "reviewed" }
+  - { provider: "codex", raw_model_pattern: "gpt-5.6", canonical_model: "gpt-5.6-sol", status: "reviewed" }
+  - { provider: "codex", raw_model_pattern: "gpt-5.6-luna", canonical_model: "gpt-5.6-luna", status: "reviewed" }
+  - { provider: "codex", raw_model_pattern: "gpt-5.6-sol", canonical_model: "gpt-5.6-sol", status: "reviewed" }
+  - { provider: "codex", raw_model_pattern: "gpt-5.6-terra", canonical_model: "gpt-5.6-terra", status: "reviewed" }
+
+  - { provider: "claude_code", raw_model_pattern: "claude-opus-4-8", canonical_model: "claude-opus-4-8", status: "reviewed" }
+  - { provider: "claude_code", raw_model_pattern: "claude-sonnet-5", canonical_model: "claude-sonnet-5", status: "reviewed" }
+  - { provider: "claude_code", raw_model_pattern: "claude-sonnet-4-6", canonical_model: "claude-sonnet-4-6", status: "reviewed" }
+  - { provider: "claude_code", raw_model_pattern: "claude-haiku-4-5", canonical_model: "claude-haiku-4-5", status: "reviewed" }
+
+  # GLM and DeepSeek can be used through either compatible client. Publish only
+  # the exact pairs found by production inventory.
+  - { provider: "claude_code", raw_model_pattern: "GLM-5.2", canonical_model: "glm-5.2", status: "reviewed", publish_when_observed: true }
+  - { provider: "codex", raw_model_pattern: "GLM-5.2", canonical_model: "glm-5.2", status: "reviewed", publish_when_observed: true }
+  - { provider: "claude_code", raw_model_pattern: "glm-5.2", canonical_model: "glm-5.2", status: "reviewed", publish_when_observed: true }
+  - { provider: "codex", raw_model_pattern: "glm-5.2", canonical_model: "glm-5.2", status: "reviewed", publish_when_observed: true }
+  - { provider: "claude_code", raw_model_pattern: "deepseek-v4-flash", canonical_model: "deepseek-v4-flash", status: "reviewed", publish_when_observed: true }
+  - { provider: "codex", raw_model_pattern: "deepseek-v4-flash", canonical_model: "deepseek-v4-flash", status: "reviewed", publish_when_observed: true }
+  - { provider: "claude_code", raw_model_pattern: "deepseek-v4-pro", canonical_model: "deepseek-v4-pro", status: "reviewed", publish_when_observed: true }
+  - { provider: "codex", raw_model_pattern: "deepseek-v4-pro", canonical_model: "deepseek-v4-pro", status: "reviewed", publish_when_observed: true }
+  - { provider: "claude_code", raw_model_pattern: "deepseek-chat", canonical_model: "deepseek-v4-flash", status: "reviewed", publish_when_observed: true }
+  - { provider: "codex", raw_model_pattern: "deepseek-chat", canonical_model: "deepseek-v4-flash", status: "reviewed", publish_when_observed: true }
+  - { provider: "claude_code", raw_model_pattern: "deepseek-reasoner", canonical_model: "deepseek-v4-flash", status: "reviewed", publish_when_observed: true }
+  - { provider: "codex", raw_model_pattern: "deepseek-reasoner", canonical_model: "deepseek-v4-flash", status: "reviewed", publish_when_observed: true }
+
+# All values below match the current API request fields and are USD per 1M
+# tokens. source_checked_at and status must be sent with each row.
+model_prices:
+  defaults:
+    effective_from: "2026-07-01"
+    effective_to: null
+    source_checked_at: "2026-07-15T10:30:00Z"
+    status: "published"
+
+  rows:
+    - { canonical_model: "gpt-5.2", billing_variant: "any", input_per_million: "1.75", cache_read_per_million: "0.175", cache_write_5m_per_million: "0", cache_write_1h_per_million: "0", output_per_million: "14", source_url: "https://developers.openai.com/api/docs/models/gpt-5.2" }
+    - { canonical_model: "gpt-5.3-codex", billing_variant: "any", input_per_million: "1.75", cache_read_per_million: "0.175", cache_write_5m_per_million: "0", cache_write_1h_per_million: "0", output_per_million: "14", source_url: "https://developers.openai.com/api/docs/models/gpt-5.3-codex" }
+    - { canonical_model: "gpt-5.4", billing_variant: "any", input_per_million: "2.5", cache_read_per_million: "0.25", cache_write_5m_per_million: "0", cache_write_1h_per_million: "0", output_per_million: "15", source_url: "https://developers.openai.com/api/docs/models/gpt-5.4" }
+    - { canonical_model: "gpt-5.4", billing_variant: "long_context", input_per_million: "5", cache_read_per_million: "0.5", cache_write_5m_per_million: "0", cache_write_1h_per_million: "0", output_per_million: "22.5", source_url: "https://developers.openai.com/api/docs/models/gpt-5.4" }
+    - { canonical_model: "gpt-5.4-mini", billing_variant: "any", input_per_million: "0.75", cache_read_per_million: "0.075", cache_write_5m_per_million: "0", cache_write_1h_per_million: "0", output_per_million: "4.5", source_url: "https://developers.openai.com/api/docs/models/gpt-5.4-mini" }
+    - { canonical_model: "gpt-5.5", billing_variant: "any", input_per_million: "5", cache_read_per_million: "0.5", cache_write_5m_per_million: "0", cache_write_1h_per_million: "0", output_per_million: "30", source_url: "https://developers.openai.com/api/docs/models/gpt-5.5" }
+    - { canonical_model: "gpt-5.5", billing_variant: "long_context", input_per_million: "10", cache_read_per_million: "1", cache_write_5m_per_million: "0", cache_write_1h_per_million: "0", output_per_million: "45", source_url: "https://developers.openai.com/api/docs/models/gpt-5.5" }
+    - { canonical_model: "gpt-5.6-luna", billing_variant: "any", input_per_million: "1", cache_read_per_million: "0.1", cache_write_5m_per_million: "1.25", cache_write_1h_per_million: "1.25", output_per_million: "6", source_url: "https://developers.openai.com/api/docs/models/gpt-5.6-luna" }
+    - { canonical_model: "gpt-5.6-luna", billing_variant: "long_context", input_per_million: "2", cache_read_per_million: "0.2", cache_write_5m_per_million: "2.5", cache_write_1h_per_million: "2.5", output_per_million: "9", source_url: "https://developers.openai.com/api/docs/models/gpt-5.6-luna" }
+    - { canonical_model: "gpt-5.6-sol", billing_variant: "any", input_per_million: "5", cache_read_per_million: "0.5", cache_write_5m_per_million: "6.25", cache_write_1h_per_million: "6.25", output_per_million: "30", source_url: "https://developers.openai.com/api/docs/models/gpt-5.6-sol" }
+    - { canonical_model: "gpt-5.6-sol", billing_variant: "long_context", input_per_million: "10", cache_read_per_million: "1", cache_write_5m_per_million: "12.5", cache_write_1h_per_million: "12.5", output_per_million: "45", source_url: "https://developers.openai.com/api/docs/models/gpt-5.6-sol" }
+    - { canonical_model: "gpt-5.6-terra", billing_variant: "any", input_per_million: "2.5", cache_read_per_million: "0.25", cache_write_5m_per_million: "3.125", cache_write_1h_per_million: "3.125", output_per_million: "15", source_url: "https://developers.openai.com/api/docs/models/gpt-5.6-terra" }
+    - { canonical_model: "gpt-5.6-terra", billing_variant: "long_context", input_per_million: "5", cache_read_per_million: "0.5", cache_write_5m_per_million: "6.25", cache_write_1h_per_million: "6.25", output_per_million: "22.5", source_url: "https://developers.openai.com/api/docs/models/gpt-5.6-terra" }
+
+    - { canonical_model: "claude-opus-4-8", billing_variant: "any", input_per_million: "5", cache_read_per_million: "0.5", cache_write_5m_per_million: "6.25", cache_write_1h_per_million: "10", output_per_million: "25", source_url: "https://platform.claude.com/docs/en/about-claude/pricing" }
+    - { canonical_model: "claude-sonnet-4-6", billing_variant: "any", input_per_million: "3", cache_read_per_million: "0.3", cache_write_5m_per_million: "3.75", cache_write_1h_per_million: "6", output_per_million: "15", source_url: "https://platform.claude.com/docs/en/about-claude/pricing" }
+    - { canonical_model: "claude-haiku-4-5", billing_variant: "any", input_per_million: "1", cache_read_per_million: "0.1", cache_write_5m_per_million: "1.25", cache_write_1h_per_million: "2", output_per_million: "5", source_url: "https://platform.claude.com/docs/en/about-claude/pricing" }
+    - canonical_model: "claude-sonnet-5"
+      billing_variant: "any"
+      input_per_million: "2"
+      cache_read_per_million: "0.2"
+      cache_write_5m_per_million: "2.5"
+      cache_write_1h_per_million: "4"
+      output_per_million: "10"
+      effective_from: "2026-07-01"
+      effective_to: "2026-09-01"
+      source_url: "https://platform.claude.com/docs/en/about-claude/pricing"
+      notes: "Anthropic introductory price through 2026-08-31."
+    - canonical_model: "claude-sonnet-5"
+      billing_variant: "any"
+      input_per_million: "3"
+      cache_read_per_million: "0.3"
+      cache_write_5m_per_million: "3.75"
+      cache_write_1h_per_million: "6"
+      output_per_million: "15"
+      effective_from: "2026-09-01"
+      effective_to: null
+      source_url: "https://platform.claude.com/docs/en/about-claude/pricing"
+      notes: "Anthropic standard price from 2026-09-01."
+
+    - { canonical_model: "deepseek-v4-flash", billing_variant: "any", input_per_million: "0.14", cache_read_per_million: "0.0028", cache_write_5m_per_million: "0", cache_write_1h_per_million: "0", output_per_million: "0.28", source_url: "https://api-docs.deepseek.com/quick_start/pricing/", notes: "Cache miss maps to uncached input; automatic cache has no separate cache-write fee." }
+    - { canonical_model: "deepseek-v4-pro", billing_variant: "any", input_per_million: "0.435", cache_read_per_million: "0.003625", cache_write_5m_per_million: "0", cache_write_1h_per_million: "0", output_per_million: "0.87", source_url: "https://api-docs.deepseek.com/quick_start/pricing/", notes: "Cache miss maps to uncached input; automatic cache has no separate cache-write fee." }
+
+    # The current AIDA price book only supports USD source prices. GLM-5.2's
+    # official CNY prices (8 / 2 / 0 / 0 / 28) are normalized once using the
+    # 2026-07-15 SAFE rate 1 USD = 6.7910 CNY. This is an explicit phase-one
+    # estimate, not native-CNY billing reconciliation.
+    - canonical_model: "glm-5.2"
+      billing_variant: "any"
+      input_per_million: "1.178029745251"
+      cache_read_per_million: "0.294507436313"
+      cache_write_5m_per_million: "0"
+      cache_write_1h_per_million: "0"
+      output_per_million: "4.123104108379"
+      source_url: "https://bigmodel.cn/pricing"
+      notes: "Official CNY/1M: input 8, cache hit 2, cache storage temporarily free, output 28. USD-normalized at 6.7910 on 2026-07-15; phase-one estimate."
+
+exchange_rates:
+  source_url: "https://www.safe.gov.cn/AppStructured/hlw/RMBQuery.do"
+  source_checked_at: "2026-07-15T10:30:00Z"
+  status: "published"
+  rows:
+    - { rate: "6.8067", effective_from: "2026-07-01", effective_to: "2026-07-02" }
+    - { rate: "6.8088", effective_from: "2026-07-02", effective_to: "2026-07-03" }
+    - { rate: "6.8047", effective_from: "2026-07-03", effective_to: "2026-07-06" }
+    - { rate: "6.8066", effective_from: "2026-07-06", effective_to: "2026-07-07" }
+    - { rate: "6.8054", effective_from: "2026-07-07", effective_to: "2026-07-08" }
+    - { rate: "6.8077", effective_from: "2026-07-08", effective_to: "2026-07-09" }
+    - { rate: "6.8036", effective_from: "2026-07-09", effective_to: "2026-07-10" }
+    - { rate: "6.7989", effective_from: "2026-07-10", effective_to: "2026-07-13" }
+    - { rate: "6.7972", effective_from: "2026-07-13", effective_to: "2026-07-14" }
+    - { rate: "6.7990", effective_from: "2026-07-14", effective_to: "2026-07-15" }
+    - { rate: "6.7910", effective_from: "2026-07-15", effective_to: null }
+
+excluded_models:
+  # This list is an explicit production decision list, not a zero-price map.
+  # provider + raw_model is exact. Re-run inventory after Ledger backfill and
+  # stop publication if a pair is absent from both this list and aliases.
+  - provider: "codex"
+    raw_model: "gpt-5.3-codex-spark"
+    reason: "Research preview has no final API-equivalent price. Do not map to gpt-5.3-codex."
+  - provider: "codex"
+    raw_model: "codex-auto-review"
+    reason: "Internal workflow model; no verified API-equivalent public price."
+  - provider: "codex"
+    raw_model: "gpt-5-codex"
+    reason: "Observed only in legacy test-account data without raw logs; exclude from phase-one historical pricing."
+  - provider: "codex"
+    raw_model: "gpt-5.5-20260626"
+    reason: "Snapshot alias has not been manually verified against the gpt-5.5 price contract."
+  - provider: "codex"
+    raw_model: "GLM-5.1"
+    reason: "No manually verified phase-one API-equivalent price."
+  - provider: "claude_code"
+    raw_model: "auto"
+    reason: "Model identity is ambiguous and cannot be priced safely."
+  - provider: "claude_code"
+    raw_model: "tencent/hy3:free"
+    reason: "Third-party free-route identifier; no verified API-equivalent pricing contract."
+  - provider: "claude_code"
+    raw_model: "kimi-k2.7-code"
+    reason: "No manually verified phase-one API-equivalent price."
+  - provider: "claude_code"
+    raw_model: "kimi-k2.6"
+    reason: "No manually verified phase-one API-equivalent price."
+  - provider: "claude_code"
+    raw_model: "Kimi-K2.6"
+    reason: "Observed case-sensitive identifier; no manually verified phase-one API-equivalent price."
+  - provider: "claude_code"
+    raw_model: "claude-fable-5"
+    reason: "No manually verified phase-one API-equivalent price."
+  - provider: "claude_code"
+    raw_model: "claude-opus-4-6"
+    reason: "Not included in the manually reviewed phase-one price set."
+  - provider: "claude_code"
+    raw_model: "GLM-5.2-FP8"
+    reason: "Deployment-specific quantized model; do not assume the GLM-5.2 public API price."
+  - provider: "claude_code"
+    raw_model: "GLM-5-1-FP8-pruned-reap_E192"
+    reason: "Deployment-specific internal model; no API-equivalent price."
+  - provider: "claude_code"
+    raw_model: "GLM-5.1"
+    reason: "No manually verified phase-one API-equivalent price."
+  - provider: "claude_code"
+    raw_model: "GLM-4.7"
+    reason: "No manually verified phase-one API-equivalent price."
+  - provider: "claude_code"
+    raw_model: "astron-code-latest"
+    reason: "Internal model alias; canonical model and price are not verifiable."
+  - provider: "claude_code"
+    raw_model: "/nfs/FM/ydq/minimax1m/MiniMax-M2___5"
+    reason: "Local model path; no API-equivalent price."
+  - provider: "claude_code"
+    raw_model: "/nfs/3D/zhangleichao/Qwen/Qwen3.5-397B-A17B"
+    reason: "Local model path; no API-equivalent price."
+  - provider: "claude_code"
+    raw_model: "test-model"
+    reason: "Test data; do not create a zero-price production mapping."
+
+post_publish_acceptance:
+  - "Exactly one price book is active."
+  - "Every production provider/raw_model is either reviewed and priced or explicitly excluded."
+  - "No published model-price or exchange-rate interval overlaps."
+  - "Recalculation preview counts are reviewed before apply."
+  - "After apply, rerunning the same preview returns changed_components=0."
+  - "Sample at least one GPT, Claude, GLM, and DeepSeek component and recompute all five token categories manually."
+  - "Token totals remain unchanged before and after cost recalculation."

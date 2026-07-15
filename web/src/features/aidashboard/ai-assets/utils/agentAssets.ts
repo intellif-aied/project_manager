@@ -50,6 +50,7 @@ export const REPORT_SYSTEM_PROMPT_KEYS = new Set([
   "calendar_context_json",
   "selected_session_slice_keys",
   "selected_session_slice_keys_json",
+  "report_source_selection_id",
   "period_start",
   "period_end",
   "scheduled_trigger_at",

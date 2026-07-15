@@ -91,6 +91,11 @@ assert.match(
   /"selected_session_slice_keys_json"/,
   "session slice keys are Aida-managed prompt keys"
 );
+assert.match(
+  agentAssets,
+  /"report_source_selection_id"/,
+  "report source selection id is an Aida-managed prompt key"
+);
 assert.doesNotMatch(
   agentRunPage,
   /const REPORT_SYSTEM_PROMPT_KEYS = new Set/,
@@ -100,6 +105,21 @@ assert.match(
   agentRunPage,
   /calendar_context_json: JSON\.stringify\(\s*reportCalendarContextPayload/,
   "Report Agent prompt preview must show the injected calendar context"
+);
+assert.match(
+  agentRunPage,
+  /report_source_selection_id: "运行时生成"/,
+  "Report Agent prompt preview must mark the source selection id as runtime-managed"
+);
+assert.match(
+  agentRunPage,
+  /fetchReportSourceCandidates\(/,
+  "Agent run session picker must use report-source slice candidates"
+);
+assert.doesNotMatch(
+  agentRunPage,
+  /fetchSessionTokens\(|session_id.*activity_date/,
+  "Agent run session picker must not recreate legacy session_id:date keys"
 );
 assert.doesNotMatch(
   controls,

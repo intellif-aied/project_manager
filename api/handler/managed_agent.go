@@ -2503,7 +2503,7 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	selectedSessionSliceKeys, err := normalizeSelectedSessionSliceKeys(req.SelectedSessionSliceKeys)
+	selectedSessionSliceKeys, err := normalizeReportSourceSliceKeys(req.SelectedSessionSliceKeys)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -2536,11 +2536,25 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 		inputRef["credential_override"] = "redacted"
 	}
 	var runID string
-	if reportSourceAvailable && len(selectedSessionSliceKeys) == 0 {
+	if reportSourceAvailable {
 		selectionPeriod, periodErr := reportsource.ReportPeriod(req.ReportType, date, weekStart, weekEnd)
 		if periodErr != nil {
 			writeReportSourceError(w, periodErr)
 			return
+		}
+		if len(selectedSessionSliceKeys) > 0 {
+			inputs := make([]reportsource.SourceInput, 0, len(selectedSessionSliceKeys))
+			for _, sliceKey := range selectedSessionSliceKeys {
+				inputs = append(inputs, reportsource.SourceInput{SliceKey: sliceKey})
+			}
+			prepared, prepareErr := h.reportSource.CreateExplicit(
+				r.Context(), u.ID, req.ReportType, selectionPeriod, inputs,
+			)
+			if prepareErr != nil {
+				writeReportSourceError(w, prepareErr)
+				return
+			}
+			reportSourceSelectionID = prepared.ID
 		}
 		var attached reportsource.Selection
 		runID, attached, err = h.reportSource.CreateAttachedRun(
@@ -2576,7 +2590,7 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 		return
 	}
 
-	systemPromptValues := reportAgentStartPromptValues(runID, req.ReportType, date, weekStart, weekEnd, target, selectedSessionSliceKeys, reportSourceSelectionID, h.reportMCPURL())
+	systemPromptValues := reportAgentStartPromptValues(runID, req.ReportType, date, weekStart, weekEnd, target, nil, reportSourceSelectionID, h.reportMCPURL())
 	userMessage := strings.TrimSpace(req.Message)
 	if userMessage == "" {
 		userMessage = fallbackReportRunMessage(req.ReportType, date, weekStart, weekEnd, target)
@@ -2627,6 +2641,29 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 type reportSourceRunInputError struct {
 	Code    string
 	Message string
+}
+
+func normalizeReportSourceSliceKeys(values []string) ([]string, error) {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		key := strings.TrimSpace(value)
+		if key == "" {
+			continue
+		}
+		if !isValidUUID(key) {
+			return nil, fmt.Errorf("selected_session_slice_keys must contain slice UUIDs")
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, key)
+	}
+	if len(result) > 200 {
+		return nil, fmt.Errorf("selected_session_slice_keys supports at most 200 values")
+	}
+	return result, nil
 }
 
 func validateReportSourceRunInput(isPersonalReport bool, selectionID string, sliceKeys []string) *reportSourceRunInputError {
