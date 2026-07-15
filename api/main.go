@@ -48,7 +48,9 @@ func main() {
 	}
 
 	aihubClient := service.NewAIHubClient(cfg.AIHubHost, cfg.AIHubToken)
+	modelCatalogClient := service.NewModelCatalogClient(cfg.AIGatewayModelsURL)
 	authH := handler.NewAuthHandler(database, aihubClient, cfg.BootstrapAdminUIDs)
+	modelCatalogH := handler.NewModelCatalogHandler(modelCatalogClient)
 	aiClient := service.NewAIClient()
 	managedAgentClient := service.NewManagedAgentClient(cfg.ManagedAgentURL, cfg.ManagedAgentToken)
 	workItemEventRecorder := service.NewWorkItemEventRecorder(database)
@@ -173,6 +175,7 @@ func main() {
 	r.With(handler.CLIAuthMiddleware(database, cfg.AIHubSecret, aihubClient)).Post("/api/v1/session-syncs/prepare", sessionSyncH.Prepare)
 	r.With(handler.CLIAuthMiddleware(database, cfg.AIHubSecret, aihubClient)).Post("/api/v1/session-chunks/batch", sessionSyncH.UploadChunks)
 	r.With(handler.CLIAuthMiddleware(database, cfg.AIHubSecret, aihubClient)).Post("/api/v1/session-syncs/{generationId}/finalize", sessionSyncH.Finalize)
+	r.With(handler.CLIAuthMiddleware(database, cfg.AIHubSecret, aihubClient)).Post("/api/v1/sessions/batch", handler.LegacySessionBatchUploadDisabled)
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(handler.AuthMiddleware(database, cfg.AIHubSecret, aihubClient))
@@ -183,6 +186,7 @@ func main() {
 		r.Get("/task-assignees", authH.ListTaskAssignees)
 		r.Get("/teams", authH.ListTeams)
 		r.Get("/departments", departmentH.List)
+		r.Get("/ai-assets/models", modelCatalogH.List)
 
 		r.Route("/admin", func(r chi.Router) {
 			r.Use(handler.AdminOnly)
@@ -240,7 +244,6 @@ func main() {
 		r.Get("/dashboard/my-items", dashboardH.MyItems)
 		r.Get("/dashboard/risks", dashboardH.Risks)
 
-		r.Post("/sessions/batch", sessionH.BatchUpload)
 		r.Get("/sessions", sessionH.List)
 		r.Get("/sessions/{id}", sessionH.Get)
 		r.Get("/sessions/{id}/log", sessionH.DownloadLog)

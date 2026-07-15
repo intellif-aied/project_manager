@@ -56,6 +56,7 @@ import {
 import { PagePanel } from "@/shared/components/PagePanel/PagePanel";
 import { useAuth } from "@/shared/auth/authContext";
 import type { UserRole } from "@/shared/auth/types";
+import { ManagedModelSelect } from "../components/ManagedModelSelect";
 
 import "../components/AgentWorkspace.css";
 
@@ -793,7 +794,7 @@ function GenericAgentRunForm({ agent }: { agent: ManagedAgent }) {
       : activeRunQuery.isFetching
         ? "正在同步运行状态，请稍候。"
         : !modelId
-          ? "请先填写模型 ID，或在 Agent 配置中设置默认模型。"
+          ? "请先选择模型，或在 Agent 配置中设置默认模型。"
           : missingPromptVariables.length > 0
             ? missingPromptReason(missingPromptVariables)
             : !hasPromptInput
@@ -875,13 +876,15 @@ function GenericAgentRunForm({ agent }: { agent: ManagedAgent }) {
           )}
 
           <Card title={modelCardTitle(!defaultModelId)} className="ai-assets-editor-section">
-            <Input
-              value={runModelId}
-              onChange={(event) => setRunModelId(event.target.value)}
+            <ManagedModelSelect
+              allowClear={Boolean(defaultModelId)}
+              value={runModelId || undefined}
+              onChange={(value) => setRunModelId(value || "")}
+              preservedModelId={defaultModelId}
               placeholder={
                 defaultModelId
                   ? `留空使用 Agent 默认模型：${defaultModelId}`
-                  : "必填：请输入模型 ID"
+                  : "必选：请选择模型"
               }
             />
             <p className="ai-assets-field-help">
@@ -1035,7 +1038,7 @@ function ReportAgentRunForm({ agent }: { agent: ManagedAgent }) {
         : options.length === 0
           ? "当前账号没有该 Agent 支持的报告类型运行权限。"
           : !modelId
-            ? "请先填写模型 ID，或在 Agent 配置中设置默认模型。"
+            ? "请先选择模型，或在 Agent 配置中设置默认模型。"
             : missingPromptVariables.length > 0
               ? missingPromptReason(missingPromptVariables)
               : "";
@@ -1183,13 +1186,15 @@ function ReportAgentRunForm({ agent }: { agent: ManagedAgent }) {
           </Card>
 
           <Card title={modelCardTitle(!defaultModelId)} className="ai-assets-editor-section">
-            <Input
-              value={runModelId}
-              onChange={(event) => setRunModelId(event.target.value)}
+            <ManagedModelSelect
+              allowClear={Boolean(defaultModelId)}
+              value={runModelId || undefined}
+              onChange={(value) => setRunModelId(value || "")}
+              preservedModelId={defaultModelId}
               placeholder={
                 defaultModelId
                   ? `留空使用 Agent 默认模型：${defaultModelId}`
-                  : "必填：请输入模型 ID"
+                  : "必选：请选择模型"
               }
             />
             <p className="ai-assets-field-help">

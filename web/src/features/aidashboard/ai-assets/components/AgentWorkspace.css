@@ -339,6 +339,28 @@
   line-height: 1.55;
 }
 
+.ai-assets-model-select > .ant-select {
+  width: 100%;
+}
+
+.ai-assets-model-select__feedback {
+  align-items: center;
+  display: flex;
+  font-size: 12px;
+  gap: 6px;
+  justify-content: space-between;
+  line-height: 20px;
+  margin-top: 6px;
+}
+
+.ai-assets-model-select__feedback.is-error {
+  color: #c62828;
+}
+
+.ai-assets-model-select__feedback.is-warning {
+  color: #9a6700;
+}
+
 .ai-assets-session-selector {
   display: grid;
   gap: 8px;

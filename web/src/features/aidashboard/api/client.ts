@@ -5,6 +5,7 @@ import { HttpError } from "@/shared/request/types";
 import type { User } from "@/shared/auth/types";
 import type {
   AIHubUser,
+  AvailableModelsResponse,
   AdminBatchAddUsersResponse,
   ACStatus,
   AIRun,
@@ -827,6 +828,12 @@ export const fetchDailyReportAgentIntegration = () =>
 export const fetchManagedAgents = () =>
   unwrap(
     api.get<{ agents: ManagedAgent[] }>("/ai-assets/agents", undefined, { skipErrorHandler: true })
+  );
+export const fetchAvailableModels = () =>
+  unwrap(
+    api.get<AvailableModelsResponse>("/ai-assets/models", undefined, {
+      skipErrorHandler: true
+    })
   );
 export const createManagedAgent = (payload: UpsertManagedAgentPayload) =>
   unwrap(api.post<{ agent_id: string; managed_version?: number }>("/ai-assets/agents", payload));

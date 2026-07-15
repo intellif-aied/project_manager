@@ -586,6 +586,10 @@ export interface ManagedAgent {
   is_default_report?: boolean;
 }
 
+export interface AvailableModelsResponse {
+  models: string[];
+}
+
 export interface UpsertManagedAgentPayload {
   agent_id?: string;
   name: string;

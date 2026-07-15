@@ -42,6 +42,7 @@ import {
   isReportAgentAsset,
   REPORT_SYSTEM_PROMPT_KEYS
 } from "../utils/agentAssets";
+import { ManagedModelSelect } from "../components/ManagedModelSelect";
 
 import "../components/AgentWorkspace.css";
 
@@ -411,8 +412,16 @@ export function AgentScheduleFormPage() {
                 </Form.Item>
               ) : null}
 
-              <Form.Item name="model_id" label="模型 ID" extra="不填写时使用 Agent 默认模型">
-                <Input placeholder="例如：MiniMax-M2.5" />
+              <Form.Item name="model_id" label="模型" extra="不选择时使用 Agent 默认模型">
+                <ManagedModelSelect
+                  allowClear
+                  preservedModelId={selectedAgent?.default_model_id}
+                  placeholder={
+                    selectedAgent?.default_model_id
+                      ? `留空使用 Agent 默认模型：${selectedAgent.default_model_id}`
+                      : "选择模型"
+                  }
+                />
               </Form.Item>
 
               <Form.Item
