@@ -74,8 +74,12 @@ function selectedSourceKey(source: ReportSourceInput) {
   return source.slice_key;
 }
 
-function sessionActivityDate(record: ReportSourceCandidate) {
-  return record.activity_start_at?.slice(0, 10) || "-";
+function sessionActivityRange(record: ReportSourceCandidate) {
+  const start = record.activity_start_at?.slice(0, 10);
+  const end = record.activity_end_at?.slice(0, 10);
+  if (!start) return end || "-";
+  if (!end || end === start) return start;
+  return `${start} 至 ${end}`;
 }
 
 function sessionSourceInput(record: ReportSourceCandidate): ReportSourceInput {
@@ -426,10 +430,10 @@ function SnapshotReportAISettingsPanel({
   const columns = useMemo<ColumnsType<ReportSourceCandidate>>(
     () => [
       {
-        title: "日期",
+        title: "活动时间",
         key: "activity_date",
-        width: 104,
-        render: (_, record) => sessionActivityDate(record)
+        width: 176,
+        render: (_, record) => sessionActivityRange(record)
       },
       {
         title: "session / 摘要",
@@ -541,7 +545,7 @@ function SnapshotReportAISettingsPanel({
         }
         open={open}
         placement="right"
-        width={520}
+        width="min(680px, 94vw)"
         mask
         maskClosable
         zIndex={1100}
