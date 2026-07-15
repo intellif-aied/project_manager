@@ -69,6 +69,8 @@ type FinalizeResponse struct {
 	Status         string        `json:"status"`
 	ContentStatus  ContentStatus `json:"content_status"`
 	ExpectedCursor int64         `json:"expected_cursor"`
+	SliceKey       string        `json:"slice_key,omitempty"`
+	SliceCreated   bool          `json:"slice_created"`
 }
 
 type SyncService struct {
@@ -474,9 +476,18 @@ func (s *SyncService) Finalize(ctx context.Context, userID, generationID string,
 	}
 
 	if status == "active" && activeID.Valid && activeID.String == generationID && finalizedAt.Valid {
+		if expectedCursor != request.DeclaredEndCursor || prefixHash != request.PrefixCheckpointHash ||
+			prefixAlgorithm != request.PrefixCheckpointAlgorithmVersion {
+			return FinalizeResponse{}, ErrFinalizeConflict
+		}
+		sliceKey, sliceCreated, err := createContentSlice(ctx, tx, sessionID, sourceID, generationID, expectedCursor)
+		if err != nil {
+			return FinalizeResponse{}, err
+		}
 		return commitFinalizeResponse(tx, FinalizeResponse{
 			GenerationID: generationID, SourceKey: sourceKey, Status: "active",
 			ContentStatus: contentStatus, ExpectedCursor: expectedCursor,
+			SliceKey: sliceKey, SliceCreated: sliceCreated,
 		})
 	}
 	if status != "staging" || !stagingID.Valid || stagingID.String != generationID ||
@@ -550,11 +561,53 @@ func (s *SyncService) Finalize(ctx context.Context, userID, generationID string,
 			return FinalizeResponse{}, err
 		}
 	}
+	sliceKey, sliceCreated, err := createContentSlice(ctx, tx, sessionID, sourceID, generationID, expectedCursor)
+	if err != nil {
+		return FinalizeResponse{}, err
+	}
 
 	return commitFinalizeResponse(tx, FinalizeResponse{
 		GenerationID: generationID, SourceKey: sourceKey, Status: "active",
 		ContentStatus: contentStatus, ExpectedCursor: expectedCursor,
+		SliceKey: sliceKey, SliceCreated: sliceCreated,
 	})
+}
+
+func createContentSlice(
+	ctx context.Context,
+	tx *sql.Tx,
+	sessionID, sourceID, generationID string,
+	endCursor int64,
+) (string, bool, error) {
+	var lastSliceID sql.NullString
+	var startCursor int64
+	err := tx.QueryRowContext(ctx, `
+		SELECT id::text, end_cursor
+		FROM session_content_slices
+		WHERE generation_id = $1
+		ORDER BY end_cursor DESC, created_at DESC
+		LIMIT 1
+		FOR UPDATE`, generationID).Scan(&lastSliceID, &startCursor)
+	if errors.Is(err, sql.ErrNoRows) {
+		startCursor = 0
+	} else if err != nil {
+		return "", false, err
+	}
+	if endCursor <= startCursor {
+		return lastSliceID.String, false, nil
+	}
+	var sliceID string
+	err = tx.QueryRowContext(ctx, `
+		INSERT INTO session_content_slices (
+			session_id, source_id, generation_id, start_cursor, end_cursor
+		) VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (generation_id, start_cursor, end_cursor) DO UPDATE
+		SET end_cursor = EXCLUDED.end_cursor
+		RETURNING id::text`, sessionID, sourceID, generationID, startCursor, endCursor).Scan(&sliceID)
+	if err != nil {
+		return "", false, err
+	}
+	return sliceID, true, nil
 }
 
 func verifyChunkContinuity(ctx context.Context, tx *sql.Tx, generationID string, declaredEnd int64) error {

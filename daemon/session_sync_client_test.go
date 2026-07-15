@@ -82,9 +82,27 @@ func TestIncrementalUploadRetriesResponseLossAndResumes(t *testing.T) {
 		t.Fatalf("second results=%+v", results)
 	}
 	serverState.mu.Lock()
-	defer serverState.mu.Unlock()
 	if serverState.chunkRequests != 2 || serverState.finalizeRequests != 1 {
 		t.Fatalf("second upload sent data: chunks=%d finalize=%d", serverState.chunkRequests, serverState.finalizeRequests)
+	}
+	serverState.mu.Unlock()
+
+	newContent := []byte("{\"type\":\"user\",\"sessionId\":\"sync-client\",\"timestamp\":\"2026-07-14T01:02:00Z\"}\n")
+	if err := os.WriteFile(sourcePath, append(append([]byte(nil), content...), newContent...), 0600); err != nil {
+		t.Fatal(err)
+	}
+	results, err = uploadSessionGroupIncremental(cfg, []sessionWithFile{{info: session, filePath: sourcePath}}, session.SessionRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].Status != "uploaded" || results[0].UploadedChunks != 1 {
+		t.Fatalf("incremental results=%+v", results)
+	}
+	serverState.mu.Lock()
+	defer serverState.mu.Unlock()
+	if serverState.acceptedChunks != 2 || serverState.finalizeRequests != 2 || string(serverState.content) != string(append(content, newContent...)) {
+		t.Fatalf("incremental server state: accepted=%d finalize=%d content=%d",
+			serverState.acceptedChunks, serverState.finalizeRequests, len(serverState.content))
 	}
 }
 
@@ -136,8 +154,11 @@ func (s *fakeSessionSyncServer) serveHTTP(w http.ResponseWriter, r *http.Request
 		source := request.Sessions[0].Sources[0]
 		action := "rebuild_required"
 		status := "staging"
-		if s.active && source.LocalSize == int64(len(s.content)) && source.PrefixCheckpointHash == hashTestBytes(s.content) {
-			action = "unchanged"
+		if s.active && source.LocalSize >= int64(len(s.content)) && source.PrefixCheckpointHash == hashTestBytes(s.content) {
+			action = "append"
+			if source.LocalSize == int64(len(s.content)) {
+				action = "unchanged"
+			}
 			status = "active"
 		}
 		writeTestJSON(w, map[string]any{"results": []map[string]any{{
