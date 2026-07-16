@@ -587,7 +587,8 @@ func hasIncompleteAgentClaim(claims []AgentClaim) bool {
 		lower := strings.ToLower(claim.Text)
 		for _, marker := range []string{
 			"尚未", "仍在", "仍需", "仍停在", "正在", "卡点",
-			"先只", "随后再", "下一步继续", "等待完成",
+			"先只", "随后再", "下一步继续", "下一步开始",
+			"接下来开始", "尚待", "还未", "待完成", "等待完成",
 			"not yet", "still running", "still needs", "in progress",
 		} {
 			if strings.Contains(lower, marker) {
@@ -664,11 +665,26 @@ func addGoalBackedResult(unit *WorkUnit, seen map[string]struct{}) {
 func refineUnitCategory(unit *WorkUnit) {
 	goal := strings.ToLower(strings.TrimSpace(unit.Goal.Text))
 	if containsAny(goal,
+		"还没有发布", "尚未发布", "还在开发中", "仍在开发中",
+		"没有所谓", "不需要兼容", "不是兼容问题", "不是上线问题",
+	) {
+		unit.Category = "decision"
+		return
+	}
+	if containsAny(goal,
 		"可以开始", "能开始", "是否可以开始", "有没有冲突",
 		"可行性验证", "账号在哪里", "不知道在哪里",
-		"安装命令", "人工测试", "服务令牌", "部署凭据",
+		"安装命令", "服务令牌", "部署凭据",
 	) {
 		unit.Category = "administrative"
+		return
+	}
+	if containsAny(goal,
+		"人工测试", "真实流程测试", "按照真实流程测试",
+		"走完流程", "跑完全部流程", "完整流程测试",
+		"验收结果", "测试了吗",
+	) {
+		unit.Category = "verification"
 		return
 	}
 	if containsAny(goal,

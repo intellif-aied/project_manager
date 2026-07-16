@@ -41,7 +41,7 @@ func BuildDailySummaries(
 			builders[date] = builder
 		}
 		accumulateDailyCounts(&builder.summary, unit)
-		if isResultBearingWorkUnit(unit) {
+		if isResultBearingWorkUnit(unit) && hasReportFacingWorkUnit(unit) {
 			builder.candidates = append(builder.candidates, unit)
 		}
 	}
@@ -220,7 +220,7 @@ func dailyWorkUnitPriority(unit WorkUnit) int {
 	case "implementation", "deployment":
 		score += 35
 	case "verification":
-		score += 5
+		score -= 15
 	case "investigation":
 		score += 10
 	case "document", "decision":
@@ -241,7 +241,27 @@ func dailyWorkUnitPriority(unit WorkUnit) int {
 			break
 		}
 	}
+	if hasDeliveredOutcomeClaim(unit) {
+		score += 45
+	}
 	return score
+}
+
+func hasDeliveredOutcomeClaim(unit WorkUnit) bool {
+	for _, result := range unit.ResultStatements {
+		text := strings.ToLower(reportFacingClaim(unit, result.Text))
+		if text == "" {
+			continue
+		}
+		if containsAny(
+			text,
+			"开发", "修复", "发布", "上线", "部署", "实现",
+			"恢复", "支持", "启用", "接入", "交付", "改造", "优化",
+		) {
+			return true
+		}
+	}
+	return false
 }
 
 func makeDailyHighlight(unit WorkUnit, aggressive bool) DailyHighlight {
@@ -258,9 +278,23 @@ func makeDailyHighlight(unit WorkUnit, aggressive bool) DailyHighlight {
 		goalBytes = 160
 	}
 	results := make([]ResultStatement, 0, resultLimit)
+	resultIndexes := map[string]int{}
 	for _, statement := range unit.ResultStatements {
-		text := resultFocusedClaim(statement.Text)
+		text := reportFacingClaim(unit, statement.Text)
 		if text == "" {
+			continue
+		}
+		key := reportFacingResultKey(text)
+		if index, exists := resultIndexes[key]; exists {
+			if len(text) > len(results[index].Text) {
+				results[index] = ResultStatement{
+					Text: text, Source: statement.Source,
+					EvidenceRefs: append([]string(nil), statement.EvidenceRefs...),
+				}
+			}
+			continue
+		}
+		if len(results) == resultLimit {
 			continue
 		}
 		text, _ = truncateUTF8Bytes(text, resultBytes)
@@ -271,11 +305,9 @@ func makeDailyHighlight(unit WorkUnit, aggressive bool) DailyHighlight {
 		results = append(results, ResultStatement{
 			Text: text, Source: statement.Source, EvidenceRefs: refs,
 		})
-		if len(results) == resultLimit {
-			break
-		}
+		resultIndexes[key] = len(results) - 1
 	}
-	goal, _ := truncateUTF8Bytes(unit.Goal.Text, goalBytes)
+	goal, _ := truncateUTF8Bytes(reportFacingGoal(unit, results), goalBytes)
 	return DailyHighlight{
 		WorkUnitRef:      unit.WorkUnitRef,
 		Sequence:         unit.Sequence,
@@ -285,7 +317,7 @@ func makeDailyHighlight(unit WorkUnit, aggressive bool) DailyHighlight {
 		EvidenceGrade:    unit.EvidenceGrade,
 		Goal:             goal,
 		ResultStatements: results,
-		Unresolved:       firstUnresolved(unit.Unresolved, unresolvedLimit),
+		Unresolved:       reportFacingUnresolved(unit.Unresolved, unresolvedLimit),
 	}
 }
 

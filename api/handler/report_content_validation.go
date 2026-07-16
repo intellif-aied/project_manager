@@ -68,6 +68,9 @@ func reportContentValidationIssues(content, reportType, date, weekStart, weekEnd
 	if reportEngineeringSectionPattern.MatchString(content) {
 		add("报告正文不得单列验证、测试或文件变更章节；请把必要验证收敛为简短成果描述")
 	}
+	if hasEmptyReportFollowupSection(content) {
+		add("进行中与待跟进为空时必须整段省略，不得填写“无”或“暂无”")
+	}
 	if reportFileChangeMetricPattern.MatchString(content) {
 		add("报告正文不得展示文件或代码变更数量；文件证据仅用于内部判断结果可信度")
 	}
@@ -145,6 +148,49 @@ func reportContentValidationIssues(content, reportType, date, weekStart, weekEnd
 		}
 	}
 	return issues
+}
+
+func hasEmptyReportFollowupSection(content string) bool {
+	lines := strings.Split(content, "\n")
+	for index, line := range lines {
+		line = strings.NewReplacer("**", "", "__", "", "`", "").Replace(line)
+		line = strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(line), "#"))
+		matchedHeading := ""
+		for _, heading := range []string{"进行中与待跟进", "进行中", "待跟进"} {
+			if line == heading || strings.HasPrefix(line, heading+"：") ||
+				strings.HasPrefix(line, heading+":") {
+				matchedHeading = heading
+				break
+			}
+		}
+		if matchedHeading == "" {
+			continue
+		}
+		inline := strings.TrimSpace(strings.TrimLeft(
+			strings.TrimPrefix(line, matchedHeading), "：:",
+		))
+		if inline != "" {
+			return isEmptyReportFollowupValue(inline)
+		}
+		for next := index + 1; next < len(lines); next++ {
+			value := strings.TrimSpace(lines[next])
+			if value == "" {
+				continue
+			}
+			if strings.HasPrefix(value, "#") || strings.HasPrefix(value, "---") {
+				return true
+			}
+			value = reportTopLevelOutcomePattern.ReplaceAllString(value, "")
+			return isEmptyReportFollowupValue(value)
+		}
+		return true
+	}
+	return false
+}
+
+func isEmptyReportFollowupValue(value string) bool {
+	value = strings.Trim(value, " \t-*+0123456789.)、（）()：:")
+	return value == "无" || value == "暂无" || value == "无待跟进事项"
 }
 
 func isPersonalReportType(reportType string) bool {

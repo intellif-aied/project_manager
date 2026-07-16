@@ -167,15 +167,19 @@ func TestDigestV2SelectionFreezeReadAndWriteGuardIntegration(t *testing.T) {
 	}
 	for _, item := range payload.Items {
 		if item.Digest.SchemaVersion != sessiondigestv2.Version ||
-			item.Digest.ReportPeriodSummary == nil ||
-			len(item.Digest.ReportPeriodSummary.Days) != 1 ||
-			len(item.Digest.ReportPeriodSummary.Days[0].Highlights) != 1 ||
+			item.Digest.ReportPeriodSummary != nil ||
 			len(item.Digest.WorkUnits) != 0 {
 			t.Fatalf("invalid v2 item: %+v", item)
 		}
 	}
+	if payload.ReportPeriod == nil ||
+		len(payload.ReportPeriod.Days) != 1 ||
+		len(payload.ReportPeriod.Days[0].Highlights) != 1 {
+		t.Fatalf("selection-level report summary was not preserved: %+v", payload.ReportPeriod)
+	}
 	visible := string(page.FrozenPayload)
 	if !strings.Contains(visible, `"work_units"`) ||
+		strings.Count(visible, `"report_period_summary"`) != 1 ||
 		strings.Contains(visible, `"events"`) ||
 		strings.Contains(visible, `"payload"`) {
 		t.Fatalf("unexpected v2 source shape: %s", visible)

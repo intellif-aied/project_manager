@@ -11,12 +11,13 @@ import (
 )
 
 const (
-	Version                  = "session-digest/v2.4"
-	RedactionVersion         = "report-redaction/v1"
-	JobType                  = sessionsync.JobBuildContentSliceDigestV2
-	DefaultItemBytes         = 64 << 10
-	DefaultPeriodItemBytes   = 16 << 10
-	DefaultDailyHighlightMax = 6
+	Version                   = "session-digest/v2.7.9"
+	RedactionVersion          = "report-redaction/v1"
+	JobType                   = sessionsync.JobBuildContentSliceDigestV2
+	DefaultItemBytes          = 64 << 10
+	DefaultPeriodItemBytes    = 16 << 10
+	DefaultDailyHighlightMax  = 6
+	DefaultReportHighlightMax = 5
 )
 
 var (

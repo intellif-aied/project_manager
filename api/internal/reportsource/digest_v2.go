@@ -79,7 +79,9 @@ func (s *Service) freezeSelectionV2ForRun(
 	digestRevisionIDs := make([]string, 0, len(rows))
 	digestHashes := make([]string, 0, len(rows))
 	digestVersions := make([]string, 0, len(rows))
-	periodSummaries := make([]*sessiondigestv2.ReportPeriodSummary, 0, len(rows))
+	periodSummaries := make(
+		[]sessiondigestv2.ReportPeriodSummarySource, 0, len(rows),
+	)
 	for _, row := range rows {
 		if !row.RevisionID.Valid || !row.Status.Valid ||
 			row.Status.String == "pending" || row.Status.String == "building" {
@@ -116,6 +118,18 @@ func (s *Service) freezeSelectionV2ForRun(
 			biztime.Location(),
 			sessiondigestv2.DefaultPeriodItemBytes,
 		)
+		periodSummaries = append(
+			periodSummaries,
+			sessiondigestv2.ReportPeriodSummarySource{
+				SourceRef: row.SessionRef,
+				Summary:   digest.ReportPeriodSummary,
+			},
+		)
+		// The selection-level report_period_summary is the only report-facing
+		// outcome list. Keep item digests as provenance/coverage metadata so an
+		// Agent cannot bypass selection-level ranking by re-reading every
+		// source's nested highlights.
+		digest.ReportPeriodSummary = nil
 		item := DigestV2ContentItem{
 			SourceItemRef: row.SelectionItemID,
 			SessionRef:    row.SessionRef,
@@ -135,7 +149,6 @@ func (s *Service) freezeSelectionV2ForRun(
 			},
 		}
 		page.Items = append(page.Items, item)
-		periodSummaries = append(periodSummaries, digest.ReportPeriodSummary)
 		page.Coverage.SourceEventCount += item.Coverage.SourceEventCount
 		page.Coverage.IncludedEventCount += item.Coverage.IncludedEventCount
 		page.Coverage.OmittedEventCount += item.Coverage.OmittedEventCount
@@ -174,11 +187,11 @@ func (s *Service) freezeSelectionV2ForRun(
 	page.Coverage.RepresentedItemCount = len(page.Items)
 	page.Coverage.Complete =
 		page.Coverage.SourceItemCount == page.Coverage.RepresentedItemCount
-	page.ReportPeriod = sessiondigestv2.MergeReportPeriodSummaries(
+	page.ReportPeriod = sessiondigestv2.MergeReportPeriodSummarySources(
 		periodSummaries,
 		selection.Period.Start,
 		selection.Period.End,
-		sessiondigestv2.DefaultDailyHighlightMax,
+		sessiondigestv2.DefaultReportHighlightMax,
 	)
 	payload, compaction, err := assembleDigestV2Payload(
 		page, s.config.DigestTargetBytes, s.config.DigestHardLimit,
@@ -335,7 +348,7 @@ func (s *Service) readFrozenDigestV2Selection(
 	for _, item := range page.Items {
 		if item.Digest.SchemaVersion != sessiondigestv2.Version ||
 			item.Digest.DailySummaries == nil ||
-			item.Digest.ReportPeriodSummary == nil ||
+			item.Digest.ReportPeriodSummary != nil ||
 			item.Digest.WorkUnits == nil || item.Digest.DiscussionAggregates == nil {
 			return ContentPage{}, ErrDigestCorrupt
 		}

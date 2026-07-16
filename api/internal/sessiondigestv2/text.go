@@ -147,8 +147,16 @@ func isNoiseGoal(value string) bool {
 		"<permissions instructions>",
 		"<subagent_notification>",
 		"<skill>",
+		"<skills_instructions>",
+		"<apps_instructions>",
+		"<plugins_instructions>",
+		"<collaboration_mode>",
+		"<multi_agent_mode>",
 		"# agents.md instructions",
 		"# repository guidelines",
+		"## available skills",
+		"## skills",
+		"## memory",
 		"<instructions>",
 		"you are codex",
 		"you are chatgpt",
@@ -161,6 +169,19 @@ func isNoiseGoal(value string) bool {
 	}
 	if strings.Contains(lower, "filesystem sandboxing defines which files") ||
 		strings.Contains(lower, "valid channels: analysis") {
+		return true
+	}
+	// Some clients persist an injected skill block as a truncated serialized
+	// content array. In that form the text no longer starts with <skill>, so
+	// prefix-only filtering mistakes it for a user goal.
+	if strings.Contains(lower, "<skill>") &&
+		strings.Contains(lower, "<name>") &&
+		(strings.Contains(lower, "<path>") || strings.Contains(lower, "skill.md")) {
+		return true
+	}
+	if strings.Contains(lower, "<skills_instructions>") ||
+		(strings.Contains(lower, "### available skills") &&
+			strings.Contains(lower, "skill.md")) {
 		return true
 	}
 	return false

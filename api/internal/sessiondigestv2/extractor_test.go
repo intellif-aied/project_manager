@@ -107,6 +107,27 @@ func TestExtractorDoesNotTurnSubagentNotificationIntoUserGoal(t *testing.T) {
 	}
 }
 
+func TestExtractorRejectsTruncatedSerializedSkillInjection(t *testing.T) {
+	extractor := NewExtractor()
+	extractor.Consume(testEvent(1, "event_msg.user_message", map[string]any{
+		"payload": map[string]any{
+			"message": `[{"text":"<skill>
+<name>herdr</name>
+<path>/home/aied/.agents/skills/herdr/SKILL.md</path>
+---
+name: herdr`,
+		},
+	}))
+	extractor.Consume(testEvent(2, "event_msg.user_message", map[string]any{
+		"payload": map[string]any{"message": "优化日报结果质量"},
+	}))
+	digest, _, _, _, _, _ := extractor.Result(DefaultItemBytes)
+	if len(digest.WorkUnits) != 1 ||
+		digest.WorkUnits[0].Goal.Text != "优化日报结果质量" {
+		t.Fatalf("serialized skill injection became a goal: %+v", digest.WorkUnits)
+	}
+}
+
 func TestExtractorExcludesApprovalAssessmentTranscript(t *testing.T) {
 	extractor := NewExtractor()
 	extractor.Consume(testEvent(1, "response_item.message", map[string]any{
@@ -137,6 +158,47 @@ func TestExtractorExcludesApprovalAssessmentTranscript(t *testing.T) {
 	digest, _, _, _, _, _ := extractor.Result(DefaultItemBytes)
 	if len(digest.WorkUnits) != 0 {
 		t.Fatalf("approval assessment metadata became work: %+v", digest.WorkUnits)
+	}
+}
+
+func TestResolveUnitMarksNextPhaseAsPartial(t *testing.T) {
+	unit := WorkUnit{
+		Goal:          Goal{Text: "走完真实数据链"},
+		Category:      "implementation",
+		Status:        "pending",
+		EvidenceGrade: "D",
+		AgentClaims: []AgentClaim{{
+			Text: "API 已部署，下一步开始上传 Session 并生成日报。",
+		}},
+		Changes: []Change{{Path: "api/example.go", Operation: "update"}},
+	}
+	resolveUnit(&unit)
+	if unit.Status != "partial" {
+		t.Fatalf("next phase claim status=%q want=partial", unit.Status)
+	}
+}
+
+func TestRefineUnitCategorySeparatesClarificationAndRealFlowVerification(t *testing.T) {
+	clarification := WorkUnit{
+		Goal:          Goal{Text: "direct chat 还没有发布，不需要兼容旧路由"},
+		Category:      "deployment",
+		Status:        "completed",
+		EvidenceGrade: "B",
+	}
+	refineUnitCategory(&clarification)
+	if clarification.Category != "decision" {
+		t.Fatalf("clarification category=%q want=decision", clarification.Category)
+	}
+
+	verification := WorkUnit{
+		Goal:          Goal{Text: "帮我走完流程并按照真实流程测试"},
+		Category:      "implementation",
+		Status:        "completed",
+		EvidenceGrade: "A",
+	}
+	refineUnitCategory(&verification)
+	if verification.Category != "verification" {
+		t.Fatalf("real flow category=%q want=verification", verification.Category)
 	}
 }
 

@@ -9,7 +9,7 @@ import (
 
 var (
 	versionedArtifactPattern    = regexp.MustCompile(`(?i)\b([a-z][a-z0-9._-]{2,})@v?([0-9]+\.[0-9]+\.[0-9]+)\b`)
-	namedArtifactVersionPattern = regexp.MustCompile(`(?i)\b(session[\s_-]*digest|digest)\s+v?([0-9]+\.[0-9]+(?:\.[0-9]+)?)\b`)
+	namedArtifactVersionPattern = regexp.MustCompile(`(?i)\b(session[\s_-]*digest|digest|aida[\s_-]*cli|aida[\s_-]*report)\s+v?([0-9]+\.[0-9]+(?:\.[0-9]+)?)\b`)
 	asciiTopicPattern           = regexp.MustCompile(`(?i)[a-z][a-z0-9._-]{2,}`)
 )
 
@@ -22,7 +22,9 @@ var genericTopicTokens = map[string]struct{}{
 }
 
 var strongTopicTokens = map[string]struct{}{
-	"rtk": {},
+	"rtk":            {},
+	"session-digest": {},
+	"subagent":       {},
 }
 
 func consolidateDailyCandidates(units []WorkUnit) []WorkUnit {
@@ -54,6 +56,30 @@ func mergeSupersedingWorkUnit(newer, older WorkUnit) WorkUnit {
 	if isPlaceholderGoal(newer.Goal.Text) && !isPlaceholderGoal(older.Goal.Text) {
 		newer.Goal = older.Goal
 	}
+	seen := map[string]struct{}{}
+	for _, statement := range newer.ResultStatements {
+		key := strings.ToLower(resultFocusedClaim(statement.Text))
+		if key != "" {
+			seen[key] = struct{}{}
+		}
+	}
+	for _, statement := range older.ResultStatements {
+		if len(newer.ResultStatements) >= 3 {
+			break
+		}
+		key := strings.ToLower(resultFocusedClaim(statement.Text))
+		if key == "" {
+			continue
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		newer.ResultStatements = append(newer.ResultStatements, statement)
+		seen[key] = struct{}{}
+	}
+	if len(newer.Unresolved) == 0 && len(older.Unresolved) > 0 {
+		newer.Unresolved = append([]Unresolved(nil), older.Unresolved...)
+	}
 	return newer
 }
 
@@ -62,8 +88,30 @@ func isPlaceholderGoal(value string) bool {
 	return value == "" || strings.Contains(value, "未识别的历史工作单元")
 }
 
+type ReportPeriodSummarySource struct {
+	SourceRef string
+	Summary   *ReportPeriodSummary
+}
+
 func MergeReportPeriodSummaries(
 	summaries []*ReportPeriodSummary,
+	startDate, endDate string,
+	highlightLimit int,
+) *ReportPeriodSummary {
+	sources := make([]ReportPeriodSummarySource, 0, len(summaries))
+	for index, summary := range summaries {
+		sources = append(sources, ReportPeriodSummarySource{
+			SourceRef: "summary-" + strconv.Itoa(index),
+			Summary:   summary,
+		})
+	}
+	return MergeReportPeriodSummarySources(
+		sources, startDate, endDate, highlightLimit,
+	)
+}
+
+func MergeReportPeriodSummarySources(
+	sources []ReportPeriodSummarySource,
 	startDate, endDate string,
 	highlightLimit int,
 ) *ReportPeriodSummary {
@@ -75,14 +123,23 @@ func MergeReportPeriodSummaries(
 		EndDate:   endDate,
 		Days:      []DailySummary{},
 	}
+	type sourcedHighlight struct {
+		highlight DailyHighlight
+		sourceRef string
+	}
 	type dayCandidates struct {
-		highlights []DailyHighlight
+		highlights []sourcedHighlight
 		truncated  bool
 	}
 	byDate := map[string]*dayCandidates{}
-	for _, summary := range summaries {
+	for index, source := range sources {
+		summary := source.Summary
 		if summary == nil {
 			continue
+		}
+		sourceRef := strings.TrimSpace(source.SourceRef)
+		if sourceRef == "" {
+			sourceRef = "summary-" + strconv.Itoa(index)
 		}
 		for _, day := range summary.Days {
 			if (startDate != "" && day.Date < startDate) ||
@@ -94,7 +151,12 @@ func MergeReportPeriodSummaries(
 				candidates = &dayCandidates{}
 				byDate[day.Date] = candidates
 			}
-			candidates.highlights = append(candidates.highlights, day.Highlights...)
+			for _, highlight := range day.Highlights {
+				candidates.highlights = append(candidates.highlights, sourcedHighlight{
+					highlight: highlight,
+					sourceRef: sourceRef,
+				})
+			}
 			candidates.truncated = candidates.truncated || day.HighlightsTruncated
 		}
 	}
@@ -106,57 +168,143 @@ func MergeReportPeriodSummaries(
 	for _, date := range dates {
 		candidates := byDate[date]
 		sort.SliceStable(candidates.highlights, func(i, j int) bool {
-			left, leftOK := parseTimestamp(candidates.highlights[i].ActivityEndAt)
-			right, rightOK := parseTimestamp(candidates.highlights[j].ActivityEndAt)
+			left, leftOK := parseTimestamp(candidates.highlights[i].highlight.ActivityEndAt)
+			right, rightOK := parseTimestamp(candidates.highlights[j].highlight.ActivityEndAt)
 			if leftOK && rightOK && !left.Equal(right) {
 				return left.After(right)
 			}
 			if leftOK != rightOK {
 				return leftOK
 			}
-			return candidates.highlights[i].Sequence > candidates.highlights[j].Sequence
+			return candidates.highlights[i].highlight.Sequence >
+				candidates.highlights[j].highlight.Sequence
 		})
-		units := make([]WorkUnit, 0, len(candidates.highlights))
+
+		unitsBySource := map[string][]WorkUnit{}
+		sourceOrder := make([]string, 0)
+		knownSources := map[string]struct{}{}
 		seen := map[string]struct{}{}
-		for index, highlight := range candidates.highlights {
+		for index, candidate := range candidates.highlights {
+			highlight := candidate.highlight
 			key := highlight.WorkUnitRef
 			if key == "" {
 				key = highlight.Goal + "\x00" + highlight.ActivityEndAt
 			}
+			key = candidate.sourceRef + "\x00" + key
 			if _, exists := seen[key]; exists {
 				continue
 			}
 			seen[key] = struct{}{}
-			units = append(units, WorkUnit{
-				WorkUnitRef:      highlight.WorkUnitRef,
-				Sequence:         len(candidates.highlights) - index,
-				ActivityEndAt:    highlight.ActivityEndAt,
-				PeriodRelation:   "overlap",
-				Goal:             Goal{Text: highlight.Goal, Source: "selection_period_summary"},
-				Category:         highlight.Category,
-				Status:           highlight.Status,
-				EvidenceGrade:    highlight.EvidenceGrade,
-				ResultStatements: append([]ResultStatement(nil), highlight.ResultStatements...),
-				Unresolved:       append([]Unresolved(nil), highlight.Unresolved...),
-			})
+			if _, exists := knownSources[candidate.sourceRef]; !exists {
+				knownSources[candidate.sourceRef] = struct{}{}
+				sourceOrder = append(sourceOrder, candidate.sourceRef)
+			}
+			unitsBySource[candidate.sourceRef] = append(
+				unitsBySource[candidate.sourceRef],
+				WorkUnit{
+					WorkUnitRef:      highlight.WorkUnitRef,
+					Sequence:         len(candidates.highlights) - index,
+					ActivityEndAt:    highlight.ActivityEndAt,
+					PeriodRelation:   "overlap",
+					Goal:             Goal{Text: highlight.Goal, Source: "selection_period_summary"},
+					Category:         highlight.Category,
+					Status:           highlight.Status,
+					EvidenceGrade:    highlight.EvidenceGrade,
+					ResultStatements: append([]ResultStatement(nil), highlight.ResultStatements...),
+					Unresolved:       append([]Unresolved(nil), highlight.Unresolved...),
+				},
+			)
 		}
-		units = consolidateDailyCandidates(units)
-		sort.SliceStable(units, func(i, j int) bool {
-			left := dailyWorkUnitPriority(units[i])
-			right := dailyWorkUnitPriority(units[j])
+
+		type sourcedWorkUnit struct {
+			unit       WorkUnit
+			sourceRefs map[string]struct{}
+		}
+		sourcedUnits := make([]sourcedWorkUnit, 0, len(candidates.highlights))
+		for _, sourceRef := range sourceOrder {
+			for _, unit := range consolidateDailyCandidates(unitsBySource[sourceRef]) {
+				sourcedUnits = append(sourcedUnits, sourcedWorkUnit{
+					unit:       unit,
+					sourceRefs: map[string]struct{}{sourceRef: {}},
+				})
+			}
+		}
+		sort.SliceStable(sourcedUnits, func(i, j int) bool {
+			return sourcedUnits[i].unit.Sequence > sourcedUnits[j].unit.Sequence
+		})
+		consolidated := make([]sourcedWorkUnit, 0, len(sourcedUnits))
+		for _, candidate := range sourcedUnits {
+			superseded := false
+			for index := range consolidated {
+				if !workUnitSupersedes(consolidated[index].unit, candidate.unit) {
+					continue
+				}
+				consolidated[index].unit = mergeSupersedingWorkUnit(
+					consolidated[index].unit, candidate.unit,
+				)
+				for sourceRef := range candidate.sourceRefs {
+					consolidated[index].sourceRefs[sourceRef] = struct{}{}
+				}
+				superseded = true
+				break
+			}
+			if !superseded {
+				consolidated = append(consolidated, candidate)
+			}
+		}
+		sort.SliceStable(consolidated, func(i, j int) bool {
+			left := dailyWorkUnitPriority(consolidated[i].unit)
+			right := dailyWorkUnitPriority(consolidated[j].unit)
 			if left != right {
 				return left > right
 			}
-			return units[i].Sequence > units[j].Sequence
+			return consolidated[i].unit.Sequence > consolidated[j].unit.Sequence
 		})
-		limit := min(len(units), highlightLimit)
+
+		limit := min(len(consolidated), highlightLimit)
+		selected := make([]sourcedWorkUnit, 0, limit)
+		selectedIndexes := map[int]struct{}{}
+		representedSources := map[string]struct{}{}
+		for index, candidate := range consolidated {
+			if len(selected) == limit {
+				break
+			}
+			representsNewSource := false
+			for sourceRef := range candidate.sourceRefs {
+				if _, exists := representedSources[sourceRef]; !exists {
+					representsNewSource = true
+					break
+				}
+			}
+			if !representsNewSource {
+				continue
+			}
+			selected = append(selected, candidate)
+			selectedIndexes[index] = struct{}{}
+			for sourceRef := range candidate.sourceRefs {
+				representedSources[sourceRef] = struct{}{}
+			}
+		}
+		for index, candidate := range consolidated {
+			if len(selected) == limit {
+				break
+			}
+			if _, exists := selectedIndexes[index]; exists {
+				continue
+			}
+			selected = append(selected, candidate)
+		}
+
 		day := DailySummary{
 			Date:                date,
 			Highlights:          make([]DailyHighlight, 0, limit),
-			HighlightsTruncated: candidates.truncated || len(units) > limit,
+			HighlightsTruncated: candidates.truncated || len(consolidated) > limit,
 		}
-		for _, unit := range units[:limit] {
-			day.Highlights = append(day.Highlights, makeDailyHighlight(unit, false))
+		for _, candidate := range selected {
+			day.Highlights = append(
+				day.Highlights,
+				makeDailyHighlight(candidate.unit, false),
+			)
 		}
 		merged.Days = append(merged.Days, day)
 	}
@@ -179,6 +327,10 @@ func workUnitSupersedes(newer, older WorkUnit) bool {
 			deliveryCategory(newer.Category) && deliveryCategory(older.Category) {
 			return true
 		}
+		if artifact == "aida-cli" &&
+			deliveryCategory(newer.Category) && deliveryCategory(older.Category) {
+			return true
+		}
 		if strings.Contains(goal, artifact) ||
 			older.Category == "administrative" ||
 			isLowInformationGoal(older.Goal.Text) {
@@ -191,6 +343,16 @@ func workUnitSupersedes(newer, older WorkUnit) bool {
 	}
 	newerTokens := topicTokens(newerText)
 	olderTokens := topicTokens(olderText)
+	addTopicAliases(newerTokens, workUnitEvidenceText(newer))
+	addTopicAliases(olderTokens, workUnitEvidenceText(older))
+	if sharedStrongTopicToken(newerTokens, olderTokens) {
+		if older.Category == "investigation" && newer.Category == "investigation" {
+			return true
+		}
+		if deliveryCategory(newer.Category) && deliveryCategory(older.Category) {
+			return true
+		}
+	}
 	if len(newerTokens) < 2 || len(olderTokens) < 2 {
 		return false
 	}
@@ -201,10 +363,6 @@ func workUnitSupersedes(newer, older WorkUnit) bool {
 		}
 	}
 	if shared < 2 {
-		if older.Category == "investigation" && newer.Category == "investigation" &&
-			sharedStrongTopicToken(newerTokens, olderTokens) {
-			return true
-		}
 		return false
 	}
 	if older.Category == "investigation" && newer.Category == "investigation" {
@@ -248,6 +406,8 @@ func deliveryCategory(category string) bool {
 
 func artifactVersions(value string) map[string]string {
 	result := map[string]string{}
+	value = strings.ReplaceAll(value, "`", "")
+	value = strings.ReplaceAll(value, "**", "")
 	for _, match := range versionedArtifactPattern.FindAllStringSubmatch(value, -1) {
 		artifact := strings.ToLower(match[1])
 		version := match[2]
@@ -256,7 +416,14 @@ func artifactVersions(value string) map[string]string {
 		}
 	}
 	for _, match := range namedArtifactVersionPattern.FindAllStringSubmatch(value, -1) {
+		artifactName := strings.ToLower(match[1])
 		artifact := "session-digest"
+		switch {
+		case strings.Contains(artifactName, "report"):
+			artifact = "aida-report"
+		case strings.Contains(artifactName, "cli"):
+			artifact = "aida-cli"
+		}
 		version := match[2]
 		if existing, ok := result[artifact]; !ok || compareSemanticVersion(version, existing) > 0 {
 			result[artifact] = version
@@ -319,7 +486,8 @@ func firstOutcomeSentence(value string) string {
 
 func topicTokens(value string) map[string]struct{} {
 	result := map[string]struct{}{}
-	for _, raw := range asciiTopicPattern.FindAllString(strings.ToLower(value), -1) {
+	lower := strings.ToLower(value)
+	for _, raw := range asciiTopicPattern.FindAllString(lower, -1) {
 		token := strings.Trim(raw, "._-")
 		token = strings.TrimPrefix(token, "v")
 		if token == "" || versionedNumber(token) {
@@ -330,7 +498,56 @@ func topicTokens(value string) map[string]struct{} {
 		}
 		result[token] = struct{}{}
 	}
+	addTopicAliases(result, lower)
 	return result
+}
+
+func addTopicAliases(result map[string]struct{}, value string) {
+	lower := strings.ToLower(value)
+	for _, alias := range []struct {
+		token   string
+		needles []string
+	}{
+		{
+			token: "session-digest",
+			needles: []string{
+				"session digest", "服务端 digest", "日报摘要",
+				"digest_v2", "digest v2",
+			},
+		},
+		{
+			token: "subagent",
+			needles: []string{
+				"sub-agent", "sub agent", "子 agent", "子agent",
+				"子代理", "parentsessionref", "parent_session_ref",
+			},
+		},
+		{
+			token: "session-list",
+			needles: []string{
+				"session 列表", "session列表", "会话列表",
+			},
+		},
+		{
+			token: "interactive-upload",
+			needles: []string{
+				"bubble tea", "真实 tty", "交互界面", "选择界面",
+			},
+		},
+		{
+			token: "auto-update",
+			needles: []string{
+				"自动升级", "自动更新", "install.sh",
+			},
+		},
+	} {
+		for _, needle := range alias.needles {
+			if strings.Contains(lower, needle) {
+				result[alias.token] = struct{}{}
+				break
+			}
+		}
+	}
 }
 
 func versionedNumber(value string) bool {
