@@ -6,6 +6,7 @@
 # Optional environment variables:
 #   AIDA_RELEASE_URL  Static release directory URL, defaults to the packaged value.
 #   AIDA_API_URL      Aida API base URL written to %USERPROFILE%\.aida.yaml. Defaults to the packaged value.
+#   AIDA_INTERNAL_API_URL  Optional trusted internal API URL preferred when authenticated probing succeeds.
 #   AIDA_TOKEN        User JWT written to %USERPROFILE%\.aida.yaml when provided.
 #   AIDA_INSTALL_DIR  Install directory, default %LOCALAPPDATA%\Aida\bin.
 #   AIDA_FORCE        Set to 1 to skip update prompts.
@@ -14,6 +15,7 @@ $ErrorActionPreference = "Stop"
 
 $DefaultReleaseUrl = "http://localhost:5080/statics-live/aida"
 $DefaultApiUrl = "http://localhost:8080/api/v1"
+$DefaultInternalApiUrl = ""
 
 function Resolve-Value($Value, $Default) {
     if ([string]::IsNullOrWhiteSpace($Value)) {
@@ -84,6 +86,7 @@ if (-not [Environment]::Is64BitOperatingSystem) {
 
 $releaseUrl = (Resolve-Value $env:AIDA_RELEASE_URL $DefaultReleaseUrl).TrimEnd('/')
 $apiUrl = (Resolve-Value $env:AIDA_API_URL $DefaultApiUrl).TrimEnd('/')
+$internalApiUrl = (Resolve-Value $env:AIDA_INTERNAL_API_URL $DefaultInternalApiUrl).TrimEnd('/')
 $token = $env:AIDA_TOKEN
 $installDir = Resolve-Value $env:AIDA_INSTALL_DIR (Join-Path $env:LOCALAPPDATA "Aida\bin")
 $aidaExe = Join-Path $installDir "aida.exe"
@@ -92,6 +95,9 @@ Write-Host "=== Aida Installer ==="
 Write-Host "  Release URL: $releaseUrl"
 Write-Host "  Install dir: $installDir"
 Write-Host "  API URL:     $apiUrl"
+if (-not [string]::IsNullOrWhiteSpace($internalApiUrl)) {
+    Write-Host "  Internal API:$internalApiUrl"
+}
 Write-Host ""
 
 $version = (Invoke-RestMethod "$releaseUrl/aida-latest.txt").ToString().Trim()
@@ -163,6 +169,12 @@ if (Test-Path $configFile) {
     if (-not [string]::IsNullOrWhiteSpace($apiUrl)) {
         $lines = @(Set-AidaConfigValue $lines "api_url" $apiUrl)
     }
+    if (-not [string]::IsNullOrWhiteSpace($internalApiUrl)) {
+        $lines = @(Set-AidaConfigValue $lines "internal_api_url" $internalApiUrl)
+        $lines = @(Set-AidaConfigValue $lines "auto_route" "true")
+    }
+    $lines = @(Set-AidaConfigValue $lines "release_url" $releaseUrl)
+    $lines = @(Set-AidaConfigValue $lines "auto_update" "true")
     if (-not [string]::IsNullOrWhiteSpace($token)) {
         $lines = @(Set-AidaConfigValue $lines "token" $token)
     }
@@ -173,6 +185,12 @@ if (Test-Path $configFile) {
     if (-not [string]::IsNullOrWhiteSpace($apiUrl)) {
         $lines += "api_url: $apiUrl"
     }
+    if (-not [string]::IsNullOrWhiteSpace($internalApiUrl)) {
+        $lines += "internal_api_url: $internalApiUrl"
+        $lines += "auto_route: true"
+    }
+    $lines += "release_url: $releaseUrl"
+    $lines += "auto_update: true"
     if (-not [string]::IsNullOrWhiteSpace($token)) {
         $lines += "token: $token"
     }

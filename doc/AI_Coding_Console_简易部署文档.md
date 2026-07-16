@@ -38,7 +38,8 @@
                       |--> MinIO
                       |--> consumer --> Claude CLI
 
-开发机 / 员工机器 --> aida CLI --> api
+开发机 / 员工机器 --> aida CLI --> 内网 API（可达时优先）
+                                \-> 外网 API（自动回退）
 ```
 
 关键说明：
@@ -71,7 +72,8 @@
 | 访问对象 | 对外地址 | 说明 |
 |---|---|---|
 | Web | `http://113.100.143.91:9180/` | 浏览器页面入口 |
-| API | `http://113.100.143.91:9180/api/v1` | 前端与 `aida` CLI 统一入口 |
+| 外网 API | `http://113.100.143.91:9180/api/v1` | 前端入口，也是 `aida` CLI 的稳定回退入口 |
+| 公司内网 API | `http://192.168.14.182/api/v1` | `aida` CLI 在公司网络内优先使用，避免占用外网小带宽 |
 | 健康检查 | `http://113.100.143.91:9180/health` | 由 Web Nginx 反代到 API |
 | CLI 安装包 | `http://113.100.143.91:9180/statics-live/aida/` | 由 Web Nginx 反代到 MinIO |
 
@@ -541,7 +543,8 @@ make release-test-dir
 ```bash
 make release-prod-dir \
   AIDA_RELEASE_URL=http://113.100.143.91:9180/statics-live/aida \
-  AIDA_API_URL=http://113.100.143.91:9180/api/v1
+  AIDA_API_URL=http://113.100.143.91:9180/api/v1 \
+  AIDA_INTERNAL_API_URL=http://192.168.14.182/api/v1
 ```
 
 产物目录：
@@ -554,7 +557,8 @@ make release-prod-dir \
 
 - 测试包固定使用测试地址 `http://192.168.14.157:9000/statics-live/aida`
 - 正式包必须传入实际服务器地址
-- 安装脚本会把 `AIDA_RELEASE_URL` 与 `AIDA_API_URL` 固化进去
+- 安装脚本会把外网发布地址、外网 API 和内网 API 候选地址固化进去
+- 外网 API 始终是稳定回退地址，不能被内网地址替换
 
 ## 12.2 上传到 MinIO
 
@@ -564,7 +568,9 @@ make release-prod-dir \
 docker compose --profile tools run --rm -v /tmp/aida-releases:/data:ro mc '
   mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
   mc mb -p local/statics-live 2>/dev/null || true
-  mc cp /data/* local/statics-live/aida/
+  mc cp /data/aida-linux-amd64 /data/aida-darwin-arm64 /data/aida-windows-amd64.exe local/statics-live/aida/
+  mc cp /data/install.sh /data/install.ps1 /data/SHA256SUMS.txt local/statics-live/aida/
+  mc cp /data/aida-latest.txt local/statics-live/aida/aida-latest.txt
   mc anonymous set download local/statics-live/aida
 '
 ```
@@ -574,6 +580,7 @@ docker compose --profile tools run --rm -v /tmp/aida-releases:/data:ro mc '
 - bucket 名为 `statics-live`
 - 发布前缀为 `aida/`
 - 命令会将该目录设置为匿名只读下载
+- `aida-latest.txt` 必须最后上传，它是客户端开始拉取新版本的发布开关
 
 ## 12.3 CLI 安装命令
 
@@ -581,7 +588,7 @@ docker compose --profile tools run --rm -v /tmp/aida-releases:/data:ro mc '
 
 ```bash
 curl -fsSL http://113.100.143.91:9180/statics-live/aida/install.sh \
-  | AIDA_API_URL=http://113.100.143.91:9180/api/v1 AIDA_TOKEN=<用户JWT> bash
+  | AIDA_TOKEN=<用户JWT> bash
 ```
 
 `install.sh` 会按当前系统选择二进制：Linux x86_64 下载 `aida-linux-amd64`，macOS arm64 下载 `aida-darwin-arm64`。
@@ -589,7 +596,7 @@ curl -fsSL http://113.100.143.91:9180/statics-live/aida/install.sh \
 ### Windows
 
 ```powershell
-$env:AIDA_API_URL="http://113.100.143.91:9180/api/v1"; $env:AIDA_TOKEN="<用户JWT>"; Invoke-RestMethod http://113.100.143.91:9180/statics-live/aida/install.ps1 | Invoke-Expression
+$env:AIDA_TOKEN="<用户JWT>"; Invoke-RestMethod http://113.100.143.91:9180/statics-live/aida/install.ps1 | Invoke-Expression
 ```
 
 如果不带 `AIDA_TOKEN`，安装后可手动登录：
@@ -604,7 +611,51 @@ Windows 注意事项：
 - 不要再套一层 `powershell -Command`
 - 否则 PATH 刷新只会发生在子进程里
 
-## 12.4 单端口 Nginx 入口
+安装后的 `~/.aida.yaml`（Windows 为 `%USERPROFILE%\.aida.yaml`）包含：
+
+```yaml
+api_url: http://113.100.143.91:9180/api/v1
+internal_api_url: http://192.168.14.182/api/v1
+auto_route: true
+release_url: http://113.100.143.91:9180/statics-live/aida
+auto_update: true
+```
+
+`aida` 在真正上传前使用当前 Token 请求内网 `/auth/me`，1.2 秒内验证成功就走内网；连接失败、超时、鉴权失败或响应不是合法 JSON 时自动使用外网。`AIDA_API_URL` 或 `aida login --server` 的显式地址优先，不执行自动切换。可用 `aida status` 查看本次实际选择的入口。
+
+## 12.4 CLI 自动更新
+
+安装脚本只负责首次安装和从旧版本切换到支持自更新的版本。完成这一次升级后，用户不需要在每次发布时重新执行 `curl | bash`。
+
+客户端行为：
+
+1. 用户正常执行 `aida sessions`、`aida upload`、`aida status` 或 `aida login`；
+2. 客户端每天最多检查一次外网 `aida-latest.txt`；
+3. 发现更高版本后下载当前平台二进制；
+4. 使用同一发布目录的 `SHA256SUMS.txt` 校验；
+5. Linux/macOS 原子替换，Windows 在当前进程退出后完成替换；
+6. 本次命令继续运行，下一次命令使用新版本。
+
+人工立即检查可执行：
+
+```bash
+aida update
+aida version
+```
+
+关闭自动更新可在配置中设置：
+
+```yaml
+auto_update: false
+```
+
+发布新 CLI 时必须同时上传三个平台二进制、`aida-latest.txt` 和完整的 `SHA256SUMS.txt`，最后再上传 `aida-latest.txt`。这样客户端不会在二进制尚未上传完成时读到新版本。严禁只替换二进制而不更新校验文件。
+
+当前生产下载地址是 HTTP。SHA256 可以发现损坏或发布文件不一致，但不能抵御主动网络劫持；生产应尽快迁移到 HTTPS 或增加离线签名验证。
+
+已有旧客户端尚无 `release_url` 和自动路由配置，需要在本功能首次发布时执行最后一次安装命令，或者由运维批量写入上述配置。此后正常发布不再要求用户重复安装。
+
+## 12.5 单端口 Nginx 入口
 
 `web` 镜像内置 Nginx 已配置：
 
@@ -693,6 +744,8 @@ http: server gave HTTP response to HTTPS client
 - consumer 无明显报错
 - Claude 报表生成可用
 - CLI 安装包可下载
+- `aida status` 在公司网络显示 `internal`，外部网络显示 `public`
+- `aida update` 能正确校验并安装最新版本
 - Linux / macOS Apple Silicon / Windows 安装命令至少验证一端
 
 如果这份文档后续需要扩展，可以继续补充：

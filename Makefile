@@ -4,7 +4,9 @@ SHA256SUM ?= $(shell command -v sha256sum >/dev/null 2>&1 && echo sha256sum || e
 
 TEST_AIDA_RELEASE_URL ?= http://192.168.14.157:9000/statics-live/aida
 TEST_AIDA_API_URL ?= http://192.168.14.157:18090/api/v1
+TEST_AIDA_INTERNAL_API_URL ?= http://192.168.14.157:18090/api/v1
 AIDA_API_URL ?= http://localhost:8080/api/v1
+AIDA_INTERNAL_API_URL ?= http://192.168.14.182/api/v1
 
 .PHONY: version build-release-binaries release-dir release-test-dir release-prod-dir release-test-archive release-prod-archive clean
 
@@ -25,11 +27,11 @@ build-release-binaries:
 release-dir: release-test-dir
 
 release-test-dir: build-release-binaries
-	$(call package_release,aida-releases-test,$(TEST_AIDA_RELEASE_URL),$(TEST_AIDA_API_URL))
+	$(call package_release,aida-releases-test,$(TEST_AIDA_RELEASE_URL),$(TEST_AIDA_API_URL),$(TEST_AIDA_INTERNAL_API_URL))
 
 release-prod-dir: build-release-binaries
 	$(if $(AIDA_RELEASE_URL),,$(error AIDA_RELEASE_URL is required. Example: make release-prod-dir AIDA_RELEASE_URL=http://<server>:9000/statics-live/aida AIDA_API_URL=http://<server>:18090/api/v1))
-	$(call package_release,aida-releases-release,$(AIDA_RELEASE_URL),$(AIDA_API_URL))
+	$(call package_release,aida-releases-release,$(AIDA_RELEASE_URL),$(AIDA_API_URL),$(AIDA_INTERNAL_API_URL))
 
 release-test-archive: release-test-dir
 	tar -czf aida_release_$(VERSION)_test_multi_platform.tar.gz -C aida-releases-test .
@@ -49,15 +51,17 @@ define package_release
 	cp install.ps1 "$(1)/install.ps1"
 	perl -0pi -e 's|AIDA_RELEASE_URL:-[^}]*|AIDA_RELEASE_URL:-$(2)|' "$(1)/install.sh"
 	perl -0pi -e 's|AIDA_API_URL:-[^}]*|AIDA_API_URL:-$(3)|' "$(1)/install.sh"
+	perl -0pi -e 's|AIDA_INTERNAL_API_URL:-[^}]*|AIDA_INTERNAL_API_URL:-$(4)|' "$(1)/install.sh"
 	perl -0pi -e 's|^\$$DefaultReleaseUrl = .*|\$$DefaultReleaseUrl = "$(2)"|m' "$(1)/install.ps1"
 	perl -0pi -e 's|^\$$DefaultApiUrl = .*|\$$DefaultApiUrl = "$(3)"|m' "$(1)/install.ps1"
+	perl -0pi -e 's|^\$$DefaultInternalApiUrl = .*|\$$DefaultInternalApiUrl = "$(4)"|m' "$(1)/install.ps1"
 	chmod 755 "$(1)/install.sh"
 	echo "$(VERSION)" > "$(1)/aida-latest.txt"
 	cd "$(1)" && $(SHA256SUM) aida-linux-amd64 aida-darwin-arm64 aida-windows-amd64.exe install.sh install.ps1 aida-latest.txt > SHA256SUMS.txt
 	@echo "release directory ready: ./$(1)"
 	@echo "publish its contents to: $(2)"
 	@echo "install command:"
-	@echo "  curl -fsSL $(2)/install.sh | AIDA_API_URL=$(3) AIDA_TOKEN=<jwt> bash"
+	@echo "  curl -fsSL $(2)/install.sh | AIDA_TOKEN=<jwt> bash"
 	@echo "  Invoke-RestMethod $(2)/install.ps1 | Invoke-Expression"
 endef
 

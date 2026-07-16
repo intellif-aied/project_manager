@@ -12,9 +12,17 @@ import (
 var Version = "dev"
 
 type Config struct {
-	APIURL     string `yaml:"api_url"`
-	Token      string `yaml:"token"`
-	ServerInfo string `yaml:"server_info,omitempty"`
+	APIURL           string `yaml:"api_url"`
+	InternalAPIURL   string `yaml:"internal_api_url,omitempty"`
+	AutoRoute        bool   `yaml:"auto_route,omitempty"`
+	ReleaseURL       string `yaml:"release_url,omitempty"`
+	AutoUpdate       bool   `yaml:"auto_update,omitempty"`
+	LastUpdateCheck  string `yaml:"last_update_check,omitempty"`
+	Token            string `yaml:"token"`
+	ServerInfo       string `yaml:"server_info,omitempty"`
+	ActiveAPIURL     string `yaml:"-"`
+	ActiveRoute      string `yaml:"-"`
+	apiURLOverridden bool
 }
 
 const (
@@ -49,8 +57,22 @@ func loadConfig() *Config {
 func configFromEnv(cfg *Config) *Config {
 	if v := os.Getenv("AIDA_API_URL"); v != "" {
 		cfg.APIURL = strings.TrimRight(v, "/")
+		cfg.apiURLOverridden = true
 	} else if v := os.Getenv("AIDASHBOARD_API_URL"); v != "" {
 		cfg.APIURL = strings.TrimRight(v, "/")
+		cfg.apiURLOverridden = true
+	}
+	if v := os.Getenv("AIDA_INTERNAL_API_URL"); v != "" {
+		cfg.InternalAPIURL = strings.TrimRight(v, "/")
+	}
+	if v := os.Getenv("AIDA_RELEASE_URL"); v != "" {
+		cfg.ReleaseURL = strings.TrimRight(v, "/")
+	}
+	if v := strings.TrimSpace(os.Getenv("AIDA_AUTO_ROUTE")); v != "" {
+		cfg.AutoRoute = v == "1" || strings.EqualFold(v, "true")
+	}
+	if v := strings.TrimSpace(os.Getenv("AIDA_AUTO_UPDATE")); v != "" {
+		cfg.AutoUpdate = v == "1" || strings.EqualFold(v, "true")
 	}
 	if v := os.Getenv("AIDA_TOKEN"); v != "" {
 		cfg.Token = v
@@ -84,13 +106,19 @@ func main() {
 
 	switch os.Args[1] {
 	case "login":
+		maybeAutoUpdate(loadConfig())
 		cmdLogin(os.Args[2:])
 	case "sessions", "ls":
+		maybeAutoUpdate(loadConfig())
 		cmdSessions(os.Args[2:])
 	case "upload", "push":
+		maybeAutoUpdate(loadConfig())
 		cmdUpload(os.Args[2:])
 	case "status":
+		maybeAutoUpdate(loadConfig())
 		cmdStatus()
+	case "update":
+		cmdUpdate()
 	case "version", "--version", "-v":
 		fmt.Printf("aida %s\n", Version)
 	case "help", "--help", "-h":
@@ -115,6 +143,7 @@ Commands:
   upload   [numbers...] [--all] [--page-size N]
                                             Upload sessions to server
   status                                     Show current login status
+  update                                     Check and install the latest version
   version                                    Show CLI version
 
 Examples:

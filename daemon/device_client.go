@@ -349,6 +349,7 @@ func cmdLogin(args []string) {
 	}
 	if server != "" {
 		cfg.APIURL = strings.TrimRight(server, "/")
+		cfg.AutoRoute = false
 	}
 
 	if token == "" {
@@ -466,6 +467,7 @@ func cmdSessions(args []string) {
 func cmdUpload(args []string) {
 	cfg := loadConfig()
 	requireAuth(cfg)
+	resolveAPIEndpoint(cfg)
 
 	uploadAll := false
 	pageSize := defaultSessionPageSize
@@ -526,7 +528,7 @@ func cmdUpload(args []string) {
 		return
 	}
 
-	fmt.Printf("\nUploading %d session(s) to %s ...\n\n", len(toUpload), cfg.APIURL)
+	fmt.Printf("\nUploading %d session(s) to %s (%s) ...\n\n", len(toUpload), apiBaseURL(cfg), cfg.ActiveRoute)
 
 	totalUploaded := 0
 	totalSubs := 0
@@ -588,7 +590,7 @@ func cmdUpload(args []string) {
 		}
 		writer.Close()
 
-		req, err := http.NewRequest("POST", cfg.APIURL+"/sessions/batch", &buf)
+		req, err := http.NewRequest("POST", apiBaseURL(cfg)+"/sessions/batch", &buf)
 		if err != nil {
 			fmt.Printf("  [FAIL]  %-14s  %s  %v\n", s.SessionRef[:12], formatLastActiveTime(s, "01-02 15:04"), err)
 			continue
@@ -661,7 +663,7 @@ func cmdUpload(args []string) {
 
 	fmt.Printf("\nDone. %d main + %d sub-agent(s) processed.\n", totalUploaded, totalSubs)
 	if totalUploaded > 0 || totalSubs > 0 {
-		fmt.Printf("Dashboard: %s\n", strings.Replace(cfg.APIURL, "/api/v1", "", 1))
+		fmt.Printf("Dashboard: %s\n", strings.Replace(apiBaseURL(cfg), "/api/v1", "", 1))
 	}
 }
 
@@ -743,7 +745,9 @@ func cmdStatus() {
 		return
 	}
 
-	fmt.Printf("Server:  %s\n", cfg.APIURL)
+	resolveAPIEndpoint(cfg)
+	fmt.Printf("Server:  %s (%s)\n", apiBaseURL(cfg), cfg.ActiveRoute)
+	fmt.Printf("Public:  %s\n", cfg.APIURL)
 	fmt.Printf("Config:  %s\n", configPath())
 
 	if cfg.ServerInfo != "" {
@@ -987,7 +991,7 @@ func parseJSONL(path string) *SessionInfo {
 // ---- API helpers ----
 
 func apiGet(cfg *Config, path string) (json.RawMessage, error) {
-	req, err := http.NewRequest("GET", cfg.APIURL+path, nil)
+	req, err := http.NewRequest("GET", apiBaseURL(cfg)+path, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -996,7 +1000,7 @@ func apiGet(cfg *Config, path string) (json.RawMessage, error) {
 }
 
 func apiPost(cfg *Config, path string, body []byte) (json.RawMessage, error) {
-	req, err := http.NewRequest("POST", cfg.APIURL+path, strings.NewReader(string(body)))
+	req, err := http.NewRequest("POST", apiBaseURL(cfg)+path, strings.NewReader(string(body)))
 	if err != nil {
 		return nil, err
 	}
@@ -1006,7 +1010,7 @@ func apiPost(cfg *Config, path string, body []byte) (json.RawMessage, error) {
 }
 
 func apiPut(cfg *Config, path string, body []byte) (json.RawMessage, error) {
-	req, err := http.NewRequest("PUT", cfg.APIURL+path, bytes.NewReader(body))
+	req, err := http.NewRequest("PUT", apiBaseURL(cfg)+path, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}

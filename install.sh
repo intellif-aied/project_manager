@@ -9,6 +9,7 @@
 # Environment variables:
 #   AIDA_RELEASE_URL  Static release directory URL, defaults to the packaged value.
 #   AIDA_API_URL      Aida API base URL written to ~/.aida.yaml. Defaults to the packaged value when provided by the release package.
+#   AIDA_INTERNAL_API_URL  Optional trusted internal API URL preferred when authenticated probing succeeds.
 #   AIDA_TOKEN        User JWT written to ~/.aida.yaml when provided.
 #   AIDA_INSTALL_DIR  Install directory, default ~/.local/bin.
 #   AIDA_FORCE        Set to 1 to skip update prompts.
@@ -17,6 +18,7 @@ set -euo pipefail
 
 RELEASE_URL="${AIDA_RELEASE_URL:-http://localhost:5080/statics-live/aida}"
 API_URL="${AIDA_API_URL:-http://localhost:8080/api/v1}"
+INTERNAL_API_URL="${AIDA_INTERNAL_API_URL:-}"
 TOKEN="${AIDA_TOKEN:-}"
 INSTALL_DIR="${AIDA_INSTALL_DIR:-$HOME/.local/bin}"
 
@@ -94,6 +96,9 @@ echo "  Binary:      $BINARY_NAME"
 if [ -n "$API_URL" ]; then
     echo "  API URL:     ${API_URL%/}"
 fi
+if [ -n "$INTERNAL_API_URL" ]; then
+    echo "  Internal API:${INTERNAL_API_URL%/}"
+fi
 echo ""
 
 VERSION="$(fetch_text "$RELEASE_URL/aida-latest.txt" | tr -d '[:space:]')"
@@ -152,14 +157,23 @@ upsert_config_value() {
 
 CONFIG_FILE="$HOME/.aida.yaml"
 API_URL="${API_URL%/}"
+INTERNAL_API_URL="${INTERNAL_API_URL%/}"
 if [ -f "$CONFIG_FILE" ]; then
-    [ -n "$API_URL" ] && upsert_config_value "$CONFIG_FILE" api_url "$API_URL"
-    [ -n "$TOKEN" ] && upsert_config_value "$CONFIG_FILE" token "$TOKEN"
+	[ -n "$API_URL" ] && upsert_config_value "$CONFIG_FILE" api_url "$API_URL"
+	[ -n "$INTERNAL_API_URL" ] && upsert_config_value "$CONFIG_FILE" internal_api_url "$INTERNAL_API_URL"
+	[ -n "$INTERNAL_API_URL" ] && upsert_config_value "$CONFIG_FILE" auto_route true
+	[ -n "$RELEASE_URL" ] && upsert_config_value "$CONFIG_FILE" release_url "$RELEASE_URL"
+	[ -n "$RELEASE_URL" ] && upsert_config_value "$CONFIG_FILE" auto_update true
+	[ -n "$TOKEN" ] && upsert_config_value "$CONFIG_FILE" token "$TOKEN"
     chmod 600 "$CONFIG_FILE"
     echo "updated config -> $CONFIG_FILE"
 elif [ -n "$API_URL" ] || [ -n "$TOKEN" ]; then
     {
-        [ -n "$API_URL" ] && printf 'api_url: %s\n' "$API_URL"
+		[ -n "$API_URL" ] && printf 'api_url: %s\n' "$API_URL"
+		[ -n "$INTERNAL_API_URL" ] && printf 'internal_api_url: %s\n' "$INTERNAL_API_URL"
+		[ -n "$INTERNAL_API_URL" ] && printf 'auto_route: true\n'
+		[ -n "$RELEASE_URL" ] && printf 'release_url: %s\n' "$RELEASE_URL"
+		[ -n "$RELEASE_URL" ] && printf 'auto_update: true\n'
         [ -n "$TOKEN" ] && printf 'token: %s\n' "$TOKEN"
     } > "$CONFIG_FILE"
     chmod 600 "$CONFIG_FILE"

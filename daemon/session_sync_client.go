@@ -427,7 +427,7 @@ func doSessionSyncRequest(
 	body io.Reader,
 	timeout time.Duration,
 ) (int, []byte, error) {
-	request, err := http.NewRequestWithContext(context.Background(), method, cfg.APIURL+path, body)
+	request, err := http.NewRequestWithContext(context.Background(), method, apiBaseURL(cfg)+path, body)
 	if err != nil {
 		return 0, nil, err
 	}
