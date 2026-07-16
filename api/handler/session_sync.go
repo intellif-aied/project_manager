@@ -29,6 +29,7 @@ type SessionSyncHandler struct {
 	service   *sessionsync.SyncService
 	lifecycle *sessionsync.ContentLifecycleService
 	acceptor  *sessionsync.ChunkAcceptor
+	store     *storage.MinioStorage
 }
 
 func NewSessionSyncHandler(
@@ -54,7 +55,7 @@ func NewSessionSyncHandler(
 			return nil, err
 		}
 	}
-	return &SessionSyncHandler{service: service, lifecycle: lifecycle, acceptor: acceptor}, nil
+	return &SessionSyncHandler{service: service, lifecycle: lifecycle, acceptor: acceptor, store: store}, nil
 }
 
 func (h *SessionSyncHandler) Prepare(w http.ResponseWriter, r *http.Request) {
@@ -230,6 +231,38 @@ func (h *SessionSyncHandler) Finalize(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeSessionSyncError(w, err)
 		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (h *SessionSyncHandler) Abort(w http.ResponseWriter, r *http.Request) {
+	u, ok := h.authorize(w, r)
+	if !ok {
+		return
+	}
+	generationID := chi.URLParam(r, "generationId")
+	if !isValidUUID(generationID) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_GENERATION", "error": "invalid generation id"})
+		return
+	}
+	response, err := h.service.Abort(r.Context(), u.ID, generationID)
+	if err != nil {
+		writeSessionSyncError(w, err)
+		return
+	}
+	if h.store != nil {
+		for _, objectKey := range response.ObjectKeys {
+			if err := h.store.Delete(r.Context(), objectKey); err != nil {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+					"code": "ABORT_CLEANUP_PENDING", "error": err.Error(), "generation_id": generationID,
+				})
+				return
+			}
+		}
+		if err := h.service.MarkAbortObjectsDeleted(r.Context(), u.ID, generationID); err != nil {
+			writeSessionSyncError(w, err)
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, response)
 }

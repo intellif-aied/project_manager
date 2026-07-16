@@ -103,7 +103,8 @@ func (p *ContentProjectionProcessor) processChunk(ctx context.Context, job Proce
 	if err != nil {
 		return err
 	}
-	if contentStatus != ContentAvailable && contentStatus != ContentCleared {
+	if contentStatus != ContentUploading && contentStatus != ContentUploadFailed &&
+		contentStatus != ContentAvailable && contentStatus != ContentCleared {
 		return ErrStaleContentEpoch
 	}
 
@@ -216,7 +217,8 @@ func (p *ContentProjectionProcessor) processActivation(ctx context.Context, job 
 	if err != nil {
 		return err
 	}
-	if contentStatus != ContentAvailable && contentStatus != ContentCleared {
+	if contentStatus != ContentUploading && contentStatus != ContentUploadFailed &&
+		contentStatus != ContentAvailable && contentStatus != ContentCleared {
 		return ErrStaleContentEpoch
 	}
 

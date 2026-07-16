@@ -124,6 +124,69 @@ func TestIncrementalUploadFallsBackOnlyForExplicitDisabledCode(t *testing.T) {
 	}
 }
 
+func TestIncrementalUploadPreflightRejectsOversizedLineBeforePrepare(t *testing.T) {
+	prepareRequests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/session-syncs/prepare" {
+			prepareRequests++
+		}
+		http.Error(w, "unexpected request", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, "oversized.jsonl")
+	content := append([]byte(`{"payload":"`), strings.Repeat("x", defaultSyncMaxLineBytes)...)
+	content = append(content, []byte(`"}`+"\n")...)
+	if err := os.WriteFile(path, content, 0600); err != nil {
+		t.Fatal(err)
+	}
+	session := &SessionInfo{SessionRef: "oversized", AgentType: "codex", FilePath: path}
+	_, err := uploadSessionGroupIncremental(
+		&Config{APIURL: server.URL, Token: "test-token"},
+		[]sessionWithFile{{info: session, filePath: path}},
+		session.SessionRef,
+	)
+	if err == nil || !strings.Contains(err.Error(), "preflight") || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("err=%v", err)
+	}
+	if prepareRequests != 0 {
+		t.Fatalf("prepare requests=%d, want 0", prepareRequests)
+	}
+}
+
+func TestIncrementalUploadAbortsStagingAfterUploadFailure(t *testing.T) {
+	content := []byte("{}\n")
+	serverState := &fakeSessionSyncServer{
+		generationID:   "44444444-4444-4444-8444-444444444444",
+		failEveryChunk: true,
+	}
+	server := httptest.NewServer(http.HandlerFunc(serverState.serveHTTP))
+	defer server.Close()
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, "abort.jsonl")
+	if err := os.WriteFile(path, content, 0600); err != nil {
+		t.Fatal(err)
+	}
+	session := &SessionInfo{SessionRef: "abort", AgentType: "codex", FilePath: path}
+	_, err := uploadSessionGroupIncremental(
+		&Config{APIURL: server.URL, Token: "test-token"},
+		[]sessionWithFile{{info: session, filePath: path}},
+		session.SessionRef,
+	)
+	if err == nil || !strings.Contains(err.Error(), "chunk HTTP 400") {
+		t.Fatalf("err=%v", err)
+	}
+	serverState.mu.Lock()
+	defer serverState.mu.Unlock()
+	if serverState.abortRequests != 1 {
+		t.Fatalf("abort requests=%d, want 1", serverState.abortRequests)
+	}
+}
+
 func TestIncrementalUploadFinalizesSnapshotWhenSourceGrowsDuringUpload(t *testing.T) {
 	initial := []byte("{\"type\":\"user\",\"sessionId\":\"growing\",\"timestamp\":\"2026-07-15T01:00:00Z\"}\n")
 	appended := []byte("{\"type\":\"assistant\",\"sessionId\":\"growing\",\"timestamp\":\"2026-07-15T01:01:00Z\"}\n")
@@ -244,6 +307,8 @@ type fakeSessionSyncServer struct {
 	finalizeRequests       int
 	prepareSummary         string
 	failFirstChunkResponse bool
+	failEveryChunk         bool
+	abortRequests          int
 	afterFirstAccepted     func()
 }
 
@@ -281,6 +346,10 @@ func (s *fakeSessionSyncServer) serveHTTP(w http.ResponseWriter, r *http.Request
 		}}})
 	case r.URL.Path == "/session-chunks/batch":
 		s.chunkRequests++
+		if s.failEveryChunk {
+			http.Error(w, "simulated permanent failure", http.StatusBadRequest)
+			return
+		}
 		if err := r.ParseMultipartForm(1 << 20); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -337,6 +406,9 @@ func (s *fakeSessionSyncServer) serveHTTP(w http.ResponseWriter, r *http.Request
 		}
 		s.active = true
 		writeTestJSON(w, map[string]any{"status": "active"})
+	case strings.HasPrefix(r.URL.Path, "/session-syncs/") && strings.HasSuffix(r.URL.Path, "/abort"):
+		s.abortRequests++
+		writeTestJSON(w, map[string]any{"status": "abandoned"})
 	default:
 		http.NotFound(w, r)
 	}

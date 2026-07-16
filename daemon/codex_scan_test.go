@@ -4,8 +4,33 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
+
+func TestParseCodexJSONLForkUsesRootMetadataAndExcludesInheritedCounters(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rollout-fork.jsonl")
+	lines := []string{
+		`{"timestamp":"2026-07-16T02:00:00Z","type":"session_meta","payload":{"id":"child-session","timestamp":"2026-07-16T02:00:00Z","cwd":"/child","source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent-session"}}}}}`,
+		tokenCountLine("2026-07-16T01:00:00Z", 100),
+		`{"timestamp":"2026-07-16T01:00:01Z","type":"session_meta","payload":{"id":"parent-session","timestamp":"2026-07-16T01:00:00Z","cwd":"/parent"}}`,
+		tokenCountLine("2026-07-16T02:01:00Z", 120),
+		tokenCountLine("2026-07-16T02:02:00Z", 130),
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	session := parseCodexJSONL(path)
+	if session.SessionRef != "child-session" || session.ParentSessionRef != "parent-session" ||
+		session.Cwd != "/child" || session.ForkSource != "source.subagent.thread_spawn.parent_thread_id" {
+		t.Fatalf("unexpected fork metadata: %+v", session)
+	}
+	if session.StartedAt.Format(time.RFC3339) != "2026-07-16T02:00:00Z" || session.TotalTok != 30 {
+		t.Fatalf("fork start/token total: start=%s total=%d", session.StartedAt, session.TotalTok)
+	}
+}
 
 func TestParseCodexJSONLCounterResetFallsBackToLastActivity(t *testing.T) {
 	dir := t.TempDir()

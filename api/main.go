@@ -213,6 +213,7 @@ func main() {
 	r.With(handler.CLIAuthMiddleware(database, cfg.AIHubSecret, aihubClient)).Post("/api/v1/session-syncs/prepare", sessionSyncH.Prepare)
 	r.With(handler.CLIAuthMiddleware(database, cfg.AIHubSecret, aihubClient)).Post("/api/v1/session-chunks/batch", sessionSyncH.UploadChunks)
 	r.With(handler.CLIAuthMiddleware(database, cfg.AIHubSecret, aihubClient)).Post("/api/v1/session-syncs/{generationId}/finalize", sessionSyncH.Finalize)
+	r.With(handler.CLIAuthMiddleware(database, cfg.AIHubSecret, aihubClient)).Post("/api/v1/session-syncs/{generationId}/abort", sessionSyncH.Abort)
 	r.With(handler.CLIAuthMiddleware(database, cfg.AIHubSecret, aihubClient)).Post("/api/v1/sessions/batch", handler.LegacySessionBatchUploadDisabled)
 
 	r.Route("/api/v1", func(r chi.Router) {

@@ -27,6 +27,8 @@ type PrepareSessionRequest struct {
 	SessionRef       string                 `json:"session_ref"`
 	AgentType        string                 `json:"agent_type"`
 	ParentSessionRef string                 `json:"parent_session_ref,omitempty"`
+	ForkedAt         *time.Time             `json:"forked_at,omitempty"`
+	ForkSource       string                 `json:"fork_source,omitempty"`
 	Summary          string                 `json:"summary,omitempty"`
 	StartedAt        *time.Time             `json:"started_at,omitempty"`
 	LastActivityAt   *time.Time             `json:"last_activity_at,omitempty"`
@@ -73,6 +75,14 @@ type FinalizeResponse struct {
 	SliceCreated   bool          `json:"slice_created"`
 }
 
+type AbortResponse struct {
+	GenerationID  string        `json:"generation_id"`
+	Status        string        `json:"status"`
+	ContentStatus ContentStatus `json:"content_status"`
+	DeletedChunks int           `json:"deleted_chunks"`
+	ObjectKeys    []string      `json:"-"`
+}
+
 type SyncService struct {
 	db *sql.DB
 }
@@ -88,6 +98,8 @@ func (s *SyncService) Prepare(ctx context.Context, userID string, request Prepar
 	request.SessionRef = strings.TrimSpace(request.SessionRef)
 	request.AgentType = strings.TrimSpace(request.AgentType)
 	request.Summary = strings.ReplaceAll(strings.TrimSpace(request.Summary), "\x00", "\uFFFD")
+	request.ParentSessionRef = strings.TrimSpace(request.ParentSessionRef)
+	request.ForkSource = strings.TrimSpace(request.ForkSource)
 	if request.AgentType == "" {
 		request.AgentType = "claude_code"
 	}
@@ -145,12 +157,15 @@ func lockOrCreateSession(
 		_, err = tx.ExecContext(ctx, `
 			UPDATE sessions
 			SET parent_session_ref = COALESCE(NULLIF($1, ''), parent_session_ref),
-				cwd = COALESCE(NULLIF($2, ''), cwd),
-				project_name = COALESCE(NULLIF($3, ''), project_name),
-				summary = COALESCE(NULLIF($4, ''), summary),
-				last_activity_at = CASE WHEN $5::timestamptz IS NULL THEN last_activity_at ELSE GREATEST(last_activity_at, $5) END,
+				forked_at = COALESCE($2::timestamptz, forked_at),
+				fork_source = COALESCE(NULLIF($3, ''), fork_source),
+				cwd = COALESCE(NULLIF($4, ''), cwd),
+				project_name = COALESCE(NULLIF($5, ''), project_name),
+				summary = COALESCE(NULLIF($6, ''), summary),
+				last_activity_at = CASE WHEN $7::timestamptz IS NULL THEN last_activity_at ELSE GREATEST(last_activity_at, $7) END,
 				updated_at = now()
-			WHERE id = $6`, request.ParentSessionRef, request.CWD, request.ProjectName, request.Summary, lastActivity, sessionID)
+			WHERE id = $8`, request.ParentSessionRef, request.ForkedAt, request.ForkSource,
+			request.CWD, request.ProjectName, request.Summary, lastActivity, sessionID)
 		return sessionID, contentStatus, err
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -168,11 +183,14 @@ func lockOrCreateSession(
 	}
 	err = tx.QueryRowContext(ctx, `
 		INSERT INTO sessions (
-			session_ref, user_id, agent_type, parent_session_ref, started_at,
-			last_activity_at, cwd, project_name, summary
-		) VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, NULLIF($7, ''), NULLIF($8, ''), NULLIF($9, ''))
+			session_ref, user_id, agent_type, parent_session_ref, forked_at, fork_source,
+			started_at, last_activity_at, cwd, project_name, summary, content_status
+		) VALUES (
+			$1, $2, $3, NULLIF($4, ''), $5, NULLIF($6, ''),
+			$7, $8, NULLIF($9, ''), NULLIF($10, ''), NULLIF($11, ''), 'uploading'
+		)
 		RETURNING id, content_status`,
-		request.SessionRef, userID, request.AgentType, request.ParentSessionRef,
+		request.SessionRef, userID, request.AgentType, request.ParentSessionRef, request.ForkedAt, request.ForkSource,
 		startedAt, lastActivityAt, request.CWD, request.ProjectName, request.Summary,
 	).Scan(&sessionID, &contentStatus)
 	return sessionID, contentStatus, err
@@ -495,7 +513,8 @@ func (s *SyncService) Finalize(ctx context.Context, userID, generationID string,
 		prefixAlgorithm != request.PrefixCheckpointAlgorithmVersion {
 		return FinalizeResponse{}, ErrFinalizeConflict
 	}
-	if contentStatus != ContentAvailable && contentStatus != ContentCleared {
+	if contentStatus != ContentUploading && contentStatus != ContentUploadFailed &&
+		contentStatus != ContentAvailable && contentStatus != ContentCleared {
 		return FinalizeResponse{}, ErrFinalizeConflict
 	}
 	if err := verifyChunkContinuity(ctx, tx, generationID, request.DeclaredEndCursor); err != nil {
@@ -571,6 +590,123 @@ func (s *SyncService) Finalize(ctx context.Context, userID, generationID string,
 		ContentStatus: contentStatus, ExpectedCursor: expectedCursor,
 		SliceKey: sliceKey, SliceCreated: sliceCreated,
 	})
+}
+
+func (s *SyncService) Abort(ctx context.Context, userID, generationID string) (AbortResponse, error) {
+	if strings.TrimSpace(userID) == "" || strings.TrimSpace(generationID) == "" {
+		return AbortResponse{}, ErrInvalidSyncRequest
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return AbortResponse{}, err
+	}
+	defer tx.Rollback()
+	var sessionID, sourceID, generationStatus string
+	var contentStatus ContentStatus
+	var activeGenerationID sql.NullString
+	err = tx.QueryRowContext(ctx, `
+		SELECT s.id, src.id, g.status, s.content_status, src.active_generation_id
+		FROM session_source_generations g
+		JOIN session_sources src ON src.id = g.source_id
+		JOIN sessions s ON s.id = src.session_id
+		WHERE g.id = $1 AND s.user_id = $2
+		FOR UPDATE OF g, src, s`, generationID, userID).Scan(
+		&sessionID, &sourceID, &generationStatus, &contentStatus, &activeGenerationID,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return AbortResponse{}, ErrGenerationNotFound
+	}
+	if err != nil {
+		return AbortResponse{}, err
+	}
+	if generationStatus == "active" || generationStatus == "superseded" {
+		return AbortResponse{}, ErrFinalizeConflict
+	}
+	if generationStatus == "staging" {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE session_source_generations
+			SET status = 'abandoned', superseded_at = now()
+			WHERE id = $1 AND status = 'staging'`, generationID); err != nil {
+			return AbortResponse{}, err
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE session_sources
+			SET staging_generation_id = NULL, updated_at = now()
+			WHERE id = $1 AND staging_generation_id = $2`, sourceID, generationID); err != nil {
+			return AbortResponse{}, err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE session_content_projection_revisions SET status = 'failed'
+		WHERE generation_id = $1 AND status IN ('building', 'validated')`, generationID); err != nil {
+		return AbortResponse{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE session_metrics_revisions SET status = 'failed'
+		WHERE generation_id = $1 AND status IN ('building', 'validated')`, generationID); err != nil {
+		return AbortResponse{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE session_processing_jobs
+		SET status = 'dead', lease_owner = NULL, lease_until = NULL,
+			last_error = 'session upload aborted', completed_at = now()
+		WHERE generation_id = $1 AND status IN ('pending', 'leased', 'retry_wait')`, generationID); err != nil {
+		return AbortResponse{}, err
+	}
+	rows, err := tx.QueryContext(ctx, `
+		UPDATE session_upload_chunks
+		SET object_status = CASE WHEN object_status = 'deleted' THEN 'deleted' ELSE 'delete_pending' END,
+			content_index_status = CASE WHEN content_index_status = 'indexed' THEN 'indexed' ELSE 'failed' END,
+			usage_parse_status = CASE WHEN usage_parse_status = 'parsed' THEN 'parsed' ELSE 'failed' END
+		WHERE generation_id = $1
+		RETURNING raw_object_key, object_status`, generationID)
+	if err != nil {
+		return AbortResponse{}, err
+	}
+	objectKeys := []string{}
+	for rows.Next() {
+		var key, status string
+		if err := rows.Scan(&key, &status); err != nil {
+			rows.Close()
+			return AbortResponse{}, err
+		}
+		if status != "deleted" && strings.TrimSpace(key) != "" {
+			objectKeys = append(objectKeys, key)
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return AbortResponse{}, err
+	}
+	if !activeGenerationID.Valid {
+		contentStatus = ContentUploadFailed
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE sessions SET content_status = $2, updated_at = now() WHERE id = $1`, sessionID, contentStatus); err != nil {
+			return AbortResponse{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return AbortResponse{}, err
+	}
+	return AbortResponse{
+		GenerationID: generationID, Status: "abandoned", ContentStatus: contentStatus,
+		DeletedChunks: len(objectKeys), ObjectKeys: objectKeys,
+	}, nil
+}
+
+func (s *SyncService) MarkAbortObjectsDeleted(ctx context.Context, userID, generationID string) error {
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE session_upload_chunks c
+		SET object_status = 'deleted'
+		FROM session_source_generations g
+		JOIN session_sources src ON src.id = g.source_id
+		JOIN sessions s ON s.id = src.session_id
+		WHERE c.generation_id = g.id AND g.id = $1 AND s.user_id = $2
+			AND g.status = 'abandoned' AND c.object_status = 'delete_pending'`, generationID, userID)
+	if err != nil {
+		return err
+	}
+	_, err = result.RowsAffected()
+	return err
 }
 
 func createContentSlice(

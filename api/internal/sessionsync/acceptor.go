@@ -137,7 +137,7 @@ func (a *ChunkAcceptor) Accept(ctx context.Context, request AcceptChunkRequest) 
 
 func writableContentDecision(snapshot ChunkSnapshot) *ChunkDecision {
 	switch snapshot.ContentStatus {
-	case ContentAvailable:
+	case ContentUploading, ContentUploadFailed, ContentAvailable:
 		return nil
 	case ContentCleared:
 		if snapshot.RestoreWritable {

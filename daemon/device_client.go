@@ -51,29 +51,32 @@ type UserMsg struct {
 }
 
 type SessionInfo struct {
-	SessionRef     string
-	AgentType      string // "" (== claude_code, default) or "codex"
-	FilePath       string
-	FileModifiedAt time.Time
-	ProjectDir     string
-	Cwd            string
-	GitBranch      string
-	StartedAt      time.Time
-	EndedAt        time.Time
-	Model          string
-	Models         []string // distinct models seen, in insertion order
-	Summary        string
-	SummaryStatus  string
-	SummarySource  string
-	ToolCalls      map[string]int
-	InputTok       int64
-	OutputTok      int64
-	CacheCreateTok int64
-	CacheReadTok   int64
-	TotalTok       int64
-	NumLines       int
-	SubFiles       []string // subagent JSONL file paths
-	ActivitySlices []ActivitySlice
+	SessionRef       string
+	ParentSessionRef string
+	ForkedAt         time.Time
+	ForkSource       string
+	AgentType        string // "" (== claude_code, default) or "codex"
+	FilePath         string
+	FileModifiedAt   time.Time
+	ProjectDir       string
+	Cwd              string
+	GitBranch        string
+	StartedAt        time.Time
+	EndedAt          time.Time
+	Model            string
+	Models           []string // distinct models seen, in insertion order
+	Summary          string
+	SummaryStatus    string
+	SummarySource    string
+	ToolCalls        map[string]int
+	InputTok         int64
+	OutputTok        int64
+	CacheCreateTok   int64
+	CacheReadTok     int64
+	TotalTok         int64
+	NumLines         int
+	SubFiles         []string // subagent JSONL file paths
+	ActivitySlices   []ActivitySlice
 }
 
 type ActivitySlice struct {

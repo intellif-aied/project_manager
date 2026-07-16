@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -116,6 +117,26 @@ func TestCodexUnchangedCumulativeCountersAdvanceCursorWithoutUsageRecord(t *test
 	}
 	if parsed.State.PreviousCodexCounters == nil || parsed.State.PreviousCodexCounters.TotalTokens != 120 {
 		t.Fatalf("state=%+v", parsed.State)
+	}
+}
+
+func TestCodexForkInheritedCountersAreBaselineOnly(t *testing.T) {
+	content := strings.Join([]string{
+		`{"timestamp":"2026-07-16T02:00:00Z","type":"session_meta","payload":{"id":"child","timestamp":"2026-07-16T02:00:00Z","source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent"}}}}}`,
+		`{"timestamp":"2026-07-16T01:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20,"total_tokens":120}}}}`,
+		`{"timestamp":"2026-07-16T02:01:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":130,"cached_input_tokens":25,"output_tokens":30,"total_tokens":160}}}}`,
+		`{"timestamp":"2026-07-16T02:02:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":140,"cached_input_tokens":27,"output_tokens":35,"total_tokens":175}}}}`,
+	}, "\n") + "\n"
+	parsed, err := ParseProviderChunk("codex", strings.NewReader(content), 0, ParseState{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.State.ForkParentSessionRef != "parent" || !parsed.State.ForkBaselineReady ||
+		parsed.State.ForkBaselineMissing || len(parsed.Records) != 2 {
+		t.Fatalf("unexpected fork state/records: state=%+v records=%d", parsed.State, len(parsed.Records))
+	}
+	if parsed.Records[0].Delta.TotalTokens != 40 || parsed.Records[1].Delta.TotalTokens != 15 {
+		t.Fatalf("unexpected child deltas: %+v", parsed.Records)
 	}
 }
 

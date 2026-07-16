@@ -158,6 +158,17 @@ func TestSES020OversizedJSONLLineIsRejected(t *testing.T) {
 	}
 }
 
+func TestJSONLLineAboveFourMiBFitsUnifiedEightMiBChunk(t *testing.T) {
+	line := append([]byte(`{"message":"`), bytes.Repeat([]byte("x"), (4<<20)+128)...)
+	line = append(line, []byte(`"}`+"\n")...)
+	chunks, pending, err := splitSessionJSONL(bytes.NewReader(line), 0, 1, sessionChunkLimits{
+		MaxEvents: defaultSyncChunkEvents, MaxChunkBytes: defaultSyncChunkBytes, MaxLineBytes: defaultSyncMaxLineBytes,
+	})
+	if err != nil || pending || len(chunks) != 1 || len(chunks[0].Content) != len(line) {
+		t.Fatalf("chunks=%d pending=%t err=%v", len(chunks), pending, err)
+	}
+}
+
 func TestStreamingChunkerStopsImmediatelyWhenEmitterFails(t *testing.T) {
 	emitErr := errors.New("stop after first ACK failure")
 	emitted := 0

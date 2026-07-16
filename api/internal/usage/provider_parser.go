@@ -45,6 +45,13 @@ type ParseState struct {
 	PreviousCodexCounters *TokenCounters `json:"previous_codex_counters,omitempty"`
 	ActiveModel           string         `json:"active_model,omitempty"`
 	CounterSegment        int64          `json:"counter_segment"`
+	RootMetadataSeen      bool           `json:"root_metadata_seen,omitempty"`
+	ForkParentSessionRef  string         `json:"fork_parent_session_ref,omitempty"`
+	ForkSource            string         `json:"fork_source,omitempty"`
+	ForkedAt              *time.Time     `json:"forked_at,omitempty"`
+	ForkBaselineReady     bool           `json:"fork_baseline_ready,omitempty"`
+	ForkBaselineMissing   bool           `json:"fork_baseline_missing,omitempty"`
+	ForkMetadataConflict  bool           `json:"fork_metadata_conflict,omitempty"`
 }
 
 type UsageRecord struct {
@@ -245,6 +252,26 @@ func parseCodexLine(
 	startCursor, endCursor int64,
 	state *ParseState,
 ) (UsageRecord, parsedLineKind) {
+	if envelope.Type == "session_meta" {
+		if !state.RootMetadataSeen {
+			state.RootMetadataSeen = true
+			var meta codexRootSessionMeta
+			if json.Unmarshal(envelope.Payload, &meta) == nil {
+				state.ForkParentSessionRef, state.ForkSource = codexForkParent(meta)
+				if state.ForkParentSessionRef != "" {
+					timestamp := strings.TrimSpace(meta.Timestamp)
+					if timestamp == "" {
+						timestamp = strings.TrimSpace(envelope.Timestamp)
+					}
+					if forkedAt, err := time.Parse(time.RFC3339Nano, timestamp); err == nil {
+						forkedAt = forkedAt.UTC()
+						state.ForkedAt = &forkedAt
+					}
+				}
+			}
+		}
+		return UsageRecord{}, lineIgnored
+	}
 	if envelope.Type == "turn_context" {
 		var context struct {
 			Model string `json:"model"`
@@ -290,6 +317,24 @@ func parseCodexLine(
 	if countersHaveNegative(counters) || counters.CachedInputTokens > counters.InputTokens {
 		return UsageRecord{}, lineUnknownUsage
 	}
+	occurredAt, err := time.Parse(time.RFC3339Nano, envelope.Timestamp)
+	if err != nil {
+		return UsageRecord{}, lineUnknownUsage
+	}
+	occurredAt = occurredAt.UTC()
+	if state.ForkParentSessionRef != "" && state.ForkedAt != nil {
+		if occurredAt.Before(*state.ForkedAt) {
+			state.PreviousCodexCounters = &counters
+			state.ForkBaselineReady = true
+			return UsageRecord{}, lineIgnored
+		}
+		if !state.ForkBaselineReady {
+			state.PreviousCodexCounters = &counters
+			state.ForkBaselineReady = true
+			state.ForkBaselineMissing = true
+			return UsageRecord{}, lineIgnored
+		}
+	}
 	delta := counters
 	quality := QualityEstimated
 	reason := "Codex token_count has no stable cross-source provider event id"
@@ -304,11 +349,14 @@ func parseCodexLine(
 		quality = QualityConflict
 		reason = "provider total_tokens does not equal input_tokens + output_tokens"
 	}
-	state.PreviousCodexCounters = &counters
-	occurredAt, err := time.Parse(time.RFC3339Nano, envelope.Timestamp)
-	if err != nil {
-		return UsageRecord{}, lineUnknownUsage
+	if state.ForkMetadataConflict {
+		quality = QualityConflict
+		reason = "Codex fork parent metadata conflicts with the stored session"
+	} else if state.ForkBaselineMissing && quality != QualityConflict {
+		quality = QualityEstimated
+		reason = "Codex fork inherited baseline was unavailable; the first observed cumulative counter was not billed"
 	}
+	state.PreviousCodexCounters = &counters
 	if delta.InputTokens == 0 && delta.CachedInputTokens == 0 && delta.OutputTokens == 0 && delta.TotalTokens == 0 {
 		return UsageRecord{}, lineIgnored
 	}
@@ -319,10 +367,67 @@ func parseCodexLine(
 		Provider: "codex", EventKey: eventKey, IdentityStrategy: "generation_cursor",
 		ProviderFingerprint: eventKey + ":" + lineHash,
 		SourceStartCursor:   startCursor, SourceEndCursor: endCursor,
-		OccurredAt: occurredAt.UTC(), RawModel: state.ActiveModel,
+		OccurredAt: occurredAt, RawModel: state.ActiveModel,
 		RawUsage: rawUsage, RawUsageHash: hashBytes(rawUsage), Counters: counters, Delta: delta,
 		Quality: quality, QualityReason: reason,
 	}, lineUsage
+}
+
+type codexRootSessionMeta struct {
+	ID             string          `json:"id"`
+	Timestamp      string          `json:"timestamp"`
+	ForkedFromID   string          `json:"forked_from_id"`
+	ParentThreadID string          `json:"parent_thread_id"`
+	SessionID      string          `json:"session_id"`
+	ThreadSource   json.RawMessage `json:"thread_source"`
+	Source         json.RawMessage `json:"source"`
+}
+
+func codexForkParent(meta codexRootSessionMeta) (string, string) {
+	if parent := nestedRawString(meta.Source, "subagent", "thread_spawn", "parent_thread_id"); parent != "" {
+		return parent, "source.subagent.thread_spawn.parent_thread_id"
+	}
+	if parent := strings.TrimSpace(meta.ForkedFromID); parent != "" {
+		return parent, "forked_from_id"
+	}
+	if parent := strings.TrimSpace(meta.ParentThreadID); parent != "" {
+		return parent, "parent_thread_id"
+	}
+	if rawIndicatesSubagent(meta.ThreadSource) {
+		if parent := strings.TrimSpace(meta.SessionID); parent != "" && parent != strings.TrimSpace(meta.ID) {
+			return parent, "thread_source.subagent.session_id"
+		}
+	}
+	return "", ""
+}
+
+func nestedRawString(raw json.RawMessage, path ...string) string {
+	var value any
+	if len(raw) == 0 || json.Unmarshal(raw, &value) != nil {
+		return ""
+	}
+	for _, key := range path {
+		object, ok := value.(map[string]any)
+		if !ok {
+			return ""
+		}
+		value = object[key]
+	}
+	text, _ := value.(string)
+	return strings.TrimSpace(text)
+}
+
+func rawIndicatesSubagent(raw json.RawMessage) bool {
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		return strings.EqualFold(strings.TrimSpace(text), "subagent")
+	}
+	var object map[string]any
+	if json.Unmarshal(raw, &object) == nil {
+		_, ok := object["subagent"]
+		return ok
+	}
+	return false
 }
 
 func normalizeProvider(provider string) string {

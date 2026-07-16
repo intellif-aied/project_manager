@@ -4,7 +4,7 @@
 
 - 事故编号：AIDA-BUG-20260716-001
 - 优先级：P0
-- 状态：待修复，生产历史数据尚未正式重算
+- 状态：代码已修复、待发布；生产历史数据尚未正式重算
 - 影响模块：Aida 客户端上传、后端 Codex Token 解析、Token 分析和成本统计
 
 Codex 创建 fork 或 subagent Session 时，新 JSONL 文件可能包含父 Session 的历史事件和累计 `token_count`。当前客户端没有上传可靠的父引用，后端也没有排除继承历史，导致父 Token 在多个 fork generation 中重复统计。

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/aidashboard/api/internal/biztime"
@@ -18,7 +19,7 @@ import (
 )
 
 const (
-	ParserVersion     = "usage-parser-v2"
+	ParserVersion     = "usage-parser-v3"
 	NormalizerVersion = "token-normalizer-v1"
 )
 
@@ -148,6 +149,11 @@ func (p *Processor) processChunk(ctx context.Context, job sessionsync.Processing
 	}
 	if err != nil {
 		return err
+	}
+	if chunk.Provider == "codex" {
+		if err := p.applyCodexForkMetadata(ctx, tx, chunk.SessionID, &parsed); err != nil {
+			return err
+		}
 	}
 	if parsed.EndCursor != chunk.EndCursor {
 		return fmt.Errorf("%w: parsed cursor=%d chunk end=%d", ErrUsageUnavailable, parsed.EndCursor, chunk.EndCursor)
@@ -372,17 +378,29 @@ func (p *Processor) lockParserCheckpoint(ctx context.Context, tx *sql.Tx, revisi
 	var checkpoint parserCheckpoint
 	var previousJSON []byte
 	var activeModel sql.NullString
+	var forkParent, forkSource sql.NullString
+	var forkedAt sql.NullTime
 	if err := tx.QueryRowContext(ctx, `
-		SELECT id, parsed_cursor, previous_token_counters_json, counter_segment, active_model
+		SELECT id, parsed_cursor, previous_token_counters_json, counter_segment, active_model,
+			root_metadata_seen, fork_parent_session_ref, fork_source, forked_at,
+			fork_baseline_ready, fork_baseline_missing, fork_metadata_conflict
 		FROM session_parser_checkpoints
 		WHERE revision_id = $1 AND provider = $2 FOR UPDATE`, revisionID, provider).Scan(
 		&checkpoint.ID, &checkpoint.ParsedCursor, &previousJSON,
-		&checkpoint.State.CounterSegment, &activeModel,
+		&checkpoint.State.CounterSegment, &activeModel, &checkpoint.State.RootMetadataSeen,
+		&forkParent, &forkSource, &forkedAt, &checkpoint.State.ForkBaselineReady,
+		&checkpoint.State.ForkBaselineMissing, &checkpoint.State.ForkMetadataConflict,
 	); err != nil {
 		return parserCheckpoint{}, err
 	}
 	if activeModel.Valid {
 		checkpoint.State.ActiveModel = activeModel.String
+	}
+	checkpoint.State.ForkParentSessionRef = forkParent.String
+	checkpoint.State.ForkSource = forkSource.String
+	if forkedAt.Valid {
+		value := forkedAt.Time.UTC()
+		checkpoint.State.ForkedAt = &value
 	}
 	var counters TokenCounters
 	if len(previousJSON) > 0 && string(previousJSON) != "{}" {
@@ -402,14 +420,63 @@ func updateCheckpoint(ctx context.Context, tx *sql.Tx, checkpointID string, chun
 	checkpointContent, _ := json.Marshal(map[string]any{
 		"cursor": parsed.EndCursor, "previous": json.RawMessage(previous),
 		"segment": parsed.State.CounterSegment, "model": parsed.State.ActiveModel,
+		"root_metadata_seen":      parsed.State.RootMetadataSeen,
+		"fork_parent_session_ref": parsed.State.ForkParentSessionRef,
+		"fork_source":             parsed.State.ForkSource, "forked_at": parsed.State.ForkedAt,
+		"fork_baseline_ready":    parsed.State.ForkBaselineReady,
+		"fork_baseline_missing":  parsed.State.ForkBaselineMissing,
+		"fork_metadata_conflict": parsed.State.ForkMetadataConflict,
 	})
 	hash := sha256.Sum256(checkpointContent)
 	_, err := tx.ExecContext(ctx, `
 		UPDATE session_parser_checkpoints
 		SET parsed_cursor = $2, previous_token_counters_json = $3,
-			counter_segment = $4, active_model = NULLIF($5, ''), checkpoint_hash = $6, updated_at = now()
+			counter_segment = $4, active_model = NULLIF($5, ''), checkpoint_hash = $6,
+			root_metadata_seen = $7, fork_parent_session_ref = NULLIF($8, ''),
+			fork_source = NULLIF($9, ''), forked_at = $10,
+			fork_baseline_ready = $11, fork_baseline_missing = $12,
+			fork_metadata_conflict = $13, updated_at = now()
 		WHERE id = $1`, checkpointID, parsed.EndCursor, previous,
-		parsed.State.CounterSegment, parsed.State.ActiveModel, hex.EncodeToString(hash[:]))
+		parsed.State.CounterSegment, parsed.State.ActiveModel, hex.EncodeToString(hash[:]),
+		parsed.State.RootMetadataSeen, parsed.State.ForkParentSessionRef, parsed.State.ForkSource,
+		parsed.State.ForkedAt, parsed.State.ForkBaselineReady, parsed.State.ForkBaselineMissing,
+		parsed.State.ForkMetadataConflict)
+	return err
+}
+
+func (p *Processor) applyCodexForkMetadata(
+	ctx context.Context,
+	tx *sql.Tx,
+	sessionID string,
+	parsed *ParseResult,
+) error {
+	if parsed == nil || parsed.State.ForkParentSessionRef == "" {
+		return nil
+	}
+	var storedParent sql.NullString
+	if err := tx.QueryRowContext(ctx, `
+		SELECT parent_session_ref FROM sessions WHERE id = $1 FOR UPDATE`, sessionID,
+	).Scan(&storedParent); err != nil {
+		return err
+	}
+	if storedParent.Valid && strings.TrimSpace(storedParent.String) != "" &&
+		strings.TrimSpace(storedParent.String) != parsed.State.ForkParentSessionRef {
+		parsed.State.ForkMetadataConflict = true
+		for index := range parsed.Records {
+			parsed.Records[index].Quality = QualityConflict
+			parsed.Records[index].QualityReason = "Codex fork parent metadata conflicts with the stored session"
+		}
+		return nil
+	}
+	_, err := tx.ExecContext(ctx, `
+		UPDATE sessions
+		SET parent_session_ref = COALESCE(NULLIF(parent_session_ref, ''), $2),
+			forked_at = COALESCE($3, forked_at),
+			fork_source = COALESCE(NULLIF($4, ''), fork_source),
+			started_at = CASE WHEN $3::timestamptz IS NULL THEN started_at ELSE $3 END,
+			updated_at = now()
+		WHERE id = $1`, sessionID, parsed.State.ForkParentSessionRef,
+		parsed.State.ForkedAt, parsed.State.ForkSource)
 	return err
 }
 

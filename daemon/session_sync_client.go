@@ -23,7 +23,7 @@ const (
 	uploadStateVersion         = 1
 	prefixCheckpointAlgorithm  = "sha256-prefix-v1"
 	defaultSyncChunkEvents     = 500
-	defaultSyncChunkBytes      = 4 << 20
+	defaultSyncChunkBytes      = 8 << 20
 	defaultSyncMaxLineBytes    = 8 << 20
 	sessionChunkRequestTimeout = 5 * time.Minute
 )
@@ -58,6 +58,8 @@ type prepareSessionRequest struct {
 	SessionRef       string                 `json:"session_ref"`
 	AgentType        string                 `json:"agent_type"`
 	ParentSessionRef string                 `json:"parent_session_ref,omitempty"`
+	ForkedAt         *time.Time             `json:"forked_at,omitempty"`
+	ForkSource       string                 `json:"fork_source,omitempty"`
 	Summary          string                 `json:"summary,omitempty"`
 	StartedAt        *time.Time             `json:"started_at,omitempty"`
 	LastActivityAt   *time.Time             `json:"last_activity_at,omitempty"`
@@ -102,8 +104,8 @@ func uploadSessionGroupIncremental(cfg *Config, items []sessionWithFile, parentS
 	}
 	results := make([]incrementalUploadResult, 0, len(items))
 	for index, item := range items {
-		parentRef := ""
-		if index > 0 {
+		parentRef := strings.TrimSpace(item.info.ParentSessionRef)
+		if parentRef == "" && index > 0 {
 			parentRef = parentSessionRef
 		}
 		result, err := uploadSessionSourceIncremental(cfg, states, item, parentRef)
@@ -120,7 +122,7 @@ func uploadSessionSourceIncremental(
 	states *uploadStateFile,
 	item sessionWithFile,
 	parentSessionRef string,
-) (incrementalUploadResult, error) {
+) (result incrementalUploadResult, returnErr error) {
 	session := item.info
 	if session == nil || session.SessionRef == "" || item.filePath == "" {
 		return incrementalUploadResult{}, errors.New("session metadata and source file are required")
@@ -130,6 +132,9 @@ func uploadSessionSourceIncremental(
 		return incrementalUploadResult{}, err
 	}
 	agentType := normalizedAgentType(session.AgentType)
+	if err := preflightSessionSource(item.filePath); err != nil {
+		return incrementalUploadResult{}, err
+	}
 	sourceKey := fmt.Sprintf("%s:%s:main", agentType, session.SessionRef)
 	stateKey := uploadStateKey(agentType, session.SessionRef, sourceKey)
 	state := states.Sources[stateKey]
@@ -137,7 +142,7 @@ func uploadSessionSourceIncremental(
 	if err != nil {
 		return incrementalUploadResult{}, err
 	}
-	result := incrementalUploadResult{SessionRef: session.SessionRef, Status: prepared.Action}
+	result = incrementalUploadResult{SessionRef: session.SessionRef, Status: prepared.Action}
 	if prepared.Action == "content_cleared" {
 		return result, nil
 	}
@@ -147,6 +152,18 @@ func uploadSessionSourceIncremental(
 	if prepared.GenerationID == "" || prepared.ExpectedCursor < 0 || prepared.ExpectedCursor > fileInfo.Size() {
 		return incrementalUploadResult{}, errors.New("server returned an invalid generation checkpoint")
 	}
+	abortOnFailure := prepared.GenerationStatus == "staging"
+	defer func() {
+		if returnErr == nil || !abortOnFailure {
+			return
+		}
+		if abortErr := abortSessionSource(cfg, prepared.GenerationID); abortErr != nil {
+			returnErr = fmt.Errorf("%w; staging cleanup failed: %v", returnErr, abortErr)
+			return
+		}
+		delete(states.Sources, stateKey)
+		_ = saveUploadStates(states)
+	}()
 
 	file, err := os.Open(item.filePath)
 	if err != nil {
@@ -225,6 +242,7 @@ func uploadSessionSourceIncremental(
 			result.Status = "uploaded"
 		}
 	}
+	abortOnFailure = false
 	return result, nil
 }
 
@@ -245,7 +263,8 @@ func prepareSessionSource(
 			ClientVersion: Version,
 			Sessions: []prepareSessionRequest{{
 				SessionRef: session.SessionRef, AgentType: normalizedAgentType(session.AgentType),
-				ParentSessionRef: parentSessionRef, Summary: session.Summary, StartedAt: timePointer(session.StartedAt),
+				ParentSessionRef: parentSessionRef, ForkedAt: timePointer(session.ForkedAt), ForkSource: session.ForkSource,
+				Summary: session.Summary, StartedAt: timePointer(session.StartedAt),
 				LastActivityAt: timePointer(session.LastActiveAt()), CWD: session.Cwd,
 				ProjectName: sessionProjectDisplay(session),
 				Sources: []prepareSourceRequest{{
@@ -283,6 +302,21 @@ func prepareSessionSource(
 		return prepared, nil
 	}
 	return prepareSourceResult{}, errors.New("prepare checkpoint did not converge")
+}
+
+func preflightSessionSource(path string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	_, err = streamSessionJSONLChunks(file, 0, 1, sessionChunkLimits{
+		MaxEvents: defaultSyncChunkEvents, MaxChunkBytes: defaultSyncChunkBytes, MaxLineBytes: defaultSyncMaxLineBytes,
+	}, func(localSessionChunk) error { return nil })
+	if err != nil {
+		return fmt.Errorf("session source preflight failed before prepare: %w", err)
+	}
+	return nil
 }
 
 func uploadIncrementalChunk(cfg *Config, generationID string, chunk localSessionChunk) error {
@@ -361,6 +395,20 @@ func finalizeSessionSource(cfg *Config, generationID string, cursor int64, prefi
 	}
 	if status >= 300 {
 		return fmt.Errorf("finalize HTTP %d: %s", status, truncate(string(body), 300))
+	}
+	return nil
+}
+
+func abortSessionSource(cfg *Config, generationID string) error {
+	status, body, err := doSessionSyncRequest(
+		cfg, http.MethodPost, "/session-syncs/"+generationID+"/abort", "application/json",
+		bytes.NewReader([]byte(`{}`)), defaultRequestTimeout,
+	)
+	if err != nil {
+		return err
+	}
+	if status >= 300 {
+		return fmt.Errorf("abort HTTP %d: %s", status, truncate(string(body), 300))
 	}
 	return nil
 }

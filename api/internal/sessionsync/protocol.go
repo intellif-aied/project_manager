@@ -16,6 +16,8 @@ const PrefixCheckpointAlgorithm = "sha256-prefix-v1"
 type ContentStatus string
 
 const (
+	ContentUploading      ContentStatus = "uploading"
+	ContentUploadFailed   ContentStatus = "upload_failed"
 	ContentAvailable      ContentStatus = "available"
 	ContentClearing       ContentStatus = "clearing"
 	ContentClearingFailed ContentStatus = "clearing_failed"
@@ -74,7 +76,7 @@ type PrepareDecision struct {
 
 func DecidePrepare(state PrepareState, input PrepareInput) PrepareDecision {
 	switch state.ContentStatus {
-	case ContentAvailable:
+	case ContentUploading, ContentUploadFailed, ContentAvailable:
 	case ContentClearing, ContentClearingFailed:
 		return PrepareDecision{
 			Action:     PrepareRejected,

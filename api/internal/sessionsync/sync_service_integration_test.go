@@ -232,6 +232,78 @@ func TestSyncServiceConcurrentPrepareCreatesOneStagingGeneration(t *testing.T) {
 	}
 }
 
+func TestSyncServiceAbortAbandonsStagingAndMarksUploadFailed(t *testing.T) {
+	database := openSyncIntegrationDatabase(t)
+	userID := int64(990012)
+	cleanupSyncIntegrationUser(t, database, userID)
+	if _, err := database.Exec(`INSERT INTO users (id, username) VALUES ($1, 'v2-abort-upload-test')`, userID); err != nil {
+		t.Fatal(err)
+	}
+	defer cleanupSyncIntegrationUser(t, database, userID)
+
+	service, err := NewSyncService(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("{\"event\":1}\n")
+	prepared, err := service.Prepare(context.Background(), fmt.Sprint(userID), integrationPrepareRequest("abort-upload", content))
+	if err != nil || len(prepared) != 1 {
+		t.Fatalf("prepared=%+v err=%v", prepared, err)
+	}
+	repository, err := NewPostgresChunkRepository(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	acceptor, err := NewChunkAcceptor(repository, &fakeVerifiedStore{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := acceptor.Accept(context.Background(), AcceptChunkRequest{
+		UserID: fmt.Sprint(userID), GenerationID: prepared[0].GenerationID,
+		Chunk: ChunkMetadata{
+			StartCursor: 0, EndCursor: int64(len(content)), StartLine: 1, EndLine: 1,
+			ContentSHA256: HashBytes(content),
+		},
+		ContentSize: int64(len(content)), Content: bytes.NewReader(content),
+	})
+	if err != nil || decision.Status != ChunkAccepted {
+		t.Fatalf("decision=%+v err=%v", decision, err)
+	}
+
+	aborted, err := service.Abort(context.Background(), fmt.Sprint(userID), prepared[0].GenerationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if aborted.Status != "abandoned" || aborted.ContentStatus != ContentUploadFailed || len(aborted.ObjectKeys) != 1 {
+		t.Fatalf("aborted=%+v", aborted)
+	}
+	var generationStatus, contentStatus, objectStatus string
+	var stagingGenerationID sql.NullString
+	if err := database.QueryRow(`
+		SELECT g.status, s.content_status, c.object_status, src.staging_generation_id
+		FROM session_source_generations g
+		JOIN session_sources src ON src.id = g.source_id
+		JOIN sessions s ON s.id = src.session_id
+		JOIN session_upload_chunks c ON c.generation_id = g.id
+		WHERE g.id = $1`, prepared[0].GenerationID).Scan(
+		&generationStatus, &contentStatus, &objectStatus, &stagingGenerationID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if generationStatus != "abandoned" || contentStatus != "upload_failed" || objectStatus != "delete_pending" || stagingGenerationID.Valid {
+		t.Fatalf("generation=%s content=%s object=%s staging=%v", generationStatus, contentStatus, objectStatus, stagingGenerationID)
+	}
+	if err := service.MarkAbortObjectsDeleted(context.Background(), fmt.Sprint(userID), prepared[0].GenerationID); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRow(`SELECT object_status FROM session_upload_chunks WHERE generation_id = $1`, prepared[0].GenerationID).Scan(&objectStatus); err != nil {
+		t.Fatal(err)
+	}
+	if objectStatus != "deleted" {
+		t.Fatalf("object status=%s", objectStatus)
+	}
+}
+
 func integrationPrepareRequest(sessionRef string, content []byte) PrepareSessionRequest {
 	startedAt := time.Date(2026, 7, 14, 9, 0, 0, 0, time.UTC)
 	return PrepareSessionRequest{

@@ -27,9 +27,14 @@ type codexLine struct {
 }
 
 type codexSessionMeta struct {
-	ID        string `json:"id"`
-	Timestamp string `json:"timestamp"`
-	Cwd       string `json:"cwd"`
+	ID             string          `json:"id"`
+	Timestamp      string          `json:"timestamp"`
+	Cwd            string          `json:"cwd"`
+	ForkedFromID   string          `json:"forked_from_id"`
+	ParentThreadID string          `json:"parent_thread_id"`
+	SessionID      string          `json:"session_id"`
+	ThreadSource   json.RawMessage `json:"thread_source"`
+	Source         json.RawMessage `json:"source"`
 }
 
 type codexTurnContext struct {
@@ -119,6 +124,9 @@ func parseCodexJSONL(path string) *SessionInfo {
 	var prevTokens codexTokenInfo
 	var hasPrevTokens bool
 	var tokenCountersReset bool
+	var sawRootMeta bool
+	var forkBaselineReady bool
+	var forkBaselineMissing bool
 	var firstSummary string
 	activitySlices := map[string]*ActivitySlice{}
 
@@ -145,18 +153,22 @@ func parseCodexJSONL(path string) *SessionInfo {
 		switch cl.Type {
 		case "session_meta":
 			var meta codexSessionMeta
-			if err := json.Unmarshal(cl.Payload, &meta); err == nil {
-				if s.SessionRef == "" {
-					s.SessionRef = meta.ID
-				}
-				if meta.Cwd != "" && s.Cwd == "" {
-					s.Cwd = meta.Cwd
+			if err := json.Unmarshal(cl.Payload, &meta); err == nil && !sawRootMeta {
+				sawRootMeta = true
+				s.SessionRef = meta.ID
+				s.Cwd = meta.Cwd
+				if meta.Cwd != "" {
 					s.ProjectDir = filepath.Base(meta.Cwd)
 				}
 				if meta.Timestamp != "" {
 					if mt, err := time.Parse(time.RFC3339Nano, meta.Timestamp); err == nil {
 						s.StartedAt = mt
+						s.ForkedAt = mt
 					}
+				}
+				s.ParentSessionRef, s.ForkSource = codexParentMetadata(meta)
+				if s.ParentSessionRef == "" {
+					s.ForkedAt = time.Time{}
 				}
 			}
 		case "turn_context":
@@ -183,6 +195,21 @@ func parseCodexJSONL(path string) *SessionInfo {
 					if len(ev.Info) > 0 {
 						var ti codexTokenInfo
 						if err := json.Unmarshal(ev.Info, &ti); err == nil {
+							if s.ParentSessionRef != "" && !s.ForkedAt.IsZero() {
+								if ts.Before(s.ForkedAt) {
+									prevTokens = ti
+									hasPrevTokens = true
+									forkBaselineReady = true
+									continue
+								}
+								if !forkBaselineReady && !hasPrevTokens {
+									prevTokens = ti
+									hasPrevTokens = true
+									forkBaselineReady = true
+									forkBaselineMissing = true
+									continue
+								}
+							}
 							if currentSlice != nil {
 								if addCodexTokenDelta(currentSlice, ti, prevTokens, hasPrevTokens) {
 									tokenCountersReset = true
@@ -221,7 +248,7 @@ func parseCodexJSONL(path string) *SessionInfo {
 		}
 	}
 
-	if sawTokens {
+	if sawTokens && s.ParentSessionRef == "" {
 		s.InputTok = lastTokens.Total.InputTokens
 		s.CacheReadTok = lastTokens.Total.CachedInputTokens
 		// Codex doesn't expose a separate cache-creation counter; leave at 0.
@@ -254,6 +281,21 @@ func parseCodexJSONL(path string) *SessionInfo {
 				slice.TokenSliceStrategy = "delta"
 			}
 		}
+		if s.ParentSessionRef != "" {
+			s.InputTok, s.OutputTok, s.CacheReadTok, s.TotalTok = 0, 0, 0, 0
+			for _, slice := range activitySlices {
+				s.InputTok += slice.InputTokens
+				s.OutputTok += slice.OutputTokens
+				s.CacheReadTok += slice.CacheReadTokens
+				s.TotalTok += slice.TotalTokens
+				if forkBaselineMissing {
+					slice.IsEstimated = true
+					slice.TokenSliceStrategy = "fork_delta_missing_initial_baseline"
+				} else {
+					slice.TokenSliceStrategy = "fork_delta"
+				}
+			}
+		}
 	}
 
 	if firstSummary != "" {
@@ -268,6 +310,59 @@ func parseCodexJSONL(path string) *SessionInfo {
 	finalizeActivitySlices(s, activitySlices)
 
 	return s
+}
+
+func codexParentMetadata(meta codexSessionMeta) (string, string) {
+	if parent := nestedJSONString(meta.Source, "subagent", "thread_spawn", "parent_thread_id"); parent != "" {
+		return parent, "source.subagent.thread_spawn.parent_thread_id"
+	}
+	if parent := strings.TrimSpace(meta.ForkedFromID); parent != "" {
+		return parent, "forked_from_id"
+	}
+	if parent := strings.TrimSpace(meta.ParentThreadID); parent != "" {
+		return parent, "parent_thread_id"
+	}
+	if codexThreadSourceIsSubagent(meta.ThreadSource) {
+		if parent := strings.TrimSpace(meta.SessionID); parent != "" && parent != strings.TrimSpace(meta.ID) {
+			return parent, "thread_source.subagent.session_id"
+		}
+	}
+	return "", ""
+}
+
+func nestedJSONString(raw json.RawMessage, path ...string) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var value any
+	if json.Unmarshal(raw, &value) != nil {
+		return ""
+	}
+	for _, key := range path {
+		object, ok := value.(map[string]any)
+		if !ok {
+			return ""
+		}
+		value = object[key]
+	}
+	text, _ := value.(string)
+	return strings.TrimSpace(text)
+}
+
+func codexThreadSourceIsSubagent(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		return strings.EqualFold(strings.TrimSpace(text), "subagent")
+	}
+	var object map[string]any
+	if json.Unmarshal(raw, &object) == nil {
+		_, ok := object["subagent"]
+		return ok
+	}
+	return false
 }
 
 func addCodexTokenDelta(slice *ActivitySlice, current, previous codexTokenInfo, hasPrevious bool) bool {
