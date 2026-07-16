@@ -57,6 +57,14 @@ func TestContentProjectionProcessorOrdersAndActivatesIntegration(t *testing.T) {
 	if status != "active" || cursor != fixture.endCursor || eventCount != 2 || rows != 2 {
 		t.Fatalf("status=%s cursor=%d eventCount=%d rows=%d", status, cursor, eventCount, rows)
 	}
+	var contentStatus string
+	if err := database.QueryRow(`
+		SELECT content_status FROM sessions WHERE id = $1`, fixture.sessionID).Scan(&contentStatus); err != nil {
+		t.Fatal(err)
+	}
+	if contentStatus != string(ContentAvailable) {
+		t.Fatalf("content_status=%s want=%s", contentStatus, ContentAvailable)
+	}
 	var summary, message, literal string
 	if err := database.QueryRow(`
 		SELECT summary, content_payload #>> '{payload,message}', content_payload #>> '{payload,literal}'
@@ -111,8 +119,8 @@ func createProjectionFixture(t *testing.T, database *sql.DB, userID int64, sessi
 	}
 	var fixture projectionFixture
 	if err := database.QueryRow(`
-		INSERT INTO sessions (session_ref, user_id, agent_type, started_at)
-		VALUES ($1, $2, 'codex', now()) RETURNING id`, sessionRef, userID).Scan(&fixture.sessionID); err != nil {
+		INSERT INTO sessions (session_ref, user_id, agent_type, started_at, content_status)
+		VALUES ($1, $2, 'codex', now(), 'uploading') RETURNING id`, sessionRef, userID).Scan(&fixture.sessionID); err != nil {
 		t.Fatal(err)
 	}
 	var sourceID, generationID string

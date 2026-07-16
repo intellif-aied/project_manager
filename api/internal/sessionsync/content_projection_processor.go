@@ -301,6 +301,8 @@ func (p *ContentProjectionProcessor) processActivation(ctx context.Context, job 
 		if err != nil || changed != 1 {
 			return ErrProjectionUnavailable
 		}
+	}
+	if contentStatus != ContentAvailable {
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE sessions SET content_status = 'available', updated_at = now() WHERE id = $1`, job.SessionID); err != nil {
 			return err
