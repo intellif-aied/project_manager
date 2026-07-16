@@ -149,10 +149,17 @@ func TestValidateReportSourceRunInputRejectsOrganizationSourceParameters(t *test
 
 func TestReportCalendarContextJSONUsesDeterministicWeekdays(t *testing.T) {
 	daily := reportCalendarContextJSON(reportTypePersonalDaily, "2026-06-08", "", "")
-	requireContainsAll(t, daily, `"date":"2026-06-08"`, `"weekday":"周一"`)
+	requireContainsAll(t, daily,
+		`"timezone":"Asia/Shanghai"`,
+		`"report_date":"2026-06-08"`,
+		`"today_means":"period.date"`,
+		`"date":"2026-06-08"`,
+		`"weekday":"周一"`,
+	)
 
 	weekly := reportCalendarContextJSON(reportTypePersonalWeekly, "", "2026-06-08", "2026-06-14")
 	requireContainsAll(t, weekly,
+		`"timezone":"Asia/Shanghai"`,
 		`"week_start":"2026-06-08"`,
 		`"week_end":"2026-06-14"`,
 		`"date":"2026-06-08"`,

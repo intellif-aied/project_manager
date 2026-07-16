@@ -12,6 +12,7 @@ import (
 	"time"
 
 	projectdb "github.com/aidashboard/api/db"
+	"github.com/aidashboard/api/internal/biztime"
 	"github.com/aidashboard/api/internal/sessiondigest"
 )
 
@@ -129,6 +130,15 @@ func TestDigestSelectionFreezeReadAndWriteGuardIntegration(t *testing.T) {
 		payload.ReturnedCount != 2 || payload.Coverage.SourceItemCount != 2 ||
 		payload.Coverage.RepresentedItemCount != 2 || payload.Budget.ActualBytes != len(page.FrozenPayload) {
 		t.Fatalf("invalid digest payload contract: %+v bytes=%d", payload, len(page.FrozenPayload))
+	}
+	if payload.Timezone != biztime.Zone || !strings.Contains(payload.ContentSnapshot, "+08:00") {
+		t.Fatalf("digest payload is missing the Shanghai time contract: %+v", payload)
+	}
+	for _, item := range payload.Items {
+		if !strings.Contains(item.ActivityStart, "+08:00") || !strings.Contains(item.ActivityEnd, "+08:00") ||
+			item.StartDate == "" || item.EndDate == "" {
+			t.Fatalf("digest item is missing local time fields: %+v", item)
+		}
 	}
 	visibleJSON := string(page.FrozenPayload)
 	for _, forbidden := range []string{`"events"`, `"payload"`, "reasoning", "token_usage"} {

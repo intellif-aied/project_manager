@@ -56,6 +56,7 @@ import { PagePanel } from "@/shared/components/PagePanel/PagePanel";
 import { useAuth } from "@/shared/auth/authContext";
 import type { UserRole } from "@/shared/auth/types";
 import { ManagedModelSelect } from "../components/ManagedModelSelect";
+import { BUSINESS_TIME_ZONE, formatBusinessMonthDayTime } from "@/shared/utils/businessTime";
 
 import "../components/AgentWorkspace.css";
 
@@ -168,7 +169,13 @@ function reportCalendarContextPayload(
   weekRange: [Dayjs, Dayjs]
 ) {
   if (!isWeeklyReportType(reportType)) {
-    return { type: "daily", day: calendarDayPayload(reportDate) };
+    return {
+      type: "daily",
+      timezone: BUSINESS_TIME_ZONE,
+      report_date: reportDate.format("YYYY-MM-DD"),
+      today_means: "period.date",
+      day: calendarDayPayload(reportDate)
+    };
   }
   const start = weekRange[0].startOf("day");
   const end = weekRange[1].startOf("day");
@@ -182,6 +189,7 @@ function reportCalendarContextPayload(
   }
   return {
     type: "weekly",
+    timezone: BUSINESS_TIME_ZONE,
     week_start: start.format("YYYY-MM-DD"),
     week_end: end.format("YYYY-MM-DD"),
     days
@@ -314,13 +322,7 @@ function formatTokens(value: number) {
 }
 
 function formatDateTime(iso?: string) {
-  if (!iso) return "-";
-  return new Date(iso).toLocaleString("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit"
-  });
+  return formatBusinessMonthDayTime(iso);
 }
 
 function formatActivityRange(session: ReportSourceCandidate) {
@@ -894,9 +896,7 @@ function GenericAgentRunForm({ agent }: { agent: ManagedAgent }) {
               onChange={(value) => setRunModelId(value || "")}
               preservedModelId={defaultModelId}
               placeholder={
-                defaultModelId
-                  ? `留空使用 Agent 默认模型：${defaultModelId}`
-                  : "必选：请选择模型"
+                defaultModelId ? `留空使用 Agent 默认模型：${defaultModelId}` : "必选：请选择模型"
               }
             />
             <p className="ai-assets-field-help">
@@ -1208,9 +1208,7 @@ function ReportAgentRunForm({ agent }: { agent: ManagedAgent }) {
               onChange={(value) => setRunModelId(value || "")}
               preservedModelId={defaultModelId}
               placeholder={
-                defaultModelId
-                  ? `留空使用 Agent 默认模型：${defaultModelId}`
-                  : "必选：请选择模型"
+                defaultModelId ? `留空使用 Agent 默认模型：${defaultModelId}` : "必选：请选择模型"
               }
             />
             <p className="ai-assets-field-help">

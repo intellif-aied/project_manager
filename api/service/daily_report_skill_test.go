@@ -8,7 +8,7 @@ import (
 func TestReportSkillMarkdownUsesDeterministicDisplayContext(t *testing.T) {
 	markdown := ReportSkillMarkdown("https://aida.example.com/api/v1/mcp/reports")
 	required := []string{
-		"calendar_context: authoritative date, weekday, and date_label values computed by Aida",
+		"calendar_context: authoritative timezone, report date, weekday, and date_label values computed by Aida",
 		"use scope_context.department_name as the department display name",
 		"Never expose raw identifiers in the report body",
 		"REPORT_CONTENT_INVALID",
@@ -25,7 +25,10 @@ func TestReportSkillMarkdownUsesDeterministicDisplayContext(t *testing.T) {
 		"scope.type=department and report_scope=team",
 		"Existing content is editing context only",
 		"both source_mode=default and source_mode=explicit are mandatory report evidence",
-		"interpret report dates in Asia/Shanghai",
+		"already converted by Aida to Asia/Shanghai",
+		"never add or subtract 8 hours again",
+		"今日/当天 means period.date only",
+		"Never apply a second timezone conversion",
 		"never claim there was no activity or no record",
 		"Raw Token values inside Session events are cumulative telemetry",
 	}

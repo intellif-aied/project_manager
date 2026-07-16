@@ -161,6 +161,12 @@ func TestReportMCPToolsListReturns9AtomicTools(t *testing.T) {
 		if !expected[name] {
 			t.Fatalf("unexpected tool %q in tools/list", name)
 		}
+		if strings.HasPrefix(name, "get_") {
+			description, _ := m["description"].(string)
+			if name != toolGetReportInventory && !strings.Contains(description, "Asia/Shanghai") {
+				t.Fatalf("%s does not describe the business timezone: %q", name, description)
+			}
+		}
 	}
 }
 
@@ -282,6 +288,9 @@ func TestReportMCPReadResultRedactsPersistenceIdentifiers(t *testing.T) {
 			t.Fatalf("read result lost %q: %s", required, text)
 		}
 	}
+	if !strings.Contains(text, `"timezone":"Asia/Shanghai"`) {
+		t.Fatalf("read result is missing the authoritative timezone: %s", text)
+	}
 }
 
 func TestResolveAttachedReportSourceContractUsesRunAsAuthority(t *testing.T) {
@@ -312,9 +321,14 @@ func TestResolveAttachedReportSourceContractUsesRunAsAuthority(t *testing.T) {
 
 func TestReportSourcePageKeepsCursorBeforeLargeItems(t *testing.T) {
 	cursor := "cursor-2"
+	start := time.Date(2026, 7, 15, 15, 40, 0, 0, time.UTC)
 	result := reportSourceContentPageResult(reportsource.ContentPage{
-		HasMore: true, NextCursor: &cursor,
-		Items: []reportsource.ContentItem{{Summary: strings.Repeat("x", 4096)}},
+		ContentSnapshot: start, HasMore: true, NextCursor: &cursor,
+		Items: []reportsource.ContentItem{{
+			ActivityStartAt: start, ActivityEndAt: start.Add(31 * time.Minute),
+			Summary: strings.Repeat("x", 4096),
+			Events:  []reportsource.ContentEvent{{OccurredAt: start, EventType: "message"}},
+		}},
 	})
 	payload, err := json.Marshal(result)
 	if err != nil {
@@ -332,6 +346,18 @@ func TestReportSourcePageKeepsCursorBeforeLargeItems(t *testing.T) {
 	}
 	if strings.Contains(content, "selection_id") {
 		t.Fatalf("selection id must not be model-visible: %s", content[:min(len(content), 300)])
+	}
+	for _, required := range []string{
+		`"timezone":"Asia/Shanghai"`,
+		`"activity_start_at":"2026-07-15T23:40:00+08:00"`,
+		`"activity_end_at":"2026-07-16T00:11:00+08:00"`,
+		`"activity_start_date":"2026-07-15"`,
+		`"activity_end_date":"2026-07-16"`,
+		`"occurred_at":"2026-07-15T23:40:00+08:00"`,
+	} {
+		if !strings.Contains(content, required) {
+			t.Fatalf("localized source response missing %s: %s", required, content[:min(len(content), 1000)])
+		}
 	}
 }
 
@@ -586,6 +612,28 @@ func TestReportContentValidationRejectsWrongWeekdayAndInternalIDs(t *testing.T) 
 			issues := reportContentValidationIssues(tt.content, "", "2026-06-08", "2026-06-14")
 			if len(issues) != tt.want {
 				t.Fatalf("issues=%#v, want count=%d", issues, tt.want)
+			}
+		})
+	}
+}
+
+func TestReportContentValidationRejectsConflictingDailyDateMetadata(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    int
+	}{
+		{name: "matching metadata", content: "报告日期：2026-07-16\n今日（2026-07-16）完成回归\n昨日（2026-07-15）完成开发", want: 0},
+		{name: "wrong report date", content: "报告日期：2026-07-15", want: 1},
+		{name: "wrong today", content: "今日（2026-07-15）完成回归", want: 1},
+		{name: "wrong yesterday", content: "昨日（2026-07-14）完成开发", want: 1},
+		{name: "historical task date is allowed", content: "修复 2026-07-01 创建的历史任务", want: 0},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			issues := reportContentValidationIssues(test.content, "2026-07-16", "", "")
+			if len(issues) != test.want {
+				t.Fatalf("issues=%#v want=%d", issues, test.want)
 			}
 		})
 	}

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/aidashboard/api/internal/biztime"
 	"github.com/aidashboard/api/internal/reportsource"
 	"github.com/aidashboard/api/model"
 )
@@ -242,6 +243,11 @@ func mcpModelTextResult(value any) map[string]any {
 	var decoded any
 	if err := json.Unmarshal(payload, &decoded); err != nil {
 		return mcpTextResult(value)
+	}
+	if root, ok := decoded.(map[string]any); ok {
+		if _, exists := root["timezone"]; !exists {
+			root["timezone"] = biztime.Zone
+		}
 	}
 	return mcpTextResult(redactReportMCPIdentifiers(decoded))
 }

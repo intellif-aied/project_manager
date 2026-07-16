@@ -30,6 +30,11 @@ const weeklyReportsPage = readFileSync(
   resolve(root, "src/features/aidashboard/reports/pages/WeeklyReportsPage.tsx"),
   "utf8"
 );
+const dashboardPage = readFileSync(
+  resolve(root, "src/features/aidashboard/dashboard/DashboardPage.tsx"),
+  "utf8"
+);
+const businessTime = readFileSync(resolve(root, "src/shared/utils/businessTime.ts"), "utf8");
 
 assert.match(
   controls,
@@ -140,6 +145,57 @@ assert.match(
   client,
   /fetchAllSessionTokens\(params: \{\s*from\?: string;\s*to\?: string;/,
   "all-session pagination helper must support both bounded and unbounded pickers"
+);
+assert.match(
+  businessTime,
+  /BUSINESS_TIME_ZONE = "Asia\/Shanghai"/,
+  "report UI business time must use an explicit Shanghai timezone"
+);
+assert.match(
+  controls,
+  /businessDateKey\(record\.activity_start_at\)/,
+  "report source dates must use the shared Shanghai formatter"
+);
+assert.doesNotMatch(
+  controls,
+  /activity_(?:start|end)_at\?\.slice\(0, 10\)/,
+  "report source dates must not slice UTC RFC3339 strings"
+);
+assert.doesNotMatch(
+  agentRunPage,
+  /new Date\(iso\)\.toLocaleString/,
+  "Agent run source timestamps must not depend on the browser timezone"
+);
+assert.match(
+  `${dailyReportModal}\n${dashboardPage}`,
+  /businessDateKey/,
+  "daily report defaults must use the Shanghai business date"
+);
+
+const shanghaiParts = Object.fromEntries(
+  new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23"
+  })
+    .formatToParts(new Date("2026-07-15T16:11:00Z"))
+    .filter((part) => part.type !== "literal")
+    .map((part) => [part.type, part.value])
+);
+assert.deepEqual(
+  [
+    shanghaiParts.year,
+    shanghaiParts.month,
+    shanghaiParts.day,
+    shanghaiParts.hour,
+    shanghaiParts.minute
+  ],
+  ["2026", "07", "16", "00", "11"],
+  "Shanghai midnight conversion must be deterministic"
 );
 
 console.log("report agent workflow contract checks passed");

@@ -1,6 +1,7 @@
 package biztime
 
 import (
+	"fmt"
 	"sync"
 	"time"
 )
@@ -24,7 +25,19 @@ func Location() *time.Location {
 }
 
 func Now() time.Time {
-	return time.Now().In(Location())
+	return InLocation(time.Now())
+}
+
+// InLocation converts an absolute timestamp to Aida's business timezone
+// without changing the represented instant.
+func InLocation(value time.Time) time.Time {
+	return value.In(Location())
+}
+
+// FormatRFC3339 returns an explicit Asia/Shanghai RFC3339 timestamp for model
+// and UI boundaries. RFC3339Nano preserves any source precision.
+func FormatRFC3339(value time.Time) string {
+	return InLocation(value).Format(time.RFC3339Nano)
 }
 
 func Date(value time.Time) string {
@@ -56,4 +69,21 @@ func MonthStart(value time.Time) time.Time {
 
 func ParseDate(value string) (time.Time, error) {
 	return time.ParseInLocation("2006-01-02", value, Location())
+}
+
+// DateBounds converts an inclusive business-date range to UTC timestamp
+// bounds suitable for TIMESTAMPTZ queries: [start, endExclusive).
+func DateBounds(dateStart, dateEnd string) (startUTC, endExclusiveUTC time.Time, err error) {
+	start, err := ParseDate(dateStart)
+	if err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("invalid start date: %w", err)
+	}
+	end, err := ParseDate(dateEnd)
+	if err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("invalid end date: %w", err)
+	}
+	if end.Before(start) {
+		return time.Time{}, time.Time{}, fmt.Errorf("end date must be on or after start date")
+	}
+	return start.UTC(), end.AddDate(0, 0, 1).UTC(), nil
 }

@@ -26,6 +26,7 @@ import type {
   TeamReport
 } from "../../api/types";
 import { ReportAIGenerateControls, ReportAISettingsPanel } from "./ReportAIGenerateControls";
+import { businessDateKey } from "@/shared/utils/businessTime";
 
 import "./DailyReportGenerateModal.css";
 
@@ -47,7 +48,7 @@ interface DailyReportGenerateModalProps {
 }
 
 function normalizedDate(value?: string) {
-  return value ? dayjs(value).format("YYYY-MM-DD") : dayjs().format("YYYY-MM-DD");
+  return businessDateKey(value || new Date());
 }
 
 function errorMessage(error: unknown) {
@@ -132,7 +133,9 @@ export function DailyReportGenerateModal({
   const personalReportId =
     scope === "personal"
       ? (reportId ??
-        (existingPersonalListQuery.isFetching ? undefined : existingPersonalListQuery.data?.items[0]?.id))
+        (existingPersonalListQuery.isFetching
+          ? undefined
+          : existingPersonalListQuery.data?.items[0]?.id))
       : undefined;
   const personalReportQuery = useQuery({
     queryKey: ["reports", "daily", "manage-modal", "personal-report", personalReportId],
@@ -271,10 +274,14 @@ export function DailyReportGenerateModal({
       }
 
       if (currentReport?.id) {
-        return updateDepartmentReport(currentReport.id, {
-          content: nextContent,
-          next_day_plan: editorNextDayPlan.trim()
-        }, departmentId);
+        return updateDepartmentReport(
+          currentReport.id,
+          {
+            content: nextContent,
+            next_day_plan: editorNextDayPlan.trim()
+          },
+          departmentId
+        );
       }
       return saveDepartmentReportCurrent({
         department_id: departmentId,

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aidashboard/api/internal/biztime"
 	"github.com/aidashboard/api/internal/sessiondigest"
 	"github.com/lib/pq"
 )
@@ -152,8 +153,10 @@ type DigestContentItem struct {
 	SourceItemRef string               `json:"source_item_ref"`
 	SessionRef    string               `json:"session_ref"`
 	AgentType     string               `json:"agent_type"`
-	ActivityStart time.Time            `json:"activity_start_at"`
-	ActivityEnd   time.Time            `json:"activity_end_at"`
+	ActivityStart string               `json:"activity_start_at"`
+	ActivityEnd   string               `json:"activity_end_at"`
+	StartDate     string               `json:"activity_start_date"`
+	EndDate       string               `json:"activity_end_date"`
 	DigestSHA256  string               `json:"digest_sha256"`
 	Digest        sessiondigest.Digest `json:"digest"`
 	Coverage      DigestItemCoverage   `json:"coverage"`
@@ -162,9 +165,10 @@ type DigestContentItem struct {
 type digestContentPage struct {
 	SourceMode       string              `json:"source_mode"`
 	ContentMode      string              `json:"content_mode"`
+	Timezone         string              `json:"timezone,omitempty"`
 	DigestVersion    string              `json:"digest_version"`
 	RedactionVersion string              `json:"redaction_version"`
-	ContentSnapshot  time.Time           `json:"content_snapshot_at"`
+	ContentSnapshot  string              `json:"content_snapshot_at"`
 	Completeness     string              `json:"completeness"`
 	ReturnedCount    int                 `json:"returned_item_count"`
 	HasMore          bool                `json:"has_more"`
@@ -223,8 +227,9 @@ func (s *Service) freezeSelectionForRun(ctx context.Context, tx *sql.Tx, selecti
 	}
 	page := digestContentPage{
 		SourceMode: selection.Mode, ContentMode: ReadModeDigestV1,
+		Timezone:      biztime.Zone,
 		DigestVersion: s.config.DigestVersion, RedactionVersion: s.config.RedactionVersion,
-		ContentSnapshot: selection.ContentSnapshotAt, Completeness: "complete",
+		ContentSnapshot: biztime.FormatRFC3339(selection.ContentSnapshotAt), Completeness: "complete",
 		HasMore: false, NextCursor: nil, Items: []DigestContentItem{},
 	}
 	page.Coverage.SourceItemCount = len(rows)
@@ -259,8 +264,11 @@ func (s *Service) freezeSelectionForRun(ctx context.Context, tx *sql.Tx, selecti
 		}
 		item := DigestContentItem{
 			SourceItemRef: row.SelectionItemID, SessionRef: row.SessionRef, AgentType: row.AgentType,
-			ActivityStart: row.ActivityStart, ActivityEnd: row.ActivityEnd,
-			DigestSHA256: row.DigestSHA256.String, Digest: digest,
+			ActivityStart: biztime.FormatRFC3339(row.ActivityStart),
+			ActivityEnd:   biztime.FormatRFC3339(row.ActivityEnd),
+			StartDate:     biztime.Date(row.ActivityStart),
+			EndDate:       biztime.Date(row.ActivityEnd),
+			DigestSHA256:  row.DigestSHA256.String, Digest: digest,
 			Coverage: DigestItemCoverage{
 				SourceEventCount:   row.SourceEventCount.Int64,
 				IncludedEventCount: row.IncludedEventCount.Int64,

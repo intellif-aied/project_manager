@@ -31,6 +31,7 @@ import type {
 import { errorMessage } from "../../ai-assets/utils/agentAssets";
 import { useAuth } from "@/shared/auth/authContext";
 import { HttpError } from "@/shared/request/types";
+import { businessDateKey } from "@/shared/utils/businessTime";
 
 import "./ReportAIGenerateControls.css";
 
@@ -75,8 +76,8 @@ function selectedSourceKey(source: ReportSourceInput) {
 }
 
 function sessionActivityRange(record: ReportSourceCandidate) {
-  const start = record.activity_start_at?.slice(0, 10);
-  const end = record.activity_end_at?.slice(0, 10);
+  const start = record.activity_start_at ? businessDateKey(record.activity_start_at) : undefined;
+  const end = record.activity_end_at ? businessDateKey(record.activity_end_at) : undefined;
   if (!start) return end || "-";
   if (!end || end === start) return start;
   return `${start} 至 ${end}`;
@@ -418,9 +419,7 @@ function SnapshotReportAISettingsPanel({
         report_type: reportType,
         period_start: periodStart,
         period_end: periodEnd,
-        ...(queryFrom && queryTo
-          ? { activity_from: queryFrom, activity_to: queryTo }
-          : {}),
+        ...(queryFrom && queryTo ? { activity_from: queryFrom, activity_to: queryTo } : {}),
         page: String(page),
         page_size: String(pageSize)
       }),
@@ -428,13 +427,12 @@ function SnapshotReportAISettingsPanel({
     staleTime: 15_000
   });
 
-  const updateSourceSelection = (
-    records: ReportSourceCandidate[],
-    selected: boolean
-  ) => {
+  const updateSourceSelection = (records: ReportSourceCandidate[], selected: boolean) => {
     const changedSources = records.map(sessionSourceInput);
     const changedKeys = new Set(changedSources.map(selectedSourceKey));
-    const retained = selectedSources.filter((source) => !changedKeys.has(selectedSourceKey(source)));
+    const retained = selectedSources.filter(
+      (source) => !changedKeys.has(selectedSourceKey(source))
+    );
     if (!selected) {
       onSelectedSourcesChange(retained);
       return;

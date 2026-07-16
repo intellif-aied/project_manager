@@ -16,6 +16,9 @@ var (
 	reportIDLabelPattern                  = regexp.MustCompile(`(?i)(?:用户|成员|团队|小组|部门|负责人|总监|报告|会话|运行)\s*(?:id|编号)`)
 	reportISOWeekdayPattern               = regexp.MustCompile(`(20[0-9]{2})-([0-9]{1,2})-([0-9]{1,2})\s*(?:[（(]\s*)?(?:周|星期)([一二三四五六日天])\s*[）)]?`)
 	reportChineseWeekdayPattern           = regexp.MustCompile(`(?:(20[0-9]{2})\s*年\s*)?([0-9]{1,2})\s*月\s*([0-9]{1,2})\s*日\s*(?:[（(]\s*)?(?:周|星期)([一二三四五六日天])\s*[）)]?`)
+	reportMetadataDatePattern             = regexp.MustCompile(`(?m)(?:报告日期|日报日期|报告生成时间|生成时间)\s*[:：]\s*(20[0-9]{2})-([0-9]{1,2})-([0-9]{1,2})`)
+	reportTodayDatePattern                = regexp.MustCompile(`(?m)(?:今日|当天)\s*(?:[（(]\s*)?(20[0-9]{2})-([0-9]{1,2})-([0-9]{1,2})`)
+	reportYesterdayDatePattern            = regexp.MustCompile(`(?m)昨日\s*(?:[（(]\s*)?(20[0-9]{2})-([0-9]{1,2})-([0-9]{1,2})`)
 	reportNoPersonalDailyPattern          = regexp.MustCompile(`(?m)(?:(?:^|[。；;\n])\s*(?:(?:本)?(?:小组|团队)(?:当日|本周)?\s*)?无(?:任何)?个人日报(?:记录)?|个人日报\s*[:：]?\s*(?:0\s*份|零份|无人提交|均未提交))`)
 	reportNoPersonalWeeklyPattern         = regexp.MustCompile(`(?m)(?:(?:^|[。；;\n])\s*(?:(?:本)?(?:小组|团队)(?:当日|本周)?\s*)?无(?:任何)?个人周报(?:记录)?|个人周报\s*[:：]?\s*(?:0\s*份|零份|无人提交|均未提交))`)
 	reportNoTeamDailyPattern              = regexp.MustCompile(`(?m)(?:(?:^|[。；;\n])\s*(?:(?:本)?部门(?:当日|本周)?\s*)?无(?:任何)?(?:小组|团队)日报(?:记录)?|(?:小组|团队)日报\s*[:：]?\s*(?:0\s*份|零份|无人提交|均未提交))`)
@@ -75,7 +78,41 @@ func reportContentValidationIssues(content, date, weekStart, weekEnd string) []s
 			addWeekdayValidationIssue(add, value, match[4])
 		}
 	}
+	if date != "" {
+		for _, match := range reportMetadataDatePattern.FindAllStringSubmatch(content, -1) {
+			if shown, ok := dateFromMatch(match); ok && shown != date {
+				add(fmt.Sprintf("日报元信息日期必须为 %s，正文写成了 %s", date, shown))
+			}
+		}
+		for _, match := range reportTodayDatePattern.FindAllStringSubmatch(content, -1) {
+			if shown, ok := dateFromMatch(match); ok && shown != date {
+				add(fmt.Sprintf("日报中的今日/当天必须指 %s，正文写成了 %s", date, shown))
+			}
+		}
+		if reportDay, err := time.Parse("2006-01-02", date); err == nil {
+			expectedYesterday := reportDay.AddDate(0, 0, -1).Format("2006-01-02")
+			for _, match := range reportYesterdayDatePattern.FindAllStringSubmatch(content, -1) {
+				if shown, ok := dateFromMatch(match); ok && shown != expectedYesterday {
+					add(fmt.Sprintf("日报中的昨日应指 %s，正文写成了 %s", expectedYesterday, shown))
+				}
+			}
+		}
+	}
 	return issues
+}
+
+func dateFromMatch(match []string) (string, bool) {
+	if len(match) < 4 {
+		return "", false
+	}
+	year, _ := strconv.Atoi(match[1])
+	month, _ := strconv.Atoi(match[2])
+	day, _ := strconv.Atoi(match[3])
+	value, ok := validCalendarDate(year, month, day)
+	if !ok {
+		return "", false
+	}
+	return value.Format("2006-01-02"), true
 }
 
 func reportPersonalSourceActivityIssues(ctx context.Context, db *sql.DB, inputRef map[string]any, reportType, content string) ([]string, error) {

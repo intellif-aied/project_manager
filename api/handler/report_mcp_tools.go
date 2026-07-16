@@ -9,6 +9,7 @@ import (
 
 // reportMCPTools returns the 9 atomic tool schemas (doc §3.8).
 func reportMCPTools() []map[string]any {
+	const businessTimeContract = "Business dates use Asia/Shanghai. Returned RFC3339 timestamps are already converted to +08:00 and must not be converted again."
 	targetSchema := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -56,7 +57,7 @@ func reportMCPTools() []map[string]any {
 	return []map[string]any{
 		{
 			"name":        toolGetSessions,
-			"description": "Read an attached personal-report source snapshot in the server-frozen mode (digest_v1 is one complete bounded page; legacy full may paginate), or list sessions for an authenticated ad-hoc date query.",
+			"description": "Read an attached personal-report source snapshot in the server-frozen mode (digest_v1 is one complete bounded page; legacy full may paginate), or list sessions for an authenticated ad-hoc date query. " + businessTimeContract,
 			"inputSchema": map[string]any{
 				"type":     "object",
 				"required": []string{"scope"},
@@ -92,7 +93,7 @@ func reportMCPTools() []map[string]any {
 		},
 		{
 			"name":        toolGetDailyReports,
-			"description": "List daily reports within scope, optionally filtered by report_scope. Set include_content=true for report aggregation; omitted values default to true.",
+			"description": "List daily reports within scope, optionally filtered by report_scope. Set include_content=true for report aggregation; omitted values default to true. " + businessTimeContract,
 			"inputSchema": map[string]any{
 				"type":     "object",
 				"required": []string{"scope", "date_range", "include_content"},
@@ -108,7 +109,7 @@ func reportMCPTools() []map[string]any {
 		},
 		{
 			"name":        toolGetWeeklyReports,
-			"description": "List weekly reports within scope, optionally filtered by report_scope. Set include_content=true for report aggregation; omitted values default to true.",
+			"description": "List weekly reports within scope, optionally filtered by report_scope. Set include_content=true for report aggregation; omitted values default to true. " + businessTimeContract,
 			"inputSchema": map[string]any{
 				"type":     "object",
 				"required": []string{"scope", "week_range", "include_content"},
@@ -124,7 +125,7 @@ func reportMCPTools() []map[string]any {
 		},
 		{
 			"name":        toolGetTasks,
-			"description": "List tasks visible to the current user within scope.",
+			"description": "List tasks visible to the current user within scope. date_range is an inclusive Asia/Shanghai business-date range. " + businessTimeContract,
 			"inputSchema": map[string]any{
 				"type":     "object",
 				"required": []string{"scope", "date_range"},
@@ -139,7 +140,7 @@ func reportMCPTools() []map[string]any {
 		},
 		{
 			"name":        toolGetRequirements,
-			"description": "List requirements visible to the current user within scope.",
+			"description": "List requirements visible to the current user within scope. date_range is an inclusive Asia/Shanghai business-date range. " + businessTimeContract,
 			"inputSchema": map[string]any{
 				"type":     "object",
 				"required": []string{"scope", "date_range"},
@@ -154,7 +155,7 @@ func reportMCPTools() []map[string]any {
 		},
 		{
 			"name":        toolGetExistingReport,
-			"description": "Fetch the current content of a single report identified by report_type + period + target.",
+			"description": "Fetch the current content of a single report identified by report_type + period + target. " + businessTimeContract,
 			"inputSchema": map[string]any{
 				"type":     "object",
 				"required": []string{"report_type", "period"},

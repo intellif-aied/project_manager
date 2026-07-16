@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aidashboard/api/internal/biztime"
 	"github.com/aidashboard/api/internal/reportsource"
 	"github.com/aidashboard/api/model"
 	"github.com/lib/pq"
@@ -235,11 +236,13 @@ type sessionItem struct {
 	LocalSessionID      string         `json:"local_session_id,omitempty"`
 	SessionRef          string         `json:"session_ref"`
 	AgentType           string         `json:"agent_type"`
-	StartedAt           *time.Time     `json:"started_at"`
-	EndedAt             *time.Time     `json:"ended_at,omitempty"`
+	StartedAt           *string        `json:"started_at"`
+	EndedAt             *string        `json:"ended_at,omitempty"`
 	ActivityDate        string         `json:"activity_date,omitempty"`
-	ActivityStartAt     *time.Time     `json:"activity_start_at,omitempty"`
-	ActivityEndAt       *time.Time     `json:"activity_end_at,omitempty"`
+	ActivityStartAt     *string        `json:"activity_start_at,omitempty"`
+	ActivityEndAt       *string        `json:"activity_end_at,omitempty"`
+	ActivityStartDate   string         `json:"activity_start_date,omitempty"`
+	ActivityEndDate     string         `json:"activity_end_date,omitempty"`
 	ActivityDates       []string       `json:"activity_dates"`
 	Summary             string         `json:"summary"`
 	Excerpt             string         `json:"excerpt,omitempty"`
@@ -260,6 +263,14 @@ type sessionItem struct {
 	Tags                []string       `json:"tags"`
 	TaskRefs            []string       `json:"task_refs"`
 	RequirementRefs     []string       `json:"requirement_refs"`
+}
+
+func nullableBusinessTime(value sql.NullTime) *string {
+	if !value.Valid {
+		return nil
+	}
+	formatted := biztime.FormatRFC3339(value.Time)
+	return &formatted
 }
 
 func (h *ReportMCPHandler) toolGetSessions(ctx context.Context, r *http.Request, rawArgs json.RawMessage) (any, error) {
@@ -393,21 +404,15 @@ func (h *ReportMCPHandler) toolGetSessions(ctx context.Context, r *http.Request,
 			&it.SliceCount, &it.SourceHasRawLog, &it.TokenSliceStrategy, &it.SummaryStrategy, &it.IsEstimated); err != nil {
 			return nil, errMCPInternal
 		}
-		if startedAt.Valid {
-			t := startedAt.Time
-			it.StartedAt = &t
-		}
-		if endedAt.Valid {
-			t := endedAt.Time
-			it.EndedAt = &t
-		}
+		it.StartedAt = nullableBusinessTime(startedAt)
+		it.EndedAt = nullableBusinessTime(endedAt)
+		it.ActivityStartAt = nullableBusinessTime(activityStartAt)
+		it.ActivityEndAt = nullableBusinessTime(activityEndAt)
 		if activityStartAt.Valid {
-			t := activityStartAt.Time
-			it.ActivityStartAt = &t
+			it.ActivityStartDate = biztime.Date(activityStartAt.Time)
 		}
 		if activityEndAt.Valid {
-			t := activityEndAt.Time
-			it.ActivityEndAt = &t
+			it.ActivityEndDate = biztime.Date(activityEndAt.Time)
 		}
 		it.ActivityDates = []string(activityDates)
 		it.LocalSessionID = it.SessionRef
@@ -468,20 +473,60 @@ func reportSourceContentPageResult(page reportsource.ContentPage) map[string]any
 	// Keep pagination metadata before potentially large item payloads. Converting
 	// this response through a map sorts "items" ahead of "next_cursor", which
 	// makes persisted MCP output hide the cursor behind hundreds of KB of text.
+	type contentEvent struct {
+		OccurredAt string          `json:"occurred_at"`
+		EventType  string          `json:"event_type"`
+		Summary    string          `json:"summary,omitempty"`
+		Excerpt    string          `json:"excerpt,omitempty"`
+		Payload    json.RawMessage `json:"payload"`
+	}
+	type contentItem struct {
+		SessionRef        string         `json:"session_ref"`
+		AgentType         string         `json:"agent_type"`
+		ActivityStartAt   string         `json:"activity_start_at"`
+		ActivityEndAt     string         `json:"activity_end_at"`
+		ActivityStartDate string         `json:"activity_start_date"`
+		ActivityEndDate   string         `json:"activity_end_date"`
+		Summary           string         `json:"summary,omitempty"`
+		ContentQuality    string         `json:"content_quality"`
+		ContentEventCount int64          `json:"content_event_count"`
+		Events            []contentEvent `json:"events"`
+	}
+	items := make([]contentItem, 0, len(page.Items))
+	for _, source := range page.Items {
+		item := contentItem{
+			SessionRef: source.SessionRef, AgentType: source.AgentType,
+			ActivityStartAt:   biztime.FormatRFC3339(source.ActivityStartAt),
+			ActivityEndAt:     biztime.FormatRFC3339(source.ActivityEndAt),
+			ActivityStartDate: biztime.Date(source.ActivityStartAt),
+			ActivityEndDate:   biztime.Date(source.ActivityEndAt),
+			Summary:           source.Summary, ContentQuality: source.ContentQuality,
+			ContentEventCount: source.ContentEventCount, Events: []contentEvent{},
+		}
+		for _, event := range source.Events {
+			item.Events = append(item.Events, contentEvent{
+				OccurredAt: biztime.FormatRFC3339(event.OccurredAt), EventType: event.EventType,
+				Summary: event.Summary, Excerpt: event.Excerpt, Payload: event.Payload,
+			})
+		}
+		items = append(items, item)
+	}
 	payload := struct {
-		SourceMode      string                     `json:"source_mode"`
-		ContentSnapshot time.Time                  `json:"content_snapshot_at"`
-		Completeness    string                     `json:"completeness"`
-		ReturnedCount   int                        `json:"returned_item_count"`
-		ReturnedEvents  int                        `json:"returned_event_count"`
-		HasMore         bool                       `json:"has_more"`
-		NextCursor      *string                    `json:"next_cursor"`
-		Items           []reportsource.ContentItem `json:"items"`
+		SourceMode      string        `json:"source_mode"`
+		Timezone        string        `json:"timezone"`
+		ContentSnapshot string        `json:"content_snapshot_at"`
+		Completeness    string        `json:"completeness"`
+		ReturnedCount   int           `json:"returned_item_count"`
+		ReturnedEvents  int           `json:"returned_event_count"`
+		HasMore         bool          `json:"has_more"`
+		NextCursor      *string       `json:"next_cursor"`
+		Items           []contentItem `json:"items"`
 	}{
-		SourceMode: page.SourceMode, ContentSnapshot: page.ContentSnapshot,
-		Completeness: page.Completeness, ReturnedCount: page.ReturnedCount,
+		SourceMode: page.SourceMode, Timezone: biztime.Zone,
+		ContentSnapshot: biztime.FormatRFC3339(page.ContentSnapshot),
+		Completeness:    page.Completeness, ReturnedCount: page.ReturnedCount,
 		ReturnedEvents: page.ReturnedEvents, HasMore: page.HasMore,
-		NextCursor: page.NextCursor, Items: page.Items,
+		NextCursor: page.NextCursor, Items: items,
 	}
 	return mcpTextResult(payload)
 }
@@ -580,7 +625,7 @@ type dailyReportItem struct {
 	GenerationMode    string      `json:"generation_mode,omitempty"`
 	Edited            bool        `json:"edited"`
 	ManagedAgentRunID string      `json:"managed_agent_run_id,omitempty"`
-	UpdatedAt         time.Time   `json:"updated_at"`
+	UpdatedAt         string      `json:"updated_at"`
 }
 
 func reportContentIncluded(value *bool) bool {
@@ -651,10 +696,12 @@ func (h *ReportMCPHandler) toolGetDailyReports(ctx context.Context, r *http.Requ
 		defer rows.Close()
 		for rows.Next() {
 			var it dailyReportItem
+			var updatedAt time.Time
 			if err := rows.Scan(&it.ID, &it.Owner.UserID, &it.Owner.Username, &it.Owner.Role, &it.Owner.TeamID, &it.Owner.TeamName,
-				&it.Date, &it.Content, &it.GenerationMode, &it.Edited, &it.ManagedAgentRunID, &it.UpdatedAt); err != nil {
+				&it.Date, &it.Content, &it.GenerationMode, &it.Edited, &it.ManagedAgentRunID, &updatedAt); err != nil {
 				return nil, errMCPInternal
 			}
+			it.UpdatedAt = biztime.FormatRFC3339(updatedAt)
 			it.ReportScope = "personal"
 			it.ProductStatus = dailyProductStatus(it.GenerationMode, it.Edited)
 			if !includeContent {
@@ -683,10 +730,12 @@ func (h *ReportMCPHandler) toolGetDailyReports(ctx context.Context, r *http.Requ
 		defer rows.Close()
 		for rows.Next() {
 			var it dailyReportItem
+			var updatedAt time.Time
 			if err := rows.Scan(&it.ID, &it.Owner.TeamID, &it.Owner.TeamName, &it.Owner.LeaderID, &it.Owner.LeaderName,
-				&it.Date, &it.Content, &it.GenerationMode, &it.Edited, &it.ManagedAgentRunID, &it.UpdatedAt); err != nil {
+				&it.Date, &it.Content, &it.GenerationMode, &it.Edited, &it.ManagedAgentRunID, &updatedAt); err != nil {
 				return nil, errMCPInternal
 			}
+			it.UpdatedAt = biztime.FormatRFC3339(updatedAt)
 			it.ReportScope = "team"
 			it.ProductStatus = dailyProductStatus(it.GenerationMode, it.Edited)
 			if !includeContent {
@@ -712,9 +761,11 @@ func (h *ReportMCPHandler) toolGetDailyReports(ctx context.Context, r *http.Requ
 		defer rows.Close()
 		for rows.Next() {
 			var it dailyReportItem
-			if err := rows.Scan(&it.ID, &it.Date, &it.Content, &it.GenerationMode, &it.Edited, &it.ManagedAgentRunID, &it.UpdatedAt); err != nil {
+			var updatedAt time.Time
+			if err := rows.Scan(&it.ID, &it.Date, &it.Content, &it.GenerationMode, &it.Edited, &it.ManagedAgentRunID, &updatedAt); err != nil {
 				return nil, errMCPInternal
 			}
+			it.UpdatedAt = biztime.FormatRFC3339(updatedAt)
 			it.ReportScope = "department"
 			it.Owner = reportOwner{Scope: "department"}
 			it.ProductStatus = dailyProductStatus(it.GenerationMode, it.Edited)
@@ -763,7 +814,7 @@ type weeklyReportItem struct {
 	GenerationMode    string      `json:"generation_mode,omitempty"`
 	Edited            bool        `json:"edited"`
 	ManagedAgentRunID string      `json:"managed_agent_run_id,omitempty"`
-	UpdatedAt         time.Time   `json:"updated_at"`
+	UpdatedAt         string      `json:"updated_at"`
 }
 
 func (h *ReportMCPHandler) toolGetWeeklyReports(ctx context.Context, r *http.Request, rawArgs json.RawMessage) (any, error) {
@@ -830,11 +881,12 @@ func (h *ReportMCPHandler) toolGetWeeklyReports(ctx context.Context, r *http.Req
 		defer rows.Close()
 		for rows.Next() {
 			var it weeklyReportItem
-			var ws2, we2 time.Time
+			var ws2, we2, updatedAt time.Time
 			if err := rows.Scan(&it.ID, &it.Owner.UserID, &it.Owner.Username, &it.Owner.Role, &it.Owner.TeamID, &it.Owner.TeamName,
-				&ws2, &we2, &it.Content, &it.GenerationMode, &it.Edited, &it.ManagedAgentRunID, &it.UpdatedAt); err != nil {
+				&ws2, &we2, &it.Content, &it.GenerationMode, &it.Edited, &it.ManagedAgentRunID, &updatedAt); err != nil {
 				return nil, errMCPInternal
 			}
+			it.UpdatedAt = biztime.FormatRFC3339(updatedAt)
 			it.ReportScope = "personal"
 			it.WeekStart = ws2.Format("2006-01-02")
 			it.WeekEnd = we2.Format("2006-01-02")
@@ -864,11 +916,12 @@ func (h *ReportMCPHandler) toolGetWeeklyReports(ctx context.Context, r *http.Req
 		defer rows.Close()
 		for rows.Next() {
 			var it weeklyReportItem
-			var ws2, we2 time.Time
+			var ws2, we2, updatedAt time.Time
 			if err := rows.Scan(&it.ID, &it.Owner.TeamID, &it.Owner.TeamName, &it.Owner.LeaderID, &it.Owner.LeaderName,
-				&ws2, &we2, &it.Content, &it.GenerationMode, &it.Edited, &it.ManagedAgentRunID, &it.UpdatedAt); err != nil {
+				&ws2, &we2, &it.Content, &it.GenerationMode, &it.Edited, &it.ManagedAgentRunID, &updatedAt); err != nil {
 				return nil, errMCPInternal
 			}
+			it.UpdatedAt = biztime.FormatRFC3339(updatedAt)
 			it.ReportScope = "team"
 			it.WeekStart = ws2.Format("2006-01-02")
 			it.WeekEnd = we2.Format("2006-01-02")
@@ -895,10 +948,11 @@ func (h *ReportMCPHandler) toolGetWeeklyReports(ctx context.Context, r *http.Req
 		defer rows.Close()
 		for rows.Next() {
 			var it weeklyReportItem
-			var ws2, we2 time.Time
-			if err := rows.Scan(&it.ID, &ws2, &we2, &it.Content, &it.GenerationMode, &it.Edited, &it.ManagedAgentRunID, &it.UpdatedAt); err != nil {
+			var ws2, we2, updatedAt time.Time
+			if err := rows.Scan(&it.ID, &ws2, &we2, &it.Content, &it.GenerationMode, &it.Edited, &it.ManagedAgentRunID, &updatedAt); err != nil {
 				return nil, errMCPInternal
 			}
+			it.UpdatedAt = biztime.FormatRFC3339(updatedAt)
 			it.ReportScope = "department"
 			it.WeekStart = ws2.Format("2006-01-02")
 			it.WeekEnd = we2.Format("2006-01-02")
@@ -952,7 +1006,7 @@ type taskItem struct {
 	Progress    int          `json:"progress"`
 	Assignee    reportOwner  `json:"assignee"`
 	Requirement *taskReqLink `json:"requirement,omitempty"`
-	UpdatedAt   time.Time    `json:"updated_at"`
+	UpdatedAt   string       `json:"updated_at"`
 }
 
 type taskReqLink struct {
@@ -987,6 +1041,10 @@ func (h *ReportMCPHandler) toolGetTasks(ctx context.Context, r *http.Request, ra
 	if err != nil {
 		return nil, err
 	}
+	startUTC, endExclusiveUTC, err := biztime.DateBounds(start, end)
+	if err != nil {
+		return nil, errInvalidPeriod
+	}
 	rs, err := resolveScope(ctx, h.db, u, args.Scope)
 	if err != nil {
 		return nil, err
@@ -1007,7 +1065,7 @@ func (h *ReportMCPHandler) toolGetTasks(ctx context.Context, r *http.Request, ra
 			SELECT 1 FROM task_responsibles tr
 			WHERE tr.task_id = t.id AND tr.user_id = ANY($3)
 		  )`
-	queryArgs := []any{start, end, pq.Array(visible), pq.Array(statuses)}
+	queryArgs := []any{startUTC, endExclusiveUTC, pq.Array(visible), pq.Array(statuses)}
 	if rs.Type == "self" {
 		myTaskIDs, err := dashboardMyItemIDs(ctx, h.db, u.ID, "task")
 		if err != nil {
@@ -1029,7 +1087,7 @@ func (h *ReportMCPHandler) toolGetTasks(ctx context.Context, r *http.Request, ra
 		LEFT JOIN requirements r ON r.id = t.requirement_id
 		LEFT JOIN task_responsibles tr_all ON tr_all.task_id = t.id
 		LEFT JOIN users ru ON ru.id = tr_all.user_id
-		WHERE t.updated_at >= $1 AND t.updated_at < ($2::date + 1)
+		WHERE t.updated_at >= $1::timestamptz AND t.updated_at < $2::timestamptz
 		  AND %s
 		  AND t.status = ANY($4)
 		GROUP BY t.id, t.title, t.status, t.progress, r.id, r.title, t.updated_at
@@ -1045,9 +1103,11 @@ func (h *ReportMCPHandler) toolGetTasks(ctx context.Context, r *http.Request, ra
 	for rows.Next() {
 		var it taskItem
 		var reqID, reqTitle string
-		if err := rows.Scan(&it.ID, &it.Title, &it.Status, &it.Progress, &it.Assignee.UserID, &it.Assignee.Username, &reqID, &reqTitle, &it.UpdatedAt); err != nil {
+		var updatedAt time.Time
+		if err := rows.Scan(&it.ID, &it.Title, &it.Status, &it.Progress, &it.Assignee.UserID, &it.Assignee.Username, &reqID, &reqTitle, &updatedAt); err != nil {
 			return nil, errMCPInternal
 		}
+		it.UpdatedAt = biztime.FormatRFC3339(updatedAt)
 		if args.IncludeRequirement && reqID != "" {
 			it.Requirement = &taskReqLink{ID: reqID, Title: reqTitle}
 		}
@@ -1084,7 +1144,7 @@ type reqItem struct {
 	Owner     reportOwner `json:"owner"`
 	Teams     []string    `json:"teams"`
 	Risks     []any       `json:"risks,omitempty"`
-	UpdatedAt time.Time   `json:"updated_at"`
+	UpdatedAt string      `json:"updated_at"`
 }
 
 func (h *ReportMCPHandler) toolGetRequirements(ctx context.Context, r *http.Request, rawArgs json.RawMessage) (any, error) {
@@ -1099,6 +1159,10 @@ func (h *ReportMCPHandler) toolGetRequirements(ctx context.Context, r *http.Requ
 	start, end, err := parseDateRange(args.DateRange)
 	if err != nil {
 		return nil, err
+	}
+	startUTC, endExclusiveUTC, err := biztime.DateBounds(start, end)
+	if err != nil {
+		return nil, errInvalidPeriod
 	}
 	rs, err := resolveScope(ctx, h.db, u, args.Scope)
 	if err != nil {
@@ -1115,7 +1179,7 @@ func (h *ReportMCPHandler) toolGetRequirements(ctx context.Context, r *http.Requ
 	visibilityClause := `(r.creator_id = ANY($3) OR EXISTS (
 		       SELECT 1 FROM requirement_teams rt JOIN users u2 ON u2.team_id = rt.team_id
 		       WHERE rt.requirement_id = r.id AND u2.id = ANY($3)))`
-	queryArgs := []any{start, end, pq.Array(visible)}
+	queryArgs := []any{startUTC, endExclusiveUTC, pq.Array(visible)}
 	if rs.Type == "self" {
 		myRequirementIDs, err := dashboardMyItemIDs(ctx, h.db, u.ID, "requirement")
 		if err != nil {
@@ -1129,7 +1193,7 @@ func (h *ReportMCPHandler) toolGetRequirements(ctx context.Context, r *http.Requ
 		       r.updated_at
 		FROM requirements r
 		LEFT JOIN users u ON u.id = r.creator_id
-		WHERE r.updated_at >= $1 AND r.updated_at < ($2::date + 1)
+		WHERE r.updated_at >= $1::timestamptz AND r.updated_at < $2::timestamptz
 		  AND %s
 		ORDER BY r.updated_at DESC LIMIT 200`, visibilityClause)
 	rows, err := h.db.QueryContext(ctx, query, queryArgs...)
@@ -1142,9 +1206,11 @@ func (h *ReportMCPHandler) toolGetRequirements(ctx context.Context, r *http.Requ
 	riskCount := 0
 	for rows.Next() {
 		var it reqItem
-		if err := rows.Scan(&it.ID, &it.Title, &it.Status, &it.Owner.UserID, &it.Owner.Username, &it.UpdatedAt); err != nil {
+		var updatedAt time.Time
+		if err := rows.Scan(&it.ID, &it.Title, &it.Status, &it.Owner.UserID, &it.Owner.Username, &updatedAt); err != nil {
 			return nil, errMCPInternal
 		}
+		it.UpdatedAt = biztime.FormatRFC3339(updatedAt)
 		it.Teams = []string{}
 		if args.IncludeRisks {
 			it.Risks = []any{}
@@ -1214,7 +1280,7 @@ func (h *ReportMCPHandler) toolGetExistingReport(ctx context.Context, r *http.Re
 		"generation_mode":      snapshot.GenerationMode,
 		"edited":               snapshot.Edited,
 		"managed_agent_run_id": snapshot.ManagedAgentRunID,
-		"updated_at":           snapshot.UpdatedAt,
+		"updated_at":           biztime.FormatRFC3339(snapshot.UpdatedAt),
 	}
 	if date != "" {
 		report["period"] = map[string]string{"date": date}

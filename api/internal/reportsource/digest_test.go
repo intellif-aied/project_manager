@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aidashboard/api/internal/biztime"
 	"github.com/aidashboard/api/internal/sessiondigest"
 )
 
@@ -70,6 +71,13 @@ func TestAssembleDigestPayloadStabilizesActualBytes(t *testing.T) {
 	if decoded.Budget.ActualBytes != len(payload) || !decoded.Coverage.Complete || decoded.HasMore {
 		t.Fatalf("invalid frozen budget/coverage: %#v bytes=%d", decoded, len(payload))
 	}
+	if decoded.Timezone != biztime.Zone || decoded.ContentSnapshot != "2026-07-16T09:02:03+08:00" {
+		t.Fatalf("digest payload does not expose Shanghai time: %#v", decoded)
+	}
+	if decoded.Items[0].ActivityStart != "2026-07-16T09:02:03+08:00" ||
+		decoded.Items[0].StartDate != "2026-07-16" || decoded.Items[0].EndDate != "2026-07-16" {
+		t.Fatalf("digest item does not expose local timestamps and dates: %#v", decoded.Items[0])
+	}
 }
 
 func TestAssembleDigestPayloadCompactsEveryItemAndEnforcesHardLimit(t *testing.T) {
@@ -99,8 +107,9 @@ func digestFixturePage(count int, outcome string) digestContentPage {
 	now := time.Date(2026, 7, 16, 1, 2, 3, 0, time.UTC)
 	page := digestContentPage{
 		SourceMode: "default", ContentMode: ReadModeDigestV1,
+		Timezone:      biztime.Zone,
 		DigestVersion: sessiondigest.Version, RedactionVersion: sessiondigest.RedactionVersion,
-		ContentSnapshot: now, Completeness: "complete", HasMore: false,
+		ContentSnapshot: biztime.FormatRFC3339(now), Completeness: "complete", HasMore: false,
 		Items: []DigestContentItem{},
 	}
 	for index := 0; index < count; index++ {
@@ -109,7 +118,8 @@ func digestFixturePage(count int, outcome string) digestContentPage {
 		digest.Outcomes = append(digest.Outcomes, outcome)
 		page.Items = append(page.Items, DigestContentItem{
 			SourceItemRef: "item-" + string(rune('a'+index)), SessionRef: "session-ref",
-			AgentType: "codex", ActivityStart: now, ActivityEnd: now.Add(time.Hour),
+			AgentType: "codex", ActivityStart: biztime.FormatRFC3339(now), ActivityEnd: biztime.FormatRFC3339(now.Add(time.Hour)),
+			StartDate: biztime.Date(now), EndDate: biztime.Date(now.Add(time.Hour)),
 			DigestSHA256: strings.Repeat("a", 64), Digest: digest,
 			Coverage: DigestItemCoverage{
 				SourceEventCount: 10, IncludedEventCount: 2, OmittedEventCount: 8,

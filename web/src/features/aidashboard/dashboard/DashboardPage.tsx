@@ -44,6 +44,7 @@ import { useAuth } from "@/shared/auth/authContext";
 import type { UserRole } from "@/shared/auth/types";
 import { isEditConflict } from "@/shared/request/apiError";
 import { formatDateTime } from "@/shared/utils/dateTime";
+import { businessDateKey } from "@/shared/utils/businessTime";
 
 import {
   fetchAllSessionTokens,
@@ -323,7 +324,9 @@ function createReport(
 
 function applyTodayDailyReportState(
   report: ReportItem,
-  dailyReport: Pick<DailyReport, "status" | "submitted_at" | "session_ids" | "updated_at"> | undefined,
+  dailyReport:
+    | Pick<DailyReport, "status" | "submitted_at" | "session_ids" | "updated_at">
+    | undefined,
   loaded: boolean
 ): ReportItem {
   if (!loaded) return report;
@@ -946,8 +949,8 @@ export function DashboardPage() {
   const queryClient = useQueryClient();
   const { user } = useAuth();
   const { message } = App.useApp();
-  const today = dayjs();
-  const reportDate = today.format("YYYY-MM-DD");
+  const reportDate = businessDateKey();
+  const today = dayjs(reportDate);
   const weekStart = today.subtract((today.day() + 6) % 7, "day").format("YYYY-MM-DD");
   const weekEnd = dayjs(weekStart).add(6, "day").format("YYYY-MM-DD");
   const currentUserId = user?.id ?? "";
@@ -1887,9 +1890,7 @@ export function DashboardPage() {
               kind={risksQuery.isError ? "error" : "empty"}
               title={risksQuery.isError ? "风险数据加载失败" : "暂无需要处理的风险"}
               detail={
-                risksQuery.isError
-                  ? "暂时无法获取风险，请稍后重试"
-                  : "当前没有逾期、阻塞或依赖风险"
+                risksQuery.isError ? "暂时无法获取风险，请稍后重试" : "当前没有逾期、阻塞或依赖风险"
               }
               actionLabel="查看需求看板"
               onAction={() => navigate("/requirements")}
@@ -4038,9 +4039,7 @@ function getRequirementRiskEvidenceLine(item: FollowItem) {
     const visible = blockers.slice(0, 2).map(formatBlockingTaskSource);
     const blockerSuffix = blockers.length > visible.length ? ` 等 ${blockers.length} 个` : "";
     const affectedSuffix =
-      (evidence.affectedTaskCount ?? 0) > 1
-        ? ` · ${evidence.affectedTaskCount} 个任务受影响`
-        : "";
+      (evidence.affectedTaskCount ?? 0) > 1 ? ` · ${evidence.affectedTaskCount} 个任务受影响` : "";
     return `阻塞来源：${visible.join("、")}${blockerSuffix} · 影响任务：${compactWorkTitle(
       blockerSample.taskTitle
     )}${affectedSuffix}`;
@@ -4144,7 +4143,10 @@ function FollowCard({
           {item.title}
         </strong>
         {subline.length ? (
-          <OverflowPopoverText className="console-follow-card__subline" text={subline.join(" · ")} />
+          <OverflowPopoverText
+            className="console-follow-card__subline"
+            text={subline.join(" · ")}
+          />
         ) : null}
       </div>
       <div className="console-follow-card__signals">
