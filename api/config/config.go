@@ -47,6 +47,9 @@ type Config struct {
 	ManagedAgentReportDigestHardLimit   int
 	ManagedAgentReportDigestRolloutPct  int
 	ManagedAgentReportDigestCanaryUsers []string
+	SessionDigestV2BuildEnabled         bool
+	SessionDigestV2ReconcileBatch       int
+	SessionDigestV2WorkerBatch          int
 	AIDAPublicBaseURL                   string
 	EnablePublicRegister                bool
 	ClaudeCacheWriteVariant             string
@@ -101,6 +104,9 @@ func Load() *Config {
 		ManagedAgentReportDigestHardLimit:   getEnvInt("MANAGED_AGENT_REPORT_DIGEST_HARD_LIMIT_BYTES", 131072),
 		ManagedAgentReportDigestRolloutPct:  getEnvInt("MANAGED_AGENT_REPORT_DIGEST_ROLLOUT_PERCENT", 100),
 		ManagedAgentReportDigestCanaryUsers: splitCSV(getEnv("MANAGED_AGENT_REPORT_DIGEST_CANARY_USER_IDS", "")),
+		SessionDigestV2BuildEnabled:         getEnvBool("SESSION_DIGEST_V2_BUILD_ENABLED", false),
+		SessionDigestV2ReconcileBatch:       getEnvInt("SESSION_DIGEST_V2_RECONCILE_BATCH", 1),
+		SessionDigestV2WorkerBatch:          getEnvInt("SESSION_DIGEST_V2_WORKER_BATCH", 1),
 		AIDAPublicBaseURL:                   getEnv("AIDA_PUBLIC_BASE_URL", ""),
 		EnablePublicRegister:                getEnv("ENABLE_PUBLIC_REGISTER", "false") == "true",
 		ClaudeCacheWriteVariant:             strings.TrimSpace(strings.ToLower(getEnv("AIDA_CLAUDE_CACHE_WRITE_VARIANT", ""))),

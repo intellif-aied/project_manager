@@ -13,6 +13,7 @@ import (
 	"github.com/aidashboard/api/internal/pricing"
 	"github.com/aidashboard/api/internal/reportsource"
 	"github.com/aidashboard/api/internal/sessiondigest"
+	"github.com/aidashboard/api/internal/sessiondigestv2"
 	"github.com/aidashboard/api/internal/sessionsync"
 	"github.com/aidashboard/api/internal/tokenanalytics"
 	"github.com/aidashboard/api/internal/usage"
@@ -163,10 +164,10 @@ func main() {
 		meteringWorker.Start(schedulerCtx)
 		log.Println("Session metering lifecycle worker started")
 	}
-	if reportSourceConfig.SessionReadMode != reportsource.ReadModeFull {
+	if reportSourceConfig.SessionReadMode == reportsource.ReadModeDigestV1 ||
+		reportSourceConfig.SessionReadMode == reportsource.ReadModeDigestV2 ||
+		reportSourceConfig.SessionReadMode == reportsource.ReadModeShadow {
 		digestConfig := sessiondigest.DefaultConfig()
-		digestConfig.DigestVersion = reportSourceConfig.DigestVersion
-		digestConfig.RedactionVersion = reportSourceConfig.RedactionVersion
 		reconciler, err := sessiondigest.NewReconciler(database, digestConfig)
 		if err != nil {
 			log.Fatalf("Failed to init session digest reconciler: %v", err)
@@ -187,6 +188,41 @@ func main() {
 		reconciler.Start(schedulerCtx)
 		digestWorker.Start(schedulerCtx)
 		log.Printf("Session digest services started in %s mode", reportSourceConfig.SessionReadMode)
+	}
+	if reportSourceConfig.SessionReadMode == reportsource.ReadModeDigestV2 &&
+		!cfg.SessionDigestV2BuildEnabled {
+		log.Fatal("SESSION_DIGEST_V2_BUILD_ENABLED must be true when report source mode is digest_v2")
+	}
+	if cfg.SessionDigestV2BuildEnabled {
+		digestV2Config := sessiondigestv2.DefaultConfig()
+		digestV2Config.ReconcileBatch = cfg.SessionDigestV2ReconcileBatch
+		digestV2Config.WorkerBatch = cfg.SessionDigestV2WorkerBatch
+		reconciler, err := sessiondigestv2.NewReconciler(database, digestV2Config)
+		if err != nil {
+			log.Fatalf("Failed to init session digest v2 reconciler: %v", err)
+		}
+		jobRepository, err := sessionsync.NewPostgresJobRepository(database)
+		if err != nil {
+			log.Fatalf("Failed to init session digest v2 job repository: %v", err)
+		}
+		digestProcessor, err := sessiondigestv2.NewProcessor(database, digestV2Config)
+		if err != nil {
+			log.Fatalf("Failed to init session digest v2 processor: %v", err)
+		}
+		hostname, _ := os.Hostname()
+		digestWorker, err := sessiondigestv2.NewWorker(
+			jobRepository, digestProcessor, "api:"+hostname+":digest-v2", digestV2Config,
+		)
+		if err != nil {
+			log.Fatalf("Failed to init session digest v2 worker: %v", err)
+		}
+		reconciler.Start(schedulerCtx)
+		digestWorker.Start(schedulerCtx)
+		log.Printf(
+			"Session digest v2 services started (reconcile_batch=%d worker_batch=%d read_mode=%s)",
+			digestV2Config.ReconcileBatch, digestV2Config.WorkerBatch,
+			reportSourceConfig.SessionReadMode,
+		)
 	}
 	docH := handler.NewDocumentHandler(database)
 	tokenH := handler.NewTokenHandler(database)

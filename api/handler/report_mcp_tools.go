@@ -57,7 +57,7 @@ func reportMCPTools() []map[string]any {
 	return []map[string]any{
 		{
 			"name":        toolGetSessions,
-			"description": "Read an attached personal-report source snapshot in the server-frozen mode (digest_v1 is one complete bounded page; legacy full may paginate), or list sessions for an authenticated ad-hoc date query. " + businessTimeContract,
+			"description": "Read an attached personal-report source snapshot in the server-frozen mode (digest_v1 and digest_v2 are complete bounded pages; digest_v2 exposes report_period_summary as the primary period projection; legacy full may paginate), or list sessions for an authenticated ad-hoc date query. " + businessTimeContract,
 			"inputSchema": map[string]any{
 				"type":     "object",
 				"required": []string{"scope"},
@@ -70,11 +70,11 @@ func reportMCPTools() []map[string]any {
 					"run_id":      map[string]any{"type": "string"},
 					"report_source_selection_id": map[string]any{
 						"type":        "string",
-						"description": "Attached source snapshot id injected by Aida for managed personal reports.",
+						"description": "Attached source snapshot id injected by Aida for managed personal reports. When present in the run input, send the value only in this field; it may look like a UUID but it is not a session slice key.",
 					},
 					"page_cursor": map[string]any{
 						"type":        "string",
-						"description": "Cursor for the next legacy full page. Never send it for content_mode=digest_v1.",
+						"description": "Cursor for the next legacy full page. Never send it for content_mode=digest_v1 or digest_v2.",
 					},
 					"next_cursor": map[string]any{
 						"type":        "string",
@@ -84,7 +84,7 @@ func reportMCPTools() []map[string]any {
 					"selected_session_slice_keys": map[string]any{
 						"type":        "array",
 						"items":       map[string]any{"type": "string"},
-						"description": "Optional explicit session activity slice keys in the format session_id:YYYY-MM-DD. When provided, they are the authoritative session source selection and are returned even when outside date_range.",
+						"description": "Legacy ad-hoc session activity slice keys in the format session_id:YYYY-MM-DD. Never send this field when report_source_selection_id is present, and never copy a report_source_selection_id UUID into this array.",
 					},
 					"limit":           map[string]any{"type": "integer"},
 					"include_summary": map[string]any{"type": "boolean"},

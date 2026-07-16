@@ -9,6 +9,7 @@ import (
 
 	"github.com/aidashboard/api/internal/biztime"
 	"github.com/aidashboard/api/internal/sessiondigest"
+	"github.com/aidashboard/api/internal/sessiondigestv2"
 )
 
 func TestReportSourceConfigReadModeRouting(t *testing.T) {
@@ -37,12 +38,23 @@ func TestReportSourceConfigReadModeRouting(t *testing.T) {
 	if digest.RequiredReadMode("43") != ReadModeDigestV1 {
 		t.Fatal("100 percent rollout must route every user to digest")
 	}
+	v2 := DefaultConfig()
+	v2.SessionReadMode = ReadModeDigestV2
+	v2.DigestVersion = sessiondigestv2.Version
+	v2.DigestRolloutPct = 0
+	v2, err = v2.Normalized()
+	if err != nil || v2.RequiredReadMode("43") != ReadModeDigestV2 {
+		t.Fatalf("digest v2 must be an explicit all-user mode: mode=%q err=%v",
+			v2.RequiredReadMode("43"), err)
+	}
 }
 
 func TestReportSourceConfigRejectsUnsafeValues(t *testing.T) {
 	tests := []Config{
 		{SessionReadMode: "automatic", DigestVersion: sessiondigest.Version, RedactionVersion: sessiondigest.RedactionVersion, DigestTargetBytes: 1024, DigestHardLimit: 2048},
 		{SessionReadMode: ReadModeFull, DigestVersion: "future", RedactionVersion: sessiondigest.RedactionVersion, DigestTargetBytes: 1024, DigestHardLimit: 2048},
+		{SessionReadMode: ReadModeDigestV2, DigestVersion: sessiondigest.Version, RedactionVersion: sessiondigest.RedactionVersion, DigestTargetBytes: 1024, DigestHardLimit: 2048},
+		{SessionReadMode: ReadModeDigestV1, DigestVersion: sessiondigestv2.Version, RedactionVersion: sessiondigest.RedactionVersion, DigestTargetBytes: 1024, DigestHardLimit: 2048},
 		{SessionReadMode: ReadModeFull, DigestVersion: sessiondigest.Version, RedactionVersion: sessiondigest.RedactionVersion, DigestTargetBytes: 4096, DigestHardLimit: 2048},
 		{SessionReadMode: ReadModeDigestV1, DigestVersion: sessiondigest.Version, RedactionVersion: sessiondigest.RedactionVersion, DigestTargetBytes: 1024, DigestHardLimit: 2048, DigestRolloutPct: 101},
 		{SessionReadMode: ReadModeDigestV1, DigestVersion: sessiondigest.Version, RedactionVersion: sessiondigest.RedactionVersion, DigestTargetBytes: 1024, DigestHardLimit: 2048, DigestCanaryUserIDs: []string{"not-a-number"}},
@@ -52,6 +64,101 @@ func TestReportSourceConfigRejectsUnsafeValues(t *testing.T) {
 		if _, err := input.Normalized(); err == nil {
 			t.Fatalf("case %d: expected invalid config", index)
 		}
+	}
+}
+
+func TestAssembleDigestV2PayloadCompactsAndKeepsResultShape(t *testing.T) {
+	now := time.Date(2026, 7, 16, 1, 2, 3, 0, time.UTC)
+	digest := sessiondigestv2.EmptyDigest()
+	for index := 0; index < 8; index++ {
+		digest.WorkUnits = append(digest.WorkUnits, sessiondigestv2.WorkUnit{
+			WorkUnitRef:     "wu-" + string(rune('a'+index)),
+			Sequence:        index + 1,
+			ActivityStartAt: now.Add(time.Duration(index) * time.Minute).Format(time.RFC3339),
+			ActivityEndAt:   now.Add(time.Duration(index+1) * time.Minute).Format(time.RFC3339),
+			PeriodRelation:  "overlap",
+			Goal: sessiondigestv2.Goal{
+				Text: strings.Repeat("实现结果优先的摘要", 20), Source: "user_message",
+			},
+			Category:      "implementation",
+			Status:        "completed",
+			EvidenceGrade: "A",
+			ResultStatements: []sessiondigestv2.ResultStatement{{
+				Text: strings.Repeat("完成稳定实现并通过验证", 20),
+			}},
+			Evidence:    []sessiondigestv2.Evidence{},
+			Changes:     []sessiondigestv2.Change{},
+			Validations: []sessiondigestv2.Validation{},
+			Unresolved:  []sessiondigestv2.Unresolved{},
+		})
+	}
+	digest.Coverage.SourceWorkUnitCount = len(digest.WorkUnits)
+	digest.Coverage.DetailedWorkUnitCount = len(digest.WorkUnits)
+	digest.Coverage.Representation = "result_focused"
+	page := digestV2ContentPage{
+		SourceMode:       "explicit",
+		ContentMode:      ReadModeDigestV2,
+		Timezone:         biztime.Zone,
+		DigestVersion:    sessiondigestv2.Version,
+		RedactionVersion: sessiondigestv2.RedactionVersion,
+		ContentSnapshot:  biztime.FormatRFC3339(now),
+		Completeness:     "complete",
+		ReturnedCount:    1,
+		ReportPeriod: &sessiondigestv2.ReportPeriodSummary{
+			StartDate: "2026-07-16",
+			EndDate:   "2026-07-16",
+			Days: []sessiondigestv2.DailySummary{{
+				Date: "2026-07-16",
+				Highlights: []sessiondigestv2.DailyHighlight{{
+					WorkUnitRef:   "wu-current",
+					ActivityEndAt: now.Format(time.RFC3339),
+					Category:      "implementation",
+					Status:        "completed",
+					Goal:          "完成日报结果质量优化",
+					ResultStatements: []sessiondigestv2.ResultStatement{{
+						Text: "已形成选择级最终态摘要",
+					}},
+				}},
+			}},
+		},
+		Items: []DigestV2ContentItem{{
+			SourceItemRef: "item-a",
+			SessionRef:    "session-a",
+			AgentType:     "codex",
+			ActivityStart: biztime.FormatRFC3339(now),
+			ActivityEnd:   biztime.FormatRFC3339(now.Add(time.Hour)),
+			StartDate:     biztime.Date(now),
+			EndDate:       biztime.Date(now.Add(time.Hour)),
+			DigestSHA256:  strings.Repeat("a", 64),
+			Digest:        digest,
+			Coverage: DigestItemCoverage{
+				SourceEventCount: 100, IncludedEventCount: 20, OmittedEventCount: 80,
+				Representation: "result_focused",
+			},
+		}},
+		Coverage: DigestCoverage{
+			Complete: true, SourceItemCount: 1, RepresentedItemCount: 1,
+			SourceEventCount: 100, IncludedEventCount: 20, OmittedEventCount: 80,
+		},
+	}
+	payload, compaction, err := assembleDigestV2Payload(page, 4096, 128<<10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compaction != "compact" {
+		t.Fatalf("expected compact v2 payload, got %q (%d bytes)", compaction, len(payload))
+	}
+	var decoded digestV2ContentPage
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.ContentMode != ReadModeDigestV2 ||
+		decoded.ReportPeriod == nil ||
+		len(decoded.ReportPeriod.Days) != 1 ||
+		decoded.Items[0].Digest.SchemaVersion != sessiondigestv2.Version ||
+		len(decoded.Items[0].Digest.WorkUnits) == 0 ||
+		decoded.Budget.ActualBytes != len(payload) {
+		t.Fatalf("invalid v2 payload: %+v bytes=%d", decoded, len(payload))
 	}
 }
 

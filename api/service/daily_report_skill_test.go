@@ -23,14 +23,27 @@ func TestReportSkillMarkdownUsesDeterministicDisplayContext(t *testing.T) {
 		"Do not request raw/full fallback",
 		"Non-negotiable Scope Matrix",
 		"scope.type=department and report_scope=team",
-		"Existing content is editing context only",
-		"both source_mode=default and source_mode=explicit are mandatory report evidence",
+		"do not call get_existing_report",
+		"report_period_summary.days[].highlights",
+		"selection-level report_period_summary",
+		"nested item summaries are provenance",
+		"Synthesize outcomes, not a turn-by-turn conversation recap",
+		"Out-of-period facts may appear only as clearly labeled context",
 		"already converted by Aida to Asia/Shanghai",
 		"never add or subtract 8 hours again",
 		"今日/当天 means period.date only",
 		"Never apply a second timezone conversion",
 		"never claim there was no activity or no record",
 		"Raw Token values inside Session events are cumulative telemetry",
+		"never in selected_session_slice_keys",
+		"Do not state aggregate work-item counts",
+		"Never create sections titled 验证结果",
+		"Never output raw URLs, file paths, file names",
+		"retain only the latest effective version",
+		"Do not expose Registry owner, Skill ID, test account",
+		"3 to 5 material outcomes",
+		"never exceed 6",
+		"health-check status",
 	}
 	for _, expected := range required {
 		if !strings.Contains(markdown, expected) {
@@ -39,9 +52,6 @@ func TestReportSkillMarkdownUsesDeterministicDisplayContext(t *testing.T) {
 	}
 	if strings.Contains(markdown, `"report_kind": "weekly", "date_range": date_range`) {
 		t.Fatal("weekly inventory instructions must not use date_range")
-	}
-	if strings.Contains(markdown, "selected_session_slice_keys") {
-		t.Fatal("default report skill must not contain the legacy Session source path")
 	}
 	if strings.Contains(markdown, "session-digest Skill") || strings.Contains(markdown, "run session-digest") {
 		t.Fatal("default report skill must rely on the server-side digest, not an Agent-side digest skill")

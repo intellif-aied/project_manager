@@ -211,6 +211,28 @@ func TestReportMCPInventorySchemaUsesRangeForSelectedKind(t *testing.T) {
 	t.Fatal("get_report_inventory schema missing")
 }
 
+func TestReportMCPSessionSchemaSeparatesSnapshotFromLegacySliceKeys(t *testing.T) {
+	for _, tool := range reportMCPTools() {
+		if tool["name"] != toolGetSessions {
+			continue
+		}
+		schema := tool["inputSchema"].(map[string]any)
+		properties := schema["properties"].(map[string]any)
+		selection := properties["report_source_selection_id"].(map[string]any)
+		sliceKeys := properties["selected_session_slice_keys"].(map[string]any)
+		requireContainsAll(t, selection["description"].(string),
+			"send the value only in this field",
+			"it is not a session slice key",
+		)
+		requireContainsAll(t, sliceKeys["description"].(string),
+			"Never send this field when report_source_selection_id is present",
+			"never copy a report_source_selection_id UUID",
+		)
+		return
+	}
+	t.Fatal("get_sessions schema missing")
+}
+
 func TestReportMCPReportSchemasRequireContentDecision(t *testing.T) {
 	wanted := map[string]string{
 		toolGetDailyReports:  "date_range",
@@ -593,9 +615,10 @@ func TestReportMCPWriteReportResultUnsupportedType(t *testing.T) {
 
 func TestReportContentValidationRejectsWrongWeekdayAndInternalIDs(t *testing.T) {
 	tests := []struct {
-		name    string
-		content string
-		want    int
+		name       string
+		reportType string
+		content    string
+		want       int
 	}{
 		{name: "valid weekday", content: "# 周报\n- 2026-06-08（周一）：完成回归\n- 部门共 4 位成员", want: 0},
 		{name: "valid range with later weekday", content: "本周（2026-06-08 至 2026-06-14）有 1 天活动，周一（2026-06-08）完成回归", want: 0},
@@ -606,10 +629,44 @@ func TestReportContentValidationRejectsWrongWeekdayAndInternalIDs(t *testing.T) 
 		{name: "director ID label", content: "# 部门日报\n- 总监ID：304", want: 1},
 		{name: "raw ID field", content: "# 日报\n- user_id: 310", want: 1},
 		{name: "UUID", content: "# 小组日报\n- 团队：b44b1277-db0f-4bd3-bc53-0a24160704c6", want: 1},
+		{name: "engineering section", content: "# 日报\n### 验证状态\n- go test 通过", want: 1},
+		{name: "file count", content: "# 日报\n- 今日共产生 190 项文件变更", want: 1},
+		{name: "validation attempts", content: "# 日报\n- go test：40 次尝试后通过", want: 1},
+		{name: "work item aggregate", content: "# 日报\n今日有 17 个有结果工作项", want: 1},
+		{name: "internal asset label", content: "# 日报\n- Registry owner：100866", want: 1},
+		{name: "skill version", content: "# 日报\n- 最新 Skill 1.0.12 已部署", want: 1},
+		{name: "test account", content: "# 日报\n- 使用测试账号发起运行", want: 1},
+		{name: "internal host", content: "# 日报\n- 14.157 API 已切换", want: 1},
+		{name: "operational validation", content: "# 日报\n- 健康检查正常，E2E 已通过", want: 1},
+		{name: "validation status", content: "# 日报\n- 真实数据链验证通过", want: 1},
+		{name: "raw URL", content: "# 日报\n- 调研 https://github.com/rtk-ai/rtk", want: 1},
+		{name: "technical file", content: "# 日报\n- 合并 `018_report_digest.sql` 并更新 `15点.md`", want: 1},
+		{name: "technical path", content: "# 日报\n- 更新 /doc/v2/agent优化/第二阶段/ 方案", want: 1},
+		{
+			name:       "too many personal outcomes",
+			reportType: reportTypePersonalDaily,
+			content:    "# 日报\n1. 结果一\n2. 结果二\n3. 结果三\n4. 结果四\n5. 结果五\n6. 结果六\n7. 结果七",
+			want:       1,
+		},
+		{
+			name:       "organization report may list more owners",
+			reportType: reportTypeTeamDaily,
+			content:    "# 小组日报\n1. 成员一\n2. 成员二\n3. 成员三\n4. 成员四\n5. 成员五\n6. 成员六\n7. 成员七",
+			want:       0,
+		},
+		{name: "conflicting asset versions", content: "# 日报\n- aida-report@1.0.6\n- aida-report@1.0.11", want: 1},
+		{name: "conflicting digest versions", content: "# 日报\n- Digest v2.2\n- Session Digest v2.3", want: 1},
+		{name: "single current asset version", content: "# 日报\n- 已发布 aida-report@1.0.11", want: 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			issues := reportContentValidationIssues(tt.content, "", "2026-06-08", "2026-06-14")
+			issues := reportContentValidationIssues(
+				tt.content,
+				tt.reportType,
+				"",
+				"2026-06-08",
+				"2026-06-14",
+			)
 			if len(issues) != tt.want {
 				t.Fatalf("issues=%#v, want count=%d", issues, tt.want)
 			}
@@ -631,7 +688,13 @@ func TestReportContentValidationRejectsConflictingDailyDateMetadata(t *testing.T
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			issues := reportContentValidationIssues(test.content, "2026-07-16", "", "")
+			issues := reportContentValidationIssues(
+				test.content,
+				reportTypePersonalDaily,
+				"2026-07-16",
+				"",
+				"",
+			)
 			if len(issues) != test.want {
 				t.Fatalf("issues=%#v want=%d", issues, test.want)
 			}

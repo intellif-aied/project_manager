@@ -13,6 +13,7 @@ import (
 
 	"github.com/aidashboard/api/internal/biztime"
 	"github.com/aidashboard/api/internal/sessiondigest"
+	"github.com/aidashboard/api/internal/sessiondigestv2"
 	"github.com/lib/pq"
 )
 
@@ -20,6 +21,7 @@ const (
 	ReadModeFull     = "full"
 	ReadModeShadow   = "shadow"
 	ReadModeDigestV1 = "digest_v1"
+	ReadModeDigestV2 = "digest_v2"
 
 	defaultDigestTargetBytes    = 64 << 10
 	defaultDigestHardLimitBytes = 128 << 10
@@ -73,11 +75,17 @@ func (c Config) Normalized() (Config, error) {
 	if c.DigestHardLimit == 0 {
 		c.DigestHardLimit = defaults.DigestHardLimit
 	}
-	if c.SessionReadMode != ReadModeFull && c.SessionReadMode != ReadModeShadow && c.SessionReadMode != ReadModeDigestV1 {
+	if c.SessionReadMode != ReadModeFull && c.SessionReadMode != ReadModeShadow &&
+		c.SessionReadMode != ReadModeDigestV1 && c.SessionReadMode != ReadModeDigestV2 {
 		return Config{}, errors.New("invalid report session read mode")
 	}
-	if c.DigestVersion != sessiondigest.Version || c.RedactionVersion != sessiondigest.RedactionVersion {
+	if c.RedactionVersion != sessiondigest.RedactionVersion ||
+		(c.DigestVersion != sessiondigest.Version && c.DigestVersion != sessiondigestv2.Version) {
 		return Config{}, errors.New("unsupported report digest version")
+	}
+	if (c.SessionReadMode == ReadModeDigestV1 && c.DigestVersion != sessiondigest.Version) ||
+		(c.SessionReadMode == ReadModeDigestV2 && c.DigestVersion != sessiondigestv2.Version) {
+		return Config{}, errors.New("report read mode and digest version do not match")
 	}
 	if c.DigestTargetBytes < 1024 || c.DigestHardLimit < c.DigestTargetBytes || c.DigestHardLimit > 4<<20 {
 		return Config{}, errors.New("invalid report digest byte budget")
@@ -108,6 +116,9 @@ func (c Config) Normalized() (Config, error) {
 }
 
 func (c Config) RequiredReadMode(userID string) string {
+	if c.SessionReadMode == ReadModeDigestV2 {
+		return ReadModeDigestV2
+	}
 	if c.SessionReadMode != ReadModeDigestV1 {
 		return ReadModeFull
 	}
@@ -217,6 +228,9 @@ func (s *Service) freezeSelectionForRun(ctx context.Context, tx *sql.Tx, selecti
 			return ErrSelectionConflict
 		}
 		return nil
+	}
+	if requiredMode == ReadModeDigestV2 {
+		return s.freezeSelectionV2ForRun(ctx, tx, selection)
 	}
 	if requiredMode != ReadModeDigestV1 {
 		return ErrReadModeMismatch

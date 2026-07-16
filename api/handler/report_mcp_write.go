@@ -73,9 +73,9 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 	if content == "" {
 		return nil, mcpErr("INVALID_ARGUMENT", "content is required")
 	}
-	validationIssues := reportContentValidationIssues(content, date, ws, we)
+	validationIssues := reportContentValidationIssues(content, args.ReportType, date, ws, we)
 	if summary := strings.TrimSpace(args.Summary); summary != "" {
-		for _, issue := range reportContentValidationIssues(summary, date, ws, we) {
+		for _, issue := range reportContentValidationIssues(summary, args.ReportType, date, ws, we) {
 			validationIssues = append(validationIssues, "摘要："+issue)
 		}
 	}

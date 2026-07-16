@@ -26,9 +26,21 @@ var (
 	reportNoSessionActivityPattern        = regexp.MustCompile(`(?im)(?:^|[。；;\n])\s*(?:(?:今日|本日|本周)\s*)?(?:无|暂无)(?:直接)?(?:工作|活动|会话|session)?(?:详细)?记录`)
 	reportFullParticipationPattern        = regexp.MustCompile(`(?:全员参与|全部在岗|所有成员(?:均|都)?(?:参与|完成|有(?:工作|记录|产出))|全体成员(?:均|都)?(?:参与|完成|有(?:工作|记录|产出)))`)
 	reportDailyCrossPeriodCoveragePattern = regexp.MustCompile(`(?:个人|小组|团队|部门)周报[^\n]{0,24}(?:缺失|提交|覆盖|无人|无记录)`)
+	reportEngineeringSectionPattern       = regexp.MustCompile(`(?im)^#{1,6}\s*(?:验证结果|验证状态|测试情况|测试结果|文件变更|代码变更|变更文件|技术验证)\s*$`)
+	reportFileChangeMetricPattern         = regexp.MustCompile(`(?i)(?:共产生|产生|涉及|修改|变更)[^\n。；]{0,24}[0-9]+\s*(?:项|个|处)?\s*(?:文件变更|文件|代码变更)`)
+	reportValidationAttemptPattern        = regexp.MustCompile(`(?i)(?:go test|go vet|pytest|npm test|pnpm test|测试|验证)[^\n。；]{0,28}[0-9]+\s*次(?:尝试|执行|测试|验证)?`)
+	reportWorkItemAggregatePattern        = regexp.MustCompile(`(?i)(?:今日|当天)?[^\n。；]{0,12}[0-9]+\s*个有结果工作项|[0-9]+\s*个(?:已完成|进行中|pending)\b`)
+	reportVersionedAssetPattern           = regexp.MustCompile(`(?i)\b([a-z][a-z0-9._-]{2,})@v?([0-9]+\.[0-9]+\.[0-9]+)\b`)
+	reportNamedDigestVersionPattern       = regexp.MustCompile(`(?i)\b(?:session[\s_-]*)?digest\s+v?([0-9]+\.[0-9]+(?:\.[0-9]+)?)\b`)
+	reportInternalAssetLabelPattern       = regexp.MustCompile(`(?i)\bRegistry\s+owner\b|Skill\s*ID\s*[:：]|\bSkill\s+v?[0-9]+\.[0-9]+|测试账[号户]`)
+	reportInternalHostPattern             = regexp.MustCompile(`(?i)\b(?:192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2[0-9]|3[01])\.\d{1,3}\.\d{1,3}|(?:14|18)\.\d{2,3})\b`)
+	reportOperationalValidationPattern    = regexp.MustCompile(`(?i)(?:\bE2E\b|Top\s*[0-9]+[^\n。；]{0,24}回放|健康检查|启动日志|回放通过|(?:验证|测试|检查|回放|构建)[^\n。；]{0,16}(?:通过|正常|成功)|\b(?:worker|reconciler)\b)`)
+	reportURLPattern                      = regexp.MustCompile(`(?i)https?://`)
+	reportTechnicalArtifactPattern        = regexp.MustCompile("(?i)(?:`[^`\\n]*(?:/|\\.(?:go|md|sql|ts|tsx|js|json|ya?ml|sh|ps1))[^`\\n]*`|(?:^|[\\s（(])/(?:[^\\s/]+/)+[^\\s`，。；)）]+)")
+	reportTopLevelOutcomePattern          = regexp.MustCompile(`(?m)^(?:[0-9]+[.)、]|[-*+])\s+`)
 )
 
-func reportContentValidationIssues(content, date, weekStart, weekEnd string) []string {
+func reportContentValidationIssues(content, reportType, date, weekStart, weekEnd string) []string {
 	content = strings.TrimSpace(content)
 	if content == "" {
 		return nil
@@ -52,6 +64,40 @@ func reportContentValidationIssues(content, date, weekStart, weekEnd string) []s
 	}
 	if reportUUIDPattern.MatchString(content) {
 		add("报告正文包含 UUID，请删除内部标识")
+	}
+	if reportEngineeringSectionPattern.MatchString(content) {
+		add("报告正文不得单列验证、测试或文件变更章节；请把必要验证收敛为简短成果描述")
+	}
+	if reportFileChangeMetricPattern.MatchString(content) {
+		add("报告正文不得展示文件或代码变更数量；文件证据仅用于内部判断结果可信度")
+	}
+	if reportValidationAttemptPattern.MatchString(content) {
+		add("报告正文不得展示测试命令或验证尝试次数；请只保留用户可理解的最终结果")
+	}
+	if reportWorkItemAggregatePattern.MatchString(content) {
+		add("报告正文不得使用 Digest 工作项或状态汇总数量；请直接概括少量重要成果")
+	}
+	if reportInternalAssetLabelPattern.MatchString(content) {
+		add("报告正文包含内部资产管理标识，请删除 Registry owner、Skill ID 等运维细节")
+	}
+	if reportInternalHostPattern.MatchString(content) {
+		add("报告正文包含内部主机或网络地址，请改写为用户可理解的产品或环境描述")
+	}
+	if reportOperationalValidationPattern.MatchString(content) {
+		add("报告正文包含验证通过、健康检查、启动日志、E2E、Worker 或回放状态；这些只用于内部置信判断，不应作为日报成果")
+	}
+	if reportURLPattern.MatchString(content) {
+		add("报告正文包含原始 URL；请使用产品、项目或能力名称概括成果")
+	}
+	if reportTechnicalArtifactPattern.MatchString(content) {
+		add("报告正文包含代码路径、文件名或脚本名；请改写为用户可理解的交付结果")
+	}
+	if isPersonalReportType(reportType) &&
+		len(reportTopLevelOutcomePattern.FindAllStringIndex(content, -1)) > 6 {
+		add("个人报告最多保留 6 项重要成果；请合并同主题、旧版本和阶段性步骤")
+	}
+	if asset := conflictingVersionedAsset(content); asset != "" {
+		add(fmt.Sprintf("报告正文同时包含 %s 的多个版本；请只保留最新有效版本", asset))
 	}
 
 	periodStart, periodEnd := reportValidationPeriodBounds(date, weekStart, weekEnd)
@@ -101,6 +147,30 @@ func reportContentValidationIssues(content, date, weekStart, weekEnd string) []s
 	return issues
 }
 
+func isPersonalReportType(reportType string) bool {
+	return reportType == reportTypePersonalDaily || reportType == reportTypePersonalWeekly
+}
+
+func conflictingVersionedAsset(content string) string {
+	versions := map[string]string{}
+	for _, match := range reportVersionedAssetPattern.FindAllStringSubmatch(content, -1) {
+		asset := strings.ToLower(match[1])
+		version := match[2]
+		if existing, ok := versions[asset]; ok && existing != version {
+			return asset
+		}
+		versions[asset] = version
+	}
+	for _, match := range reportNamedDigestVersionPattern.FindAllStringSubmatch(content, -1) {
+		version := match[1]
+		if existing, ok := versions["session-digest"]; ok && existing != version {
+			return "session-digest"
+		}
+		versions["session-digest"] = version
+	}
+	return ""
+}
+
 func dateFromMatch(match []string) (string, bool) {
 	if len(match) < 4 {
 		return "", false
@@ -128,7 +198,8 @@ func reportPersonalSourceActivityIssues(ctx context.Context, db *sql.DB, inputRe
 	}
 	var hasWorkActivity bool
 	var err error
-	if strings.TrimSpace(stringFromAny(inputRef["report_source_read_mode"])) == "digest_v1" {
+	readMode := strings.TrimSpace(stringFromAny(inputRef["report_source_read_mode"]))
+	if readMode == "digest_v1" || readMode == "digest_v2" {
 		err = db.QueryRowContext(ctx, `
 			SELECT EXISTS (
 				SELECT 1

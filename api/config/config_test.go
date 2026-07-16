@@ -19,6 +19,9 @@ func TestReportDigestConfigurationDefaults(t *testing.T) {
 		"MANAGED_AGENT_REPORT_DIGEST_HARD_LIMIT_BYTES",
 		"MANAGED_AGENT_REPORT_DIGEST_ROLLOUT_PERCENT",
 		"MANAGED_AGENT_REPORT_DIGEST_CANARY_USER_IDS",
+		"SESSION_DIGEST_V2_BUILD_ENABLED",
+		"SESSION_DIGEST_V2_RECONCILE_BATCH",
+		"SESSION_DIGEST_V2_WORKER_BATCH",
 	} {
 		t.Setenv(key, "")
 	}
@@ -29,7 +32,10 @@ func TestReportDigestConfigurationDefaults(t *testing.T) {
 		loaded.ManagedAgentReportDigestTargetBytes != 65536 ||
 		loaded.ManagedAgentReportDigestHardLimit != 131072 ||
 		loaded.ManagedAgentReportDigestRolloutPct != 100 ||
-		len(loaded.ManagedAgentReportDigestCanaryUsers) != 0 {
+		len(loaded.ManagedAgentReportDigestCanaryUsers) != 0 ||
+		loaded.SessionDigestV2BuildEnabled ||
+		loaded.SessionDigestV2ReconcileBatch != 1 ||
+		loaded.SessionDigestV2WorkerBatch != 1 {
 		t.Fatalf("unexpected report digest defaults: %+v", loaded)
 	}
 }
@@ -38,5 +44,17 @@ func TestInvalidReportDigestIntegerIsNotSilentlyDefaulted(t *testing.T) {
 	t.Setenv("MANAGED_AGENT_REPORT_DIGEST_TARGET_BYTES", "not-an-int")
 	if got := Load().ManagedAgentReportDigestTargetBytes; got != -1 {
 		t.Fatalf("invalid integer must reach startup validation, got %d", got)
+	}
+}
+
+func TestSessionDigestV2Configuration(t *testing.T) {
+	t.Setenv("SESSION_DIGEST_V2_BUILD_ENABLED", "true")
+	t.Setenv("SESSION_DIGEST_V2_RECONCILE_BATCH", "2")
+	t.Setenv("SESSION_DIGEST_V2_WORKER_BATCH", "1")
+	loaded := Load()
+	if !loaded.SessionDigestV2BuildEnabled ||
+		loaded.SessionDigestV2ReconcileBatch != 2 ||
+		loaded.SessionDigestV2WorkerBatch != 1 {
+		t.Fatalf("unexpected digest v2 config: %+v", loaded)
 	}
 }
