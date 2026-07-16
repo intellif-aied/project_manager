@@ -211,7 +211,7 @@ make release-prod-dir
 - Windows 用户请直接在当前 PowerShell 会话中执行 `Invoke-RestMethod ... | Invoke-Expression`
 
 详细发布文档见：
-[doc/AI_Coding_Console_简易部署文档.md](/home/intellif/dev/project_manager/doc/AI_Coding_Console_简易部署文档.md)
+[doc/Aida部署与运维基准.md](/home/intellif/dev/project_manager/doc/Aida部署与运维基准.md)
 
 ## 9. 相关文档
 
