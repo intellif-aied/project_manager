@@ -192,13 +192,7 @@ func (s *Service) ListCandidates(ctx context.Context, userID string, query Candi
 				MAX(e.occurred_at) AS activity_end_at,
 				COALESCE(s.cwd, '') AS cwd, COALESCE(s.models, '{}') AS models,
 				s.content_status, MAX(e.occurred_at) AS available_through_at,
-				COALESCE((
-					SELECT SUM(uc.normalized_total_tokens)
-					FROM session_usage_components uc
-					JOIN session_upload_chunks ch ON ch.id = uc.chunk_id
-					WHERE uc.valid_to IS NULL AND ch.generation_id = sl.generation_id
-						AND ch.start_cursor >= sl.start_cursor AND ch.end_cursor <= sl.end_cursor
-				), 0) AS total_tokens
+				sl.generation_id, sl.start_cursor, sl.end_cursor
 			FROM session_content_slices sl
 			JOIN sessions s ON s.id = sl.session_id
 			JOIN session_sources src ON src.id = sl.source_id AND src.session_id = s.id
@@ -212,22 +206,35 @@ func (s *Service) ListCandidates(ctx context.Context, userID string, query Candi
 			WHERE s.user_id = $1 AND s.content_status = 'available'
 				AND rev.content_indexed_cursor >= sl.end_cursor
 			GROUP BY sl.id, s.id, rev.id
-		), candidates AS (
+		), candidates AS MATERIALIZED (
 			SELECT * FROM all_candidates
 			WHERE ($2 = '%%' OR lower(session_ref) LIKE $2 OR lower(summary) LIKE $2)
 				AND ($3::timestamptz IS NULL OR activity_end_at >= $3)
 				AND ($4::timestamptz IS NULL OR activity_start_at <= $4)
 		)`
 	var total int
-	if err := s.db.QueryRowContext(ctx, candidateCTE+` SELECT COUNT(*) FROM candidates`, userID, search, from, to).Scan(&total); err != nil {
-		return CandidatePage{}, err
-	}
-	rows, err := s.db.QueryContext(ctx, candidateCTE+`
-		SELECT slice_key, session_ref, agent_type, summary, last_activity_at, activity_start_at,
-			activity_end_at, cwd, models, content_status, available_through_at, total_tokens
-		FROM candidates
-		ORDER BY last_activity_at DESC, session_ref ASC
-		LIMIT $5 OFFSET $6`, userID, search, from, to, query.PageSize, (query.Page-1)*query.PageSize)
+	rows, err := s.db.QueryContext(ctx, candidateCTE+`,
+		paged AS (
+			SELECT * FROM candidates
+			ORDER BY last_activity_at DESC, session_ref ASC
+			LIMIT $5 OFFSET $6
+		), totals AS (
+			SELECT COUNT(*) AS total_count FROM candidates
+		)
+		SELECT p.slice_key, p.session_ref, p.agent_type, p.summary, p.last_activity_at, p.activity_start_at,
+			p.activity_end_at, p.cwd, p.models, p.content_status, p.available_through_at,
+			p.generation_id, p.start_cursor, p.end_cursor,
+			COALESCE((
+				SELECT SUM(uc.normalized_total_tokens)
+				FROM session_usage_components uc
+				JOIN session_upload_chunks ch ON ch.id = uc.chunk_id
+				WHERE uc.valid_to IS NULL AND ch.generation_id = p.generation_id
+					AND ch.start_cursor >= p.start_cursor
+					AND ch.end_cursor <= p.end_cursor
+			), 0) AS total_tokens,
+			t.total_count
+		FROM paged p CROSS JOIN totals t
+		ORDER BY p.last_activity_at DESC, p.session_ref ASC`, userID, search, from, to, query.PageSize, (query.Page-1)*query.PageSize)
 	if err != nil {
 		return CandidatePage{}, err
 	}
@@ -236,10 +243,17 @@ func (s *Service) ListCandidates(ctx context.Context, userID string, query Candi
 	for rows.Next() {
 		var item Candidate
 		var models pq.StringArray
+		var generationID string
+		var startCursor, endCursor int64
+		var totalCount int
 		if err := rows.Scan(&item.SliceKey, &item.SessionRef, &item.AgentType, &item.Summary, &item.LastActivityAt,
 			&item.ActivityStartAt, &item.ActivityEndAt, &item.CWD, &models,
-			&item.ContentStatus, &item.AvailableThroughAt, &item.TotalTokens); err != nil {
+			&item.ContentStatus, &item.AvailableThroughAt, &generationID, &startCursor,
+			&endCursor, &item.TotalTokens, &totalCount); err != nil {
 			return CandidatePage{}, err
+		}
+		if totalCount > total {
+			total = totalCount
 		}
 		item.Models = []string(models)
 		item.ContentIndexStatus = "ready"
@@ -247,6 +261,11 @@ func (s *Service) ListCandidates(ctx context.Context, userID string, query Candi
 	}
 	if err := rows.Err(); err != nil {
 		return CandidatePage{}, err
+	}
+	if len(items) == 0 {
+		if err := s.db.QueryRowContext(ctx, candidateCTE+` SELECT COUNT(*) FROM candidates`, userID, search, from, to).Scan(&total); err != nil {
+			return CandidatePage{}, err
+		}
 	}
 	return CandidatePage{Items: items, Page: query.Page, PageSize: query.PageSize, Total: total}, nil
 }
