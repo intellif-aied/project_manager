@@ -23,9 +23,9 @@ const (
 	uploadStateVersion         = 1
 	prefixCheckpointAlgorithm  = "sha256-prefix-v1"
 	defaultSyncChunkEvents     = 500
-	defaultSyncChunkBytes      = 8 << 20
-	defaultSyncMaxLineBytes    = 8 << 20
-	sessionChunkRequestTimeout = 5 * time.Minute
+	defaultSyncChunkBytes      = 500 << 20
+	defaultSyncMaxLineBytes    = 500 << 20
+	sessionChunkRequestTimeout = 30 * time.Minute
 )
 
 var errSessionSyncNotEnabled = errors.New("incremental session sync is not enabled")
@@ -329,24 +329,11 @@ func uploadIncrementalChunk(cfg *Config, generationID string, chunk localSession
 	}}}
 	metadataJSON, _ := json.Marshal(metadata)
 	for attempt := 0; attempt < 3; attempt++ {
-		var body bytes.Buffer
-		writer := multipart.NewWriter(&body)
-		if err := writer.WriteField("metadata", string(metadataJSON)); err != nil {
-			return err
-		}
-		part, err := writer.CreateFormFile("chunk_0", "chunk.jsonl")
-		if err != nil {
-			return err
-		}
-		if _, err := part.Write(chunk.Content); err != nil {
-			return err
-		}
-		if err := writer.Close(); err != nil {
-			return err
-		}
+		body, contentType := streamChunkMultipartBody(metadataJSON, chunk.Content)
 		status, responseBody, requestErr := doSessionSyncRequest(
-			cfg, http.MethodPost, "/session-chunks/batch", writer.FormDataContentType(), &body, sessionChunkRequestTimeout,
+			cfg, http.MethodPost, "/session-chunks/batch", contentType, body, sessionChunkRequestTimeout,
 		)
+		_ = body.Close()
 		if requestErr != nil {
 			if attempt < 2 {
 				time.Sleep(time.Duration(attempt+1) * 200 * time.Millisecond)
@@ -380,6 +367,27 @@ func uploadIncrementalChunk(cfg *Config, generationID string, chunk localSession
 		return fmt.Errorf("chunk rejected: %s %s %s", result.ErrorCode, result.NextAction, result.Status)
 	}
 	return errors.New("chunk upload retries exhausted")
+}
+
+func streamChunkMultipartBody(metadataJSON, content []byte) (*io.PipeReader, string) {
+	reader, pipeWriter := io.Pipe()
+	multipartWriter := multipart.NewWriter(pipeWriter)
+	contentType := multipartWriter.FormDataContentType()
+	go func() {
+		var writeErr error
+		if writeErr = multipartWriter.WriteField("metadata", string(metadataJSON)); writeErr == nil {
+			var part io.Writer
+			part, writeErr = multipartWriter.CreateFormFile("chunk_0", "chunk.jsonl")
+			if writeErr == nil {
+				_, writeErr = io.Copy(part, bytes.NewReader(content))
+			}
+		}
+		if closeErr := multipartWriter.Close(); writeErr == nil {
+			writeErr = closeErr
+		}
+		_ = pipeWriter.CloseWithError(writeErr)
+	}()
+	return reader, contentType
 }
 
 func finalizeSessionSource(cfg *Config, generationID string, cursor int64, prefixHash string) error {

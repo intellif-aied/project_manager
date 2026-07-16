@@ -14,7 +14,7 @@ import (
 	"unicode/utf8"
 )
 
-const MaxContentProjectionLineBytes = 8 << 20
+const MaxContentProjectionLineBytes = 500 << 20
 
 var (
 	ErrContentLineTooLarge = errors.New("content projection line exceeds limit")
@@ -73,7 +73,7 @@ func readCompleteJSONLLine(reader *bufio.Reader) ([]byte, error) {
 		line.Write(fragment)
 		switch {
 		case err == nil:
-			return append([]byte(nil), line.Bytes()...), nil
+			return line.Bytes(), nil
 		case errors.Is(err, bufio.ErrBufferFull):
 			continue
 		case errors.Is(err, io.EOF) && line.Len() == 0:

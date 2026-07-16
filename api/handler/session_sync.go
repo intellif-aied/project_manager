@@ -18,10 +18,10 @@ import (
 )
 
 const (
-	maxSessionSyncRequestBytes      = 256 << 20
+	maxSessionSyncRequestBytes      = 512 << 20
 	maxSessionSyncMetadataBytes     = 1 << 20
-	maxSessionSyncCompressedChunk   = 16 << 20
-	maxSessionSyncUncompressedChunk = 64 << 20
+	maxSessionSyncCompressedChunk   = 500 << 20
+	maxSessionSyncUncompressedChunk = 500 << 20
 	maxSessionSyncCompressionRatio  = 100
 )
 

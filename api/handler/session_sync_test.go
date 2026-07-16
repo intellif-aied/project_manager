@@ -104,6 +104,26 @@ func TestValidatedChunkReaderRejectsIdentitySizeMismatch(t *testing.T) {
 	}
 }
 
+func TestSessionSyncAcceptsFiveHundredMiBChunkBoundary(t *testing.T) {
+	file := writeTemporaryMultipartFile(t, []byte("x"))
+	_, closeReader, err := validatedChunkReader(file, &multipart.FileHeader{Size: 500 << 20}, chunkUploadRequest{
+		ContentEncoding: "identity", UncompressedSize: 500 << 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeReader()
+	if maxSessionSyncRequestBytes <= maxSessionSyncUncompressedChunk {
+		t.Fatalf("request limit=%d must include multipart overhead above chunk=%d", maxSessionSyncRequestBytes, maxSessionSyncUncompressedChunk)
+	}
+	_, _, err = validatedChunkReader(file, &multipart.FileHeader{Size: (500 << 20) + 1}, chunkUploadRequest{
+		ContentEncoding: "identity", UncompressedSize: (500 << 20) + 1,
+	})
+	if err == nil {
+		t.Fatal("chunk above 500 MiB was accepted")
+	}
+}
+
 func writeTemporaryMultipartFile(t *testing.T, content []byte) *os.File {
 	t.Helper()
 	file, err := os.CreateTemp(t.TempDir(), "chunk-*.jsonl")

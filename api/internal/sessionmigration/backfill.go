@@ -22,8 +22,8 @@ import (
 
 const (
 	maxChunkEvents = 500
-	maxChunkBytes  = 4 << 20
-	maxLineBytes   = 8 << 20
+	maxChunkBytes  = 500 << 20
+	maxLineBytes   = 500 << 20
 )
 
 type ObjectStore interface {
@@ -319,7 +319,7 @@ type chunk struct {
 }
 
 func streamChunks(reader io.Reader, startCursor, startLine int64, emit func(chunk) error) (int64, int64, error) {
-	buffered := bufio.NewReaderSize(reader, maxChunkBytes)
+	buffered := bufio.NewReaderSize(reader, 64<<10)
 	cursor, line := startCursor, startLine
 	chunkStart, chunkLine := cursor, line
 	var content bytes.Buffer
@@ -344,16 +344,36 @@ func streamChunks(reader io.Reader, startCursor, startLine int64, emit func(chun
 	for {
 		lineBytes, err := buffered.ReadBytes('\n')
 		if len(lineBytes) > maxLineBytes {
-			return cursor, line - 1, errors.New("raw log contains a line larger than 8 MiB")
+			return cursor, line - 1, fmt.Errorf("raw log contains a line larger than %d MiB", maxLineBytes>>20)
 		}
 		if len(lineBytes) > 0 {
 			if err == io.EOF && !json.Valid(bytes.TrimSpace(lineBytes)) {
 				return cursor, line - 1, errors.New("raw log ends with an incomplete JSONL record")
 			}
+			if err != nil && !errors.Is(err, io.EOF) {
+				return cursor, line - 1, err
+			}
 			if content.Len() > 0 && (events >= maxChunkEvents || content.Len()+len(lineBytes) > maxChunkBytes) {
 				if flushErr := flush(); flushErr != nil {
 					return cursor, line - 1, flushErr
 				}
+			}
+			if content.Len() == 0 && len(lineBytes) > maxChunkBytes/2 {
+				startCursor, startLine := cursor, line
+				cursor += int64(len(lineBytes))
+				line++
+				hashValue := sha256.Sum256(lineBytes)
+				if emitErr := emit(chunk{
+					StartCursor: startCursor, EndCursor: cursor, StartLine: startLine, EndLine: startLine,
+					Hash: hex.EncodeToString(hashValue[:]), Content: lineBytes,
+				}); emitErr != nil {
+					return cursor, line - 1, emitErr
+				}
+				chunkStart, chunkLine = cursor, line
+				if err == io.EOF {
+					break
+				}
+				continue
 			}
 			content.Write(lineBytes)
 			cursor += int64(len(lineBytes))

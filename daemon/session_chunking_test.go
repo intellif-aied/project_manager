@@ -158,13 +158,30 @@ func TestSES020OversizedJSONLLineIsRejected(t *testing.T) {
 	}
 }
 
-func TestJSONLLineAboveFourMiBFitsUnifiedEightMiBChunk(t *testing.T) {
-	line := append([]byte(`{"message":"`), bytes.Repeat([]byte("x"), (4<<20)+128)...)
+func TestJSONLLineAboveEightMiBFitsUnifiedFiveHundredMiBChunk(t *testing.T) {
+	line := append([]byte(`{"message":"`), bytes.Repeat([]byte("x"), (8<<20)+128)...)
 	line = append(line, []byte(`"}`+"\n")...)
 	chunks, pending, err := splitSessionJSONL(bytes.NewReader(line), 0, 1, sessionChunkLimits{
 		MaxEvents: defaultSyncChunkEvents, MaxChunkBytes: defaultSyncChunkBytes, MaxLineBytes: defaultSyncMaxLineBytes,
 	})
 	if err != nil || pending || len(chunks) != 1 || len(chunks[0].Content) != len(line) {
+		t.Fatalf("chunks=%d pending=%t err=%v", len(chunks), pending, err)
+	}
+}
+
+func TestSessionUploadLimitsAreFiveHundredMiB(t *testing.T) {
+	if defaultSyncChunkBytes != 500<<20 || defaultSyncMaxLineBytes != 500<<20 {
+		t.Fatalf("chunk=%d line=%d", defaultSyncChunkBytes, defaultSyncMaxLineBytes)
+	}
+}
+
+func TestLargeSingleLineStreamsAsOneChunk(t *testing.T) {
+	line := append([]byte(`{"payload":"`), bytes.Repeat([]byte("x"), 700)...)
+	line = append(line, []byte(`"}`+"\n")...)
+	chunks, pending, err := splitSessionJSONL(bytes.NewReader(line), 0, 1, sessionChunkLimits{
+		MaxEvents: 10, MaxChunkBytes: 1024, MaxLineBytes: 1024,
+	})
+	if err != nil || pending || len(chunks) != 1 || !bytes.Equal(chunks[0].Content, line) {
 		t.Fatalf("chunks=%d pending=%t err=%v", len(chunks), pending, err)
 	}
 }

@@ -115,6 +115,22 @@ func streamSessionJSONLChunks(
 				return false, err
 			}
 		}
+		if chunkEvents == 0 && len(line) > limits.MaxChunkBytes/2 {
+			startCursor := cursor
+			startLine := lineNumber
+			cursor += int64(len(line))
+			lineNumber++
+			sum := sha256.Sum256(line)
+			if err := emit(localSessionChunk{
+				StartCursor: startCursor, EndCursor: cursor, StartLine: startLine, EndLine: startLine,
+				Content: line, ContentSHA256: hex.EncodeToString(sum[:]),
+			}); err != nil {
+				return false, err
+			}
+			chunkStartCursor = cursor
+			chunkStartLine = lineNumber
+			continue
+		}
 		if chunkEvents == 0 {
 			chunkStartCursor = cursor
 			chunkStartLine = lineNumber

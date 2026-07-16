@@ -8,6 +8,8 @@
 > 次要责任边界：服务端 staging 生命周期与 Session 状态一致性  
 > 本文记录真实测试结论和修复验收要求；修复代码已完成，但尚未发布生产。
 
+> 最终实现口径：客户端、服务端接收、内容投影、Token 解析和历史回填的单行/chunk 上限统一为 500MiB；Session 总文件大小不设置业务上限。客户端 multipart 改为流式发送，单 chunk 超时调整为 30 分钟。
+
 ## 1. 问题结论
 
 当前 Aida 客户端能够分块上传总体积很大的 Session，但不能上传“任意合法的本地 Session”。只要某一条 JSONL 记录超过客户端 4MB chunk 上限，整个 Session 上传就会在客户端中断。
@@ -149,7 +151,7 @@ maxSessionSyncUncompressedChunk = 64 << 20
 
 1. 在调用 `/session-syncs/prepare` 之前完成本地可上传性预检；
 2. chunk 上限必须至少覆盖客户端允许的完整单行上限，并与服务端能力对齐；
-3. 4MB～8MB 的完整 JSONL 行必须能够作为单独 chunk 上传；
+3. 不超过 500MiB 的完整 JSONL 行必须能够作为单独 chunk 上传；
 4. 不得把单个 JSONL 事件任意拆成两个服务器无法独立解析的 JSONL chunk；
 5. 超过服务端最大能力的单行必须在任何远端写入前失败，并给出明确的行号、大小和上限；
 6. 上传中途发生不可恢复错误时，客户端必须调用明确的 abort/cleanup 流程；
@@ -157,7 +159,7 @@ maxSessionSyncUncompressedChunk = 64 << 20
 
 推荐实现优先级：
 
-- 第一阶段：将 chunk 与单行上限统一到不小于 8MB，并增加 prepare 前完整预检；
+- 第一阶段：将客户端和服务端整条链路的 chunk/单行上限统一到 500MiB，并增加 prepare 前完整预检；
 - 第二阶段：由服务端 capability 或版本契约下发允许的 chunk/line 上限，避免客户端硬编码漂移；
 - 第三阶段：如需要支持超过服务端单 chunk 上限的单事件，再设计带 framing/reassembly 的协议，不能直接切断 JSONL。
 
@@ -181,6 +183,9 @@ maxSessionSyncUncompressedChunk = 64 << 20
 | 4MB - 1B | 上传成功 |
 | 4MB + 1B | 上传成功，不再触发现有错误 |
 | 8MB - 1B | 上传成功 |
+| 8MB + 1B | 上传成功 |
+| 500MiB 边界 | 上传、投影和 Token 解析成功 |
+| 500MiB + 1B | prepare 前明确拒绝，不产生服务端 staging |
 | 客户端/服务端协商上限 - 1B | 上传成功 |
 | 协商上限 + 1B | prepare 前清晰拒绝，服务端零写入 |
 | 超大行位于文件中部 | 不留下 staging 或部分 Session 可用状态 |
@@ -215,8 +220,8 @@ maxSessionSyncUncompressedChunk = 64 << 20
 满足以下条件才能关闭本 Bug：
 
 1. 本次 4,325,340 B 和 4,363,901 B 的真实单行均可成功上传；
-2. 总文件大于 300MB 且单行合法时可以完成增量上传；
-3. 客户端不再存在“允许读取 8MB、只能上传 4MB”的矛盾；
+2. 总文件大小不设业务上限且单行不超过 500MiB 时可以完成增量上传；
+3. 客户端、服务端接收、内容投影、Token 解析和历史回填均使用统一的 500MiB 边界；
 4. 任何不可恢复的上传失败都不会留下错误的 `available` Session；
 5. 不存在无期限 staging、悬空 chunk 或错误 ready 状态；
 6. 失败后重试具有幂等性；

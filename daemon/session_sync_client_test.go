@@ -124,35 +124,15 @@ func TestIncrementalUploadFallsBackOnlyForExplicitDisabledCode(t *testing.T) {
 	}
 }
 
-func TestIncrementalUploadPreflightRejectsOversizedLineBeforePrepare(t *testing.T) {
-	prepareRequests := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/session-syncs/prepare" {
-			prepareRequests++
-		}
-		http.Error(w, "unexpected request", http.StatusInternalServerError)
-	}))
-	defer server.Close()
-
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	path := filepath.Join(home, "oversized.jsonl")
-	content := append([]byte(`{"payload":"`), strings.Repeat("x", defaultSyncMaxLineBytes)...)
+func TestIncrementalUploadPreflightAcceptsLineAbovePreviousEightMiBLimit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "large-line.jsonl")
+	content := append([]byte(`{"payload":"`), strings.Repeat("x", (8<<20)+1)...)
 	content = append(content, []byte(`"}`+"\n")...)
 	if err := os.WriteFile(path, content, 0600); err != nil {
 		t.Fatal(err)
 	}
-	session := &SessionInfo{SessionRef: "oversized", AgentType: "codex", FilePath: path}
-	_, err := uploadSessionGroupIncremental(
-		&Config{APIURL: server.URL, Token: "test-token"},
-		[]sessionWithFile{{info: session, filePath: path}},
-		session.SessionRef,
-	)
-	if err == nil || !strings.Contains(err.Error(), "preflight") || !strings.Contains(err.Error(), "exceeds") {
-		t.Fatalf("err=%v", err)
-	}
-	if prepareRequests != 0 {
-		t.Fatalf("prepare requests=%d, want 0", prepareRequests)
+	if err := preflightSessionSource(path); err != nil {
+		t.Fatal(err)
 	}
 }
 

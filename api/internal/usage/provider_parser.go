@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-const MaxUsageLineBytes = 8 << 20
+const MaxUsageLineBytes = 500 << 20
 
 const CodexLongContextInputThreshold int64 = 272000
 
@@ -483,7 +483,7 @@ func readUsageLine(reader *bufio.Reader) ([]byte, error) {
 		line.Write(fragment)
 		switch {
 		case err == nil:
-			return append([]byte(nil), line.Bytes()...), nil
+			return line.Bytes(), nil
 		case errors.Is(err, bufio.ErrBufferFull):
 			continue
 		case errors.Is(err, io.EOF) && line.Len() == 0:
