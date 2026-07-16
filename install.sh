@@ -4,13 +4,11 @@
 #
 # Usage:
 #   curl -fsSL http://<host>/statics-live/aida/install.sh | bash
-#   curl -fsSL http://<host>/statics-live/aida/install.sh | AIDA_API_URL=http://host:8080/api/v1 AIDA_TOKEN=xxx bash
 #
 # Environment variables:
 #   AIDA_RELEASE_URL  Static release directory URL, defaults to the packaged value.
 #   AIDA_API_URL      Aida API base URL written to ~/.aida.yaml. Defaults to the packaged value when provided by the release package.
 #   AIDA_INTERNAL_API_URL  Optional trusted internal API URL preferred when authenticated probing succeeds.
-#   AIDA_TOKEN        User JWT written to ~/.aida.yaml when provided.
 #   AIDA_INSTALL_DIR  Install directory, default ~/.local/bin.
 #   AIDA_FORCE        Set to 1 to skip update prompts.
 #
@@ -19,7 +17,6 @@ set -euo pipefail
 RELEASE_URL="${AIDA_RELEASE_URL:-http://localhost:5080/statics-live/aida}"
 API_URL="${AIDA_API_URL:-http://localhost:8080/api/v1}"
 INTERNAL_API_URL="${AIDA_INTERNAL_API_URL:-}"
-TOKEN="${AIDA_TOKEN:-}"
 INSTALL_DIR="${AIDA_INSTALL_DIR:-$HOME/.local/bin}"
 
 RELEASE_URL="${RELEASE_URL%/}"
@@ -164,17 +161,15 @@ if [ -f "$CONFIG_FILE" ]; then
 	[ -n "$INTERNAL_API_URL" ] && upsert_config_value "$CONFIG_FILE" auto_route true
 	[ -n "$RELEASE_URL" ] && upsert_config_value "$CONFIG_FILE" release_url "$RELEASE_URL"
 	[ -n "$RELEASE_URL" ] && upsert_config_value "$CONFIG_FILE" auto_update true
-	[ -n "$TOKEN" ] && upsert_config_value "$CONFIG_FILE" token "$TOKEN"
     chmod 600 "$CONFIG_FILE"
     echo "updated config -> $CONFIG_FILE"
-elif [ -n "$API_URL" ] || [ -n "$TOKEN" ]; then
+elif [ -n "$API_URL" ]; then
     {
 		[ -n "$API_URL" ] && printf 'api_url: %s\n' "$API_URL"
 		[ -n "$INTERNAL_API_URL" ] && printf 'internal_api_url: %s\n' "$INTERNAL_API_URL"
 		[ -n "$INTERNAL_API_URL" ] && printf 'auto_route: true\n'
 		[ -n "$RELEASE_URL" ] && printf 'release_url: %s\n' "$RELEASE_URL"
 		[ -n "$RELEASE_URL" ] && printf 'auto_update: true\n'
-        [ -n "$TOKEN" ] && printf 'token: %s\n' "$TOKEN"
     } > "$CONFIG_FILE"
     chmod 600 "$CONFIG_FILE"
     echo "wrote config -> $CONFIG_FILE"
@@ -208,14 +203,8 @@ if [ -n "$PATH_RC_FILE" ]; then
     echo "  ${step}. Reload your shell: source $PATH_RC_FILE"
     step=$((step + 1))
 fi
-HAS_CONFIG_TOKEN=0
-if [ -f "$CONFIG_FILE" ] && grep -Eq '^[[:space:]]*token:[[:space:]]*[^[:space:]]' "$CONFIG_FILE"; then
-    HAS_CONFIG_TOKEN=1
-fi
-if [ "$HAS_CONFIG_TOKEN" -eq 0 ]; then
-    echo "  ${step}. Login: aida login --server ${API_URL%/} --token <jwt>"
-    step=$((step + 1))
-fi
+echo "  ${step}. Login: aida login"
+step=$((step + 1))
 echo "  ${step}. List local sessions: aida sessions"
 step=$((step + 1))
 echo "  ${step}. Upload sessions: aida upload --all"

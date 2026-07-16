@@ -9,7 +9,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-var Version = "dev"
+var (
+	Version           = "dev"
+	DefaultReleaseURL = ""
+)
 
 type Config struct {
 	APIURL           string `yaml:"api_url"`
@@ -67,6 +70,8 @@ func configFromEnv(cfg *Config) *Config {
 	}
 	if v := os.Getenv("AIDA_RELEASE_URL"); v != "" {
 		cfg.ReleaseURL = strings.TrimRight(v, "/")
+	} else if strings.TrimSpace(cfg.ReleaseURL) == "" && strings.TrimSpace(DefaultReleaseURL) != "" {
+		cfg.ReleaseURL = strings.TrimRight(strings.TrimSpace(DefaultReleaseURL), "/")
 	}
 	if v := strings.TrimSpace(os.Getenv("AIDA_AUTO_ROUTE")); v != "" {
 		cfg.AutoRoute = v == "1" || strings.EqualFold(v, "true")
@@ -106,16 +111,16 @@ func main() {
 
 	switch os.Args[1] {
 	case "login":
-		maybeAutoUpdate(loadConfig())
+		requireCurrentVersion(loadConfig())
 		cmdLogin(os.Args[2:])
 	case "sessions", "ls":
-		maybeAutoUpdate(loadConfig())
+		requireCurrentVersion(loadConfig())
 		cmdSessions(os.Args[2:])
 	case "upload", "push":
-		maybeAutoUpdate(loadConfig())
+		requireCurrentVersion(loadConfig())
 		cmdUpload(os.Args[2:])
 	case "status":
-		maybeAutoUpdate(loadConfig())
+		requireCurrentVersion(loadConfig())
 		cmdStatus()
 	case "update":
 		cmdUpdate()
@@ -130,6 +135,14 @@ func main() {
 	}
 }
 
+func requireCurrentVersion(cfg *Config) {
+	if err := maybeAutoUpdate(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "Aida update required but failed: %v\n", err)
+		fmt.Fprintln(os.Stderr, "Run 'aida update' or reinstall Aida, then retry this command.")
+		os.Exit(1)
+	}
+}
+
 func printUsage() {
 	fmt.Print(`aida - CLI for uploading AI coding sessions to Aida
 
@@ -137,7 +150,7 @@ Usage:
   aida <command> [options]
 
 Commands:
-  login    --server <url> --token <token>   Login with server URL and API token
+  login                                      Enter your personal token interactively
   sessions [--all] [--project <dir>] [--page N] [--page-size N] [--json]
                                             List local Claude Code and Codex sessions
   upload   [numbers...] [--all] [--page-size N]
@@ -147,11 +160,8 @@ Commands:
   version                                    Show CLI version
 
 Examples:
-  # Login with platform token
-  aida login --server http://<server>:18090/api/v1 --token eyJhbG...
-
-  # Login interactively (enter token when prompted)
-  aida login --server http://<server>:18090/api/v1
+  # Login interactively using the service address installed with Aida
+  aida login
 
   # List recent sessions (last 48h)
   aida sessions

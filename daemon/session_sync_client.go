@@ -30,6 +30,11 @@ const (
 
 var errSessionSyncNotEnabled = errors.New("incremental session sync is not enabled")
 
+var (
+	sessionReadinessTimeout      = 60 * time.Second
+	sessionReadinessPollInterval = time.Second
+)
+
 type uploadStateFile struct {
 	Version int                         `json:"version"`
 	Sources map[string]localUploadState `json:"sources"`
@@ -91,10 +96,14 @@ type prepareSourceResult struct {
 }
 
 type incrementalUploadResult struct {
-	SessionRef     string
-	Status         string
-	UploadedChunks int
-	PendingTail    bool
+	SessionRef      string
+	GenerationID    string
+	Status          string
+	UploadedChunks  int
+	PendingTail     bool
+	ContentStatus   string
+	ReadyForReports bool
+	ErrorCode       string
 }
 
 func uploadSessionGroupIncremental(cfg *Config, items []sessionWithFile, parentSessionRef string) ([]incrementalUploadResult, error) {
@@ -142,7 +151,10 @@ func uploadSessionSourceIncremental(
 	if err != nil {
 		return incrementalUploadResult{}, err
 	}
-	result = incrementalUploadResult{SessionRef: session.SessionRef, Status: prepared.Action}
+	result = incrementalUploadResult{
+		SessionRef: session.SessionRef, GenerationID: prepared.GenerationID,
+		Status: prepared.Action, ContentStatus: prepared.ContentStatus,
+	}
 	if prepared.Action == "content_cleared" {
 		return result, nil
 	}
@@ -243,6 +255,25 @@ func uploadSessionSourceIncremental(
 		}
 	}
 	abortOnFailure = false
+	readiness, err := waitForGenerationReadiness(cfg, prepared.GenerationID)
+	if err != nil {
+		return incrementalUploadResult{}, err
+	}
+	result.ContentStatus = readiness.ContentStatus
+	result.ReadyForReports = readiness.ReadyForReports
+	result.ErrorCode = readiness.ErrorCode
+	switch {
+	case readiness.ErrorCode != "":
+		result.Status = "failed"
+	case readiness.ReadyForReports:
+		if prepared.Action == "unchanged" && result.UploadedChunks == 0 {
+			result.Status = "unchanged"
+		} else {
+			result.Status = "ready"
+		}
+	default:
+		result.Status = "processing"
+	}
 	return result, nil
 }
 
@@ -405,6 +436,43 @@ func finalizeSessionSource(cfg *Config, generationID string, cursor int64, prefi
 		return fmt.Errorf("finalize HTTP %d: %s", status, truncate(string(body), 300))
 	}
 	return nil
+}
+
+type generationReadiness struct {
+	GenerationID            string `json:"generation_id"`
+	GenerationStatus        string `json:"generation_status"`
+	ContentStatus           string `json:"content_status"`
+	ContentProjectionStatus string `json:"content_projection_status"`
+	ReadyForReports         bool   `json:"ready_for_reports"`
+	ErrorCode               string `json:"error_code"`
+	ErrorMessage            string `json:"error_message"`
+}
+
+func waitForGenerationReadiness(cfg *Config, generationID string) (generationReadiness, error) {
+	deadline := time.Now().Add(sessionReadinessTimeout)
+	for {
+		status, body, err := doSessionSyncRequest(
+			cfg, http.MethodGet, "/session-syncs/"+generationID+"/status", "", nil, defaultRequestTimeout,
+		)
+		if err != nil {
+			return generationReadiness{}, err
+		}
+		if status >= 300 {
+			return generationReadiness{}, fmt.Errorf("readiness HTTP %d: %s", status, truncate(string(body), 300))
+		}
+		var readiness generationReadiness
+		if err := json.Unmarshal(body, &readiness); err != nil {
+			return generationReadiness{}, errors.New("invalid readiness response")
+		}
+		if readiness.ReadyForReports || readiness.ErrorCode != "" ||
+			readiness.ContentProjectionStatus == "failed" || readiness.ContentStatus == "upload_failed" {
+			return readiness, nil
+		}
+		if !time.Now().Before(deadline) {
+			return readiness, nil
+		}
+		time.Sleep(sessionReadinessPollInterval)
+	}
 }
 
 func abortSessionSource(cfg *Config, generationID string) error {

@@ -43,7 +43,7 @@ func TestIncrementalUploadRetriesResponseLossAndResumes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) != 1 || results[0].Status != "uploaded" || results[0].UploadedChunks != 1 {
+	if len(results) != 1 || results[0].Status != "ready" || !results[0].ReadyForReports || results[0].UploadedChunks != 1 {
 		t.Fatalf("results=%+v", results)
 	}
 	serverState.mu.Lock()
@@ -78,7 +78,7 @@ func TestIncrementalUploadRetriesResponseLossAndResumes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) != 1 || results[0].Status != "unchanged" || results[0].UploadedChunks != 0 {
+	if len(results) != 1 || results[0].Status != "unchanged" || !results[0].ReadyForReports || results[0].UploadedChunks != 0 {
 		t.Fatalf("second results=%+v", results)
 	}
 	serverState.mu.Lock()
@@ -95,7 +95,7 @@ func TestIncrementalUploadRetriesResponseLossAndResumes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) != 1 || results[0].Status != "uploaded" || results[0].UploadedChunks != 1 {
+	if len(results) != 1 || results[0].Status != "ready" || !results[0].ReadyForReports || results[0].UploadedChunks != 1 {
 		t.Fatalf("incremental results=%+v", results)
 	}
 	serverState.mu.Lock()
@@ -121,6 +121,94 @@ func TestIncrementalUploadFallsBackOnlyForExplicitDisabledCode(t *testing.T) {
 	_, err := uploadSessionGroupIncremental(&Config{APIURL: server.URL, Token: "token"}, []sessionWithFile{{info: session, filePath: path}}, session.SessionRef)
 	if !errors.Is(err, errSessionSyncNotEnabled) {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestWaitForGenerationReadinessPollsUntilReady(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/session-syncs/generation-1/status" {
+			http.NotFound(w, r)
+			return
+		}
+		requests++
+		ready := requests >= 3
+		projectionStatus := "building"
+		contentStatus := "processing"
+		if ready {
+			projectionStatus = "active"
+			contentStatus = "available"
+		}
+		writeTestJSON(w, map[string]any{
+			"generation_id": "generation-1", "generation_status": "active",
+			"content_status": contentStatus, "content_projection_status": projectionStatus,
+			"ready_for_reports": ready,
+		})
+	}))
+	defer server.Close()
+
+	previousTimeout := sessionReadinessTimeout
+	previousInterval := sessionReadinessPollInterval
+	sessionReadinessTimeout = 100 * time.Millisecond
+	sessionReadinessPollInterval = time.Millisecond
+	defer func() {
+		sessionReadinessTimeout = previousTimeout
+		sessionReadinessPollInterval = previousInterval
+	}()
+
+	result, err := waitForGenerationReadiness(&Config{APIURL: server.URL, Token: "test-token"}, "generation-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.ReadyForReports || requests != 3 {
+		t.Fatalf("result=%+v requests=%d", result, requests)
+	}
+}
+
+func TestWaitForGenerationReadinessReturnsProcessingOnTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeTestJSON(w, map[string]any{
+			"generation_id": "generation-2", "generation_status": "active",
+			"content_status": "processing", "content_projection_status": "building",
+			"ready_for_reports": false,
+		})
+	}))
+	defer server.Close()
+
+	previousTimeout := sessionReadinessTimeout
+	previousInterval := sessionReadinessPollInterval
+	sessionReadinessTimeout = 5 * time.Millisecond
+	sessionReadinessPollInterval = time.Millisecond
+	defer func() {
+		sessionReadinessTimeout = previousTimeout
+		sessionReadinessPollInterval = previousInterval
+	}()
+
+	result, err := waitForGenerationReadiness(&Config{APIURL: server.URL, Token: "test-token"}, "generation-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ReadyForReports || result.ContentProjectionStatus != "building" {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestWaitForGenerationReadinessReturnsProjectionFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeTestJSON(w, map[string]any{
+			"generation_id": "generation-3", "generation_status": "active",
+			"content_status": "processing", "content_projection_status": "failed",
+			"ready_for_reports": false, "error_code": "CONTENT_PROJECTION_FAILED",
+		})
+	}))
+	defer server.Close()
+
+	result, err := waitForGenerationReadiness(&Config{APIURL: server.URL, Token: "test-token"}, "generation-3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ErrorCode != "CONTENT_PROJECTION_FAILED" {
+		t.Fatalf("result=%+v", result)
 	}
 }
 
@@ -386,6 +474,12 @@ func (s *fakeSessionSyncServer) serveHTTP(w http.ResponseWriter, r *http.Request
 		}
 		s.active = true
 		writeTestJSON(w, map[string]any{"status": "active"})
+	case strings.HasPrefix(r.URL.Path, "/session-syncs/") && strings.HasSuffix(r.URL.Path, "/status"):
+		writeTestJSON(w, map[string]any{
+			"generation_id": s.generationID, "generation_status": "active",
+			"content_status": "available", "content_projection_status": "active",
+			"ready_for_reports": true,
+		})
 	case strings.HasPrefix(r.URL.Path, "/session-syncs/") && strings.HasSuffix(r.URL.Path, "/abort"):
 		s.abortRequests++
 		writeTestJSON(w, map[string]any{"status": "abandoned"})

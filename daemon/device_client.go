@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	term "github.com/charmbracelet/x/term"
 )
 
 type Event struct {
@@ -51,32 +53,37 @@ type UserMsg struct {
 }
 
 type SessionInfo struct {
-	SessionRef       string
-	ParentSessionRef string
-	ForkedAt         time.Time
-	ForkSource       string
-	AgentType        string // "" (== claude_code, default) or "codex"
-	FilePath         string
-	FileModifiedAt   time.Time
-	ProjectDir       string
-	Cwd              string
-	GitBranch        string
-	StartedAt        time.Time
-	EndedAt          time.Time
-	Model            string
-	Models           []string // distinct models seen, in insertion order
-	Summary          string
-	SummaryStatus    string
-	SummarySource    string
-	ToolCalls        map[string]int
-	InputTok         int64
-	OutputTok        int64
-	CacheCreateTok   int64
-	CacheReadTok     int64
-	TotalTok         int64
-	NumLines         int
-	SubFiles         []string // subagent JSONL file paths
-	ActivitySlices   []ActivitySlice
+	SessionRef           string
+	ParentSessionRef     string
+	ForkedAt             time.Time
+	ForkSource           string
+	ForkAgentPath        string
+	AgentType            string // "" (== claude_code, default) or "codex"
+	FilePath             string
+	FileModifiedAt       time.Time
+	ProjectDir           string
+	Cwd                  string
+	GitBranch            string
+	StartedAt            time.Time
+	EndedAt              time.Time
+	Model                string
+	Models               []string // distinct models seen, in insertion order
+	Summary              string
+	SummaryStatus        string
+	SummarySource        string
+	ToolCalls            map[string]int
+	InputTok             int64
+	OutputTok            int64
+	CacheCreateTok       int64
+	CacheReadTok         int64
+	TotalTok             int64
+	NumLines             int
+	SubFiles             []string // subagent JSONL file paths
+	ActivitySlices       []ActivitySlice
+	SelectionChildren    []*SessionInfo `json:"-"`
+	SelectionActiveAt    time.Time      `json:"-"`
+	SelectionMissingRoot bool           `json:"-"`
+	SelectionIssue       string         `json:"-"`
 }
 
 type ActivitySlice struct {
@@ -135,7 +142,7 @@ func (s *SessionInfo) LastActiveAt() time.Time {
 }
 
 func formatLastActiveTime(s *SessionInfo, layout string) string {
-	if activeAt := s.LastActiveAt(); !activeAt.IsZero() {
+	if activeAt := sessionSelectionLastActiveAt(s); !activeAt.IsZero() {
 		return activeAt.Format(layout)
 	}
 	return "-"
@@ -268,7 +275,7 @@ func formatSessionListRow(index int, s *SessionInfo) string {
 		return ""
 	}
 	lastActive := "-"
-	if activeAt := s.LastActiveAt(); !activeAt.IsZero() {
+	if activeAt := sessionSelectionLastActiveAt(s); !activeAt.IsZero() {
 		lastActive = activeAt.Format("2006-01-02 15:04")
 	}
 	dur := "-"
@@ -354,9 +361,19 @@ func cmdLogin(args []string) {
 
 	if token == "" {
 		fmt.Print("Enter API token: ")
-		reader := bufio.NewReader(os.Stdin)
-		input, _ := reader.ReadString('\n')
-		token = strings.TrimSpace(input)
+		if inputInfo, err := os.Stdin.Stat(); err == nil && inputInfo.Mode()&os.ModeCharDevice != 0 {
+			input, readErr := term.ReadPassword(os.Stdin.Fd())
+			fmt.Println()
+			if readErr != nil {
+				fmt.Printf("Error: failed to read token: %v\n", readErr)
+				os.Exit(1)
+			}
+			token = strings.TrimSpace(string(input))
+		} else {
+			reader := bufio.NewReader(os.Stdin)
+			input, _ := reader.ReadString('\n')
+			token = strings.TrimSpace(input)
+		}
 	}
 
 	if token == "" {
@@ -426,7 +443,7 @@ func cmdSessions(args []string) {
 	if projectFilter != "" {
 		var filtered []*SessionInfo
 		for _, s := range sessions {
-			if strings.Contains(s.ProjectDir, projectFilter) || strings.Contains(s.Cwd, projectFilter) {
+			if sessionSelectionMatchesProject(s, projectFilter) {
 				filtered = append(filtered, s)
 			}
 		}
@@ -510,9 +527,13 @@ func cmdUpload(args []string) {
 			toUpload = append(toUpload, sessions[idx-1])
 		}
 	} else {
-		reader := bufio.NewReader(os.Stdin)
 		var err error
-		toUpload, err = selectSessionsInteractively(sessions, pageSize, reader, os.Stdout)
+		if terminalSupportsTUI(os.Stdin, os.Stdout) {
+			toUpload, err = selectSessionsWithTUI(sessions)
+		} else {
+			reader := bufio.NewReader(os.Stdin)
+			toUpload, err = selectSessionsInteractively(sessions, pageSize, reader, os.Stdout)
+		}
 		if err != nil {
 			fmt.Printf("Session selection failed: %v\n", err)
 			return
@@ -530,6 +551,10 @@ func cmdUpload(args []string) {
 
 	fmt.Printf("\nUploading %d session(s) to %s (%s) ...\n\n", len(toUpload), apiBaseURL(cfg), cfg.ActiveRoute)
 
+	totalReady := 0
+	totalProcessing := 0
+	totalFailed := 0
+	totalCurrentSnapshots := 0
 	totalUploaded := 0
 	totalSubs := 0
 
@@ -538,20 +563,34 @@ func cmdUpload(args []string) {
 		incrementalResults, incrementalErr := uploadSessionGroupIncremental(cfg, allSessions, s.SessionRef)
 		if !errors.Is(incrementalErr, errSessionSyncNotEnabled) {
 			for index, result := range incrementalResults {
-				label := "OK"
-				switch result.Status {
-				case "unchanged":
-					label = "SKIP"
-				case "content_cleared":
+				label := "PROCESSING"
+				switch {
+				case result.Status == "content_cleared":
 					label = "BLOCKED"
+					totalFailed++
+				case result.ErrorCode != "" || result.Status == "failed":
+					label = "FAILED"
+					totalFailed++
+				case result.PendingTail:
+					label = "CURRENT"
+					totalCurrentSnapshots++
+				case result.ReadyForReports:
+					label = "READY"
+					totalReady++
+				default:
+					totalProcessing++
 				}
-				fmt.Printf("  [%-7s] %-14s  incremental=%s chunks=%d",
-					label, shortRef(result.SessionRef), result.Status, result.UploadedChunks)
+				fmt.Printf("  [%-10s] %-14s  incremental=%s chunks=%d content=%s",
+					label, shortRef(result.SessionRef), result.Status, result.UploadedChunks,
+					firstNonEmpty(result.ContentStatus, "processing"))
 				if result.PendingTail {
-					fmt.Print(" pending-half-line")
+					fmt.Print(" snapshot-only")
+				}
+				if result.ErrorCode != "" {
+					fmt.Printf(" error=%s", result.ErrorCode)
 				}
 				fmt.Println()
-				if result.Status == "uploaded" {
+				if result.UploadedChunks > 0 {
 					if index == 0 {
 						totalUploaded++
 					} else {
@@ -561,6 +600,7 @@ func cmdUpload(args []string) {
 			}
 			if incrementalErr != nil {
 				fmt.Printf("  [FAIL]  %-14s  %v\n", shortRef(s.SessionRef), incrementalErr)
+				totalFailed++
 			}
 			continue
 		}
@@ -593,6 +633,7 @@ func cmdUpload(args []string) {
 		req, err := http.NewRequest("POST", apiBaseURL(cfg)+"/sessions/batch", &buf)
 		if err != nil {
 			fmt.Printf("  [FAIL]  %-14s  %s  %v\n", s.SessionRef[:12], formatLastActiveTime(s, "01-02 15:04"), err)
+			totalFailed++
 			continue
 		}
 		req.Header.Set("Content-Type", writer.FormDataContentType())
@@ -601,6 +642,7 @@ func cmdUpload(args []string) {
 		respBody, err := doRequestWithTimeout(req, sessionUploadRequestTimeout)
 		if err != nil {
 			fmt.Printf("  [FAIL]  %-14s  %s  %v\n", s.SessionRef[:12], formatLastActiveTime(s, "01-02 15:04"), err)
+			totalFailed++
 			continue
 		}
 
@@ -614,6 +656,7 @@ func cmdUpload(args []string) {
 		}
 		if err := json.Unmarshal(respBody, &result); err != nil {
 			fmt.Printf("  [FAIL]  %-14s  %s  invalid response: %v\n", s.SessionRef[:12], formatLastActiveTime(s, "01-02 15:04"), err)
+			totalFailed++
 			continue
 		}
 
@@ -641,27 +684,42 @@ func cmdUpload(args []string) {
 			fmt.Printf("  [OK]    %-14s  %s  %8s  %s\n",
 				s.SessionRef[:12], formatLastActiveTime(s, "01-02 15:04"), s.FormatTokens(), trunc(s.Summary, 40))
 			totalUploaded++
+			totalProcessing++
 		case "updated":
 			fmt.Printf("  [OK]    %-14s  %s  updated existing session\n",
 				s.SessionRef[:12], formatLastActiveTime(s, "01-02 15:04"))
 			totalUploaded++
+			totalProcessing++
 		case "duplicate":
 			fmt.Printf("  [SKIP]  %-14s  %s  (already uploaded)\n",
 				s.SessionRef[:12], formatLastActiveTime(s, "01-02 15:04"))
+			totalProcessing++
 		default:
 			fmt.Printf("  [%s]  %-14s  %s\n", mainStatus, s.SessionRef[:12], formatLastActiveTime(s, "01-02 15:04"))
+			totalFailed++
 		}
 
 		if subSuccess > 0 {
 			fmt.Printf("          └─ %d sub-agent(s) processed\n", subSuccess)
 			totalSubs += subSuccess
+			totalProcessing += subSuccess
 		}
 		if hadError {
 			fmt.Println("          └─ one or more batch items failed; see errors above")
+			totalFailed++
 		}
 	}
 
-	fmt.Printf("\nDone. %d main + %d sub-agent(s) processed.\n", totalUploaded, totalSubs)
+	switch {
+	case totalFailed > 0:
+		fmt.Printf("\nCompleted with errors. %d ready, %d processing, %d current snapshot, %d failed.\n",
+			totalReady, totalProcessing, totalCurrentSnapshots, totalFailed)
+	case totalProcessing > 0 || totalCurrentSnapshots > 0:
+		fmt.Printf("\nUpload accepted. %d ready, %d processing, %d current snapshot.\n",
+			totalReady, totalProcessing, totalCurrentSnapshots)
+	default:
+		fmt.Printf("\nDone. %d Session(s) ready for reports.\n", totalReady)
+	}
 	if totalUploaded > 0 || totalSubs > 0 {
 		fmt.Printf("Dashboard: %s\n", strings.Replace(apiBaseURL(cfg), "/api/v1", "", 1))
 	}
@@ -676,9 +734,12 @@ type sessionWithFile struct {
 
 func collectSessionsWithFiles(s *SessionInfo) []sessionWithFile {
 	var items []sessionWithFile
-	items = append(items, sessionWithFile{info: s, filePath: s.FilePath})
+	if s == nil {
+		return items
+	}
 	seenRefs := map[string]bool{}
-	if s.SessionRef != "" {
+	if s.SessionRef != "" && s.FilePath != "" {
+		items = append(items, sessionWithFile{info: s, filePath: s.FilePath})
 		seenRefs[s.SessionRef] = true
 	}
 	for _, subFile := range s.SubFiles {
@@ -688,6 +749,13 @@ func collectSessionsWithFiles(s *SessionInfo) []sessionWithFile {
 		}
 		seenRefs[sub.SessionRef] = true
 		items = append(items, sessionWithFile{info: sub, filePath: subFile})
+	}
+	for _, child := range s.SelectionChildren {
+		if child == nil || child.SessionRef == "" || child.FilePath == "" || seenRefs[child.SessionRef] {
+			continue
+		}
+		seenRefs[child.SessionRef] = true
+		items = append(items, sessionWithFile{info: child, filePath: child.FilePath})
 	}
 	return items
 }

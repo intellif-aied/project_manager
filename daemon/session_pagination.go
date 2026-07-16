@@ -69,8 +69,8 @@ func writeSessionPage(output io.Writer, title string, page sessionListPage, sele
 		} else {
 			fmt.Fprintf(output, "%s%s\n", marker, formatSessionListRow(globalIndex, session))
 		}
-		if !narrow && len(session.SubFiles) > 0 {
-			fmt.Fprintf(output, "        %-38s %d sub-agent(s)\n", "", len(session.SubFiles))
+		if !narrow && sessionSelectionChildCount(session) > 0 {
+			fmt.Fprintf(output, "        %-38s %d sub-agent(s)\n", "", sessionSelectionChildCount(session))
 		}
 	}
 }
@@ -84,7 +84,7 @@ func sessionTerminalWidth() int {
 
 func writeNarrowSessionRow(output io.Writer, marker string, index int, session *SessionInfo) {
 	activeAt := "-"
-	if value := session.LastActiveAt(); !value.IsZero() {
+	if value := sessionSelectionLastActiveAt(session); !value.IsZero() {
 		activeAt = value.Format("01-02 15:04")
 	}
 	duration := "-"
@@ -96,24 +96,26 @@ func writeNarrowSessionRow(output io.Writer, marker string, index int, session *
 	fmt.Fprintf(output, "    %s\n", truncate(compactSessionText(firstNonEmpty(session.Summary, "暂无摘要")), max(20, sessionTerminalWidth()-6)))
 	fmt.Fprintf(output, "    %s · %s · %s · %s Token · %d sub-agent\n",
 		truncateMiddle(sessionProjectDisplay(session), 20), truncateMiddle(firstNonEmpty(session.Model, "-"), 14),
-		duration, session.FormatTokens(), len(session.SubFiles))
+		duration, session.FormatTokens(), sessionSelectionChildCount(session))
 }
 
 type sessionJSONItem struct {
-	Index          int      `json:"index"`
-	SessionRef     string   `json:"session_ref"`
-	AgentType      string   `json:"agent_type"`
-	LastActivityAt string   `json:"last_activity_at,omitempty"`
-	Summary        string   `json:"summary"`
-	SummaryStatus  string   `json:"summary_status"`
-	SummarySource  string   `json:"summary_source,omitempty"`
-	Project        string   `json:"project"`
-	CWD            string   `json:"cwd,omitempty"`
-	Model          string   `json:"model,omitempty"`
-	Models         []string `json:"models,omitempty"`
-	DurationSecs   int64    `json:"duration_secs"`
-	LocalTokens    int64    `json:"local_token_preview"`
-	SubagentCount  int      `json:"subagent_count"`
+	Index             int      `json:"index"`
+	SessionRef        string   `json:"session_ref"`
+	AgentType         string   `json:"agent_type"`
+	LastActivityAt    string   `json:"last_activity_at,omitempty"`
+	Summary           string   `json:"summary"`
+	SummaryStatus     string   `json:"summary_status"`
+	SummarySource     string   `json:"summary_source,omitempty"`
+	Project           string   `json:"project"`
+	CWD               string   `json:"cwd,omitempty"`
+	Model             string   `json:"model,omitempty"`
+	Models            []string `json:"models,omitempty"`
+	DurationSecs      int64    `json:"duration_secs"`
+	LocalTokens       int64    `json:"local_token_preview"`
+	SubagentCount     int      `json:"subagent_count"`
+	MemberSessionRefs []string `json:"member_session_refs,omitempty"`
+	MissingRoot       bool     `json:"missing_root,omitempty"`
 }
 
 func writeSessionsJSON(output io.Writer, sessions []*SessionInfo, pageNumber, pageSize int) error {
@@ -132,7 +134,7 @@ func writeSessionsJSON(output io.Writer, sessions []*SessionInfo, pageNumber, pa
 			}
 		}
 		lastActivity := ""
-		if value := session.LastActiveAt(); !value.IsZero() {
+		if value := sessionSelectionLastActiveAt(session); !value.IsZero() {
 			lastActivity = value.UTC().Format(time.RFC3339Nano)
 		}
 		items = append(items, sessionJSONItem{
@@ -140,7 +142,9 @@ func writeSessionsJSON(output io.Writer, sessions []*SessionInfo, pageNumber, pa
 			AgentType: firstNonEmpty(session.AgentType, "claude_code"), LastActivityAt: lastActivity,
 			Summary: firstNonEmpty(session.Summary, "暂无摘要"), SummaryStatus: status, SummarySource: session.SummarySource,
 			Project: sessionProjectDisplay(session), CWD: session.Cwd, Model: session.Model, Models: session.Models,
-			DurationSecs: int64(session.Duration().Seconds()), LocalTokens: session.TotalTok, SubagentCount: len(session.SubFiles),
+			DurationSecs: int64(session.Duration().Seconds()), LocalTokens: session.TotalTok,
+			SubagentCount: sessionSelectionChildCount(session), MemberSessionRefs: sessionSelectionMemberRefs(session),
+			MissingRoot: session.SelectionMissingRoot,
 		})
 	}
 	return json.NewEncoder(output).Encode(map[string]any{

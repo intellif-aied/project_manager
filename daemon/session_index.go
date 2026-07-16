@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-const sessionIndexVersion = 1
+const sessionIndexVersion = 2
 
 type sessionIndex struct {
 	Version int                          `json:"version"`
@@ -123,8 +123,7 @@ func scanLocalSessions(claudeDir, codexDir string, showAll bool, progress func(d
 	}
 	index.Entries = nextEntries
 	_ = saveSessionIndex(index)
-	sortSessionsNewestFirst(sessions)
-	return sessions
+	return groupSessionSelections(sessions, showAll, time.Now())
 }
 
 func scanSessionsForCommand(claudeDir, codexDir string, showAll, showProgress bool) []*SessionInfo {
@@ -160,7 +159,7 @@ func collectLocalSessionFiles(claudeDir, codexDir string, showAll bool) []localS
 			return nil
 		}
 		info, err := d.Info()
-		if err == nil && (showAll || time.Since(info.ModTime()) <= 48*time.Hour) {
+		if err == nil {
 			files = append(files, localSessionFile{Path: path, AgentType: "codex", Info: info})
 		}
 		return nil

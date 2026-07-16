@@ -19,24 +19,31 @@ import (
 )
 
 const (
-	autoUpdateInterval = 24 * time.Hour
 	updateHTTPTimeout  = 10 * time.Minute
 	maxUpdateTextBytes = 1 << 20
 )
 
-func maybeAutoUpdate(cfg *Config) {
-	if cfg == nil || !cfg.AutoUpdate || strings.TrimSpace(cfg.ReleaseURL) == "" || Version == "dev" {
-		return
+func maybeAutoUpdate(cfg *Config) error {
+	if cfg == nil || strings.TrimSpace(cfg.ReleaseURL) == "" || Version == "dev" {
+		return nil
 	}
-	if last, err := time.Parse(time.RFC3339, cfg.LastUpdateCheck); err == nil && time.Since(last) < autoUpdateInterval {
-		return
+	latest, err := latestReleaseVersion(cfg.ReleaseURL)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: unable to check for Aida updates: %v\n", err)
+		return nil
 	}
-	cfg.LastUpdateCheck = time.Now().UTC().Format(time.RFC3339)
-	saveConfig(cfg)
-	updated, err := performSelfUpdate(cfg)
-	if err == nil && updated {
-		fmt.Println("Aida updated in the background; the new version will be used on the next command.")
+	if !versionGreater(latest, Version) {
+		return nil
 	}
+	fmt.Printf("Aida update available: %s -> %s. Updating now...\n", Version, latest)
+	updated, err := performSelfUpdateVersion(cfg)
+	if err != nil {
+		return err
+	}
+	if !updated {
+		return nil
+	}
+	return restartAfterUpdate()
 }
 
 func cmdUpdate() {
@@ -59,17 +66,31 @@ func cmdUpdate() {
 
 func performSelfUpdate(cfg *Config) (bool, error) {
 	releaseURL := strings.TrimRight(strings.TrimSpace(cfg.ReleaseURL), "/")
-	latestBytes, err := fetchUpdateResource(releaseURL+"/aida-latest.txt", 128)
+	latest, err := latestReleaseVersion(releaseURL)
 	if err != nil {
 		return false, err
-	}
-	latest := strings.TrimSpace(string(latestBytes))
-	if latest == "" {
-		return false, errors.New("release version is empty")
 	}
 	if !versionGreater(latest, Version) {
 		return false, nil
 	}
+	return performSelfUpdateVersion(cfg)
+}
+
+func latestReleaseVersion(releaseURL string) (string, error) {
+	releaseURL = strings.TrimRight(strings.TrimSpace(releaseURL), "/")
+	latestBytes, err := fetchUpdateResource(releaseURL+"/aida-latest.txt", 128)
+	if err != nil {
+		return "", err
+	}
+	latest := strings.TrimSpace(string(latestBytes))
+	if latest == "" {
+		return "", errors.New("release version is empty")
+	}
+	return latest, nil
+}
+
+func performSelfUpdateVersion(cfg *Config) (bool, error) {
+	releaseURL := strings.TrimRight(strings.TrimSpace(cfg.ReleaseURL), "/")
 	binaryName, err := releaseBinaryName(runtime.GOOS, runtime.GOARCH)
 	if err != nil {
 		return false, err
@@ -132,7 +153,7 @@ func performSelfUpdate(cfg *Config) (bool, error) {
 		return false, err
 	}
 	if runtime.GOOS == "windows" {
-		if err := scheduleWindowsReplacement(temporaryPath, executable); err != nil {
+		if err := scheduleWindowsReplacement(temporaryPath, executable, os.Args[1:]); err != nil {
 			return false, err
 		}
 		cleanup = false
@@ -143,6 +164,28 @@ func performSelfUpdate(cfg *Config) (bool, error) {
 	}
 	cleanup = false
 	return true, nil
+}
+
+func restartAfterUpdate() error {
+	executable, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve updated executable: %w", err)
+	}
+	if runtime.GOOS == "windows" {
+		fmt.Println("Aida updated. Restarting the command...")
+		os.Exit(0)
+	}
+	fmt.Println("Aida updated. Restarting the command...")
+	command := exec.Command(executable, os.Args[1:]...)
+	command.Stdin = os.Stdin
+	command.Stdout = os.Stdout
+	command.Stderr = os.Stderr
+	command.Env = os.Environ()
+	if err := command.Start(); err != nil {
+		return fmt.Errorf("restart updated command: %w", err)
+	}
+	os.Exit(0)
+	return nil
 }
 
 func fetchUpdateResource(url string, limit int64) ([]byte, error) {
@@ -237,9 +280,16 @@ func numericVersion(value string) ([]int, bool) {
 	return values, true
 }
 
-func scheduleWindowsReplacement(updatePath, executable string) error {
+func scheduleWindowsReplacement(updatePath, executable string, args []string) error {
 	scriptPath := updatePath + ".cmd"
-	script := fmt.Sprintf("@echo off\r\n:retry\r\nmove /Y \"%s\" \"%s\" >nul 2>&1\r\nif errorlevel 1 (timeout /t 1 /nobreak >nul & goto retry)\r\ndel \"%%~f0\"\r\n", updatePath, executable)
+	commandArgs := make([]string, 0, len(args))
+	for _, arg := range args {
+		commandArgs = append(commandArgs, quoteWindowsBatchArg(arg))
+	}
+	script := fmt.Sprintf(
+		"@echo off\r\n:retry\r\nmove /Y \"%s\" \"%s\" >nul 2>&1\r\nif errorlevel 1 (timeout /t 1 /nobreak >nul & goto retry)\r\nstart \"\" /B \"%s\" %s\r\ndel \"%%~f0\"\r\n",
+		updatePath, executable, executable, strings.Join(commandArgs, " "),
+	)
 	if err := os.WriteFile(scriptPath, []byte(script), 0600); err != nil {
 		return err
 	}
@@ -249,4 +299,10 @@ func scheduleWindowsReplacement(updatePath, executable string) error {
 		return err
 	}
 	return nil
+}
+
+func quoteWindowsBatchArg(value string) string {
+	value = strings.ReplaceAll(value, "%", "%%")
+	value = strings.ReplaceAll(value, `"`, `\"`)
+	return `"` + value + `"`
 }

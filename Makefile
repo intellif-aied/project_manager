@@ -15,20 +15,25 @@ version:
 
 build-release-binaries:
 	mkdir -p dist
+	mkdir -p "$(HOME)/go/pkg/mod" "$(HOME)/.cache/go-build"
 	docker run --rm \
 		-v "$(CURDIR):/app" \
+		-v "$(HOME)/go/pkg/mod:/go/pkg/mod" \
+		-v "$(HOME)/.cache/go-build:/root/.cache/go-build" \
 		-w /app/daemon \
 		$(GO_DOCKER_IMAGE) \
-		sh -c 'CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "-s -w -X main.Version=$(VERSION)" -o /app/dist/aida-linux-amd64 . && \
-		       CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags "-s -w -X main.Version=$(VERSION)" -o /app/dist/aida-darwin-arm64 . && \
-		       CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "-s -w -X main.Version=$(VERSION)" -o /app/dist/aida-windows-amd64.exe .'
+		sh -c 'CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "-s -w -X main.Version=$(VERSION) -X main.DefaultReleaseURL=$(RELEASE_URL)" -o /app/dist/aida-linux-amd64 . && \
+		       CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags "-s -w -X main.Version=$(VERSION) -X main.DefaultReleaseURL=$(RELEASE_URL)" -o /app/dist/aida-darwin-arm64 . && \
+		       CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "-s -w -X main.Version=$(VERSION) -X main.DefaultReleaseURL=$(RELEASE_URL)" -o /app/dist/aida-windows-amd64.exe .'
 
 # Backward-compatible default: build the local test release package.
 release-dir: release-test-dir
 
+release-test-dir: RELEASE_URL=$(TEST_AIDA_RELEASE_URL)
 release-test-dir: build-release-binaries
 	$(call package_release,aida-releases-test,$(TEST_AIDA_RELEASE_URL),$(TEST_AIDA_API_URL),$(TEST_AIDA_INTERNAL_API_URL))
 
+release-prod-dir: RELEASE_URL=$(AIDA_RELEASE_URL)
 release-prod-dir: build-release-binaries
 	$(if $(AIDA_RELEASE_URL),,$(error AIDA_RELEASE_URL is required. Example: make release-prod-dir AIDA_RELEASE_URL=http://<server>:9000/statics-live/aida AIDA_API_URL=http://<server>:18090/api/v1))
 	$(call package_release,aida-releases-release,$(AIDA_RELEASE_URL),$(AIDA_API_URL),$(AIDA_INTERNAL_API_URL))
@@ -61,7 +66,8 @@ define package_release
 	@echo "release directory ready: ./$(1)"
 	@echo "publish its contents to: $(2)"
 	@echo "install command:"
-	@echo "  curl -fsSL $(2)/install.sh | AIDA_TOKEN=<jwt> bash"
+	@echo "  curl -fsSL $(2)/install.sh | bash"
+	@echo "  aida login"
 	@echo "  Invoke-RestMethod $(2)/install.ps1 | Invoke-Expression"
 endef
 

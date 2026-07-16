@@ -26,3 +26,9 @@ func TestChecksumForFile(t *testing.T) {
 		t.Fatalf("value=%q err=%v", value, err)
 	}
 }
+
+func TestQuoteWindowsBatchArg(t *testing.T) {
+	if got := quoteWindowsBatchArg(`upload --project 100%`); got != `"upload --project 100%%"` {
+		t.Fatalf("quoteWindowsBatchArg()=%q", got)
+	}
+}

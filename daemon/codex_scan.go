@@ -167,6 +167,7 @@ func parseCodexJSONL(path string) *SessionInfo {
 					}
 				}
 				s.ParentSessionRef, s.ForkSource = codexParentMetadata(meta)
+				s.ForkAgentPath = nestedJSONString(meta.Source, "subagent", "thread_spawn", "agent_path")
 				if s.ParentSessionRef == "" {
 					s.ForkedAt = time.Time{}
 				}

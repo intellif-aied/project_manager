@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSessionPaginationUsesStableGlobalIndices(t *testing.T) {
@@ -133,6 +134,27 @@ func TestSessionsJSONIncludesSummaryDiagnosticsAndPagination(t *testing.T) {
 	for _, expected := range []string{
 		`"summary_status":"ok"`, `"summary_source":"event_msg.user_message"`,
 		`"summary_status":"empty"`, `"summary":"暂无摘要"`, `"total":2`,
+	} {
+		if !strings.Contains(output.String(), expected) {
+			t.Fatalf("JSON output missing %s: %s", expected, output.String())
+		}
+	}
+}
+
+func TestSessionsJSONIncludesGroupMetadataAndLatestActivity(t *testing.T) {
+	root := testGroupedSession("root", "", 1)
+	child := testGroupedSession("child", "root", 2)
+	root.SelectionChildren = []*SessionInfo{child}
+	root.SelectionActiveAt = time.Date(2026, 7, 16, 12, 34, 0, 0, time.UTC)
+
+	var output bytes.Buffer
+	if err := writeSessionsJSON(&output, []*SessionInfo{root}, 1, 20); err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		`"last_activity_at":"2026-07-16T12:34:00Z"`,
+		`"subagent_count":1`,
+		`"member_session_refs":["child"]`,
 	} {
 		if !strings.Contains(output.String(), expected) {
 			t.Fatalf("JSON output missing %s: %s", expected, output.String())

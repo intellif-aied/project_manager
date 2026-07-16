@@ -7,7 +7,6 @@
 #   AIDA_RELEASE_URL  Static release directory URL, defaults to the packaged value.
 #   AIDA_API_URL      Aida API base URL written to %USERPROFILE%\.aida.yaml. Defaults to the packaged value.
 #   AIDA_INTERNAL_API_URL  Optional trusted internal API URL preferred when authenticated probing succeeds.
-#   AIDA_TOKEN        User JWT written to %USERPROFILE%\.aida.yaml when provided.
 #   AIDA_INSTALL_DIR  Install directory, default %LOCALAPPDATA%\Aida\bin.
 #   AIDA_FORCE        Set to 1 to skip update prompts.
 
@@ -87,7 +86,6 @@ if (-not [Environment]::Is64BitOperatingSystem) {
 $releaseUrl = (Resolve-Value $env:AIDA_RELEASE_URL $DefaultReleaseUrl).TrimEnd('/')
 $apiUrl = (Resolve-Value $env:AIDA_API_URL $DefaultApiUrl).TrimEnd('/')
 $internalApiUrl = (Resolve-Value $env:AIDA_INTERNAL_API_URL $DefaultInternalApiUrl).TrimEnd('/')
-$token = $env:AIDA_TOKEN
 $installDir = Resolve-Value $env:AIDA_INSTALL_DIR (Join-Path $env:LOCALAPPDATA "Aida\bin")
 $aidaExe = Join-Path $installDir "aida.exe"
 
@@ -175,12 +173,9 @@ if (Test-Path $configFile) {
     }
     $lines = @(Set-AidaConfigValue $lines "release_url" $releaseUrl)
     $lines = @(Set-AidaConfigValue $lines "auto_update" "true")
-    if (-not [string]::IsNullOrWhiteSpace($token)) {
-        $lines = @(Set-AidaConfigValue $lines "token" $token)
-    }
     Set-Content -Path $configFile -Value $lines -Encoding UTF8
     Write-Host "updated config -> $configFile"
-} elseif (-not [string]::IsNullOrWhiteSpace($apiUrl) -or -not [string]::IsNullOrWhiteSpace($token)) {
+} elseif (-not [string]::IsNullOrWhiteSpace($apiUrl)) {
     $lines = @()
     if (-not [string]::IsNullOrWhiteSpace($apiUrl)) {
         $lines += "api_url: $apiUrl"
@@ -191,9 +186,6 @@ if (Test-Path $configFile) {
     }
     $lines += "release_url: $releaseUrl"
     $lines += "auto_update: true"
-    if (-not [string]::IsNullOrWhiteSpace($token)) {
-        $lines += "token: $token"
-    }
     Set-Content -Path $configFile -Value $lines -Encoding UTF8
     Write-Host "wrote config -> $configFile"
 }
@@ -207,12 +199,6 @@ if (Get-Command aida -ErrorAction SilentlyContinue) {
     Write-Host "Run in the current PowerShell session:"
     Write-Host '  $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [Environment]::GetEnvironmentVariable("Path", "User")'
 }
-$hasConfigToken = $false
-if (Test-Path $configFile) {
-    $hasConfigToken = Select-String -Path $configFile -Pattern '^\s*token\s*:\s*\S+' -Quiet
-}
-if (-not $hasConfigToken) {
-    Write-Host "Login: aida login --server $apiUrl --token <jwt>"
-}
+Write-Host "Login: aida login"
 Write-Host "List local sessions: aida sessions"
 Write-Host "Upload sessions:     aida upload --all"
