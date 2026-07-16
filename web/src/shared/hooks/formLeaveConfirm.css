@@ -100,6 +100,10 @@
     padding: 18px 16px !important;
   }
 
+  .form-leave-confirm-modal .ant-modal-confirm-body-wrapper {
+    margin: 0 !important;
+  }
+
   .form-leave-confirm-modal .ant-modal-confirm-body {
     grid-template-columns: 30px minmax(0, 1fr);
     gap: 9px;
