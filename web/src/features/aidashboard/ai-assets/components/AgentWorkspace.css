@@ -628,3 +628,215 @@
     margin-right: 0;
   }
 }
+
+@media (max-width: 768px) {
+  .ai-assets-runtime-credential,
+  .ai-assets-runtime-credential-create {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ai-assets-runtime-credential-create .ant-btn,
+  .ai-assets-session-selector__control > .ant-btn {
+    width: 100%;
+    min-height: 40px;
+  }
+
+  .ai-assets-session-modal .ant-modal-container,
+  .ai-assets-session-modal .ant-modal-content {
+    display: flex;
+    max-height: calc(100dvh - 16px);
+    flex-direction: column;
+  }
+
+  .ai-assets-session-modal .ant-modal-header,
+  .ai-assets-session-modal .ant-modal-footer {
+    flex: 0 0 auto;
+  }
+
+  .ai-assets-session-modal .ant-modal-header {
+    padding: 12px 50px 11px 14px;
+  }
+
+  .ai-assets-session-modal .ant-modal-body {
+    min-height: 0;
+    flex: 1 1 auto;
+    padding: 12px 14px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .ai-assets-session-modal .ant-modal-footer {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
+  }
+
+  .ai-assets-session-modal .ant-modal-footer .ant-btn {
+    width: 100%;
+    min-height: 38px;
+    margin: 0;
+  }
+
+  .ai-assets-session-modal__summary {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .ai-assets-session-modal__summary > .ant-space {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+    gap: 8px !important;
+  }
+
+  .ai-assets-session-modal__summary > .ant-space > .ant-space-item {
+    min-width: 0;
+  }
+
+  .ai-assets-session-modal__summary > .ant-space > .ant-space-item:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .ai-assets-session-modal__summary .ant-picker,
+  .ai-assets-session-modal__summary .ant-btn {
+    width: 100%;
+  }
+
+  .ai-assets-session-modal .ant-table-wrapper {
+    overflow: visible;
+    border: 0;
+  }
+
+  .ai-assets-session-modal .ant-table,
+  .ai-assets-session-modal .ant-table-container,
+  .ai-assets-session-modal .ant-table-content,
+  .ai-assets-session-modal table,
+  .ai-assets-session-modal tbody {
+    display: block;
+    width: 100% !important;
+    min-width: 0 !important;
+    overflow: visible !important;
+  }
+
+  .ai-assets-session-modal colgroup,
+  .ai-assets-session-modal .ant-table-thead {
+    display: none;
+  }
+
+  .ai-assets-session-modal .ant-table-tbody {
+    display: grid;
+    gap: 8px;
+  }
+
+  .ai-assets-session-modal .ant-table-tbody > tr.ant-table-row {
+    display: grid;
+    grid-template-columns: 28px minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-areas:
+      "select session session"
+      ". summary summary"
+      ". activity tokens";
+    gap: 8px 10px;
+    width: 100%;
+    padding: 11px;
+    background: #ffffff;
+    border: 1px solid #e4ebf5;
+    border-radius: 10px;
+  }
+
+  .ai-assets-session-modal .ant-table-tbody > tr.ant-table-row > td {
+    display: block;
+    width: auto !important;
+    min-width: 0;
+    height: auto;
+    padding: 0 !important;
+    overflow: hidden;
+    background: transparent !important;
+    border: 0;
+  }
+
+  .ai-assets-session-modal .ant-table-tbody > tr.ant-table-row > td:first-child {
+    grid-area: select;
+    padding-top: 2px !important;
+  }
+
+  .ai-assets-session-modal__cell--session {
+    grid-area: session;
+  }
+
+  .ai-assets-session-modal__cell--summary {
+    grid-area: summary;
+  }
+
+  .ai-assets-session-modal__cell--activity {
+    grid-area: activity;
+  }
+
+  .ai-assets-session-modal__cell--tokens {
+    grid-area: tokens;
+    text-align: left !important;
+  }
+
+  .ai-assets-session-modal__cell--summary::before,
+  .ai-assets-session-modal__cell--activity::before,
+  .ai-assets-session-modal__cell--tokens::before {
+    display: block;
+    margin-bottom: 2px;
+    color: #8794a8;
+    font-size: 10px;
+    font-weight: 650;
+    line-height: 1.4;
+  }
+
+  .ai-assets-session-modal__cell--summary::before {
+    content: "摘要";
+  }
+
+  .ai-assets-session-modal__cell--activity::before {
+    content: "活动时间";
+  }
+
+  .ai-assets-session-modal__cell--tokens::before {
+    content: "Token";
+  }
+
+  .ai-assets-session-modal .ai-assets-session-id,
+  .ai-assets-session-modal .ai-assets-session-summary {
+    display: block;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .ai-assets-session-modal .ant-table-placeholder {
+    display: block;
+    width: 100%;
+  }
+
+  .ai-assets-session-modal .ant-table-placeholder > td {
+    display: block;
+    width: 100%;
+    padding: 28px 12px !important;
+  }
+
+  .ai-assets-session-modal .ant-table-pagination {
+    justify-content: center;
+    gap: 4px;
+    margin: 10px 0 0 !important;
+  }
+
+  .ai-assets-session-modal .ant-pagination-total-text {
+    flex: 1 0 100%;
+    height: auto;
+    margin: 0;
+    text-align: center;
+  }
+
+  .ai-assets-prompt-preview,
+  .ai-assets-runner__result {
+    min-height: 140px;
+    max-height: 42dvh;
+  }
+}

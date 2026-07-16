@@ -525,6 +525,24 @@
   font-weight: 700;
 }
 
+.console-dashboard-state__icon,
+.console-dashboard-state__detail,
+.console-token-state__icon,
+.console-token-state__detail {
+  display: none;
+}
+
+.console-dashboard-state p strong {
+  color: inherit;
+  font-weight: 400;
+}
+
+.console-token-state > strong {
+  color: inherit;
+  font-size: inherit;
+  font-weight: 400;
+}
+
 .console-report-history {
   display: flex;
   flex-wrap: wrap;
@@ -2414,6 +2432,20 @@
   word-break: break-word;
 }
 
+.console-followers-trigger {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 6px;
+}
+
+.console-followers-trigger:focus-visible,
+.console-follow-card__subline.is-overflowing:focus-visible,
+.console-follow-card__people.is-overflowing:focus-visible,
+.console-risk-card__blocker.is-overflowing:focus-visible {
+  outline: 2px solid #1677ff;
+  outline-offset: 2px;
+}
+
 .console-follow-card__people {
   display: block;
   max-width: 100%;
@@ -2667,6 +2699,431 @@
   .console-dashboard-drawer .console-follow-card__meta {
     justify-content: flex-start;
     width: auto;
+  }
+}
+
+@media (max-width: 768px) {
+  .console-dashboard-page .page-panel__body {
+    gap: 12px;
+  }
+
+  .console-dashboard {
+    gap: 12px;
+  }
+
+  .console-panel {
+    min-width: 0;
+    padding: 14px;
+    border-radius: 10px;
+  }
+
+  .console-panel__header {
+    width: 100%;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+
+  .console-panel__header > div:first-child {
+    min-height: 32px;
+  }
+
+  .console-dashboard-inline-list.is-expanded,
+  .console-risk-list.console-dashboard-inline-list.is-expanded {
+    max-height: none;
+    overflow: visible;
+    overscroll-behavior: auto;
+    padding-right: 0;
+  }
+
+  .console-inline-list-more {
+    min-height: 44px;
+    padding-inline: 8px;
+  }
+
+  .console-inline-list-more__summary {
+    white-space: normal;
+  }
+
+  .console-dashboard-state {
+    min-height: 128px;
+    align-content: center;
+    justify-items: start;
+    gap: 8px;
+    padding: 16px;
+    border: 1px dashed #d8e3ee;
+    border-radius: 10px;
+    background: #fbfcfe;
+  }
+
+  .console-dashboard-state p {
+    display: grid;
+    width: 100%;
+    grid-template-columns: 36px minmax(0, 1fr);
+    gap: 10px;
+    align-items: center;
+  }
+
+  .console-dashboard-state__icon,
+  .console-token-state__icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    color: #1677ff;
+    background: #edf5ff;
+    border-radius: 9px;
+    font-size: 17px;
+  }
+
+  .console-dashboard-state--error .console-dashboard-state__icon,
+  .console-token-state.is-error .console-token-state__icon {
+    color: #cf1322;
+    background: #fff1f0;
+  }
+
+  .console-dashboard-state__copy {
+    display: grid;
+    gap: 3px;
+  }
+
+  .console-dashboard-state p strong {
+    color: #172033;
+    font-weight: 700;
+  }
+
+  .console-dashboard-state__detail,
+  .console-token-state__detail {
+    display: block;
+    color: #64748b;
+    font-size: 12px;
+    font-weight: 400;
+    line-height: 1.45;
+  }
+
+  .console-dashboard-state .ant-btn {
+    min-height: 40px;
+    padding-inline: 0;
+  }
+
+  .console-panel--daily > .console-report-status-card--personal {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .console-report-workbench,
+  .console-report-workbench-group {
+    min-width: 0;
+  }
+
+  .console-report-card-head {
+    align-items: center;
+    gap: 10px;
+  }
+
+  .console-report-actions--head .console-report-primary-action.ant-btn {
+    min-width: 88px;
+    height: 40px;
+    padding-inline: 10px;
+  }
+
+  .console-report-summary-inline,
+  .console-report-weekly-inline {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    min-height: 52px;
+    padding-block: 5px;
+  }
+
+  .console-report-summary-inline__main,
+  .console-report-weekly-inline__main {
+    display: grid;
+    justify-items: start;
+    gap: 4px;
+  }
+
+  .console-report-inline-title {
+    min-width: 0;
+  }
+
+  .console-report-inline-meta {
+    font-size: 12px;
+  }
+
+  .console-report-inline-action.ant-btn {
+    width: auto;
+    min-width: 76px;
+    height: 40px;
+    padding-inline: 8px;
+  }
+
+  .console-report-shortcuts--list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    padding-top: 12px;
+  }
+
+  .console-report-shortcuts--list .console-report-shortcut {
+    display: flex;
+    width: 100%;
+    min-height: 44px;
+    justify-content: space-between;
+    padding: 0 10px;
+    color: #31516f;
+    background: #f8fafc;
+    border: 1px solid #dfe8f1;
+    border-radius: 8px;
+  }
+
+  .console-report-shortcuts--list .console-report-shortcut:hover,
+  .console-report-shortcuts--list .console-report-shortcut:focus-visible {
+    color: #0958d9;
+    background: #edf5ff;
+    border-color: #b7d4ff;
+  }
+
+  .console-panel--token > .console-report-status-card {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .console-token-range.ant-segmented {
+    width: 100%;
+  }
+
+  .console-token-range .ant-segmented-group {
+    display: grid;
+    width: 100%;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .console-token-range .ant-segmented-item {
+    min-width: 0;
+  }
+
+  .console-token-range .ant-segmented-item-label {
+    min-height: 40px;
+    padding-inline: 4px;
+    line-height: 40px;
+  }
+
+  .console-token-state {
+    min-height: 150px;
+    grid-template-columns: 42px minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    place-content: center stretch;
+    column-gap: 12px;
+    row-gap: 4px;
+    padding: 18px;
+    text-align: left;
+  }
+
+  .console-token-state__icon {
+    grid-row: 1 / 3;
+    align-self: center;
+    width: 42px;
+    height: 42px;
+  }
+
+  .console-token-state > strong {
+    align-self: end;
+    color: #334155;
+    font-size: 13px;
+    font-weight: 700;
+  }
+
+  .console-token-state.is-error > strong {
+    color: #b42318;
+  }
+
+  .console-token-scope {
+    gap: 14px;
+  }
+
+  .console-token-summary-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .console-token-summary-metric {
+    min-height: 92px;
+    padding: 10px;
+  }
+
+  .console-token-summary-metric strong,
+  .console-token-summary-metric--primary strong {
+    font-size: 20px;
+  }
+
+  .console-token-summary-metric em {
+    display: -webkit-box;
+    overflow: hidden;
+    white-space: normal;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .console-token-overview,
+  .console-token-overview.is-compact {
+    grid-template-columns: 1fr;
+    gap: 12px;
+    height: auto;
+  }
+
+  .console-token-total {
+    min-height: 94px;
+  }
+
+  .console-token-chart,
+  .console-token-chart.is-compact {
+    min-height: 122px;
+    grid-template-rows: 18px minmax(96px, 1fr);
+    gap: 4px;
+    padding-top: 4px;
+  }
+
+  .console-token-day-bars,
+  .console-token-day-bars.is-compact {
+    min-height: 96px;
+    gap: 8px;
+  }
+
+  .console-token-day-bars.is-compact .console-token-day-bars__item {
+    grid-template-columns: 46px minmax(0, 1fr) 56px;
+    gap: 8px;
+    line-height: 1.2;
+  }
+
+  .console-token-day-bars.is-compact .console-token-day-bars__item i {
+    height: 8px;
+  }
+
+  .console-token-vertical-chart {
+    grid-template-rows: 20px 210px;
+    min-height: 234px;
+    overflow: hidden;
+  }
+
+  .console-token-vertical-echart {
+    height: 210px;
+    min-height: 210px;
+  }
+
+  .console-token-footer {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 4px;
+    padding-top: 12px;
+  }
+
+  .console-token-footer .ant-btn {
+    width: fit-content;
+    min-height: 40px;
+    justify-content: flex-start;
+  }
+
+  .console-follow-card__subline.is-overflowing,
+  .console-follow-card__people.is-overflowing,
+  .console-risk-card__blocker.is-overflowing {
+    cursor: pointer;
+    text-decoration: underline dotted rgba(9, 88, 217, 0.55);
+    text-underline-offset: 3px;
+  }
+
+  .console-followers-trigger {
+    min-height: 40px;
+  }
+
+  .console-overflow-popover,
+  .console-followers-popover {
+    max-width: calc(100vw - 24px);
+  }
+
+  .console-overflow-popover-content,
+  .console-follow-followers {
+    width: auto;
+    max-width: calc(100vw - 56px);
+    font-size: 13px;
+  }
+
+  .ant-modal-root .console-task-progress-modal.ant-modal {
+    top: max(8px, env(safe-area-inset-top));
+    width: calc(100vw - 16px) !important;
+    max-width: calc(100vw - 16px);
+    margin: 0 auto;
+    padding-bottom: max(8px, env(safe-area-inset-bottom));
+  }
+
+  .ant-modal-root .console-task-progress-modal .ant-modal-container {
+    display: flex;
+    max-height: calc(100dvh - 16px - env(safe-area-inset-top));
+    flex-direction: column;
+  }
+
+  .ant-modal-root .console-task-progress-modal .ant-modal-header {
+    flex: 0 0 auto;
+    padding: 15px 16px 12px;
+  }
+
+  .ant-modal-root .console-task-progress-modal .ant-modal-body {
+    min-height: 0;
+    flex: 1 1 auto;
+    padding: 14px 16px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .ant-modal-root .console-task-progress-modal .ant-modal-footer {
+    flex: 0 0 auto;
+    padding: 10px 16px max(12px, env(safe-area-inset-bottom));
+  }
+
+  .console-task-progress-modal .ant-modal-footer .ant-space {
+    display: grid;
+    width: 100%;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px !important;
+  }
+
+  .console-task-progress-modal .ant-modal-footer .ant-space-item,
+  .console-task-progress-modal .ant-modal-footer .ant-btn {
+    width: 100%;
+  }
+
+  .console-task-progress-modal .ant-modal-footer .ant-btn {
+    min-height: 42px;
+  }
+
+  .console-task-edit-form .ant-select,
+  .console-task-edit-form .ant-input {
+    width: 100%;
+  }
+
+  .console-task-edit-sessions {
+    max-height: min(30dvh, 220px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 8px;
+    border: 1px solid #e5edf6;
+    border-radius: 8px;
+    background: #f8fafc;
+  }
+}
+
+@media (max-width: 360px) {
+  .console-token-summary-row {
+    grid-template-columns: 1fr;
+  }
+
+  .console-report-shortcuts--list {
+    grid-template-columns: 1fr;
+  }
+
+  .console-task-progress-modal .ant-modal-footer .ant-space {
+    grid-template-columns: 1fr;
   }
 }
 

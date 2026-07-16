@@ -13,7 +13,7 @@ import {
   SearchOutlined
 } from "@ant-design/icons";
 import { App, Button, Drawer, Empty, Image, Input, Tag } from "antd";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { useAuth } from "@/shared/auth/authContext";
@@ -114,6 +114,15 @@ export function HelpCenter({ onClose, open }: HelpCenterProps) {
   const [searchDraft, setSearchDraft] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [copiedCode, setCopiedCode] = useState<string>();
+
+  useEffect(() => {
+    if (!open) return;
+    setSelectedModule("quickstart");
+    setSelectedArticleId(undefined);
+    setSearchDraft("");
+    setSearchQuery("");
+    setCopiedCode(undefined);
+  }, [open]);
 
   const role = isBusinessRole(user?.role) ? user.role : undefined;
   const allowedArticles = useMemo(

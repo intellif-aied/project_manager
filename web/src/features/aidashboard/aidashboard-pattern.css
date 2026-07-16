@@ -1021,6 +1021,25 @@
 }
 
 @media (max-width: 768px) {
+  .aidashboard-form-wrap .ant-form-item-row {
+    display: block;
+  }
+
+  .aidashboard-form-wrap .ant-form-item-label,
+  .aidashboard-form-wrap .ant-form-item-control {
+    flex: 0 0 auto !important;
+    max-width: 100%;
+  }
+
+  .aidashboard-form-wrap .ant-form-item-label {
+    padding: 0 0 6px;
+    text-align: left;
+  }
+
+  .aidashboard-form-wrap .ant-form-item-label > label {
+    height: auto;
+  }
+
   .requirement-detail__summary {
     grid-template-columns: 1fr;
   }

@@ -311,10 +311,10 @@
 }
 
 .ai-assets-mobile-card__header {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   min-width: 0;
   align-items: flex-start;
-  justify-content: space-between;
   gap: 10px;
 }
 
@@ -323,6 +323,17 @@
   margin-inline-end: 0;
   border-radius: 999px;
   font-weight: 600;
+}
+
+.ai-assets-mobile-card__tags {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .ai-assets-mobile-card__meta {

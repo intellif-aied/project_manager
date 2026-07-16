@@ -19,6 +19,9 @@ type MemberReportBrowserProps<T extends { content: string; next_day_plan?: strin
   fetchDetail: (id: string) => Promise<T>;
   displayMode?: "split" | "content-list";
   showNextDayPlan?: boolean;
+  reportLabel?: "日报" | "周报";
+  contentListTitle?: string;
+  emptyPeriodLabel?: string;
 };
 
 function textPreview(value?: string) {
@@ -58,10 +61,21 @@ async function copyText(value: string) {
 export function MemberReportBrowser<T extends { content: string; next_day_plan?: string }>({
   displayMode = "split",
   showNextDayPlan = false,
+  reportLabel = "日报",
+  contentListTitle = "部门成员日报",
+  emptyPeriodLabel = "当日",
   ...props
 }: MemberReportBrowserProps<T>) {
   if (displayMode === "content-list") {
-    return <MemberReportContentList {...props} showNextDayPlan={showNextDayPlan} />;
+    return (
+      <MemberReportContentList
+        {...props}
+        showNextDayPlan={showNextDayPlan}
+        reportLabel={reportLabel}
+        contentListTitle={contentListTitle}
+        emptyPeriodLabel={emptyPeriodLabel}
+      />
+    );
   }
   return <MemberReportSplitBrowser {...props} />;
 }
@@ -115,7 +129,15 @@ function MemberReportSplitBrowser<T extends { content: string; next_day_plan?: s
 }
 
 function MemberReportContentList<T extends { content: string; next_day_plan?: string }>({
-  items, loading, error, queryKey, fetchDetail, showNextDayPlan
+  items,
+  loading,
+  error,
+  queryKey,
+  fetchDetail,
+  showNextDayPlan,
+  reportLabel = "日报",
+  contentListTitle = "部门成员日报",
+  emptyPeriodLabel = "当日"
 }: Omit<MemberReportBrowserProps<T>, "displayMode">) {
   const { message } = App.useApp();
   const [teamID, setTeamID] = useState("all");
@@ -149,7 +171,7 @@ function MemberReportContentList<T extends { content: string; next_day_plan?: st
     if (!content) return;
     try {
       await copyText(content);
-      void message.success("日报全文已复制");
+      void message.success(`${reportLabel}全文已复制`);
     } catch {
       void message.error("复制失败，请稍后重试");
     }
@@ -186,7 +208,7 @@ function MemberReportContentList<T extends { content: string; next_day_plan?: st
       className="member-report-content-list"
       title={
         <div className="member-report-content-list__title">
-          <span>部门成员日报</span>
+          <span>{contentListTitle}</span>
           <small>已提交 {submittedCount} 人 · 未提交 {missingCount} 人</small>
         </div>
       }
@@ -203,9 +225,9 @@ function MemberReportContentList<T extends { content: string; next_day_plan?: st
       {error ? (
         <Alert type="error" showIcon message={error} />
       ) : loading ? (
-        <div className="member-report-content-list__loading">正在加载成员日报…</div>
+        <div className="member-report-content-list__loading">正在加载成员{reportLabel}…</div>
       ) : filtered.length === 0 ? (
-        <Empty description="当日暂无成员日报" />
+        <Empty description={`${emptyPeriodLabel}暂无成员${reportLabel}`} />
       ) : (
         <div className="member-report-content-list__items">
           {filtered.map((item) => {
@@ -245,33 +267,33 @@ function MemberReportContentList<T extends { content: string; next_day_plan?: st
                 </header>
                 {item.has_report ? (
                   <p className="member-report-content-item__preview">
-                    {preview || "日报已提交，展开后查看完整内容。"}
+                    {preview || `${reportLabel}已提交，展开后查看完整内容。`}
                   </p>
                 ) : null}
                 {isExpanded ? (
                   <div className="member-report-content-item__detail">
                     <div className="member-report-content-item__detail-bar">
-                      <span>日报全文</span>
+                      <span>{reportLabel}全文</span>
                       <Tooltip title="复制全文（保留 Markdown 格式）">
                         <Button
                           className="member-report-content-item__copy"
                           type="text"
                           size="small"
                           icon={<CopyOutlined />}
-                          aria-label="复制日报全文"
+                          aria-label={`复制${reportLabel}全文`}
                           disabled={!detail.data?.content?.trim()}
                           onClick={() => void copyCurrentReport()}
                         />
                       </Tooltip>
                     </div>
                     {detail.isLoading ? (
-                      <div className="member-report-content-item__loading">正在加载日报全文…</div>
+                      <div className="member-report-content-item__loading">正在加载{reportLabel}全文…</div>
                     ) : detail.isError ? (
-                      <Alert type="error" showIcon message="日报加载失败" />
+                      <Alert type="error" showIcon message={`${reportLabel}加载失败`} />
                     ) : detail.data?.content?.trim() ? (
                       <MarkdownViewer value={detail.data.content} />
                     ) : (
-                      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无日报内容" />
+                      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={`暂无${reportLabel}内容`} />
                     )}
                     {showNextDayPlan && !detail.isLoading && !detail.isError ? (
                       <div className="member-report-content-item__plan">
@@ -298,7 +320,7 @@ function MemberReportContentList<T extends { content: string; next_day_plan?: st
               className="member-report-mobile-detail__back"
               type="text"
               icon={<LeftOutlined />}
-              aria-label="返回成员日报列表"
+              aria-label={`返回成员${reportLabel}列表`}
               onClick={closeReport}
             >
               返回
@@ -315,7 +337,7 @@ function MemberReportContentList<T extends { content: string; next_day_plan?: st
               className="member-report-mobile-detail__copy"
               type="text"
               icon={<CopyOutlined />}
-              aria-label="复制日报全文"
+              aria-label={`复制${reportLabel}全文`}
               disabled={!detail.data?.content?.trim()}
               onClick={() => void copyCurrentReport()}
             >
@@ -323,7 +345,7 @@ function MemberReportContentList<T extends { content: string; next_day_plan?: st
             </Button>
           </header>
           <div className="member-report-mobile-detail__meta">
-            <span>日报全文</span>
+            <span>{reportLabel}全文</span>
             <span>
               {currentItem.saved_at
                 ? new Intl.DateTimeFormat("zh-CN", {
@@ -339,13 +361,13 @@ function MemberReportContentList<T extends { content: string; next_day_plan?: st
           </div>
           <div className="member-report-mobile-detail__body">
             {detail.isLoading ? (
-              <div className="member-report-content-item__loading">正在加载日报全文…</div>
+              <div className="member-report-content-item__loading">正在加载{reportLabel}全文…</div>
             ) : detail.isError ? (
-              <Alert type="error" showIcon message="日报加载失败" />
+              <Alert type="error" showIcon message={`${reportLabel}加载失败`} />
             ) : detail.data?.content?.trim() ? (
               <MarkdownViewer value={detail.data.content} />
             ) : (
-              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无日报内容" />
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={`暂无${reportLabel}内容`} />
             )}
             {showNextDayPlan && !detail.isLoading && !detail.isError ? (
               <div className="member-report-content-item__plan">

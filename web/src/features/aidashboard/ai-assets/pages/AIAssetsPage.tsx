@@ -1071,8 +1071,10 @@ export function AIAssetsPage() {
                 <strong>{agent.name}</strong>
                 <span>{agent.description || agent.agent_id}</span>
               </span>
-              {agent.archived ? <Tag color="default">已删除</Tag> : <Tag color="blue">可用</Tag>}
-              {agent.is_default_report ? <Tag color="purple">默认报告</Tag> : null}
+              <span className="ai-assets-mobile-card__tags">
+                {agent.archived ? <Tag color="default">已删除</Tag> : <Tag color="blue">可用</Tag>}
+                {agent.is_default_report ? <Tag color="purple">默认报告</Tag> : null}
+              </span>
             </header>
             <div className="ai-assets-mobile-card__meta">
               <MobileMeta label="Engine" value={agent.engine} />

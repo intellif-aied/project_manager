@@ -449,6 +449,19 @@
     background: #f8fafc;
   }
 
+  .report-ai-run-status > span {
+    overflow: visible;
+  }
+
+  .report-ai-run-status strong,
+  .report-ai-run-status em {
+    overflow: visible;
+    line-height: 1.4;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
   .report-ai-settings-panel__toolbar .ant-picker {
     flex: 1 1 auto;
     width: auto;
