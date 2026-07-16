@@ -709,6 +709,7 @@ export function TokenAnalyticsPage({
                 <>
                   <Tag>{filteredPeopleItems.length} 人</Tag>
                   <Input
+                    className="token-analytics-member-search"
                     allowClear
                     prefix={<SearchOutlined />}
                     placeholder="搜索成员姓名"
@@ -754,27 +755,35 @@ export function TokenAnalyticsPage({
                 loading={peopleRankingsQuery.isLoading}
                 dataSource={filteredPeopleItems}
                 columns={[
-                  { title: "成员", dataIndex: "label" },
+                  {
+                    title: "成员",
+                    dataIndex: "label",
+                    className: "token-analytics-member-column token-analytics-member-column--name"
+                  },
                   {
                     title: "Token",
                     dataIndex: "total_tokens",
+                    className: "token-analytics-member-column token-analytics-member-column--tokens",
                     align: "right",
                     render: (value: string) => formatTokenValue(value)
                   },
                   {
                     title: "API 等价成本",
                     dataIndex: "estimated_cost_cny",
+                    className: "token-analytics-member-column token-analytics-member-column--cost",
                     align: "right",
                     render: (value?: string) => formatCost(value)
                   },
                   {
                     title: "计价状态",
                     dataIndex: "pricing_status",
+                    className: "token-analytics-member-column token-analytics-member-column--status",
                     render: (value: string, record: TokenAnalyticsRankingItem) =>
                       record.is_zero_usage ? <Tag>无用量</Tag> : statusTag(value)
                   },
                   {
                     title: "操作",
+                    className: "token-analytics-member-column token-analytics-member-column--action",
                     width: 120,
                     align: "right" as const,
                     render: (_: unknown, record: TokenAnalyticsRankingItem) => (
@@ -873,11 +882,20 @@ export function TokenAnalyticsPage({
               <Tag color="blue">精确 ID 定位</Tag>
             ) : null}
             <Input.Search
+              className="token-analytics-session-search"
               value={queryInput}
               allowClear
               enterButton={<SearchOutlined />}
               placeholder="搜索 Session ID 或摘要"
-              onChange={(event) => setQueryInput(event.target.value)}
+              aria-label="搜索 Session ID 或摘要"
+              onChange={(event) => {
+                const value = event.target.value;
+                setQueryInput(value);
+                if (!value && query) {
+                  setQuery("");
+                  setPage(1);
+                }
+              }}
               onSearch={(value) => { setQuery(value.trim()); setPage(1); }}
               style={{ width: 320 }}
             />
@@ -904,6 +922,7 @@ export function TokenAnalyticsPage({
             {
               title: "Session",
               dataIndex: "session_ref",
+              className: "token-analytics-session-column token-analytics-session-column--session",
               width: 330,
               render: (value: string, record) => (
                 <div className="token-analytics-session-cell">
@@ -912,9 +931,15 @@ export function TokenAnalyticsPage({
                 </div>
               )
             },
-            { title: "模型", dataIndex: "model", width: 180 },
+            {
+              title: "模型",
+              dataIndex: "model",
+              className: "token-analytics-session-column token-analytics-session-column--model",
+              width: 180
+            },
             {
               title: "活动日期",
+              className: "token-analytics-session-column token-analytics-session-column--activity",
               width: 190,
               render: (_: unknown, record: TokenAnalyticsSessionItem) =>
                 `${record.activity_from} ~ ${record.activity_to}`
@@ -922,6 +947,7 @@ export function TokenAnalyticsPage({
             {
               title: "Token",
               dataIndex: "total_tokens",
+              className: "token-analytics-session-column token-analytics-session-column--tokens",
               width: 110,
               align: "right",
               render: (value: string) => formatTokenValue(value)
@@ -929,6 +955,7 @@ export function TokenAnalyticsPage({
             {
               title: "API 等价成本",
               dataIndex: "estimated_cost_cny",
+              className: "token-analytics-session-column token-analytics-session-column--cost",
               width: 130,
               align: "right",
               render: (value?: string) => formatCost(value)
@@ -936,6 +963,7 @@ export function TokenAnalyticsPage({
             {
               title: "状态",
               dataIndex: "pricing_status",
+              className: "token-analytics-session-column token-analytics-session-column--status",
               width: 100,
               render: (value: string) => statusTag(value)
             }

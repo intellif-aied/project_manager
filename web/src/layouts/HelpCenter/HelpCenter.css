@@ -39,6 +39,7 @@
 .help-center__body {
   display: grid;
   height: calc(100vh - 133px);
+  height: calc(100dvh - 133px);
   grid-template-columns: 184px minmax(0, 1fr);
 }
 
@@ -221,14 +222,15 @@
 @media (max-width: 768px) {
   .help-center { width: 100vw !important; max-width: 100vw; }
   .help-center__search { padding: 12px 14px; }
-  .help-center__body { height: calc(100vh - 129px); grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
-  .help-center__sidebar { display: block; padding: 10px 12px; overflow-x: auto; border-right: 0; border-bottom: 1px solid #e3eaf2; white-space: nowrap; }
+  .help-center__body { height: calc(100vh - 129px); height: calc(100dvh - 129px); grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
+  .help-center__sidebar { display: block; padding: 10px 12px; overflow-x: auto; border-right: 0; border-bottom: 1px solid #e3eaf2; white-space: nowrap; scrollbar-width: none; }
+  .help-center__sidebar::-webkit-scrollbar { display: none; }
   .help-center__nav { display: flex; gap: 5px; padding: 0; }
-  .help-center__nav button { width: auto; min-width: max-content; grid-template-columns: 18px auto auto; }
+  .help-center__nav button { width: auto; min-width: max-content; height: 42px; grid-template-columns: 18px auto auto; }
   .help-center__role-note { display: none; }
   .help-center__index { padding: 22px 16px 32px; }
   .help-center__article-list { grid-template-columns: 1fr; }
-  .help-center__article-detail { padding: 18px 17px 34px; }
+  .help-center__article-detail { padding: 18px 17px calc(34px + env(safe-area-inset-bottom)); }
   .help-center__article-head h2 { font-size: 22px; }
   .help-center__article-footer { align-items: flex-start; flex-direction: column; }
   .help-center__screenshot-placeholder { grid-template-columns: 28px minmax(0, 1fr); }

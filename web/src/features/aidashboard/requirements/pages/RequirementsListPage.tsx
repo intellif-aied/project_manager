@@ -984,6 +984,7 @@ export function RequirementsListPage() {
   });
   const confirmDeleteTask = (task: MockTask) => {
     modal.confirm({
+      className: "requirements-confirm-modal",
       title: "确认删除任务？",
       content: "删除后会解绑相关 Session/Token/文档，并重算需求进度，操作不可恢复。",
       okText: "删除任务",
@@ -2177,12 +2178,14 @@ function TokenSourcePicker({
     {
       title: "Session",
       key: "record",
+      className: "requirements-session-modal__cell requirements-session-modal__cell--session",
       width: 300,
       render: (_, source) => <span className="tokens-session-id">{realSessionId(source)}</span>
     },
     {
       title: "摘要",
       dataIndex: "summary",
+      className: "requirements-session-modal__cell requirements-session-modal__cell--summary",
       width: 390,
       render: (value: string | undefined) =>
         value ? (
@@ -2196,6 +2199,7 @@ function TokenSourcePicker({
     {
       title: "Token",
       dataIndex: "total_tokens",
+      className: "requirements-session-modal__cell requirements-session-modal__cell--token",
       width: 110,
       align: "right" as const,
       render: (value: number) => <span className="tokens-total-cell">{formatTokens(value)}</span>
@@ -2203,6 +2207,7 @@ function TokenSourcePicker({
     {
       title: "日期范围",
       dataIndex: "activity_start_at",
+      className: "requirements-session-modal__cell requirements-session-modal__cell--activity",
       width: 230,
       render: (_, source) => (
         <span className="tokens-activity-range">{formatSessionActivityRange(source)}</span>
@@ -2497,6 +2502,7 @@ export function RequirementDrawer({
   const handleCancel = () => {
     if (!requirement) return;
     modal.confirm({
+      className: "requirements-confirm-modal",
       title: "确认取消需求？",
       content:
         "取消后，该需求不会出现在主看板和 Dashboard 风险/关注中，但历史数据会保留，可后续恢复。",
@@ -2510,6 +2516,7 @@ export function RequirementDrawer({
   const handleRestore = () => {
     if (!requirement) return;
     modal.confirm({
+      className: "requirements-confirm-modal",
       title: "确认恢复需求？",
       content: "恢复后，该需求将回到待开始状态，并重新进入需求看板。",
       okText: "恢复需求",
@@ -2521,6 +2528,7 @@ export function RequirementDrawer({
   const handleDelete = () => {
     if (!requirement) return;
     modal.confirm({
+      className: "requirements-confirm-modal",
       title: "确认彻底删除？",
       content: "删除后不可恢复。仅适用于误创建且无历史数据的需求。",
       okText: "彻底删除",
@@ -2891,6 +2899,7 @@ export function RequirementDrawer({
                       open={quickEditor === "deadline"}
                       trigger="click"
                       placement="bottomRight"
+                      classNames={{ root: "requirements-quick-edit-popover" }}
                       destroyOnHidden
                       content={deadlineQuickEditor}
                       onOpenChange={(nextOpen) =>
@@ -2918,6 +2927,7 @@ export function RequirementDrawer({
                       open={quickEditor === "owner"}
                       trigger="click"
                       placement="bottomRight"
+                      classNames={{ root: "requirements-quick-edit-popover" }}
                       destroyOnHidden
                       content={ownerQuickEditor}
                       onOpenChange={(nextOpen) =>
@@ -2945,6 +2955,7 @@ export function RequirementDrawer({
                       open={quickEditor === "teams"}
                       trigger="click"
                       placement="bottomRight"
+                      classNames={{ root: "requirements-quick-edit-popover" }}
                       destroyOnHidden
                       content={teamsQuickEditor}
                       onOpenChange={(nextOpen) =>
@@ -2970,9 +2981,9 @@ export function RequirementDrawer({
                 </div>
                 <dl className="requirements-drawer__overview-meta">
                   <div className="requirements-drawer__overview-meta-row is-actions">
-                    <div><dt>截止时间</dt><dd>{formatDate(requirement.deadline)} {canQuickEditRequirement ? <Popover open={quickEditor === "deadline"} trigger="click" placement="bottomRight" destroyOnHidden content={deadlineQuickEditor} onOpenChange={(nextOpen) => nextOpen ? openQuickEditor("deadline") : closeQuickEditor()}><button type="button" className="requirements-drawer__summary-edit" aria-label="设置截止日期"><EditOutlined /></button></Popover> : null}</dd></div>
-                    <div><dt>负责人</dt><dd>{getRequirementOwnerLabel(requirement)} {canQuickEditRequirement ? <Popover open={quickEditor === "owner"} trigger="click" placement="bottomRight" destroyOnHidden content={ownerQuickEditor} onOpenChange={(nextOpen) => nextOpen ? openQuickEditor("owner") : closeQuickEditor()}><button type="button" className="requirements-drawer__summary-edit" aria-label="设置负责人"><EditOutlined /></button></Popover> : null}</dd></div>
-                    <div><dt>参与团队</dt><dd>{getRequirementTeamCompactLabel(requirement)} {canQuickEditRequirement ? <Popover open={quickEditor === "teams"} trigger="click" placement="bottomRight" destroyOnHidden content={teamsQuickEditor} onOpenChange={(nextOpen) => nextOpen ? openQuickEditor("teams") : closeQuickEditor()}><button type="button" className="requirements-drawer__summary-edit" aria-label="设置参与团队"><EditOutlined /></button></Popover> : null}</dd></div>
+                    <div><dt>截止时间</dt><dd>{formatDate(requirement.deadline)} {canQuickEditRequirement ? <Popover classNames={{ root: "requirements-quick-edit-popover" }} open={quickEditor === "deadline"} trigger="click" placement="bottomRight" destroyOnHidden content={deadlineQuickEditor} onOpenChange={(nextOpen) => nextOpen ? openQuickEditor("deadline") : closeQuickEditor()}><button type="button" className="requirements-drawer__summary-edit" aria-label="设置截止日期"><EditOutlined /></button></Popover> : null}</dd></div>
+                    <div><dt>负责人</dt><dd>{getRequirementOwnerLabel(requirement)} {canQuickEditRequirement ? <Popover classNames={{ root: "requirements-quick-edit-popover" }} open={quickEditor === "owner"} trigger="click" placement="bottomRight" destroyOnHidden content={ownerQuickEditor} onOpenChange={(nextOpen) => nextOpen ? openQuickEditor("owner") : closeQuickEditor()}><button type="button" className="requirements-drawer__summary-edit" aria-label="设置负责人"><EditOutlined /></button></Popover> : null}</dd></div>
+                    <div><dt>参与团队</dt><dd>{getRequirementTeamCompactLabel(requirement)} {canQuickEditRequirement ? <Popover classNames={{ root: "requirements-quick-edit-popover" }} open={quickEditor === "teams"} trigger="click" placement="bottomRight" destroyOnHidden content={teamsQuickEditor} onOpenChange={(nextOpen) => nextOpen ? openQuickEditor("teams") : closeQuickEditor()}><button type="button" className="requirements-drawer__summary-edit" aria-label="设置参与团队"><EditOutlined /></button></Popover> : null}</dd></div>
                   </div>
                   <div className="requirements-drawer__overview-meta-row is-details">
                     <div><dt>推进进度</dt><dd><RequirementProgress value={requirement.progress} /></dd></div>
@@ -4786,6 +4797,7 @@ function TaskDrawerContent({
   });
   const handleDelete = () => {
     modal.confirm({
+      className: "requirements-confirm-modal",
       title: "确认删除任务？",
       content: "删除后会自动解绑相关 Session/Token/文档，并重算需求进度，操作不可恢复。",
       okText: "删除任务",

@@ -4,7 +4,9 @@ import {
   EditOutlined,
   FileDoneOutlined,
   FileTextOutlined,
+  InboxOutlined,
   LinkOutlined,
+  LoadingOutlined,
   RightOutlined,
   UnorderedListOutlined,
   WarningOutlined,
@@ -1793,7 +1795,13 @@ export function DashboardPage() {
             title="我的事项"
             extra={<SummaryChips items={followSummaryChips} />}
           />
-          {followItems.length > 0 ? (
+          {followsQuery.isLoading && !followsQuery.data ? (
+            <DashboardPanelState
+              kind="loading"
+              title="正在加载我的事项"
+              detail="正在同步你负责、创建和关注的需求与任务"
+            />
+          ) : followItems.length > 0 ? (
             <>
               <div
                 className={`console-follow-list console-dashboard-inline-list${followExpanded ? " is-expanded" : ""}`}
@@ -1823,12 +1831,17 @@ export function DashboardPage() {
               ) : null}
             </>
           ) : (
-            <div className="console-report-status-card">
-              <p>{followsQuery.isError ? "我的事项加载失败" : "暂无我的事项"}</p>
-              <Button type="link" onClick={() => navigate("/requirements")}>
-                前往需求看板查看
-              </Button>
-            </div>
+            <DashboardPanelState
+              kind={followsQuery.isError ? "error" : "empty"}
+              title={followsQuery.isError ? "我的事项加载失败" : "暂无我的事项"}
+              detail={
+                followsQuery.isError
+                  ? "暂时无法获取事项，请稍后重试"
+                  : "当前没有需要你跟进的需求或任务"
+              }
+              actionLabel="前往需求看板查看"
+              onAction={() => navigate("/requirements")}
+            />
           )}
         </div>
 
@@ -1838,7 +1851,13 @@ export function DashboardPage() {
             title="我的风险提示"
             extra={<SummaryChips items={riskSummaryChips} />}
           />
-          {riskItems.length > 0 ? (
+          {risksQuery.isLoading && !risksQuery.data ? (
+            <DashboardPanelState
+              kind="loading"
+              title="正在加载风险提示"
+              detail="正在检查逾期、阻塞和依赖风险"
+            />
+          ) : riskItems.length > 0 ? (
             <>
               <div
                 className={`console-risk-list console-dashboard-inline-list${riskExpanded ? " is-expanded" : ""}`}
@@ -1864,12 +1883,17 @@ export function DashboardPage() {
               ) : null}
             </>
           ) : (
-            <div className="console-report-status-card">
-              <p>{risksQuery.isError ? "风险数据加载失败" : "暂无需要处理的风险"}</p>
-              <Button type="link" onClick={() => navigate("/requirements")}>
-                查看需求看板
-              </Button>
-            </div>
+            <DashboardPanelState
+              kind={risksQuery.isError ? "error" : "empty"}
+              title={risksQuery.isError ? "风险数据加载失败" : "暂无需要处理的风险"}
+              detail={
+                risksQuery.isError
+                  ? "暂时无法获取风险，请稍后重试"
+                  : "当前没有逾期、阻塞或依赖风险"
+              }
+              actionLabel="查看需求看板"
+              onAction={() => navigate("/requirements")}
+            />
           )}
         </div>
 
@@ -2075,6 +2099,52 @@ function PanelHeader({
         <strong>{title}</strong>
       </div>
       {extra}
+    </div>
+  );
+}
+
+function DashboardPanelState({
+  kind,
+  title,
+  detail,
+  actionLabel,
+  onAction
+}: {
+  kind: "loading" | "empty" | "error";
+  title: string;
+  detail: string;
+  actionLabel?: string;
+  onAction?: () => void;
+}) {
+  const stateIcon =
+    kind === "loading" ? (
+      <LoadingOutlined spin />
+    ) : kind === "error" ? (
+      <WarningOutlined />
+    ) : (
+      <InboxOutlined />
+    );
+
+  return (
+    <div
+      className={`console-report-status-card console-dashboard-state console-dashboard-state--${kind}`}
+      role={kind === "error" ? "alert" : "status"}
+      aria-live={kind === "error" ? "assertive" : "polite"}
+    >
+      <p>
+        <span className="console-dashboard-state__icon" aria-hidden="true">
+          {stateIcon}
+        </span>
+        <span className="console-dashboard-state__copy">
+          <strong>{title}</strong>
+          <span className="console-dashboard-state__detail">{detail}</span>
+        </span>
+      </p>
+      {actionLabel && onAction && kind !== "loading" ? (
+        <Button type="link" onClick={onAction}>
+          {actionLabel}
+        </Button>
+      ) : null}
     </div>
   );
 }
@@ -2549,11 +2619,23 @@ function SessionUploadCard({
       />
       <div className="console-report-status-card">
         {loading ? (
-          <div className="console-token-state">Token 数据加载中...</div>
+          <TokenPanelState
+            kind="loading"
+            title="正在加载 Token 数据"
+            detail="稍候即可查看当前时间范围"
+          />
         ) : error ? (
-          <div className="console-token-state is-error">Token 数据加载失败</div>
+          <TokenPanelState
+            kind="error"
+            title="Token 数据加载失败"
+            detail="可稍后重试，或前往明细页查看"
+          />
         ) : report.sessions === 0 ? (
-          <div className="console-token-state">当前范围暂无 Token 数据</div>
+          <TokenPanelState
+            kind="empty"
+            title="当前范围暂无 Token 数据"
+            detail="可切换时间范围，或上传 Session 后再查看"
+          />
         ) : (
           renderSessionUploadSummary(role, range, report)
         )}
@@ -2564,6 +2646,39 @@ function SessionUploadCard({
           </Button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function TokenPanelState({
+  kind,
+  title,
+  detail
+}: {
+  kind: "loading" | "empty" | "error";
+  title: string;
+  detail: string;
+}) {
+  const stateIcon =
+    kind === "loading" ? (
+      <LoadingOutlined spin />
+    ) : kind === "error" ? (
+      <WarningOutlined />
+    ) : (
+      <InboxOutlined />
+    );
+
+  return (
+    <div
+      className={`console-token-state${kind === "error" ? " is-error" : ""}`}
+      role={kind === "error" ? "alert" : "status"}
+      aria-live={kind === "error" ? "assertive" : "polite"}
+    >
+      <span className="console-token-state__icon" aria-hidden="true">
+        {stateIcon}
+      </span>
+      <strong>{title}</strong>
+      <span className="console-token-state__detail">{detail}</span>
     </div>
   );
 }
@@ -4110,18 +4225,37 @@ function OverflowPopoverText({ className, text }: { className: string; text: str
   };
 
   const node = (
-    <span ref={textRef} className={className}>
+    <span
+      ref={textRef}
+      className={`${className}${overflowing ? " is-overflowing" : ""}`}
+      role={overflowing ? "button" : undefined}
+      tabIndex={overflowing ? 0 : undefined}
+      aria-expanded={overflowing ? open : undefined}
+      aria-haspopup={overflowing ? "dialog" : undefined}
+      onKeyDown={(event) => {
+        if (!overflowing) return;
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          setOpen((current) => !current);
+        }
+        if (event.key === "Escape") {
+          setOpen(false);
+        }
+      }}
+    >
       {text}
     </span>
   );
 
   return (
     <Popover
-      trigger="hover"
+      classNames={{ root: "console-overflow-popover" }}
+      trigger={["hover", "click"]}
       placement="bottomLeft"
       open={open}
       onOpenChange={handleOpenChange}
       mouseEnterDelay={0.25}
+      destroyOnHidden
       content={overflowing ? <div className="console-overflow-popover-content">{text}</div> : null}
     >
       {node}
@@ -4296,13 +4430,28 @@ function FollowFollowersPopover({ item }: { item: FollowItem }) {
 
   return (
     <Popover
+      classNames={{ root: "console-followers-popover" }}
       trigger={["hover", "click"]}
       placement="leftTop"
       open={open}
       onOpenChange={setOpen}
       content={<FollowFollowersContent item={item} enabled={open} />}
     >
-      <span>
+      <span
+        className="console-followers-trigger"
+        role="button"
+        tabIndex={0}
+        aria-label={`查看 ${item.followerCount ?? 0} 位关注人`}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            setOpen((current) => !current);
+          }
+          if (event.key === "Escape") setOpen(false);
+        }}
+      >
         <FollowCountTag count={item.followerCount ?? 0} level={item.attentionLevel ?? "normal"} />
       </span>
     </Popover>
@@ -4311,7 +4460,7 @@ function FollowFollowersPopover({ item }: { item: FollowItem }) {
 
 function FollowCountTag({ count, level }: { count: number; level: AttentionLevel }) {
   return (
-    <Tag color={followCountTagColor(level)} title="悬停查看关注人">
+    <Tag color={followCountTagColor(level)} title="查看关注人">
       {attentionLabel(level, count)}
     </Tag>
   );

@@ -643,23 +643,27 @@
 }
 
 @media (max-width: 720px) {
-  .console-report-workflow-modal.ant-modal,
-  .console-report-workflow-modal .ant-modal-content {
+  .ant-modal-root .console-report-workflow-modal.ant-modal,
+  .ant-modal-root .console-report-workflow-modal .ant-modal-content {
     max-height: calc(100dvh - 16px);
     max-width: calc(100vw - 16px);
     top: 8px;
   }
 
-  .console-report-workflow-modal .ant-modal-header {
+  .ant-modal-root .console-report-workflow-modal .ant-modal-header {
     padding: 14px 14px 11px;
   }
 
-  .console-report-workflow-modal .ant-modal-body {
-    max-height: calc(100dvh - 154px);
+  .ant-modal-root .console-report-workflow-modal .ant-modal-body {
+    flex: 1 1 auto;
+    max-height: none;
+    overflow-x: hidden;
+    overflow-y: auto;
     padding: 12px 14px 14px;
+    overscroll-behavior: contain;
   }
 
-  .console-report-workflow-modal .ant-modal-footer {
+  .ant-modal-root .console-report-workflow-modal .ant-modal-footer {
     padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
   }
 
@@ -690,6 +694,22 @@
   .console-report-workflow-modal .ant-modal-footer .report-ai-generate-controls {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .console-report-workflow-modal .ant-modal-footer .report-ai-generate-controls .ant-btn {
+    width: 100%;
+    min-width: 0;
+    padding-inline: 8px;
+  }
+
+  .console-report-workflow-modal .console-report-editor-layout__content-input.ant-input {
+    height: clamp(180px, 36dvh, 300px);
+    min-height: 160px;
+    resize: none;
+  }
+
+  .console-report-workflow-modal .console-report-editor-layout__next-day-input.ant-input {
+    min-height: 58px;
   }
 
   .console-team-source__stats {

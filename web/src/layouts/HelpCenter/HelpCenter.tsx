@@ -12,8 +12,8 @@ import {
   RocketOutlined,
   SearchOutlined
 } from "@ant-design/icons";
-import { Button, Drawer, Empty, Image, Input, Tag } from "antd";
-import { useMemo, useState } from "react";
+import { App, Button, Drawer, Empty, Image, Input, Tag } from "antd";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { useAuth } from "@/shared/auth/authContext";
@@ -57,8 +57,9 @@ async function copyText(text: string) {
   textarea.style.opacity = "0";
   document.body.appendChild(textarea);
   textarea.select();
-  document.execCommand("copy");
+  const copied = document.execCommand("copy");
   textarea.remove();
+  if (!copied) throw new Error("copy failed");
 }
 
 function HelpArticleList({ articles, onOpen }: { articles: HelpArticle[]; onOpen: (id: string) => void }) {
@@ -83,12 +84,22 @@ function HelpArticleList({ articles, onOpen }: { articles: HelpArticle[]; onOpen
 
 export function HelpCenter({ onClose, open }: HelpCenterProps) {
   const navigate = useNavigate();
+  const { message } = App.useApp();
   const { user } = useAuth();
   const [selectedModule, setSelectedModule] = useState<HelpModuleKey>("quickstart");
   const [selectedArticleId, setSelectedArticleId] = useState<string>();
   const [searchDraft, setSearchDraft] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [copiedCode, setCopiedCode] = useState<string>();
+
+  useEffect(() => {
+    if (!open) return;
+    setSelectedModule("quickstart");
+    setSelectedArticleId(undefined);
+    setSearchDraft("");
+    setSearchQuery("");
+    setCopiedCode(undefined);
+  }, [open]);
 
   const role = isBusinessRole(user?.role) ? user.role : undefined;
   const allowedArticles = useMemo(
@@ -157,10 +168,17 @@ export function HelpCenter({ onClose, open }: HelpCenterProps) {
                       size="small"
                       type="text"
                       onClick={() => {
-                        void copyText(block.code).then(() => {
-                          setCopiedCode(block.code);
-                          window.setTimeout(() => setCopiedCode((current) => current === block.code ? undefined : current), 1600);
-                        });
+                        void copyText(block.code)
+                          .then(() => {
+                            setCopiedCode(block.code);
+                            window.setTimeout(
+                              () => setCopiedCode((current) => current === block.code ? undefined : current),
+                              1600
+                            );
+                          })
+                          .catch(() => {
+                            void message.error("复制失败，请长按命令手动复制");
+                          });
                       }}
                     >
                       {isCopied ? "已复制" : "复制"}

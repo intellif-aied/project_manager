@@ -379,3 +379,89 @@ input.ant-input {
     font-size: 16px;
   }
 }
+
+/*
+ * Ant Design renders RangePicker as two 330px calendar panels. On a phone the
+ * popup is portalled to <body>, so page-local responsive rules cannot contain
+ * it and the document becomes horizontally scrollable. Keep every picker
+ * inside the visual viewport and use one calendar panel for range selection;
+ * Ant Design still advances from the start date to the end date normally.
+ */
+@media (max-width: 768px) {
+  .ant-picker-dropdown {
+    inset-inline: 8px !important;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    max-height: calc(100dvh - 16px);
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .ant-picker-dropdown .ant-picker-range-arrow {
+    display: none;
+  }
+
+  .ant-picker-dropdown .ant-picker-panel-container,
+  .ant-picker-dropdown .ant-picker-range-wrapper,
+  .ant-picker-dropdown .ant-picker-panels,
+  .ant-picker-dropdown .ant-picker-panel,
+  .ant-picker-dropdown .ant-picker-date-panel,
+  .ant-picker-dropdown .ant-picker-week-panel,
+  .ant-picker-dropdown .ant-picker-month-panel,
+  .ant-picker-dropdown .ant-picker-quarter-panel,
+  .ant-picker-dropdown .ant-picker-year-panel,
+  .ant-picker-dropdown .ant-picker-time-panel {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+
+  .ant-picker-dropdown .ant-picker-panel-container {
+    max-height: calc(100dvh - 16px);
+    overflow: auto;
+    border-radius: 12px;
+    box-shadow:
+      0 12px 32px rgba(15, 23, 42, 0.18),
+      0 2px 8px rgba(15, 23, 42, 0.08);
+  }
+
+  .ant-picker-dropdown .ant-picker-panels {
+    display: block;
+  }
+
+  .ant-picker-dropdown
+    .ant-picker-range-wrapper
+    .ant-picker-panels
+    > :nth-child(2) {
+    display: none;
+  }
+
+  .ant-picker-dropdown .ant-picker-header {
+    padding-inline: 8px;
+  }
+
+  .ant-picker-dropdown .ant-picker-header button {
+    min-width: 36px;
+    min-height: 36px;
+  }
+
+  .ant-picker-dropdown .ant-picker-body {
+    padding: 8px 12px 12px;
+  }
+
+  .ant-picker-dropdown .ant-picker-content {
+    width: 100% !important;
+  }
+
+  .ant-picker-dropdown .ant-picker-cell {
+    height: 38px;
+    padding-block: 3px;
+  }
+
+  .ant-picker-dropdown .ant-picker-footer,
+  .ant-picker-dropdown .ant-picker-time-panel-column {
+    max-width: 100%;
+  }
+}

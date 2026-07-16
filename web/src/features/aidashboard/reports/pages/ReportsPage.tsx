@@ -48,6 +48,7 @@ import type {
   DailyReportListItem,
   DepartmentReport,
   DepartmentReportListItem,
+  TeamReport,
   TeamReportListItem
 } from "../../api/types";
 
@@ -710,22 +711,43 @@ function TeamDailyTable({
     }
   ];
   return (
-    <Card
-      className="reports-list-card"
-      title="小组日报记录"
-    >
-      {reportsQuery.isError ? (
-        <Alert type="error" showIcon message="小组日报加载失败" description={errorMessage(reportsQuery.error)} />
-      ) : (
-        <Table<TeamReportListItem>
-          rowKey="id"
-          columns={columns}
-          dataSource={reportsQuery.data?.items ?? []}
+    <>
+      <div className="reports-team-daily-desktop">
+        <Card
+          className="reports-list-card"
+          title="小组日报记录"
+        >
+          {reportsQuery.isError ? (
+            <Alert type="error" showIcon message="小组日报加载失败" description={errorMessage(reportsQuery.error)} />
+          ) : (
+            <Table<TeamReportListItem>
+              rowKey="id"
+              columns={columns}
+              dataSource={reportsQuery.data?.items ?? []}
+              loading={reportsQuery.isLoading}
+              pagination={tablePagination(reportsQuery.data?.total ?? 0)}
+            />
+          )}
+        </Card>
+      </div>
+      <div className="reports-team-daily-mobile">
+        <InlineDailyContentList<TeamReportListItem, TeamReport>
+          title="小组日报记录"
+          items={reportsQuery.data?.items ?? []}
+          total={reportsQuery.data?.total ?? 0}
           loading={reportsQuery.isLoading}
-          pagination={tablePagination(reportsQuery.data?.total ?? 0)}
+          error={reportsQuery.isError ? `小组日报加载失败：${errorMessage(reportsQuery.error)}` : undefined}
+          pagination={tablePagination}
+          fetchDetail={fetchTeamReport}
+          renderStatus={teamStatus}
+          renderMeta={(record) =>
+            `小组日报 · 共 ${record.member_count} 人 · 已提交 ${record.submitted_count} · 未提交 ${record.missing_count}`
+          }
+          onEdit={onEdit}
+          onDelete={onDelete}
         />
-      )}
-    </Card>
+      </div>
+    </>
   );
 }
 

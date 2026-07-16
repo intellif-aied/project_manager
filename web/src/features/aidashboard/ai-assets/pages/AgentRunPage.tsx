@@ -545,6 +545,7 @@ function SessionSliceSelector({
             {
               title: "真实 Session ID",
               key: "session",
+              className: "ai-assets-session-modal__cell ai-assets-session-modal__cell--session",
               width: "36%",
               render: (_: unknown, session) => (
                 <span className="ai-assets-session-id">{session.session_ref}</span>
@@ -553,6 +554,7 @@ function SessionSliceSelector({
             {
               title: "摘要",
               dataIndex: "summary",
+              className: "ai-assets-session-modal__cell ai-assets-session-modal__cell--summary",
               width: "30%",
               render: (summary?: string) =>
                 summary ? (
@@ -566,12 +568,14 @@ function SessionSliceSelector({
             {
               title: "活动时间",
               key: "activity",
+              className: "ai-assets-session-modal__cell ai-assets-session-modal__cell--activity",
               width: "22%",
               render: (_: unknown, session) => formatActivityRange(session)
             },
             {
               title: "Total",
               dataIndex: "total_tokens",
+              className: "ai-assets-session-modal__cell ai-assets-session-modal__cell--tokens",
               align: "right" as const,
               width: "12%",
               render: (value: number) => formatTokens(value)
