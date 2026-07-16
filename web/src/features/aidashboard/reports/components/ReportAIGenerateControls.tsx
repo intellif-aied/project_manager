@@ -7,7 +7,7 @@ import {
   RobotOutlined
 } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { App, Button, DatePicker, Drawer, Modal, Space, Table, Tooltip } from "antd";
+import { App, Button, DatePicker, Drawer, Modal, Space, Table, Tag, Tooltip } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import type { Dayjs } from "dayjs";
 import { useEffect, useMemo, useState } from "react";
@@ -32,11 +32,16 @@ import { errorMessage } from "../../ai-assets/utils/agentAssets";
 import { useAuth } from "@/shared/auth/authContext";
 import { HttpError } from "@/shared/request/types";
 import { businessDateKey } from "@/shared/utils/businessTime";
+import {
+  clearReportAIRun,
+  readStoredReportAIRun,
+  registerReportAIRun,
+  reportRunStorageKey,
+  type ReportPeriodPayload,
+  type ReportTargetPayload
+} from "../reportAIRunTracking";
 
 import "./ReportAIGenerateControls.css";
-
-type ReportPeriodPayload = ManagedReportAgentRunPayload["period"];
-type ReportTargetPayload = NonNullable<ManagedReportAgentRunPayload["target"]>;
 
 interface ReportAIGenerateControlsProps {
   reportType: ReportType;
@@ -49,10 +54,12 @@ interface ReportAIGenerateControlsProps {
   onToggleSettings?: () => void;
   onBeforeGenerate?: () => boolean | Promise<boolean>;
   onGenerated?: (run: AIRun) => void;
+  onGeneratingChange?: (generating: boolean) => void;
 }
 
 interface ReportAIGenerateControlsStateProps extends ReportAIGenerateControlsProps {
   storageKey: string;
+  currentUserId: string;
 }
 
 interface ReportAISettingsPanelProps {
@@ -91,27 +98,11 @@ function sessionSourceKey(record: ReportSourceCandidate) {
   return record.slice_key;
 }
 
-function reportRunStorageKey(
-  userId: string,
-  reportType: ReportType,
-  period: ReportPeriodPayload,
-  target: ReportTargetPayload
-) {
-  return `aida:report-ai-run:${JSON.stringify({ userId, reportType, period, target })}`;
-}
-
 function reportPeriodLabel(period: ReportPeriodPayload) {
   if (period.date) return period.date;
   if (period.week_start && period.week_end) return `${period.week_start} 至 ${period.week_end}`;
   if (period.week_start) return period.week_start;
   return "当前周期";
-}
-
-function elapsedLabel(seconds: number) {
-  if (seconds < 60) return `${seconds} 秒`;
-  const minutes = Math.floor(seconds / 60);
-  const rest = seconds % 60;
-  return rest > 0 ? `${minutes} 分 ${rest} 秒` : `${minutes} 分钟`;
 }
 
 function isReportAgentUnavailable(
@@ -133,32 +124,6 @@ function confirmDefaultReportInitialization() {
   });
 }
 
-function readStoredRunId(key: string) {
-  try {
-    return window.localStorage.getItem(key) || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function storeRunId(key: string, runId: string) {
-  try {
-    window.localStorage.setItem(key, runId);
-  } catch {
-    // localStorage can be unavailable in hardened browsers; the in-memory guard still works.
-  }
-}
-
-function clearStoredRunId(key: string, runId?: string) {
-  try {
-    if (!runId || window.localStorage.getItem(key) === runId) {
-      window.localStorage.removeItem(key);
-    }
-  } catch {
-    // Ignore storage failures; they should not affect report generation.
-  }
-}
-
 export function ReportAIGenerateControls(props: ReportAIGenerateControlsProps) {
   const { user } = useAuth();
   const currentUserId = user?.id ?? "anonymous";
@@ -166,7 +131,14 @@ export function ReportAIGenerateControls(props: ReportAIGenerateControlsProps) {
     () => reportRunStorageKey(currentUserId, props.reportType, props.period, props.target),
     [currentUserId, props.period, props.reportType, props.target]
   );
-  return <ReportAIGenerateControlsState key={storageKey} {...props} storageKey={storageKey} />;
+  return (
+    <ReportAIGenerateControlsState
+      key={storageKey}
+      {...props}
+      storageKey={storageKey}
+      currentUserId={currentUserId}
+    />
+  );
 }
 
 function ReportAIGenerateControlsState({
@@ -180,17 +152,15 @@ function ReportAIGenerateControlsState({
   onToggleSettings,
   onBeforeGenerate,
   onGenerated,
-  storageKey
+  onGeneratingChange,
+  storageKey,
+  currentUserId
 }: ReportAIGenerateControlsStateProps) {
   const queryClient = useQueryClient();
-  const [activeRunId, setActiveRunId] = useState<string | undefined>(() =>
-    readStoredRunId(storageKey)
+  const [activeRunId, setActiveRunId] = useState<string | undefined>(
+    () => readStoredReportAIRun(storageKey)?.runId
   );
   const [handledRunId, setHandledRunId] = useState<string>();
-  const [runStartedAt, setRunStartedAt] = useState<number | undefined>(() =>
-    activeRunId ? Date.now() : undefined
-  );
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [initializingDefault, setInitializingDefault] = useState(false);
   const [lastOutcome, setLastOutcome] = useState<
     { type: "success" | "error"; text: string } | undefined
@@ -204,7 +174,7 @@ function ReportAIGenerateControlsState({
     enabled: Boolean(activeRunId),
     retry: (failureCount, err) => {
       if (err instanceof HttpError && (err.status === 403 || err.status === 404)) {
-        clearStoredRunId(storageKey, activeRunId);
+        clearReportAIRun(storageKey, activeRunId);
         return false;
       }
       return failureCount < 2;
@@ -219,7 +189,7 @@ function ReportAIGenerateControlsState({
     const err = activeRunQuery.error;
     if (!activeRunId || !(err instanceof HttpError)) return;
     if (err.status !== 403 && err.status !== 404) return;
-    clearStoredRunId(storageKey, activeRunId);
+    clearReportAIRun(storageKey, activeRunId);
     const timer = window.setTimeout(() => {
       setActiveRunId(undefined);
       setHandledRunId(undefined);
@@ -270,11 +240,17 @@ function ReportAIGenerateControlsState({
       return run;
     },
     onSuccess: (run) => {
-      storeRunId(storageKey, run.id);
+      registerReportAIRun({
+        storageKey,
+        runId: run.id,
+        userId: currentUserId,
+        reportType,
+        period,
+        target,
+        startedAt: Date.now()
+      });
       setActiveRunId(run.id);
       setHandledRunId(undefined);
-      setRunStartedAt(Date.now());
-      setElapsedSeconds(0);
       setLastOutcome(undefined);
       void queryClient.invalidateQueries({ queryKey: ["managed-agent-runs"] });
     },
@@ -294,13 +270,8 @@ function ReportAIGenerateControlsState({
     activeStatus === "running";
 
   useEffect(() => {
-    if (!generating || !runStartedAt) return;
-    const update = () =>
-      setElapsedSeconds(Math.max(0, Math.floor((Date.now() - runStartedAt) / 1000)));
-    update();
-    const timer = window.setInterval(update, 1000);
-    return () => window.clearInterval(timer);
-  }, [generating, runStartedAt]);
+    onGeneratingChange?.(generating);
+  }, [generating, onGeneratingChange]);
 
   useEffect(() => {
     const run = activeRunQuery.data;
@@ -308,7 +279,6 @@ function ReportAIGenerateControlsState({
     const timer = window.setTimeout(() => {
       if (run.status === "succeeded") {
         setHandledRunId(run.id);
-        clearStoredRunId(storageKey, run.id);
         setActiveRunId(undefined);
         setLastOutcome({ type: "success", text: `${periodLabel} 生成完成，报告正文已刷新` });
         void queryClient.invalidateQueries({ queryKey: ["reports"] });
@@ -318,7 +288,6 @@ function ReportAIGenerateControlsState({
       }
       if (run.status === "failed" || run.status === "timeout") {
         setHandledRunId(run.id);
-        clearStoredRunId(storageKey, run.id);
         setActiveRunId(undefined);
         const text = run.error_message || `${periodLabel} AI 生成失败`;
         setLastOutcome({ type: "error", text });
@@ -333,22 +302,27 @@ function ReportAIGenerateControlsState({
       ? "正在提交生成任务"
       : activeStatus === "pending"
         ? "任务已提交，等待模型开始"
-        : elapsedSeconds >= 45
-          ? "AI 正在处理报告上下文，请继续等待"
-          : "AI 正在读取数据并生成报告";
+        : "AI 正在整理数据并生成报告";
   const runningDetail = initializingDefault
     ? "初始化完成后将自动开始生成"
-    : `已等待 ${elapsedLabel(elapsedSeconds)} · 完成后自动刷新`;
+    : "通常需要几十秒，可以关闭窗口，任务会在后台继续";
 
   return (
-    <div className="report-ai-generate-shell">
+    <div
+      className={`report-ai-generate-shell${generating ? " report-ai-generate-shell--running" : ""}`}
+    >
       {generating ? (
         <div className="report-ai-run-status is-running" role="status" aria-live="polite">
-          <LoadingOutlined spin />
-          <span>
+          <span className="report-ai-run-status__visual">
+            <LoadingOutlined spin />
+          </span>
+          <span className="report-ai-run-status__copy">
             <strong>{runningTitle}</strong>
             <em>{runningDetail}</em>
           </span>
+          <Tag className="report-ai-run-status__badge" color="blue" variant="filled">
+            后台任务
+          </Tag>
         </div>
       ) : lastOutcome ? (
         <div
@@ -356,36 +330,35 @@ function ReportAIGenerateControlsState({
           role="status"
           aria-live="polite"
         >
-          {lastOutcome.type === "success" ? <CheckCircleOutlined /> : <CloseCircleOutlined />}
-          <span>
+          <span className="report-ai-run-status__visual">
+            {lastOutcome.type === "success" ? <CheckCircleOutlined /> : <CloseCircleOutlined />}
+          </span>
+          <span className="report-ai-run-status__copy">
             <strong>{lastOutcome.type === "success" ? "AI 生成完成" : "AI 生成失败"}</strong>
             <em>{lastOutcome.text}</em>
           </span>
         </div>
       ) : null}
-      <Space.Compact className="report-ai-generate-controls">
-        <Button
-          icon={<RobotOutlined />}
-          loading={generating}
-          disabled={disabled || generating}
-          onClick={() => runMutation.mutate()}
-        >
-          {generating ? "正在生成" : lastOutcome?.type === "error" ? "重新生成" : "AI 生成"}
-        </Button>
-        {allowSessionSelection ? (
-          <Button
-            icon={<FileSearchOutlined />}
-            className={settingsOpen ? "is-active" : undefined}
-            disabled={disabled || generating}
-            title="选择参与生成的 session"
-            onClick={onToggleSettings}
-          >
-            {selectedSessionSources.length > 0
-              ? `已选 ${selectedSessionSources.length} 个 session`
-              : "选择 session"}
+      {!generating ? (
+        <Space.Compact className="report-ai-generate-controls">
+          <Button icon={<RobotOutlined />} disabled={disabled} onClick={() => runMutation.mutate()}>
+            {lastOutcome?.type === "error" ? "重新生成" : "AI 生成"}
           </Button>
-        ) : null}
-      </Space.Compact>
+          {allowSessionSelection ? (
+            <Button
+              icon={<FileSearchOutlined />}
+              className={settingsOpen ? "is-active" : undefined}
+              disabled={disabled}
+              title="选择参与生成的 session"
+              onClick={onToggleSettings}
+            >
+              {selectedSessionSources.length > 0
+                ? `已选 ${selectedSessionSources.length} 个 session`
+                : "选择 session"}
+            </Button>
+          ) : null}
+        </Space.Compact>
+      ) : null}
     </div>
   );
 }
@@ -407,7 +380,7 @@ function SnapshotReportAISettingsPanel({
   const periodStart = period.date ?? period.week_start ?? "";
   const periodEnd = period.date ?? period.week_end ?? periodStart;
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(5);
+  const [pageSize, setPageSize] = useState(10);
   const [queryRange, setQueryRange] = useState<[Dayjs, Dayjs] | null>(null);
   const queryFrom = queryRange?.[0].format("YYYY-MM-DD");
   const queryTo = queryRange?.[1].format("YYYY-MM-DD");

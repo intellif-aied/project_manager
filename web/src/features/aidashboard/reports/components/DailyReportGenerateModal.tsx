@@ -1,4 +1,4 @@
-import { CalendarOutlined, EditOutlined, SaveOutlined } from "@ant-design/icons";
+import { CalendarOutlined, CloudSyncOutlined, EditOutlined, SaveOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, App, Button, DatePicker, Empty, Input, Modal, Space, Tag } from "antd";
 import { useEffect, useMemo, useState } from "react";
@@ -116,6 +116,7 @@ export function DailyReportGenerateModal({
   const [manualMode, setManualMode] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [selectedSessionSources, setSelectedSessionSources] = useState<ReportSourceInput[]>([]);
+  const [aiGenerating, setAIGenerating] = useState(false);
 
   const existingPersonalListQuery = useQuery({
     queryKey: ["reports", "daily", "manage-modal", "personal-existing", date],
@@ -325,6 +326,14 @@ export function DailyReportGenerateModal({
   };
 
   const handleClose = () => {
+    if (aiGenerating) {
+      message.info({
+        key: "report-ai-background-running",
+        content: "日报会继续在后台生成，完成后将通知你。"
+      });
+      onClose();
+      return;
+    }
     if (hasUnsavedContentChange) {
       Modal.confirm({
         title: "当前内容尚未保存，关闭后将丢失，是否关闭？",
@@ -345,10 +354,14 @@ export function DailyReportGenerateModal({
       width={860}
       onCancel={handleClose}
       keyboard={!settingsOpen}
-      maskClosable={!settingsOpen}
-      focusTriggerAfterClose
+      mask={{ enabled: true, closable: !settingsOpen }}
+      focusable={{ focusTriggerAfterClose: true }}
       footer={
-        <Space className="console-report-workflow-modal__footer">
+        <Space
+          className={`console-report-workflow-modal__footer${
+            aiGenerating ? " is-ai-generating" : ""
+          }`}
+        >
           {canEditContent ? (
             <ReportAIGenerateControls
               reportType={dailyReportType(scope)}
@@ -361,39 +374,51 @@ export function DailyReportGenerateModal({
               disabled={loading || saveMutation.isPending}
               onBeforeGenerate={confirmBeforeAIGenerate}
               onGenerated={handleAIGenerated}
+              onGeneratingChange={setAIGenerating}
             />
           ) : null}
-          <Button onClick={handleClose} disabled={saveMutation.isPending}>
-            {readOnly ? "关闭" : "取消"}
+          <Button
+            icon={aiGenerating ? <CloudSyncOutlined /> : undefined}
+            onClick={handleClose}
+            disabled={saveMutation.isPending}
+          >
+            {readOnly ? "关闭" : aiGenerating ? "后台运行并关闭" : "取消"}
           </Button>
-          {canEditContent && showEditor ? (
-            <Button
-              type="primary"
-              icon={<SaveOutlined />}
-              loading={saveMutation.isPending}
-              disabled={loading}
-              onClick={() => saveMutation.mutate()}
-            >
-              保存
-            </Button>
-          ) : canEditContent ? (
-            <Button
-              type="primary"
-              icon={<EditOutlined />}
-              loading={loading}
-              onClick={() => {
-                setManualMode(true);
-                setContent(currentReport?.content ?? "");
-                setContentTouched(true);
-              }}
-            >
-              直接填写
-            </Button>
+          {!aiGenerating ? (
+            canEditContent && showEditor ? (
+              <Button
+                type="primary"
+                icon={<SaveOutlined />}
+                loading={saveMutation.isPending}
+                disabled={loading}
+                onClick={() => saveMutation.mutate()}
+              >
+                保存
+              </Button>
+            ) : canEditContent ? (
+              <Button
+                type="primary"
+                icon={<EditOutlined />}
+                loading={loading}
+                onClick={() => {
+                  setManualMode(true);
+                  setContent(currentReport?.content ?? "");
+                  setContentTouched(true);
+                }}
+              >
+                直接填写
+              </Button>
+            ) : null
           ) : null}
         </Space>
       }
     >
-      <div className="console-report-modal console-report-management">
+      <div
+        className={`console-report-modal console-report-management${
+          aiGenerating ? " is-ai-generating" : ""
+        }`}
+        aria-busy={aiGenerating}
+      >
         {loadError ? (
           <Alert type="error" showIcon message="报告加载失败" description="请稍后重试" />
         ) : null}
@@ -407,6 +432,7 @@ export function DailyReportGenerateModal({
                 allowClear={false}
                 suffixIcon={<CalendarOutlined />}
                 inputReadOnly
+                disabled={aiGenerating}
                 onChange={handleDateChange}
               />
             ) : null}
@@ -427,10 +453,10 @@ export function DailyReportGenerateModal({
                   <TextArea
                     className="console-report-editor-layout__content-input"
                     rows={18}
-                    readOnly={readOnly}
+                    readOnly={readOnly || aiGenerating}
                     value={editorContent}
                     onChange={(event) => {
-                      if (readOnly) return;
+                      if (readOnly || aiGenerating) return;
                       setContent(event.target.value);
                       setContentTouched(true);
                     }}
@@ -443,10 +469,10 @@ export function DailyReportGenerateModal({
                     className="console-report-editor-layout__next-day-input"
                     rows={2}
                     autoSize={{ minRows: 2, maxRows: 2 }}
-                    readOnly={readOnly}
+                    readOnly={readOnly || aiGenerating}
                     value={editorNextDayPlan}
                     onChange={(event) => {
-                      if (readOnly) return;
+                      if (readOnly || aiGenerating) return;
                       setNextDayPlan(event.target.value.split(/\r?\n/).slice(0, 2).join("\n"));
                       setNextDayPlanTouched(true);
                     }}

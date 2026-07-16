@@ -104,6 +104,7 @@ import {
   PersonalWeeklyReportModal,
   TeamWeeklyReportModal
 } from "../reports/pages/WeeklyReportsPage";
+import { hasActiveReportAIRun, useReportAIRunStore } from "../reports/reportAIRunTracking";
 
 import "./console-dashboard.css";
 
@@ -954,6 +955,7 @@ export function DashboardPage() {
   const weekStart = today.subtract((today.day() + 6) % 7, "day").format("YYYY-MM-DD");
   const weekEnd = dayjs(weekStart).add(6, "day").format("YYYY-MM-DD");
   const currentUserId = user?.id ?? "";
+  const activeReportRuns = useReportAIRunStore((state) => state.runs);
   const followsQuery = useQuery({
     queryKey: ["dashboard", currentUserId, "my-items"],
     queryFn: () => fetchDashboardMyItems({ page: 1, page_size: DASHBOARD_PAGE_SIZE }),
@@ -1064,16 +1066,34 @@ export function DashboardPage() {
     staleTime: 30_000
   });
   const todayDailyReport = todayReportsQuery.data?.[0];
+  const applyActiveRunState = (reportItem: ReportItem) => {
+    const active = hasActiveReportAIRun(activeReportRuns, {
+      userId: currentUserId,
+      reportType: reportItem.kind,
+      ...(reportItem.kind.endsWith("_daily") ? { date: reportDate } : { weekStart, weekEnd })
+    });
+    return active
+      ? {
+          ...reportItem,
+          status: "生成中" as const,
+          updatedAt: "后台生成中"
+        }
+      : reportItem;
+  };
   const personalReports = data.personalReports.map((reportItem) => {
     if (reportItem.kind === "personal_weekly") {
-      return applyPersonalWeeklyReportState(
-        reportItem,
-        personalWeeklyQuery.data,
-        personalWeeklyQuery.isSuccess
+      return applyActiveRunState(
+        applyPersonalWeeklyReportState(
+          reportItem,
+          personalWeeklyQuery.data,
+          personalWeeklyQuery.isSuccess
+        )
       );
     }
-    if (reportItem.kind !== "personal_daily") return reportItem;
-    return applyTodayDailyReportState(reportItem, todayDailyReport, todayReportsQuery.isSuccess);
+    if (reportItem.kind !== "personal_daily") return applyActiveRunState(reportItem);
+    return applyActiveRunState(
+      applyTodayDailyReportState(reportItem, todayDailyReport, todayReportsQuery.isSuccess)
+    );
   });
   const summaryReports = (data.summaryReports ?? [])
     .filter(
@@ -1085,20 +1105,20 @@ export function DashboardPage() {
     )
     .map((reportItem) => {
       if (reportItem.kind === "team_daily") {
-        return applyTeamDailyReportState(
-          reportItem,
-          teamReportQuery.data,
-          teamReportQuery.isSuccess
+        return applyActiveRunState(
+          applyTeamDailyReportState(reportItem, teamReportQuery.data, teamReportQuery.isSuccess)
         );
       }
       if (reportItem.kind === "department_daily") {
-        return applyDepartmentDailyReportState(
-          reportItem,
-          departmentReportQuery.data,
-          departmentReportQuery.isSuccess
+        return applyActiveRunState(
+          applyDepartmentDailyReportState(
+            reportItem,
+            departmentReportQuery.data,
+            departmentReportQuery.isSuccess
+          )
         );
       }
-      return reportItem;
+      return applyActiveRunState(reportItem);
     });
   const effectiveCoverage =
     dashboardRole === "director" && departmentSourcesQuery.data
@@ -2448,14 +2468,16 @@ function renderPrimaryReportAction(
       className={`console-report-primary-action ${
         report.status === "待生成"
           ? "console-report-primary-action--generate"
-          : report.status === "已保存，未发送最新修改"
-            ? "console-report-primary-action--edited"
-            : report.status === "已保存"
-              ? "console-report-primary-action--saved"
-              : "console-report-primary-action--quiet"
+          : report.status === "生成中"
+            ? "console-report-primary-action--loading"
+            : report.status === "已保存，未发送最新修改"
+              ? "console-report-primary-action--edited"
+              : report.status === "已保存"
+                ? "console-report-primary-action--saved"
+                : "console-report-primary-action--quiet"
       }`}
       type={report.status === "待生成" ? "primary" : "default"}
-      icon={<EditOutlined />}
+      icon={report.status === "生成中" ? <LoadingOutlined spin /> : <EditOutlined />}
       onMouseDown={(event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -2481,7 +2503,7 @@ function getReportButtonText(report: ReportItem) {
   if (report.status === "已保存") return `编辑${noun}`;
   if (report.status === "已发送") return `打开${noun}`;
   if (report.status === "已归档") return `打开${noun}`;
-  if (report.status === "生成中") return `打开${noun}`;
+  if (report.status === "生成中") return "查看进度";
 
   return `打开${noun}`;
 }
@@ -2493,7 +2515,7 @@ function getCompactReportButtonText(report: ReportItem) {
   if (report.status === "已保存，未发送最新修改") return "继续编辑";
   if (report.status === "已保存") return "继续编辑";
   if (report.status === "已发送" || report.status === "已归档") return "打开内容";
-  if (report.status === "生成中") return "打开内容";
+  if (report.status === "生成中") return "查看进度";
   return "打开内容";
 }
 
@@ -2528,7 +2550,7 @@ function getDailyReportCopy(report: ReportItem) {
   }
 
   if (report.status === "生成中") {
-    return "日报内容可打开查看或编辑。";
+    return "AI 正在后台生成，可继续处理其他工作。";
   }
 
   return "暂无日报，可直接填写。";
@@ -3955,7 +3977,7 @@ function ReportStatusTag({ status }: { status: ReportStatus }) {
         : status === "待生成"
           ? "暂无报告"
           : status === "生成中"
-            ? "可编辑"
+            ? "生成中"
             : status === "生成失败"
               ? "可编辑"
               : status;

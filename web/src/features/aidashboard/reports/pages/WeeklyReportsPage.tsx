@@ -18,6 +18,7 @@ import {
 } from "antd";
 import {
   CalendarOutlined,
+  CloudSyncOutlined,
   CopyOutlined,
   DeleteOutlined,
   DownOutlined,
@@ -436,6 +437,7 @@ function WeeklyReportEditorModal({
   const [contentTouched, setContentTouched] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [selectedSessionSources, setSelectedSessionSources] = useState<ReportSourceInput[]>([]);
+  const [aiGenerating, setAIGenerating] = useState(false);
   const title = weeklyReportModalTitle(scope);
   const selectedWeekEnd = selectedWeekStart === weekStart ? weekEnd : weekEndOf(selectedWeekStart);
 
@@ -555,6 +557,14 @@ function WeeklyReportEditorModal({
   };
 
   const handleClose = () => {
+    if (aiGenerating) {
+      message.info({
+        key: "weekly-report-ai-background-running",
+        content: `${title}会继续在后台生成，完成后将通知你。`
+      });
+      onClose();
+      return;
+    }
     if (hasUnsavedContentChange) {
       Modal.confirm({
         title: "当前内容尚未保存，关闭后将丢失，是否关闭？",
@@ -576,10 +586,14 @@ function WeeklyReportEditorModal({
       onCancel={handleClose}
       destroyOnHidden
       keyboard={!settingsOpen}
-      maskClosable={!settingsOpen}
-      focusTriggerAfterClose
+      mask={{ enabled: true, closable: !settingsOpen }}
+      focusable={{ focusTriggerAfterClose: true }}
       footer={
-        <Space className="console-report-workflow-modal__footer">
+        <Space
+          className={`console-report-workflow-modal__footer${
+            aiGenerating ? " is-ai-generating" : ""
+          }`}
+        >
           {!readOnly ? (
             <ReportAIGenerateControls
               reportType={weeklyReportType(scope)}
@@ -592,12 +606,17 @@ function WeeklyReportEditorModal({
               disabled={reportQuery.isLoading || saveMutation.isPending}
               onBeforeGenerate={confirmBeforeAIGenerate}
               onGenerated={handleAIGenerated}
+              onGeneratingChange={setAIGenerating}
             />
           ) : null}
-          <Button onClick={handleClose} disabled={saveMutation.isPending}>
-            {readOnly ? "关闭" : "取消"}
+          <Button
+            icon={aiGenerating ? <CloudSyncOutlined /> : undefined}
+            onClick={handleClose}
+            disabled={saveMutation.isPending}
+          >
+            {readOnly ? "关闭" : aiGenerating ? "后台运行并关闭" : "取消"}
           </Button>
-          {!readOnly ? (
+          {!readOnly && !aiGenerating ? (
             <Button
               type="primary"
               loading={saveMutation.isPending}
@@ -610,7 +629,12 @@ function WeeklyReportEditorModal({
         </Space>
       }
     >
-      <div className="console-report-modal console-report-management">
+      <div
+        className={`console-report-modal console-report-management${
+          aiGenerating ? " is-ai-generating" : ""
+        }`}
+        aria-busy={aiGenerating}
+      >
         {reportQuery.isError ? (
           <Alert
             type="error"
@@ -630,6 +654,7 @@ function WeeklyReportEditorModal({
                 allowClear={false}
                 suffixIcon={<CalendarOutlined />}
                 inputReadOnly
+                disabled={aiGenerating}
                 onChange={handleWeekChange}
               />
             ) : null}
@@ -657,11 +682,12 @@ function WeeklyReportEditorModal({
                     </span>
                   </div>
                   <TextArea
+                    className="console-report-editor-layout__content-input"
                     rows={18}
-                    readOnly={readOnly}
+                    readOnly={readOnly || aiGenerating}
                     value={editorContent}
                     onChange={(event) => {
-                      if (readOnly) return;
+                      if (readOnly || aiGenerating) return;
                       setContent(event.target.value);
                       setContentTouched(true);
                     }}
@@ -742,7 +768,7 @@ export function WeeklyReportsPage() {
     staleTime: 60_000
   });
   const effectiveDepartmentID = canSelectDepartment
-    ? selectedDepartmentID ?? departmentsQuery.data?.[0]?.id
+    ? (selectedDepartmentID ?? departmentsQuery.data?.[0]?.id)
     : undefined;
 
   const deleteMutation = useMutation({
@@ -841,7 +867,10 @@ export function WeeklyReportsPage() {
                 value={effectiveDepartmentID}
                 loading={departmentsQuery.isLoading}
                 placeholder="选择部门"
-                options={(departmentsQuery.data ?? []).map((item) => ({ label: item.name, value: item.id }))}
+                options={(departmentsQuery.data ?? []).map((item) => ({
+                  label: item.name,
+                  value: item.id
+                }))}
                 onChange={setSelectedDepartmentID}
               />
             ) : null}

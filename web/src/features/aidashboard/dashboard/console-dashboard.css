@@ -359,10 +359,17 @@
   border-color: #d97706;
 }
 
-.console-report-actions--head .console-report-primary-action--loading.ant-btn:disabled {
-  color: #8a97a8;
-  background: #f5f8fc;
-  border-color: #e1e8f0;
+.console-report-actions--head .console-report-primary-action--loading.ant-btn {
+  color: #0958d9;
+  background: #edf5ff;
+  border-color: #cfe5ff;
+}
+
+.console-report-actions--head .console-report-primary-action--loading.ant-btn:hover,
+.console-report-actions--head .console-report-primary-action--loading.ant-btn:focus-visible {
+  color: #0958d9;
+  background: #e2efff;
+  border-color: #9fc5ff;
 }
 
 .console-report-status-card {

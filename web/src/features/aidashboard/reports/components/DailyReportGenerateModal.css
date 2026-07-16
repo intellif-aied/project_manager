@@ -72,7 +72,10 @@
   justify-content: flex-end;
 }
 
-.console-report-workflow-modal .ant-modal-footer .console-report-workflow-modal__footer > .ant-space-item:first-child {
+.console-report-workflow-modal
+  .ant-modal-footer
+  .console-report-workflow-modal__footer
+  > .ant-space-item:first-child {
   min-width: 0;
 }
 
@@ -342,6 +345,15 @@
 .console-report-editor-layout__next-day-input.ant-input:hover {
   border-color: #9fc2ff;
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.08);
+}
+
+.console-report-management.is-ai-generating .console-report-editor-layout__content-input.ant-input,
+.console-report-management.is-ai-generating
+  .console-report-editor-layout__next-day-input.ant-input {
+  border-color: #e2eaf3;
+  background: #f8fafc;
+  color: #526173;
+  cursor: default;
 }
 
 .console-department-source {
@@ -677,7 +689,17 @@
     min-width: 0;
   }
 
-  .console-report-workflow-modal .ant-modal-footer .console-report-workflow-modal__footer > .ant-space-item:first-child {
+  .console-report-workflow-modal
+    .ant-modal-footer
+    .console-report-workflow-modal__footer
+    > .ant-space-item:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .console-report-workflow-modal
+    .ant-modal-footer
+    .console-report-workflow-modal__footer.is-ai-generating
+    > .ant-space-item:not(:first-child) {
     grid-column: 1 / -1;
   }
 

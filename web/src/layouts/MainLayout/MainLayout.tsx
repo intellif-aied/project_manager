@@ -7,6 +7,7 @@ import { Header } from "@/layouts/Header/Header";
 import { HeaderNavProvider } from "@/layouts/Header/HeaderNavProvider";
 import { Sidebar, SidebarContent } from "@/layouts/Sidebar/Sidebar";
 import { useLayoutStore } from "@/stores/layoutStore";
+import { ReportAIRunTracker } from "@/features/aidashboard/reports/components/ReportAIRunTracker";
 
 import "./MainLayout.css";
 
@@ -22,6 +23,7 @@ export function MainLayout({ children }: PropsWithChildren) {
 
   return (
     <HeaderNavProvider>
+      <ReportAIRunTracker />
       <Layout className="main-layout">
         <Sidebar />
         <Drawer

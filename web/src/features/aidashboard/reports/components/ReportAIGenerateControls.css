@@ -9,12 +9,22 @@
   gap: 10px;
 }
 
+.report-ai-generate-shell--running {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.report-ai-generate-shell--running .report-ai-run-status {
+  max-width: none;
+}
+
 .console-report-workflow-modal .console-report-workflow-modal__footer {
   display: flex;
   width: 100%;
 }
 
-.console-report-workflow-modal .console-report-workflow-modal__footer > .ant-space-item:first-child {
+.console-report-workflow-modal
+  .console-report-workflow-modal__footer
+  > .ant-space-item:first-child {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
@@ -53,20 +63,34 @@
 }
 
 .report-ai-run-status {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   flex: 1 1 auto;
   align-items: center;
-  gap: 6px;
+  gap: 9px;
   min-width: 0;
   max-width: 520px;
+  min-height: 42px;
+  padding: 7px 9px;
+  border: 1px solid #d9e8fb;
+  border-radius: 9px;
+  background: linear-gradient(135deg, #f5f9ff 0%, #fbfdff 100%);
   color: #475569;
 }
 
-.report-ai-run-status > .anticon {
-  font-size: 16px;
+.report-ai-run-status__visual {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: #e8f2ff;
+  color: #2563eb;
+  font-size: 15px;
 }
 
-.report-ai-run-status > span {
+.report-ai-run-status__copy {
   display: grid;
   align-items: center;
   min-width: 0;
@@ -74,35 +98,55 @@
   gap: 1px;
 }
 
-.report-ai-run-status strong,
-.report-ai-run-status em {
+.report-ai-run-status__copy strong,
+.report-ai-run-status__copy em {
   overflow: hidden;
   letter-spacing: 0;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.report-ai-run-status strong {
+.report-ai-run-status__copy strong {
   color: #172033;
   font-size: 12px;
   font-weight: 700;
 }
 
-.report-ai-run-status em {
+.report-ai-run-status__copy em {
   color: #64748b;
   font-size: 12px;
   font-style: normal;
 }
 
-.report-ai-run-status.is-running > .anticon {
-  color: #2563eb;
+.report-ai-run-status__badge.ant-tag {
+  margin: 0;
+  padding-inline: 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 22px;
 }
 
-.report-ai-run-status.is-success > .anticon {
+.report-ai-run-status.is-success {
+  border-color: #cdebd8;
+  background: linear-gradient(135deg, #f2fbf5 0%, #fbfefc 100%);
+}
+
+.report-ai-run-status.is-success .report-ai-run-status__visual {
+  background: #dcf5e5;
   color: #15803d;
 }
 
-.report-ai-run-status.is-error > .anticon,
+.report-ai-run-status.is-error {
+  border-color: #f4d3ce;
+  background: linear-gradient(135deg, #fff6f4 0%, #fffdfc 100%);
+}
+
+.report-ai-run-status.is-error .report-ai-run-status__visual {
+  background: #ffebe8;
+  color: #b42318;
+}
+
 .report-ai-run-status.is-error strong {
   color: #b42318;
 }
@@ -440,26 +484,28 @@
   }
 
   .report-ai-run-status {
+    grid-template-columns: auto minmax(0, 1fr) auto;
     width: 100%;
     min-width: 0;
     max-width: none;
-    padding: 7px 9px;
-    border: 1px solid #dfe8f3;
-    border-radius: 7px;
-    background: #f8fafc;
+    max-width: none;
   }
 
-  .report-ai-run-status > span {
+  .report-ai-run-status__copy {
     overflow: visible;
   }
 
-  .report-ai-run-status strong,
-  .report-ai-run-status em {
+  .report-ai-run-status__copy strong,
+  .report-ai-run-status__copy em {
     overflow: visible;
     line-height: 1.4;
     text-overflow: clip;
     white-space: normal;
     overflow-wrap: anywhere;
+  }
+
+  .report-ai-run-status__badge.ant-tag {
+    align-self: start;
   }
 
   .report-ai-settings-panel__toolbar .ant-picker {
