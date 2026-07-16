@@ -137,6 +137,18 @@ func writeReportSourceError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"code": "REPORT_SOURCE_SELECTION_NOT_FOUND", "error": "selection not found"})
 	case errors.Is(err, reportsource.ErrSourceUnavailable), errors.Is(err, reportsource.ErrSelectionConflict):
 		writeJSON(w, http.StatusConflict, map[string]string{"code": "REPORT_SOURCE_UNAVAILABLE", "error": err.Error()})
+	case errors.Is(err, reportsource.ErrDigestNotReady):
+		writeJSON(w, http.StatusConflict, map[string]string{"code": "REPORT_SOURCE_DIGEST_NOT_READY", "error": "report source digest is not ready; retry later"})
+	case errors.Is(err, reportsource.ErrDigestFailed):
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"code": "REPORT_SOURCE_DIGEST_FAILED", "error": "report source digest build failed"})
+	case errors.Is(err, reportsource.ErrDigestLimitExceeded):
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "REPORT_SOURCE_DIGEST_LIMIT_EXCEEDED", "error": "report source digest exceeds the hard limit"})
+	case errors.Is(err, reportsource.ErrDigestVersionMismatch):
+		writeJSON(w, http.StatusConflict, map[string]string{"code": "REPORT_SOURCE_DIGEST_VERSION_MISMATCH", "error": "report source digest version does not match"})
+	case errors.Is(err, reportsource.ErrReadModeMismatch):
+		writeJSON(w, http.StatusConflict, map[string]string{"code": "REPORT_SOURCE_READ_MODE_MISMATCH", "error": "report source read mode does not match"})
+	case errors.Is(err, reportsource.ErrDigestCorrupt):
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"code": "REPORT_SOURCE_DIGEST_FAILED", "error": "report source digest integrity check failed"})
 	default:
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "REPORT_SOURCE_FAILED", "error": err.Error()})
 	}

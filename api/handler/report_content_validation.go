@@ -90,7 +90,18 @@ func reportPersonalSourceActivityIssues(ctx context.Context, db *sql.DB, inputRe
 		return nil, nil
 	}
 	var hasWorkActivity bool
-	err := db.QueryRowContext(ctx, `
+	var err error
+	if strings.TrimSpace(stringFromAny(inputRef["report_source_read_mode"])) == "digest_v1" {
+		err = db.QueryRowContext(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				FROM report_source_selection_items i
+				JOIN session_slice_digest_revisions d ON d.id = i.digest_revision_id
+				WHERE i.selection_id = $1 AND d.status = 'ready'
+					AND d.included_event_count > 0
+			)`, selectionID).Scan(&hasWorkActivity)
+	} else {
+		err = db.QueryRowContext(ctx, `
 		SELECT EXISTS (
 			SELECT 1
 			FROM report_source_selection_items i
@@ -102,6 +113,7 @@ func reportPersonalSourceActivityIssues(ctx context.Context, db *sql.DB, inputRe
 				AND e.event_type IN ('event_msg.user_message', 'event_msg.agent_message', 'response_item.message')
 				AND NULLIF(btrim(COALESCE(e.summary, e.excerpt, '')), '') IS NOT NULL
 		)`, selectionID).Scan(&hasWorkActivity)
+	}
 	if err != nil {
 		return nil, err
 	}

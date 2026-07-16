@@ -11,7 +11,7 @@ Pipeline (no mocks):
   -> business report readback via /reports/...
 
 Outputs:
-  doc/ReportAgent真实模型六类报告验收报告.md
+  tmp/test-reports/ReportAgent真实模型六类报告验收报告.md
   tmp/report_agent_real_model_full_flow_<timestamp>.md
 """
 

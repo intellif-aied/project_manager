@@ -17,6 +17,7 @@ type ProcessingJob struct {
 	ChunkID                 sql.NullString
 	TargetRevisionID        sql.NullString
 	TargetMetricsRevisionID sql.NullString
+	TargetDigestRevisionID  sql.NullString
 	ContentEpoch            sql.NullInt64
 	Payload                 []byte
 	Attempts                int
@@ -104,12 +105,12 @@ func (r *PostgresJobRepository) ClaimTypes(
 		FROM candidates c
 		WHERE j.id = c.id
 		RETURNING j.id, j.job_type, j.session_id, j.generation_id, j.chunk_id,
-			j.target_revision_id, j.target_metrics_revision_id,
+			j.target_revision_id, j.target_metrics_revision_id, j.target_digest_revision_id,
 			j.content_epoch, j.payload, j.attempts,
 			j.max_attempts, j.lease_owner, j.lease_until
 		)
 		SELECT updated.id, updated.job_type, updated.session_id, updated.generation_id, updated.chunk_id,
-			updated.target_revision_id, updated.target_metrics_revision_id,
+			updated.target_revision_id, updated.target_metrics_revision_id, updated.target_digest_revision_id,
 			updated.content_epoch, updated.payload, updated.attempts,
 			updated.max_attempts, updated.lease_owner, updated.lease_until
 		FROM updated
@@ -126,7 +127,7 @@ func (r *PostgresJobRepository) ClaimTypes(
 		var job ProcessingJob
 		if err := rows.Scan(
 			&job.ID, &job.Type, &job.SessionID, &job.GenerationID, &job.ChunkID,
-			&job.TargetRevisionID, &job.TargetMetricsRevisionID,
+			&job.TargetRevisionID, &job.TargetMetricsRevisionID, &job.TargetDigestRevisionID,
 			&job.ContentEpoch, &job.Payload, &job.Attempts,
 			&job.MaxAttempts, &job.LeaseOwner, &job.LeaseUntil,
 		); err != nil {

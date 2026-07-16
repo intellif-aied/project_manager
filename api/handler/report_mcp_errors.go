@@ -3,7 +3,7 @@ package handler
 import "fmt"
 
 // mcpErrorCode is a structured Report MCP error. It carries a stable string code
-// (per doc/mcp修改方案.md §3.7 / §12) that clients can switch on, plus a human
+// (per doc/v1/mcp修改方案.md §3.7 / §12) that clients can switch on, plus a human
 // message. serve() converts *mcpErrorCode into a JSON-RPC error object.
 type mcpErrorCode struct {
 	Code    string

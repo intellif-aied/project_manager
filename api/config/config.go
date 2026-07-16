@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -39,6 +40,13 @@ type Config struct {
 	ManagedAgentReportAgentInstructions string
 	ManagedAgentReportAgentStartPrompt  string
 	ManagedAgentReportAssetRepair       bool
+	ManagedAgentReportSessionReadMode   string
+	ManagedAgentReportDigestVersion     string
+	ManagedAgentReportRedactionVersion  string
+	ManagedAgentReportDigestTargetBytes int
+	ManagedAgentReportDigestHardLimit   int
+	ManagedAgentReportDigestRolloutPct  int
+	ManagedAgentReportDigestCanaryUsers []string
 	AIDAPublicBaseURL                   string
 	EnablePublicRegister                bool
 	ClaudeCacheWriteVariant             string
@@ -86,6 +94,13 @@ func Load() *Config {
 		ManagedAgentReportAgentInstructions: readOptionalFile(getEnv("MANAGED_AGENT_REPORT_AGENT_INSTRUCTIONS_FILE", "")),
 		ManagedAgentReportAgentStartPrompt:  readOptionalFile(getEnv("MANAGED_AGENT_REPORT_AGENT_START_PROMPT_FILE", "")),
 		ManagedAgentReportAssetRepair:       getEnvBool("MANAGED_AGENT_REPORT_ASSET_REPAIR", true),
+		ManagedAgentReportSessionReadMode:   strings.TrimSpace(strings.ToLower(getEnv("MANAGED_AGENT_REPORT_SESSION_READ_MODE", "full"))),
+		ManagedAgentReportDigestVersion:     getEnv("MANAGED_AGENT_REPORT_DIGEST_VERSION", "session-digest/v1"),
+		ManagedAgentReportRedactionVersion:  getEnv("MANAGED_AGENT_REPORT_REDACTION_VERSION", "report-redaction/v1"),
+		ManagedAgentReportDigestTargetBytes: getEnvInt("MANAGED_AGENT_REPORT_DIGEST_TARGET_BYTES", 65536),
+		ManagedAgentReportDigestHardLimit:   getEnvInt("MANAGED_AGENT_REPORT_DIGEST_HARD_LIMIT_BYTES", 131072),
+		ManagedAgentReportDigestRolloutPct:  getEnvInt("MANAGED_AGENT_REPORT_DIGEST_ROLLOUT_PERCENT", 100),
+		ManagedAgentReportDigestCanaryUsers: splitCSV(getEnv("MANAGED_AGENT_REPORT_DIGEST_CANARY_USER_IDS", "")),
 		AIDAPublicBaseURL:                   getEnv("AIDA_PUBLIC_BASE_URL", ""),
 		EnablePublicRegister:                getEnv("ENABLE_PUBLIC_REGISTER", "false") == "true",
 		ClaudeCacheWriteVariant:             strings.TrimSpace(strings.ToLower(getEnv("AIDA_CLAUDE_CACHE_WRITE_VARIANT", ""))),
@@ -116,6 +131,28 @@ func getEnvBool(key string, fallback bool) bool {
 		return fallback
 	}
 	return value == "1" || value == "true" || value == "yes" || value == "on"
+}
+
+func getEnvInt(key string, fallback int) int {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return -1
+	}
+	return parsed
+}
+
+func splitCSV(value string) []string {
+	values := []string{}
+	for _, item := range strings.Split(value, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			values = append(values, item)
+		}
+	}
+	return values
 }
 
 func readOptionalFile(path string) string {

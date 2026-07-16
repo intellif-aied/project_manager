@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generic MCP client acceptance test for /api/v1/mcp/reports.
 
-Per doc/mcp修改方案.md. Does NOT use platform Agent. Tests MCP as a generic
+Per doc/v1/mcp修改方案.md. Does NOT use platform Agent. Tests MCP as a generic
 capability service: endpoint availability, tools/list, 9 atomic tools,
 scope/target/permission matrix, 6 report_type writeback, business readback,
 product_status, error codes, migration idempotency, old-name cleanup.
@@ -34,7 +34,7 @@ AIHUB_SECRET = os.environ.get(
     "NYwe6r2UAdJEQw5swd9KheOFMDKICYbBwV_91x6msCk",
 )
 
-# Test account tokens (from doc/测试账号文档.md). Hardcoded for stability.
+# Test account tokens (from doc/v1/测试账号文档.md). Hardcoded for stability.
 TOKENS = {
     "pm":       "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1aWQiOjMwMywiaWF0IjoxNzgyNzM3NTIyLCJleHAiOjE3ODUzMjk1MjJ9.NkFDwsjc2gRZE9ME4lwPh1aJGkyQDKM7WyZhr3I1LLo",
     "director": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1aWQiOjMwNCwiaWF0IjoxNzgyNzM3NTIyLCJleHAiOjE3ODUzMjk1MjJ9.uxqNFtJ1oPW4pxABCb5eEISSKv94Iy76iA6-jOQ3qPQ",

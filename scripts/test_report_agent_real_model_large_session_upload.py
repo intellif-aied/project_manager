@@ -13,7 +13,7 @@ Pipeline (no mocks, real local sessions):
   -> MCP regression / default-assets / go test / web lint+typecheck+build / grep
 
 Outputs:
-  doc/ReportAgent真实模型大规模Session验收报告.md
+  tmp/test-reports/ReportAgent真实模型大规模Session验收报告.md
   tmp/report_agent_real_model_large_session_upload_<timestamp>.md
 """
 
@@ -59,7 +59,7 @@ POLL_TIMEOUT_SEC = float(os.getenv("AIDA_POLL_TIMEOUT", "900"))
 
 SKIP_REAL_MODEL = os.getenv("AIDA_SKIP_REAL_MODEL", "0") == "1"
 
-# Role -> username mapping (matches doc/测试账号文档.md)
+# Role -> username mapping (matches doc/v1/测试账号文档.md)
 ROLE_USERNAMES = {
     "employee_a": "t05",
     "employee_b": "t06",

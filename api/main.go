@@ -12,6 +12,7 @@ import (
 	"github.com/aidashboard/api/handler"
 	"github.com/aidashboard/api/internal/pricing"
 	"github.com/aidashboard/api/internal/reportsource"
+	"github.com/aidashboard/api/internal/sessiondigest"
 	"github.com/aidashboard/api/internal/sessionsync"
 	"github.com/aidashboard/api/internal/tokenanalytics"
 	"github.com/aidashboard/api/internal/usage"
@@ -62,7 +63,19 @@ func main() {
 		log.Fatalf("Failed to init session sync handler: %v", err)
 	}
 	reportH := handler.NewReportHandler(database)
-	reportSourceService, err := reportsource.NewService(database)
+	reportSourceConfig, err := (reportsource.Config{
+		SessionReadMode:     cfg.ManagedAgentReportSessionReadMode,
+		DigestVersion:       cfg.ManagedAgentReportDigestVersion,
+		RedactionVersion:    cfg.ManagedAgentReportRedactionVersion,
+		DigestTargetBytes:   cfg.ManagedAgentReportDigestTargetBytes,
+		DigestHardLimit:     cfg.ManagedAgentReportDigestHardLimit,
+		DigestRolloutPct:    cfg.ManagedAgentReportDigestRolloutPct,
+		DigestCanaryUserIDs: cfg.ManagedAgentReportDigestCanaryUsers,
+	}).Normalized()
+	if err != nil {
+		log.Fatalf("Invalid report source digest configuration: %v", err)
+	}
+	reportSourceService, err := reportsource.NewServiceWithConfig(database, reportSourceConfig)
 	if err != nil {
 		log.Fatalf("Failed to init report source service: %v", err)
 	}
@@ -149,6 +162,31 @@ func main() {
 		}
 		meteringWorker.Start(schedulerCtx)
 		log.Println("Session metering lifecycle worker started")
+	}
+	if reportSourceConfig.SessionReadMode != reportsource.ReadModeFull {
+		digestConfig := sessiondigest.DefaultConfig()
+		digestConfig.DigestVersion = reportSourceConfig.DigestVersion
+		digestConfig.RedactionVersion = reportSourceConfig.RedactionVersion
+		reconciler, err := sessiondigest.NewReconciler(database, digestConfig)
+		if err != nil {
+			log.Fatalf("Failed to init session digest reconciler: %v", err)
+		}
+		jobRepository, err := sessionsync.NewPostgresJobRepository(database)
+		if err != nil {
+			log.Fatalf("Failed to init session digest job repository: %v", err)
+		}
+		digestProcessor, err := sessiondigest.NewProcessor(database, digestConfig)
+		if err != nil {
+			log.Fatalf("Failed to init session digest processor: %v", err)
+		}
+		hostname, _ := os.Hostname()
+		digestWorker, err := sessiondigest.NewWorker(jobRepository, digestProcessor, "api:"+hostname+":digest")
+		if err != nil {
+			log.Fatalf("Failed to init session digest worker: %v", err)
+		}
+		reconciler.Start(schedulerCtx)
+		digestWorker.Start(schedulerCtx)
+		log.Printf("Session digest services started in %s mode", reportSourceConfig.SessionReadMode)
 	}
 	docH := handler.NewDocumentHandler(database)
 	tokenH := handler.NewTokenHandler(database)

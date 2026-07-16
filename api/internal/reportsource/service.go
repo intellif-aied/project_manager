@@ -29,14 +29,23 @@ const reportSourcePageMaxEvents = 100
 const reportSourcePageMaxBytes = 512 << 10
 
 type Service struct {
-	db *sql.DB
+	db     *sql.DB
+	config Config
 }
 
 func NewService(database *sql.DB) (*Service, error) {
+	return NewServiceWithConfig(database, DefaultConfig())
+}
+
+func NewServiceWithConfig(database *sql.DB, config Config) (*Service, error) {
 	if database == nil {
 		return nil, errors.New("database is required")
 	}
-	return &Service{db: database}, nil
+	normalized, err := config.Normalized()
+	if err != nil {
+		return nil, err
+	}
+	return &Service{db: database, config: normalized}, nil
 }
 
 type Period struct {
@@ -58,6 +67,7 @@ type SelectionItem struct {
 	ContentEventCount  int64     `json:"content_event_count"`
 	ContentStatus      string    `json:"content_status"`
 	ContentEpoch       int64     `json:"-"`
+	SliceID            string    `json:"-"`
 	SessionID          string    `json:"-"`
 	SourceID           string    `json:"-"`
 	GenerationID       string    `json:"-"`
@@ -73,6 +83,7 @@ type Selection struct {
 	Mode              string          `json:"selection_mode"`
 	Status            string          `json:"status"`
 	ContentSnapshotAt time.Time       `json:"content_snapshot_at"`
+	RequiredReadMode  string          `json:"required_read_mode,omitempty"`
 	Items             []SelectionItem `json:"items"`
 }
 
@@ -127,15 +138,16 @@ type ContentItem struct {
 }
 
 type ContentPage struct {
-	SourceMode      string        `json:"source_mode"`
-	SelectionID     string        `json:"selection_id"`
-	ContentSnapshot time.Time     `json:"content_snapshot_at"`
-	Completeness    string        `json:"completeness"`
-	ReturnedCount   int           `json:"returned_item_count"`
-	ReturnedEvents  int           `json:"returned_event_count"`
-	HasMore         bool          `json:"has_more"`
-	NextCursor      *string       `json:"next_cursor"`
-	Items           []ContentItem `json:"items"`
+	SourceMode      string          `json:"source_mode"`
+	SelectionID     string          `json:"selection_id"`
+	ContentSnapshot time.Time       `json:"content_snapshot_at"`
+	Completeness    string          `json:"completeness"`
+	ReturnedCount   int             `json:"returned_item_count"`
+	ReturnedEvents  int             `json:"returned_event_count"`
+	HasMore         bool            `json:"has_more"`
+	NextCursor      *string         `json:"next_cursor"`
+	Items           []ContentItem   `json:"items"`
+	FrozenPayload   json.RawMessage `json:"-"`
 }
 
 func (s *Service) ListCandidates(ctx context.Context, userID string, query CandidateQuery) (CandidatePage, error) {
@@ -306,10 +318,23 @@ func (s *Service) CreateAttachedRun(
 			return "", Selection{}, err
 		}
 	}
+	if err := validateSelectionSourcesAvailable(ctx, tx, selection.ID); err != nil {
+		return "", Selection{}, err
+	}
+	requiredReadMode := s.config.RequiredReadMode(userID)
+	if err := s.freezeSelectionForRun(ctx, tx, selection, requiredReadMode); err != nil {
+		return "", Selection{}, err
+	}
+	selection.RequiredReadMode = requiredReadMode
 	if inputRef == nil {
 		inputRef = map[string]any{}
 	}
 	inputRef["report_source_selection_id"] = selection.ID
+	inputRef["report_source_read_mode"] = requiredReadMode
+	if requiredReadMode == ReadModeDigestV1 {
+		inputRef["report_source_digest_version"] = s.config.DigestVersion
+		inputRef["report_source_redaction_version"] = s.config.RedactionVersion
+	}
 	inputJSON, err := json.Marshal(inputRef)
 	if err != nil {
 		return "", Selection{}, err
@@ -357,14 +382,14 @@ func (s *Service) ReadAttachedSelection(
 		return ContentPage{}, err
 	}
 	defer tx.Rollback()
-	var mode, status string
+	var mode, status, requiredReadMode string
 	var snapshotAt time.Time
 	var storedStart, storedEnd time.Time
 	err = tx.QueryRowContext(ctx, `
-		SELECT selection_mode, status, content_snapshot_at, period_start, period_end
+		SELECT selection_mode, status, required_read_mode, content_snapshot_at, period_start, period_end
 		FROM report_source_selections
 		WHERE id = $1 AND user_id = $2 AND attached_run_id = $3`, selectionID, userID, runID).Scan(
-		&mode, &status, &snapshotAt, &storedStart, &storedEnd,
+		&mode, &status, &requiredReadMode, &snapshotAt, &storedStart, &storedEnd,
 	)
 	if errors.Is(err, sql.ErrNoRows) || status != "attached" {
 		return ContentPage{}, ErrSelectionMismatch
@@ -383,6 +408,15 @@ func (s *Service) ReadAttachedSelection(
 	}
 	if err := validateSelectionSourcesAvailable(ctx, tx, selectionID); err != nil {
 		return ContentPage{}, err
+	}
+	if requiredReadMode == ReadModeDigestV1 {
+		if strings.TrimSpace(pageCursor) != "" {
+			return ContentPage{}, ErrReadModeMismatch
+		}
+		return s.readFrozenDigestSelection(ctx, tx, userID, selectionID, runID)
+	}
+	if requiredReadMode != ReadModeFull {
+		return ContentPage{}, ErrReadModeMismatch
 	}
 
 	itemOffset := 0
@@ -496,7 +530,7 @@ func (s *Service) ReadAttachedSelection(
 	} else {
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE report_source_selections
-			SET read_completed_at = COALESCE(read_completed_at, now())
+			SET read_completed_at = COALESCE(read_completed_at, now()), read_completed_mode = 'full'
 			WHERE id = $1 AND user_id = $2 AND attached_run_id = $3 AND status = 'attached'`,
 			selectionID, userID, runID,
 		); err != nil {
@@ -511,7 +545,7 @@ func (s *Service) ReadAttachedSelection(
 
 func loadInternalSelectionItems(ctx context.Context, tx *sql.Tx, selectionID string) ([]SelectionItem, error) {
 	rows, err := tx.QueryContext(ctx, `
-		SELECT id::text, session_id::text, session_ref_snapshot, agent_type, source_id::text,
+		SELECT id::text, COALESCE(session_content_slice_id::text, ''), session_id::text, session_ref_snapshot, agent_type, source_id::text,
 			source_generation_id::text, content_projection_revision_id::text, start_cursor,
 			end_cursor, activity_start_at, activity_end_at, COALESCE(summary_snapshot, ''),
 			content_status_snapshot, content_epoch_snapshot, content_event_count
@@ -523,7 +557,7 @@ func loadInternalSelectionItems(ctx context.Context, tx *sql.Tx, selectionID str
 	items := []SelectionItem{}
 	for rows.Next() {
 		var item SelectionItem
-		if err := rows.Scan(&item.ID, &item.SessionID, &item.SessionRef, &item.AgentType,
+		if err := rows.Scan(&item.ID, &item.SliceID, &item.SessionID, &item.SessionRef, &item.AgentType,
 			&item.SourceID, &item.GenerationID, &item.ProjectionRevision, &item.StartCursor,
 			&item.EndCursor, &item.ActivityStart, &item.ActivityEnd, &item.Summary,
 			&item.ContentStatus, &item.ContentEpoch, &item.ContentEventCount); err != nil {
@@ -559,7 +593,7 @@ func resolveExplicitItems(ctx context.Context, tx *sql.Tx, userID string, inputs
 		}
 		var item SelectionItem
 		err := tx.QueryRowContext(ctx, `
-			SELECT s.id::text, s.session_ref, s.agent_type, src.id::text, g.id::text, rev.id::text,
+			SELECT sl.id::text, s.id::text, s.session_ref, s.agent_type, src.id::text, g.id::text, rev.id::text,
 				sl.start_cursor, sl.end_cursor, MIN(e.occurred_at), MAX(e.occurred_at),
 				COALESCE((
 					SELECT NULLIF(btrim(e2.summary), '') FROM session_content_events e2
@@ -586,7 +620,7 @@ func resolveExplicitItems(ctx context.Context, tx *sql.Tx, userID string, inputs
 			WHERE s.user_id = $1 AND s.content_status = 'available'
 				AND rev.content_indexed_cursor >= sl.end_cursor
 			GROUP BY s.id, src.id, g.id, rev.id, sl.id`, userID, input.SliceKey).Scan(
-			&item.SessionID, &item.SessionRef, &item.AgentType, &item.SourceID, &item.GenerationID,
+			&item.SliceID, &item.SessionID, &item.SessionRef, &item.AgentType, &item.SourceID, &item.GenerationID,
 			&item.ProjectionRevision, &item.StartCursor, &item.EndCursor, &item.ActivityStart,
 			&item.ActivityEnd, &item.Summary, &item.ContentStatus, &item.ContentEpoch,
 			&item.ContentEventCount,
@@ -605,7 +639,7 @@ func resolveExplicitItems(ctx context.Context, tx *sql.Tx, userID string, inputs
 func resolveDefaultItems(ctx context.Context, tx *sql.Tx, userID string, start, end time.Time) ([]SelectionItem, error) {
 	rows, err := tx.QueryContext(ctx, `
 		WITH complete_slices AS (
-			SELECT s.id::text AS session_id, s.session_ref, s.agent_type,
+			SELECT sl.id::text AS slice_id, s.id::text AS session_id, s.session_ref, s.agent_type,
 				src.id::text AS source_id, g.id::text AS generation_id, rev.id::text AS revision_id,
 				sl.start_cursor, sl.end_cursor, MIN(e.occurred_at) AS activity_start_at,
 				MAX(e.occurred_at) AS activity_end_at,
@@ -643,7 +677,7 @@ func resolveDefaultItems(ctx context.Context, tx *sql.Tx, userID string, start, 
 				AND rev.content_indexed_cursor >= sl.end_cursor
 			GROUP BY s.id, src.id, g.id, rev.id, sl.id
 		)
-		SELECT session_id, session_ref, agent_type, source_id, generation_id, revision_id,
+		SELECT slice_id, session_id, session_ref, agent_type, source_id, generation_id, revision_id,
 			start_cursor, end_cursor, activity_start_at, activity_end_at, summary,
 			content_status, content_epoch, content_event_count
 		FROM complete_slices
@@ -658,7 +692,7 @@ func resolveDefaultItems(ctx context.Context, tx *sql.Tx, userID string, start, 
 	items := []SelectionItem{}
 	for rows.Next() {
 		var item SelectionItem
-		if err := rows.Scan(&item.SessionID, &item.SessionRef, &item.AgentType, &item.SourceID,
+		if err := rows.Scan(&item.SliceID, &item.SessionID, &item.SessionRef, &item.AgentType, &item.SourceID,
 			&item.GenerationID, &item.ProjectionRevision, &item.StartCursor, &item.EndCursor,
 			&item.ActivityStart, &item.ActivityEnd, &item.Summary, &item.ContentStatus, &item.ContentEpoch,
 			&item.ContentEventCount); err != nil {
@@ -790,12 +824,12 @@ func insertSelection(
 		item := &selection.Items[i]
 		err := tx.QueryRowContext(ctx, `
 			INSERT INTO report_source_selection_items (
-				selection_id, session_id, session_ref_snapshot, agent_type, source_id,
+				selection_id, session_content_slice_id, session_id, session_ref_snapshot, agent_type, source_id,
 				source_generation_id, content_projection_revision_id, start_cursor, end_cursor,
 				activity_start_at, activity_end_at, summary_snapshot, content_status_snapshot,
 				content_epoch_snapshot, content_event_count
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NULLIF($12, ''), $13, $14, $15)
-			RETURNING id::text`, selection.ID, item.SessionID, item.SessionRef, item.AgentType,
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NULLIF($13, ''), $14, $15, $16)
+			RETURNING id::text`, selection.ID, item.SliceID, item.SessionID, item.SessionRef, item.AgentType,
 			item.SourceID, item.GenerationID, item.ProjectionRevision, item.StartCursor, item.EndCursor,
 			item.ActivityStart, item.ActivityEnd, item.Summary, item.ContentStatus, item.ContentEpoch,
 			item.ContentEventCount,
@@ -836,11 +870,8 @@ func lockPreparedSelection(
 		return Selection{}, ErrSelectionConflict
 	}
 	selection.Period = Period{Start: start.Format("2006-01-02"), End: end.Format("2006-01-02")}
-	if err := validateSelectionSourcesAvailable(ctx, tx, selection.ID); err != nil {
-		return Selection{}, err
-	}
 	rows, err := tx.QueryContext(ctx, `
-		SELECT id::text, session_id::text, session_ref_snapshot, agent_type, source_id::text,
+		SELECT id::text, COALESCE(session_content_slice_id::text, ''), session_id::text, session_ref_snapshot, agent_type, source_id::text,
 			source_generation_id::text, content_projection_revision_id::text, start_cursor,
 			end_cursor, activity_start_at, activity_end_at, COALESCE(summary_snapshot, ''),
 			content_status_snapshot, content_epoch_snapshot, content_event_count
@@ -851,7 +882,7 @@ func lockPreparedSelection(
 	defer rows.Close()
 	for rows.Next() {
 		var item SelectionItem
-		if err := rows.Scan(&item.ID, &item.SessionID, &item.SessionRef, &item.AgentType,
+		if err := rows.Scan(&item.ID, &item.SliceID, &item.SessionID, &item.SessionRef, &item.AgentType,
 			&item.SourceID, &item.GenerationID, &item.ProjectionRevision, &item.StartCursor,
 			&item.EndCursor, &item.ActivityStart, &item.ActivityEnd, &item.Summary,
 			&item.ContentStatus, &item.ContentEpoch, &item.ContentEventCount); err != nil {
@@ -884,14 +915,16 @@ func (s *Service) ValidateAttachedSelectionTx(
 	if err != nil {
 		return ErrSelectionMismatch
 	}
-	var status string
+	var status, requiredReadMode string
+	var readCompletedMode sql.NullString
 	var readCompletedAt sql.NullTime
 	var storedStart, storedEnd time.Time
 	err = tx.QueryRowContext(ctx, `
-		SELECT status, period_start, period_end, read_completed_at
+		SELECT status, period_start, period_end, required_read_mode,
+			read_completed_mode, read_completed_at
 		FROM report_source_selections
 		WHERE id = $1 AND user_id = $2 AND attached_run_id = $3`, selectionID, userID, runID).Scan(
-		&status, &storedStart, &storedEnd, &readCompletedAt,
+		&status, &storedStart, &storedEnd, &requiredReadMode, &readCompletedMode, &readCompletedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) || status != "attached" {
 		return ErrSelectionMismatch
@@ -910,8 +943,13 @@ func (s *Service) ValidateAttachedSelectionTx(
 	if runReportType != reportType || !sameDate(storedStart, periodStart) || !sameDate(storedEnd, periodEnd) {
 		return ErrSelectionMismatch
 	}
-	if !readCompletedAt.Valid {
+	if !readCompletedAt.Valid || !readCompletedMode.Valid || readCompletedMode.String != requiredReadMode {
 		return ErrSourceIncomplete
+	}
+	if requiredReadMode == ReadModeDigestV1 {
+		if err := s.validateFrozenDigestSelectionTx(ctx, tx, userID, selectionID, runID); err != nil {
+			return err
+		}
 	}
 	return validateSelectionSourcesAvailable(ctx, tx, selectionID)
 }

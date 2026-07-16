@@ -7,12 +7,13 @@ import (
 )
 
 const (
-	JobIndexContentChunk      = "index_content_chunk"
-	JobParseUsageChunk        = "parse_usage_chunk"
-	JobRebuildContentRevision = "rebuild_content_revision"
-	JobRebuildMetricsRevision = "rebuild_metrics_revision"
-	JobBuildMeteringEnvelope  = "build_metering_envelope"
-	JobDeleteObject           = "delete_object"
+	JobIndexContentChunk       = "index_content_chunk"
+	JobParseUsageChunk         = "parse_usage_chunk"
+	JobRebuildContentRevision  = "rebuild_content_revision"
+	JobRebuildMetricsRevision  = "rebuild_metrics_revision"
+	JobBuildMeteringEnvelope   = "build_metering_envelope"
+	JobBuildContentSliceDigest = "build_content_slice_digest"
+	JobDeleteObject            = "delete_object"
 )
 
 type ChunkSnapshot struct {

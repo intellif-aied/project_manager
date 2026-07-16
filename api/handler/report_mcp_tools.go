@@ -56,7 +56,7 @@ func reportMCPTools() []map[string]any {
 	return []map[string]any{
 		{
 			"name":        toolGetSessions,
-			"description": "Read an attached personal-report source snapshot, or list sessions for an authenticated ad-hoc date query.",
+			"description": "Read an attached personal-report source snapshot in the server-frozen mode (digest_v1 is one complete bounded page; legacy full may paginate), or list sessions for an authenticated ad-hoc date query.",
 			"inputSchema": map[string]any{
 				"type":     "object",
 				"required": []string{"scope"},
@@ -73,7 +73,7 @@ func reportMCPTools() []map[string]any {
 					},
 					"page_cursor": map[string]any{
 						"type":        "string",
-						"description": "Cursor for the next page. Set this to the previous response's next_cursor value.",
+						"description": "Cursor for the next legacy full page. Never send it for content_mode=digest_v1.",
 					},
 					"next_cursor": map[string]any{
 						"type":        "string",

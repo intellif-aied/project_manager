@@ -740,7 +740,7 @@ def generate_report():
         report.append("3. 失败原因分类：需根据失败详情进一步归类为产品口径不一致 / 后端接口问题 / 前端展示问题 / 测试数据问题 / 账号权限问题。")
         report.append("4. 是否建议进入下一阶段：暂不建议，需先处理失败用例。")
     report_text = "\n".join(report) + "\n"
-    report_path = Path("doc/test-reports") / f"attention-e2e-{RUN_TS}.md"
+    report_path = Path("tmp/test-reports") / f"attention-e2e-{RUN_TS}.md"
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(report_text, encoding="utf-8")
     write_json("summary.json", {"case_results": CASE_RESULTS, "details": DETAILS, "data": DATA, "requests": REQUEST_LOG, "report_path": str(report_path)})

@@ -138,6 +138,47 @@ func TestSessionSyncMigrationContract(t *testing.T) {
 		INSERT INTO session_processing_jobs (
 			job_type, session_id, generation_id, target_revision_id, content_epoch
 		) VALUES ('rebuild_content_revision', '`+claudeSessionID+`', '`+generationID+`', '`+revisionID+`', 0)`)
+
+	var sliceID string
+	if err := tx.QueryRow(`
+		INSERT INTO session_content_slices (
+			session_id, source_id, generation_id, start_cursor, end_cursor
+		) VALUES ($1, $2, $3, 0, 10) RETURNING id`, claudeSessionID, sourceID, generationID).Scan(&sliceID); err != nil {
+		t.Fatal(err)
+	}
+	var digestRevisionID string
+	if err := tx.QueryRow(`
+		INSERT INTO session_slice_digest_revisions (
+			session_content_slice_id, content_projection_revision_id, generation_id,
+			content_epoch, digest_version, redaction_version
+		) VALUES ($1, $2, $3, 0, 'session-digest/v1', 'report-redaction/v1')
+		RETURNING id`, sliceID, revisionID, generationID).Scan(&digestRevisionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO session_processing_jobs (
+			job_type, session_id, generation_id, target_digest_revision_id, content_epoch
+		) VALUES ('build_content_slice_digest', $1, $2, $3, 0)`, claudeSessionID, generationID, digestRevisionID); err != nil {
+		t.Fatalf("digest job must be accepted: %v", err)
+	}
+	expectConstraintViolation(t, tx, `
+		INSERT INTO session_processing_jobs (
+			job_type, session_id, generation_id, target_digest_revision_id, content_epoch
+		) VALUES ('build_content_slice_digest', '`+claudeSessionID+`', '`+generationID+`', '`+digestRevisionID+`', 0)`)
+	if _, err := tx.Exec(`
+		UPDATE session_slice_digest_revisions
+		SET status = 'ready',
+			digest_json = '{"goals":[],"outcomes":[],"files_changed":[],"validations":[],"blockers":[]}',
+			source_event_count = 1, included_event_count = 1, omitted_event_count = 0,
+			source_bytes = 10, digest_bytes = 80, source_sha256 = $2,
+			digest_sha256 = $2, ready_at = now()
+		WHERE id = $1`, digestRevisionID, hash); err != nil {
+		t.Fatalf("ready digest must satisfy the schema contract: %v", err)
+	}
+	expectConstraintViolation(t, tx, `
+		UPDATE session_slice_digest_revisions
+		SET digest_json = '{"goals":["mutated"],"outcomes":[],"files_changed":[],"validations":[],"blockers":[]}'
+		WHERE id = '`+digestRevisionID+`'`)
 }
 
 func expectConstraintViolation(t *testing.T, tx *sql.Tx, statement string) {

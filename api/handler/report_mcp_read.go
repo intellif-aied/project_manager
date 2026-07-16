@@ -298,6 +298,12 @@ func (h *ReportMCPHandler) toolGetSessions(ctx context.Context, r *http.Request,
 				return nil, mcpErr("CONTENT_CLEARED", "report source content is no longer available")
 			case errors.Is(err, reportsource.ErrContentItemTooLarge):
 				return nil, mcpErr("CONTENT_ITEM_TOO_LARGE", err.Error())
+			case errors.Is(err, reportsource.ErrReadModeMismatch):
+				return nil, mcpErr("REPORT_SOURCE_READ_MODE_MISMATCH", "report source read mode does not match this run")
+			case errors.Is(err, reportsource.ErrDigestVersionMismatch):
+				return nil, mcpErr("REPORT_SOURCE_DIGEST_VERSION_MISMATCH", "report source digest version does not match this run")
+			case errors.Is(err, reportsource.ErrDigestCorrupt):
+				return nil, mcpErr("REPORT_SOURCE_DIGEST_FAILED", "report source digest integrity check failed")
 			case errors.Is(err, reportsource.ErrSelectionMismatch), errors.Is(err, reportsource.ErrSelectionNotFound):
 				return nil, mcpErr("REPORT_SOURCE_MISMATCH", "report source selection does not match this run")
 			default:
@@ -456,6 +462,9 @@ func (h *ReportMCPHandler) toolGetSessions(ctx context.Context, r *http.Request,
 }
 
 func reportSourceContentPageResult(page reportsource.ContentPage) map[string]any {
+	if len(page.FrozenPayload) > 0 {
+		return mcpTextResult(page.FrozenPayload)
+	}
 	// Keep pagination metadata before potentially large item payloads. Converting
 	// this response through a map sorts "items" ahead of "next_cursor", which
 	// makes persisted MCP output hide the cursor behind hundreds of KB of text.

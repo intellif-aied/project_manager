@@ -335,6 +335,28 @@ func TestReportSourcePageKeepsCursorBeforeLargeItems(t *testing.T) {
 	}
 }
 
+func TestReportSourceDigestReturnsFrozenPayloadWithoutReassembly(t *testing.T) {
+	frozen := json.RawMessage(`{"source_mode":"explicit","content_mode":"digest_v1","coverage":{"complete":true},"has_more":false,"items":[]}`)
+	result := reportSourceContentPageResult(reportsource.ContentPage{FrozenPayload: frozen})
+	payload, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(payload, &wire); err != nil {
+		t.Fatal(err)
+	}
+	content := wire["content"].([]any)[0].(map[string]any)["text"].(string)
+	if content != string(frozen) {
+		t.Fatalf("frozen digest was reassembled: got=%s want=%s", content, frozen)
+	}
+	for _, forbidden := range []string{`"events"`, `"payload"`, `"returned_event_count"`} {
+		if strings.Contains(content, forbidden) {
+			t.Fatalf("full-source field leaked into digest response: %s", content)
+		}
+	}
+}
+
 func TestReportSourceConsistencyRejectsFalseZeroCoverage(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -586,6 +608,32 @@ func TestReportPersonalSourceActivityIssuesRejectsFalseNoActivityClaim(t *testin
 		t.Fatal(err)
 	}
 	if len(issues) != 1 || !strings.Contains(issues[0], "来源快照包含工作记录") {
+		t.Fatalf("issues = %#v", issues)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReportPersonalSourceActivityIssuesUsesDigestCoverage(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mock.ExpectQuery("session_slice_digest_revisions").
+		WithArgs("selection-1").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+
+	issues, err := reportPersonalSourceActivityIssues(context.Background(), db,
+		map[string]any{
+			"report_source_selection_id": "selection-1",
+			"report_source_read_mode":    "digest_v1",
+		}, reportTypePersonalDaily, "# 个人日报\n今日无活动记录。")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 1 {
 		t.Fatalf("issues = %#v", issues)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
