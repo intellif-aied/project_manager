@@ -450,45 +450,111 @@
   .login-page__signal-grid {
     max-width: none;
   }
+
+  .login-page__terminal {
+    display: none;
+  }
 }
 
 @media (max-width: 640px) {
   .login-page {
-    padding: 22px 14px;
+    min-height: 100dvh;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding: max(18px, env(safe-area-inset-top)) 14px
+      max(18px, env(safe-area-inset-bottom));
   }
 
   .login-page__shell {
+    align-content: center;
     width: 100%;
-    min-height: auto;
+    min-height: calc(100dvh - 36px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  }
+
+  .login-page__shell--login {
+    gap: 18px;
+  }
+
+  .login-page__intro {
+    display: grid;
+    gap: 14px;
   }
 
   .login-page__brand-row {
-    grid-template-columns: 44px minmax(0, 1fr);
+    grid-template-columns: 42px minmax(0, 1fr);
+    gap: 11px;
+    margin-bottom: 0;
   }
 
   .login-page__brand-logo {
-    width: 44px;
-    height: 44px;
+    width: 42px;
+    height: 42px;
     border-radius: 10px;
   }
 
+  .login-page__brand-row strong {
+    font-size: 16px;
+  }
+
+  .login-page__brand-row em {
+    font-size: 11px;
+  }
+
+  .login-page__eyebrow {
+    margin-bottom: 6px;
+    font-size: 11px;
+  }
+
   .login-page__hero h1 {
-    font-size: 34px;
+    font-size: clamp(26px, 8.5vw, 32px);
+    line-height: 1.12;
   }
 
   .login-page__hero p:not(.login-page__eyebrow) {
-    font-size: 15px;
+    margin-top: 10px;
+    font-size: 13px;
+    line-height: 1.6;
   }
 
   .login-page__signal-grid {
-    grid-template-columns: 1fr;
+    display: none;
+  }
+
+  .login-page__card {
+    box-shadow:
+      0 22px 56px rgba(0, 0, 0, 0.3),
+      0 0 0 1px rgba(255, 255, 255, 0.2) inset;
   }
 
   .login-page__card .ant-card-body {
-    padding: 24px;
+    padding: 22px;
+  }
+
+  .login-page__access-strip {
+    margin-bottom: 20px;
+  }
+
+  .login-page__title {
+    margin-bottom: 20px;
   }
 
   .login-page__title h2 {
-    font-size: 26px;
+    margin-top: 14px;
+    font-size: 24px;
+  }
+
+  .login-page__title p {
+    margin-top: 7px;
+    font-size: 13px;
+    line-height: 1.55;
+  }
+
+  .login-page__card .ant-form-item {
+    margin-bottom: 14px;
+  }
+
+  .login-page__card-footer {
+    margin-top: 18px;
+    font-size: 12px;
   }
 }
