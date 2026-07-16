@@ -2562,6 +2562,25 @@
   font-size: 11px;
 }
 
+@media (min-width: 861px) and (max-width: 1366px) {
+  .console-token-summary-row {
+    grid-template-columns: minmax(132px, 0.42fr) minmax(0, 1fr);
+  }
+
+  .console-token-summary-metric {
+    padding-inline: 10px;
+  }
+
+  .console-token-summary-metric strong {
+    font-size: 18px;
+    letter-spacing: -0.01em;
+  }
+
+  .console-token-summary-metric--primary strong {
+    font-size: 22px;
+  }
+}
+
 @media (max-width: 1280px) {
   .console-dashboard {
     min-width: 960px;
