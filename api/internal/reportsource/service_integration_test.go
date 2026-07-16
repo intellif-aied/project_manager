@@ -143,13 +143,37 @@ func TestReportSourceSelectionLifecycleIntegration(t *testing.T) {
 	}
 
 	defaultRunID, defaultSelection, err := service.CreateAttachedRun(ctx, "990040", "personal_daily",
-		Period{Start: "2026-07-10", End: "2026-07-10"}, "", "report_agent_run", "agent-test", "", map[string]any{})
+		Period{Start: "2026-07-10", End: "2026-07-10"}, "", "report_agent_run", "agent-test", "", map[string]any{"report_type": "personal_daily"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if defaultRunID == "" || defaultSelection.Mode != "default" || defaultSelection.Status != "attached" ||
-		len(defaultSelection.Items) != 1 || defaultSelection.Items[0].ContentEventCount != 3 {
+		len(defaultSelection.Items) != 2 || defaultSelection.Items[0].StartCursor != 0 ||
+		defaultSelection.Items[0].EndCursor != 200 || defaultSelection.Items[1].StartCursor != 200 ||
+		defaultSelection.Items[1].EndCursor != 300 ||
+		defaultSelection.Items[0].ContentEventCount+defaultSelection.Items[1].ContentEventCount != 3 {
 		t.Fatalf("default selection=%+v", defaultSelection)
+	}
+	defaultPage, err := service.ReadAttachedSelection(ctx, "990040", defaultSelection.ID, defaultRunID,
+		"personal_daily", defaultSelection.Period, "")
+	if err != nil || defaultPage.SourceMode != "default" || defaultPage.HasMore ||
+		defaultPage.ReturnedEvents != 3 || len(defaultPage.Items) != 2 {
+		t.Fatalf("default selection page=%+v err=%v", defaultPage, err)
+	}
+	earliestActivity := defaultPage.Items[0].ActivityStartAt
+	for _, item := range defaultPage.Items[1:] {
+		if item.ActivityStartAt.Before(earliestActivity) {
+			earliestActivity = item.ActivityStartAt
+		}
+	}
+	if !earliestActivity.Equal(fixture.times[0]) {
+		t.Fatalf("cross-day slice was cropped: activity_start=%s want=%s", earliestActivity, fixture.times[0])
+	}
+
+	emptyRunID, emptySelection, err := service.CreateAttachedRun(ctx, "990040", "personal_daily",
+		Period{Start: "2026-07-08", End: "2026-07-08"}, "", "report_agent_run", "agent-test", "", map[string]any{"report_type": "personal_daily"})
+	if err != nil || emptyRunID == "" || len(emptySelection.Items) != 0 {
+		t.Fatalf("empty default selection=%+v run=%s err=%v", emptySelection, emptyRunID, err)
 	}
 
 	lastPagedTime := fixture.times[2].Add(102 * time.Minute)

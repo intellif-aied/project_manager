@@ -88,6 +88,11 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 		return nil, errMCPInternal
 	}
 	validationIssues = append(validationIssues, sourceIssues...)
+	activityIssues, err := reportPersonalSourceActivityIssues(r.Context(), h.db, run.InputRef, args.ReportType, consistencyText)
+	if err != nil {
+		return nil, errMCPInternal
+	}
+	validationIssues = append(validationIssues, activityIssues...)
 	if len(validationIssues) > 0 {
 		return nil, mcpErr("REPORT_CONTENT_INVALID", strings.Join(validationIssues, "；"))
 	}

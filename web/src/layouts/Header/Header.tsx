@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useLocation } from "react-router-dom";
 
 import { HelpCenter } from "@/layouts/HelpCenter/HelpCenter";
-import { getHelpModuleByPath } from "@/layouts/HelpCenter/helpCenterConfig";
+import { isBusinessRole } from "@/layouts/HelpCenter/helpCenterContent";
 import { appRoutes } from "@/router/routes";
 import { findBestMenuMatch, findRouteByPath } from "@/router/routeAccess";
 import { UserMenu } from "@/shared/auth/UserMenu";
@@ -28,7 +28,7 @@ export function Header() {
     currentMenu?.path === "/examples/table-crud"
       ? [{ title: "Data" }, { title: currentMenu.title, path: currentMenu.path }]
       : [{ title }];
-  const helpModule = user?.role === "admin" ? undefined : getHelpModuleByPath(location.pathname);
+  const showHelpCenter = isBusinessRole(user?.role);
 
   return (
     <header className="app-header">
@@ -53,7 +53,7 @@ export function Header() {
         </div>
       </div>
       <div className="app-header__right">
-        {helpModule ? (
+        {showHelpCenter ? (
           <Button
             className="app-header__help-trigger"
             type="text"
@@ -65,7 +65,7 @@ export function Header() {
         ) : null}
         <UserMenu />
       </div>
-      {helpModule ? <HelpCenter key={helpOpen ? "open" : "closed"} open={helpOpen} onClose={() => setHelpOpen(false)} /> : null}
+      {showHelpCenter ? <HelpCenter key={helpOpen ? "open" : "closed"} open={helpOpen} onClose={() => setHelpOpen(false)} /> : null}
     </header>
   );
 }

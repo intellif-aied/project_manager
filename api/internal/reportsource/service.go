@@ -441,6 +441,7 @@ func (s *Service) ReadAttachedSelection(
 				rows.Close()
 				return ContentPage{}, err
 			}
+			event.Payload = redactReportUsageMetrics(event.Payload)
 			encoded, err := json.Marshal(event)
 			if err != nil {
 				rows.Close()
@@ -603,20 +604,53 @@ func resolveExplicitItems(ctx context.Context, tx *sql.Tx, userID string, inputs
 
 func resolveDefaultItems(ctx context.Context, tx *sql.Tx, userID string, start, end time.Time) ([]SelectionItem, error) {
 	rows, err := tx.QueryContext(ctx, `
-		SELECT s.id::text, s.session_ref, s.agent_type, src.id::text, g.id::text, rev.id::text,
-			MIN(e.source_start_cursor), MAX(e.source_end_cursor), MIN(e.occurred_at), MAX(e.occurred_at),
-			COALESCE(s.summary, ''), s.content_status, s.content_epoch, COUNT(*)
-		FROM sessions s
-		JOIN session_sources src ON src.session_id = s.id
-		JOIN session_source_generations g ON g.id = src.active_generation_id AND g.status = 'active'
-		JOIN session_content_projection_revisions rev
-			ON rev.id = src.active_content_projection_revision_id AND rev.generation_id = g.id AND rev.status = 'active'
-		JOIN session_content_events e
-			ON e.content_projection_revision_id = rev.id AND e.source_end_cursor <= rev.content_indexed_cursor
-		WHERE s.user_id = $1 AND s.content_status = 'available'
-			AND (e.occurred_at AT TIME ZONE 'Asia/Shanghai')::date BETWEEN $2::date AND $3::date
-		GROUP BY s.id, src.id, g.id, rev.id
-		ORDER BY MIN(e.occurred_at), s.session_ref`, userID, start.Format("2006-01-02"), end.Format("2006-01-02"))
+		WITH complete_slices AS (
+			SELECT s.id::text AS session_id, s.session_ref, s.agent_type,
+				src.id::text AS source_id, g.id::text AS generation_id, rev.id::text AS revision_id,
+				sl.start_cursor, sl.end_cursor, MIN(e.occurred_at) AS activity_start_at,
+				MAX(e.occurred_at) AS activity_end_at,
+				COALESCE((
+					SELECT NULLIF(btrim(e2.summary), '')
+					FROM session_content_events e2
+					WHERE e2.content_projection_revision_id = rev.id
+						AND e2.source_start_cursor >= sl.start_cursor
+						AND e2.source_end_cursor <= sl.end_cursor
+						AND NULLIF(btrim(e2.summary), '') IS NOT NULL
+						AND e2.event_type NOT IN ('response_item.custom_tool_call', 'response_item.function_call')
+					ORDER BY CASE e2.event_type
+						WHEN 'event_msg.user_message' THEN 0
+						WHEN 'event_msg.agent_message' THEN 1
+						WHEN 'response_item.message' THEN 2
+						ELSE 3
+					END, e2.source_start_cursor, e2.id
+					LIMIT 1
+				), 'Session 增量内容（' || COUNT(*)::text || ' 条记录）') AS summary,
+				s.content_status, s.content_epoch, COUNT(*) AS content_event_count
+			FROM sessions s
+			JOIN session_sources src ON src.session_id = s.id
+			JOIN session_source_generations g
+				ON g.id = src.active_generation_id AND g.status = 'active'
+			JOIN session_content_slices sl
+				ON sl.session_id = s.id AND sl.source_id = src.id AND sl.generation_id = g.id
+			JOIN session_content_projection_revisions rev
+				ON rev.id = src.active_content_projection_revision_id
+				AND rev.generation_id = g.id AND rev.status = 'active'
+			JOIN session_content_events e
+				ON e.content_projection_revision_id = rev.id
+				AND e.source_start_cursor >= sl.start_cursor
+				AND e.source_end_cursor <= sl.end_cursor
+			WHERE s.user_id = $1 AND s.content_status = 'available'
+				AND rev.content_indexed_cursor >= sl.end_cursor
+			GROUP BY s.id, src.id, g.id, rev.id, sl.id
+		)
+		SELECT session_id, session_ref, agent_type, source_id, generation_id, revision_id,
+			start_cursor, end_cursor, activity_start_at, activity_end_at, summary,
+			content_status, content_epoch, content_event_count
+		FROM complete_slices
+		WHERE (activity_end_at AT TIME ZONE 'Asia/Shanghai')::date >= $2::date
+			AND (activity_start_at AT TIME ZONE 'Asia/Shanghai')::date <= $3::date
+		ORDER BY activity_start_at, session_ref, start_cursor`,
+		userID, start.Format("2006-01-02"), end.Format("2006-01-02"))
 	if err != nil {
 		return nil, err
 	}
@@ -633,6 +667,73 @@ func resolveDefaultItems(ctx context.Context, tx *sql.Tx, userID string, start, 
 		items = append(items, item)
 	}
 	return items, rows.Err()
+}
+
+var reportUsageMetricKeys = map[string]struct{}{
+	"usage":                       {},
+	"token_usage":                 {},
+	"total_token_usage":           {},
+	"last_token_usage":            {},
+	"input_tokens":                {},
+	"output_tokens":               {},
+	"cached_input_tokens":         {},
+	"cache_read_input_tokens":     {},
+	"cache_creation_input_tokens": {},
+	"cache_read_tokens":           {},
+	"cache_creation_tokens":       {},
+	"reasoning_output_tokens":     {},
+	"total_tokens":                {},
+}
+
+func redactReportUsageMetrics(payload json.RawMessage) json.RawMessage {
+	if len(payload) == 0 {
+		return json.RawMessage(`{}`)
+	}
+	var value any
+	if err := json.Unmarshal(payload, &value); err != nil {
+		return json.RawMessage(`{}`)
+	}
+	redacted, changed := redactReportUsageValue(value)
+	if !changed {
+		return payload
+	}
+	encoded, err := json.Marshal(redacted)
+	if err != nil {
+		return json.RawMessage(`{}`)
+	}
+	return encoded
+}
+
+func redactReportUsageValue(value any) (any, bool) {
+	switch typed := value.(type) {
+	case map[string]any:
+		changed := false
+		for key, item := range typed {
+			if _, remove := reportUsageMetricKeys[strings.ToLower(strings.TrimSpace(key))]; remove {
+				delete(typed, key)
+				changed = true
+				continue
+			}
+			redacted, itemChanged := redactReportUsageValue(item)
+			if itemChanged {
+				typed[key] = redacted
+				changed = true
+			}
+		}
+		return typed, changed
+	case []any:
+		changed := false
+		for index, item := range typed {
+			redacted, itemChanged := redactReportUsageValue(item)
+			if itemChanged {
+				typed[index] = redacted
+				changed = true
+			}
+		}
+		return typed, changed
+	default:
+		return value, false
+	}
 }
 
 func mergeItems(items []SelectionItem) []SelectionItem {

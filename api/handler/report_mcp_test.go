@@ -348,12 +348,12 @@ func TestReportSourceConsistencyRejectsFalseZeroCoverage(t *testing.T) {
 	issues, err := reportSourceConsistencyIssues(
 		context.Background(), db, reportTypeDepartmentDaily, "2026-05-18", "", "",
 		reportTarget{Type: "department", DepartmentID: "312"},
-		"本部门当日无个人日报记录。个人日报：缺失 1 人（测试09）。",
+		"本部门当日无小组日报记录。小组日报：缺失 1 个小组。",
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(issues) != 1 || !strings.Contains(issues[0], "实际包含 3 份个人日报") {
+	if len(issues) != 1 || !strings.Contains(issues[0], "实际包含 3 份小组日报") {
 		t.Fatalf("issues=%#v", issues)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -370,7 +370,7 @@ func TestReportSourceConsistencySkipsContentWithoutZeroClaim(t *testing.T) {
 	issues, err := reportSourceConsistencyIssues(
 		context.Background(), db, reportTypeDepartmentDaily, "2026-05-18", "", "",
 		reportTarget{Type: "department", DepartmentID: "312"},
-		"个人日报已提交 3 份，缺失 1 人（测试09）。",
+		"小组日报已提交 3 份，缺失 1 个小组。",
 	)
 	if err != nil || len(issues) != 0 {
 		t.Fatalf("issues=%#v err=%v", issues, err)
@@ -389,20 +389,39 @@ func TestReportSourceConsistencyRejectsUnsupportedFullParticipation(t *testing.T
 	mock.ExpectQuery("SELECT COUNT\\(\\*\\)").
 		WithArgs("2026-05-18", "312").
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(3))
-	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM users").
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM teams").
 		WithArgs("312").
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(4))
 
 	issues, err := reportSourceConsistencyIssues(
 		context.Background(), db, reportTypeDepartmentDaily, "2026-05-18", "", "",
 		reportTarget{Type: "department", DepartmentID: "312"},
-		"小组全员参与生产发布回归测试。个人日报提交 3 人，缺失 1 人（测试09）。",
+		"小组全员参与生产发布回归测试。小组日报提交 3 份，缺失 1 个小组。",
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(issues) != 1 || !strings.Contains(issues[0], "名册共有 4 人") {
+	if len(issues) != 1 || !strings.Contains(issues[0], "范围共有 4个小组") {
 		t.Fatalf("issues=%#v", issues)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReportSourceConsistencyAllowsPartialMissingWeeklyReports(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	issues, err := reportSourceConsistencyIssues(
+		context.Background(), db, reportTypeTeamWeekly, "", "2026-05-18", "2026-05-24",
+		reportTarget{Type: "team", TeamID: "team-1"},
+		"个人周报已提交 2 份。缺失成员：测试08暂无个人周报记录，测试09暂无个人周报记录。",
+	)
+	if err != nil || len(issues) != 0 {
+		t.Fatalf("issues=%#v err=%v", issues, err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
@@ -547,6 +566,51 @@ func TestReportContentValidationRejectsWrongWeekdayAndInternalIDs(t *testing.T) 
 				t.Fatalf("issues=%#v, want count=%d", issues, tt.want)
 			}
 		})
+	}
+}
+
+func TestReportPersonalSourceActivityIssuesRejectsFalseNoActivityClaim(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mock.ExpectQuery("SELECT EXISTS").
+		WithArgs("selection-1").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+
+	issues, err := reportPersonalSourceActivityIssues(context.Background(), db,
+		map[string]any{"report_source_selection_id": "selection-1"}, reportTypePersonalDaily,
+		"# 个人日报\n今日无活动记录。")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 1 || !strings.Contains(issues[0], "来源快照包含工作记录") {
+		t.Fatalf("issues = %#v", issues)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReportPersonalSourceActivityIssuesAllowsFactualContentWithoutQuery(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	issues, err := reportPersonalSourceActivityIssues(context.Background(), db,
+		map[string]any{"report_source_selection_id": "selection-1"}, reportTypePersonalDaily,
+		"# 个人日报\n完成跨日来源设计与接口核对。")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 0 {
+		t.Fatalf("issues = %#v", issues)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 

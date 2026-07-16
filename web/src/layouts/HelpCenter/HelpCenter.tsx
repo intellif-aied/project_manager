@@ -46,20 +46,43 @@ const HELP_MODULES = [
 ] as const;
 
 async function copyText(text: string) {
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-    return;
+  if (window.isSecureContext && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // Fall back for browsers that expose the API but deny clipboard access.
+    }
   }
 
   const textarea = document.createElement("textarea");
+  const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   textarea.value = text;
+  textarea.setAttribute("readonly", "");
   textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "0";
   textarea.style.opacity = "0";
+  textarea.style.pointerEvents = "none";
   document.body.appendChild(textarea);
-  textarea.select();
-  const copied = document.execCommand("copy");
-  textarea.remove();
-  if (!copied) throw new Error("copy failed");
+  let copied = false;
+  const handleCopy = (event: ClipboardEvent) => {
+    if (!event.clipboardData) return;
+    event.clipboardData.setData("text/plain", text);
+    event.preventDefault();
+  };
+  document.addEventListener("copy", handleCopy);
+  try {
+    textarea.focus({ preventScroll: true });
+    textarea.select();
+    textarea.setSelectionRange(0, textarea.value.length);
+    copied = document.execCommand("copy");
+  } finally {
+    document.removeEventListener("copy", handleCopy);
+    textarea.remove();
+    previousFocus?.focus({ preventScroll: true });
+  }
+  if (!copied) throw new Error("Clipboard copy failed");
 }
 
 function HelpArticleList({ articles, onOpen }: { articles: HelpArticle[]; onOpen: (id: string) => void }) {
@@ -83,8 +106,8 @@ function HelpArticleList({ articles, onOpen }: { articles: HelpArticle[]; onOpen
 }
 
 export function HelpCenter({ onClose, open }: HelpCenterProps) {
-  const navigate = useNavigate();
   const { message } = App.useApp();
+  const navigate = useNavigate();
   const { user } = useAuth();
   const [selectedModule, setSelectedModule] = useState<HelpModuleKey>("quickstart");
   const [selectedArticleId, setSelectedArticleId] = useState<string>();
@@ -132,6 +155,19 @@ export function HelpCenter({ onClose, open }: HelpCenterProps) {
     setSearchQuery("");
   };
 
+  const handleCopyCode = async (code: string) => {
+    try {
+      await copyText(code);
+      setCopiedCode(code);
+      window.setTimeout(
+        () => setCopiedCode((current) => (current === code ? undefined : current)),
+        1600
+      );
+    } catch {
+      void message.error("复制失败，请检查浏览器剪贴板权限后重试");
+    }
+  };
+
   const renderArticle = (article: HelpArticle) => (
     <article className="help-center__article-detail">
       <Button type="text" className="help-center__back" icon={<ArrowLeftOutlined />} onClick={() => setSelectedArticleId(undefined)}>
@@ -167,19 +203,7 @@ export function HelpCenter({ onClose, open }: HelpCenterProps) {
                       icon={isCopied ? <CheckOutlined /> : <CopyOutlined />}
                       size="small"
                       type="text"
-                      onClick={() => {
-                        void copyText(block.code)
-                          .then(() => {
-                            setCopiedCode(block.code);
-                            window.setTimeout(
-                              () => setCopiedCode((current) => current === block.code ? undefined : current),
-                              1600
-                            );
-                          })
-                          .catch(() => {
-                            void message.error("复制失败，请长按命令手动复制");
-                          });
-                      }}
+                      onClick={() => void handleCopyCode(block.code)}
                     >
                       {isCopied ? "已复制" : "复制"}
                     </Button>
