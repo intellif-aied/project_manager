@@ -259,6 +259,9 @@ func parseCodexLine(
 			if json.Unmarshal(envelope.Payload, &meta) == nil {
 				state.ForkParentSessionRef, state.ForkSource = codexForkParent(meta)
 				if state.ForkParentSessionRef != "" {
+					if state.ForkSource == "source.subagent.thread_spawn.parent_thread_id" {
+						state.ForkBaselineMissing = true
+					}
 					timestamp := strings.TrimSpace(meta.Timestamp)
 					if timestamp == "" {
 						timestamp = strings.TrimSpace(envelope.Timestamp)
@@ -269,6 +272,16 @@ func parseCodexLine(
 					}
 				}
 			}
+		}
+		return UsageRecord{}, lineIgnored
+	}
+	if envelope.Type == "inter_agent_communication_metadata" {
+		if state.ForkParentSessionRef != "" &&
+			state.ForkSource == "source.subagent.thread_spawn.parent_thread_id" &&
+			codexInterAgentTriggerTurn(envelope.Payload) &&
+			!state.ForkBaselineReady {
+			state.ForkBaselineReady = true
+			state.ForkBaselineMissing = false
 		}
 		return UsageRecord{}, lineIgnored
 	}
@@ -326,6 +339,12 @@ func parseCodexLine(
 		if occurredAt.Before(*state.ForkedAt) {
 			state.PreviousCodexCounters = &counters
 			state.ForkBaselineReady = true
+			state.ForkBaselineMissing = false
+			return UsageRecord{}, lineIgnored
+		}
+		if state.ForkSource == "source.subagent.thread_spawn.parent_thread_id" &&
+			state.ForkBaselineMissing && !state.ForkBaselineReady {
+			state.PreviousCodexCounters = &counters
 			return UsageRecord{}, lineIgnored
 		}
 		if !state.ForkBaselineReady {
@@ -371,6 +390,16 @@ func parseCodexLine(
 		RawUsage: rawUsage, RawUsageHash: hashBytes(rawUsage), Counters: counters, Delta: delta,
 		Quality: quality, QualityReason: reason,
 	}, lineUsage
+}
+
+func codexInterAgentTriggerTurn(payload json.RawMessage) bool {
+	var marker struct {
+		TriggerTurn bool `json:"trigger_turn"`
+		Payload     struct {
+			TriggerTurn bool `json:"trigger_turn"`
+		} `json:"payload"`
+	}
+	return json.Unmarshal(payload, &marker) == nil && (marker.TriggerTurn || marker.Payload.TriggerTurn)
 }
 
 type codexRootSessionMeta struct {

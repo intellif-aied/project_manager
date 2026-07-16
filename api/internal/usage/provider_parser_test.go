@@ -140,6 +140,38 @@ func TestCodexForkInheritedCountersAreBaselineOnly(t *testing.T) {
 	}
 }
 
+func TestCodexSubagentRewrittenHistoryStopsAtCommunicationBoundary(t *testing.T) {
+	lines := []string{
+		`{"timestamp":"2026-07-16T02:00:00Z","type":"session_meta","payload":{"id":"child","timestamp":"2026-07-16T02:00:00Z","source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent"}}}}}`,
+		`{"timestamp":"2026-07-16T02:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20,"total_tokens":120}}}}`,
+		`{"timestamp":"2026-07-16T02:00:02Z","type":"inter_agent_communication_metadata","payload":{"type":"inter_agent_communication_metadata","payload":{"trigger_turn":false}}}`,
+		`{"timestamp":"2026-07-16T02:00:02Z","type":"session_meta","payload":{"id":"copied-parent"}}`,
+		`{"timestamp":"2026-07-16T02:00:03Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":130,"cached_input_tokens":25,"output_tokens":30,"total_tokens":160}}}}`,
+		`{"timestamp":"2026-07-16T02:00:04Z","type":"inter_agent_communication_metadata","payload":{"type":"inter_agent_communication_metadata","payload":{"trigger_turn":true}}}`,
+		`{"timestamp":"2026-07-16T02:00:05Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":140,"cached_input_tokens":27,"output_tokens":35,"total_tokens":175}}}}`,
+		`{"timestamp":"2026-07-16T02:00:06Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":150,"cached_input_tokens":29,"output_tokens":40,"total_tokens":190}}}}`,
+	}
+	firstContent := strings.Join(lines[:5], "\n") + "\n"
+	first, err := ParseProviderChunk("codex", strings.NewReader(firstContent), 0, ParseState{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Records) != 0 || first.State.ForkBaselineReady || !first.State.ForkBaselineMissing {
+		t.Fatalf("copied history was not held as baseline: state=%+v records=%d", first.State, len(first.Records))
+	}
+	secondContent := strings.Join(lines[5:], "\n") + "\n"
+	second, err := ParseProviderChunk("codex", strings.NewReader(secondContent), int64(len(firstContent)), first.State)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second.Records) != 2 || !second.State.ForkBaselineReady || second.State.ForkBaselineMissing {
+		t.Fatalf("unexpected boundary state/records: state=%+v records=%d", second.State, len(second.Records))
+	}
+	if second.Records[0].Delta.TotalTokens != 15 || second.Records[1].Delta.TotalTokens != 15 {
+		t.Fatalf("copied history leaked into child usage: %+v", second.Records)
+	}
+}
+
 func TestUsageParserRejectsIncompleteAndOversizedLines(t *testing.T) {
 	if _, err := ParseProviderChunk("codex", bytes.NewReader([]byte(`{"type":"event_msg"}`)), 0, ParseState{}); !errors.Is(err, ErrIncompleteLine) {
 		t.Fatalf("incomplete err=%v", err)

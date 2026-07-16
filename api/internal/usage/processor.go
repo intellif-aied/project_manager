@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	ParserVersion     = "usage-parser-v3"
+	ParserVersion     = "usage-parser-v4"
 	NormalizerVersion = "token-normalizer-v1"
 )
 
