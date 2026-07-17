@@ -30,7 +30,7 @@ services:
       retries: 10
 
   api:
-    image: ${IMAGE_REGISTRY:-192.168.14.129:80/aied}/ai-coding-console-api:${IMAGE_TAG:-latest}
+    image: ${IMAGE_REGISTRY:-192.168.14.129:80/aied}/ai-coding-console-api:${API_IMAGE_TAG:-latest}
     restart: unless-stopped
     environment:
       DATABASE_URL: "postgres://${POSTGRES_USER:-aidashboard}:${POSTGRES_PASSWORD:-change-me-db-password}@db:5432/${POSTGRES_DB:-aidashboard}?sslmode=disable"
@@ -65,7 +65,7 @@ services:
         condition: service_healthy
 
   web:
-    image: ${IMAGE_REGISTRY:-192.168.14.129:80/aied}/ai-coding-console-web:${IMAGE_TAG:-latest}
+    image: ${IMAGE_REGISTRY:-192.168.14.129:80/aied}/ai-coding-console-web:${WEB_IMAGE_TAG:-latest}
     restart: unless-stopped
     environment:
       AIHUB_RUNTIME_CONFIG_apiBaseUrl: /api/v1

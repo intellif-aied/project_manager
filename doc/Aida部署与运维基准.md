@@ -39,7 +39,7 @@ Report Agent -> /api/v1/mcp/reports
 - API、PostgreSQL、MinIO 不直接暴露公网；
 - `db`、`minio` volume 不因发布重建；
 - Nginx 保持大文件上传和长请求超时配置；
-- API 与 Web 使用同一不可变镜像标签，禁止生产使用 `latest`；
+- API 与 Web 分别使用不可变镜像标签，禁止生产使用 `latest`；
 - `mc` 只通过 Compose `tools` profile 临时运行。
 
 ## 3. 部署文件和配置契约
@@ -51,7 +51,8 @@ Report Agent -> /api/v1/mcp/reports
 ```env
 PUBLIC_BASE_URL=<公网入口>
 IMAGE_REGISTRY=<镜像仓库>
-IMAGE_TAG=<本次不可变标签>
+API_IMAGE_TAG=<本次 API 不可变标签>
+WEB_IMAGE_TAG=<本次 Web 不可变标签>
 TZ=Asia/Shanghai
 
 AI_GATEWAY_MODELS_URL=<模型目录接口>
@@ -88,10 +89,10 @@ Report Skill/MCP 的 slug、MCP 协议版本、凭据槽、默认 Agent 文案�
 
 单次发布的具体值填写在 `doc/v2/发布事项/YYYYMMDD-*.md`，本文只规定顺序：
 
-1. 冻结同一 SHA 的 API、Web 和 CLI 源码，排除备份及临时文件。
+1. 冻结本次范围内 API、Web 和 CLI 的源码提交，排除备份及临时文件。
 2. 记录生产当前容器、配置和数据库状态。
 3. 备份 PostgreSQL 并校验 SHA256。
-4. 用同一发布标签构建并推送 API/Web 镜像。
+4. 分别用不可变标签构建并推送本次范围内的 API/Web 镜像。
 5. 先更新 API，执行正向迁移并检查健康状态。
 6. 完成 Digest/后台数据准备后，确认所有新报告使用规定的读取模式。
 7. 发布或修复 Report Skill、MCP 和默认 Agent 绑定。
@@ -99,7 +100,7 @@ Report Skill/MCP 的 slug、MCP 协议版本、凭据槽、默认 Agent 文案�
 9. 构建并发布 CLI，最后再切换 CLI 版本发现文件。
 10. 执行固定验收并填写单次发布记录。
 
-API-only 或 Web-only 发布只能重建指定服务；不得因修改共享 `IMAGE_TAG` 而意外重建全部服务。
+API-only 或 Web-only 发布只能更新并重建指定服务；`API_IMAGE_TAG` 与 `WEB_IMAGE_TAG` 必须独立维护，禁止使用共享标签导致另一服务被意外替换。
 
 ## 6. 数据库迁移规则
 
@@ -194,7 +195,7 @@ make release-prod-dir \
 - `db`、`minio`、`api`、`web` 均正常运行；
 - `/health` 返回成功；
 - 数据库迁移达到发布记录指定版本；
-- API/Web 镜像标签一致且不是 `latest`；
+- API/Web 镜像标签均为各自记录的不可变标签且不是 `latest`；
 - Report Skill 在 public registry 可解析，默认 Agent 引用正确 owner/slug/version；
 - MCP 工具可调用，凭据槽和当前用户 Token 正常；
 - Digest ready/failed、上传 abort、API 5xx 无异常积压；
