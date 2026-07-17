@@ -185,106 +185,48 @@ func (s *Service) ListCandidates(ctx context.Context, userID string, query Candi
 		to = query.ActivityTo.UTC()
 	}
 	const candidateCTE = `
-		WITH candidates AS MATERIALIZED (
-			SELECT sl.id::text AS slice_key, s.session_ref, s.agent_type,
-				first_event.occurred_at AS activity_start_at,
-				last_event.occurred_at AS activity_end_at,
+		WITH valid_sources AS MATERIALIZED (
+			SELECT s.id AS session_id, s.user_id, s.session_ref, s.agent_type,
 				COALESCE(s.cwd, '') AS cwd, COALESCE(s.models, '{}') AS models,
-				s.content_status, rev.id AS content_projection_revision_id,
-				sl.start_cursor, sl.end_cursor
-			FROM session_content_slices sl
-			JOIN sessions s ON s.id = sl.session_id
-			JOIN session_sources src ON src.id = sl.source_id AND src.session_id = s.id
-			JOIN session_content_projection_revisions rev
-				ON rev.id = src.active_content_projection_revision_id
-				AND rev.generation_id = sl.generation_id AND rev.status = 'active'
-			JOIN LATERAL (
-				SELECT e.occurred_at
-				FROM session_content_events e
-				WHERE e.content_projection_revision_id = rev.id
-					AND e.source_start_cursor >= sl.start_cursor
-					AND e.source_end_cursor <= sl.end_cursor
-				ORDER BY e.occurred_at ASC
-				LIMIT 1
-			) first_event ON true
-			JOIN LATERAL (
-				SELECT e.occurred_at
-				FROM session_content_events e
-				WHERE e.content_projection_revision_id = rev.id
-					AND e.source_start_cursor >= sl.start_cursor
-					AND e.source_end_cursor <= sl.end_cursor
-				ORDER BY e.occurred_at DESC
-				LIMIT 1
-			) last_event ON true
-			LEFT JOIN LATERAL (
-				SELECT COALESCE((
-					SELECT NULLIF(btrim(e2.summary), '')
-					FROM session_content_events e2
-					WHERE e2.content_projection_revision_id = rev.id
-						AND e2.source_start_cursor >= sl.start_cursor
-						AND e2.source_end_cursor <= sl.end_cursor
-						AND NULLIF(btrim(e2.summary), '') IS NOT NULL
-						AND e2.event_type NOT IN ('response_item.custom_tool_call', 'response_item.function_call')
-					ORDER BY CASE e2.event_type
-						WHEN 'event_msg.user_message' THEN 0
-						WHEN 'event_msg.agent_message' THEN 1
-						WHEN 'response_item.message' THEN 2
-						ELSE 3
-					END, e2.source_start_cursor, e2.id
-					LIMIT 1
-				), 'Session 增量内容（' || (
-					SELECT COUNT(*)
-					FROM session_content_events e3
-					WHERE e3.content_projection_revision_id = rev.id
-						AND e3.source_start_cursor >= sl.start_cursor
-						AND e3.source_end_cursor <= sl.end_cursor
-				)::text || ' 条记录）') AS summary
-				WHERE $2 <> '%%'
-			) search_summary ON true
+				s.content_status, s.content_epoch, src.id AS source_id,
+				revision.generation_id, revision.id AS revision_id
+			FROM sessions s
+			JOIN session_sources src
+				ON src.session_id = s.id AND src.active_content_projection_revision_id IS NOT NULL
+			JOIN session_content_projection_revisions revision
+				ON revision.id = src.active_content_projection_revision_id
+				AND revision.status = 'active'
 			WHERE s.user_id = $1 AND s.content_status = 'available'
-				AND rev.content_indexed_cursor >= sl.end_cursor
-				AND ($3::timestamptz IS NULL OR last_event.occurred_at >= $3)
-				AND ($4::timestamptz IS NULL OR first_event.occurred_at <= $4)
-				AND ($2 = '%%' OR lower(s.session_ref) LIKE $2 OR lower(search_summary.summary) LIKE $2)
+		), candidates AS MATERIALIZED (
+			SELECT catalog.slice_id::text AS slice_key, valid.session_ref, valid.agent_type,
+				catalog.summary, catalog.activity_start_at, catalog.activity_end_at,
+				valid.cwd, valid.models, valid.content_status
+			FROM report_source_slice_catalog catalog
+			JOIN valid_sources valid
+				ON valid.session_id = catalog.session_id
+				AND valid.user_id = catalog.user_id
+				AND valid.source_id = catalog.source_id
+				AND valid.generation_id = catalog.generation_id
+				AND valid.revision_id = catalog.content_projection_revision_id
+				AND valid.content_epoch = catalog.content_epoch
+			WHERE catalog.user_id = $1 AND catalog.status = 'ready'
+				AND ($3::timestamptz IS NULL OR catalog.activity_end_at >= $3)
+				AND ($4::timestamptz IS NULL OR catalog.activity_start_at <= $4)
+				AND ($2 = '%%' OR lower(valid.session_ref) LIKE $2 OR lower(catalog.summary) LIKE $2)
 		)`
 	var total int
 	rows, err := s.db.QueryContext(ctx, candidateCTE+`,
 		paged AS (
 			SELECT * FROM candidates
-			ORDER BY activity_end_at DESC, session_ref ASC
+			ORDER BY activity_end_at DESC, session_ref ASC, slice_key ASC
 			LIMIT $5 OFFSET $6
-		), totals AS (
-			SELECT COUNT(*) AS total_count FROM candidates
 		)
-		SELECT p.slice_key, p.session_ref, p.agent_type,
-			COALESCE(page_summary.summary, 'Session 增量内容（' || (
-				SELECT COUNT(*)
-				FROM session_content_events e3
-				WHERE e3.content_projection_revision_id = p.content_projection_revision_id
-					AND e3.source_start_cursor >= p.start_cursor
-					AND e3.source_end_cursor <= p.end_cursor
-			)::text || ' 条记录）') AS summary,
+		SELECT p.slice_key, p.session_ref, p.agent_type, p.summary,
 			p.activity_end_at AS last_activity_at, p.activity_start_at,
 			p.activity_end_at, p.cwd, p.models, p.content_status, p.activity_end_at AS available_through_at,
-			t.total_count
-		FROM paged p CROSS JOIN totals t
-		LEFT JOIN LATERAL (
-			SELECT NULLIF(btrim(e2.summary), '') AS summary
-			FROM session_content_events e2
-			WHERE e2.content_projection_revision_id = p.content_projection_revision_id
-				AND e2.source_start_cursor >= p.start_cursor
-				AND e2.source_end_cursor <= p.end_cursor
-				AND NULLIF(btrim(e2.summary), '') IS NOT NULL
-				AND e2.event_type NOT IN ('response_item.custom_tool_call', 'response_item.function_call')
-			ORDER BY CASE e2.event_type
-				WHEN 'event_msg.user_message' THEN 0
-				WHEN 'event_msg.agent_message' THEN 1
-				WHEN 'response_item.message' THEN 2
-				ELSE 3
-			END, e2.source_start_cursor, e2.id
-			LIMIT 1
-		) page_summary ON true
-		ORDER BY p.activity_end_at DESC, p.session_ref ASC`, userID, search, from, to, query.PageSize, (query.Page-1)*query.PageSize)
+			(SELECT COUNT(*) FROM candidates) AS total_count
+		FROM paged p
+		ORDER BY p.activity_end_at DESC, p.session_ref ASC, p.slice_key ASC`, userID, search, from, to, query.PageSize, (query.Page-1)*query.PageSize)
 	if err != nil {
 		return CandidatePage{}, err
 	}
@@ -774,33 +716,28 @@ func resolveExplicitItems(ctx context.Context, tx *sql.Tx, userID string, inputs
 		}
 		var item SelectionItem
 		err := tx.QueryRowContext(ctx, `
-			SELECT sl.id::text, s.id::text, s.session_ref, s.agent_type, src.id::text, g.id::text, rev.id::text,
-				sl.start_cursor, sl.end_cursor, MIN(e.occurred_at), MAX(e.occurred_at),
-				COALESCE((
-					SELECT NULLIF(btrim(e2.summary), '') FROM session_content_events e2
-					WHERE e2.content_projection_revision_id = rev.id
-						AND e2.source_start_cursor >= sl.start_cursor AND e2.source_end_cursor <= sl.end_cursor
-						AND NULLIF(btrim(e2.summary), '') IS NOT NULL
-						AND e2.event_type NOT IN ('response_item.custom_tool_call', 'response_item.function_call')
-					ORDER BY CASE e2.event_type
-						WHEN 'event_msg.user_message' THEN 0
-						WHEN 'event_msg.agent_message' THEN 1
-						WHEN 'response_item.message' THEN 2
-						ELSE 3
-					END, e2.source_start_cursor, e2.id LIMIT 1
-				), 'Session 增量内容（' || COUNT(*)::text || ' 条记录）'), s.content_status, s.content_epoch, COUNT(*)
-			FROM sessions s
-			JOIN session_sources src ON src.session_id = s.id
-			JOIN session_content_slices sl ON sl.id = $2 AND sl.session_id = s.id AND sl.source_id = src.id
-			JOIN session_source_generations g ON g.id = sl.generation_id AND g.status = 'active'
-			JOIN session_content_projection_revisions rev
-				ON rev.id = src.active_content_projection_revision_id AND rev.generation_id = g.id AND rev.status = 'active'
-			JOIN session_content_events e
-				ON e.content_projection_revision_id = rev.id
-				AND e.source_start_cursor >= sl.start_cursor AND e.source_end_cursor <= sl.end_cursor
-			WHERE s.user_id = $1 AND s.content_status = 'available'
-				AND rev.content_indexed_cursor >= sl.end_cursor
-			GROUP BY s.id, src.id, g.id, rev.id, sl.id`, userID, input.SliceKey).Scan(
+			SELECT catalog.slice_id::text, s.id::text, s.session_ref, s.agent_type,
+				catalog.source_id::text, catalog.generation_id::text,
+				catalog.content_projection_revision_id::text,
+				catalog.start_cursor, catalog.end_cursor, catalog.activity_start_at,
+				catalog.activity_end_at, catalog.summary, s.content_status,
+				s.content_epoch, catalog.event_count
+			FROM report_source_slice_catalog catalog
+			JOIN sessions s
+				ON s.id = catalog.session_id AND s.user_id = catalog.user_id
+			JOIN session_sources source
+				ON source.id = catalog.source_id AND source.session_id = s.id
+				AND source.active_generation_id = catalog.generation_id
+				AND source.active_content_projection_revision_id = catalog.content_projection_revision_id
+			JOIN session_source_generations generation
+				ON generation.id = catalog.generation_id AND generation.status = 'active'
+			JOIN session_content_projection_revisions revision
+				ON revision.id = catalog.content_projection_revision_id
+				AND revision.generation_id = generation.id AND revision.status = 'active'
+			WHERE catalog.user_id = $1 AND catalog.slice_id = $2
+				AND catalog.status = 'ready'
+				AND s.content_status = 'available'
+				AND s.content_epoch = catalog.content_epoch`, userID, input.SliceKey).Scan(
 			&item.SliceID, &item.SessionID, &item.SessionRef, &item.AgentType, &item.SourceID, &item.GenerationID,
 			&item.ProjectionRevision, &item.StartCursor, &item.EndCursor, &item.ActivityStart,
 			&item.ActivityEnd, &item.Summary, &item.ContentStatus, &item.ContentEpoch,
@@ -819,52 +756,30 @@ func resolveExplicitItems(ctx context.Context, tx *sql.Tx, userID string, inputs
 
 func resolveDefaultItems(ctx context.Context, tx *sql.Tx, userID string, start, end time.Time) ([]SelectionItem, error) {
 	rows, err := tx.QueryContext(ctx, `
-		WITH complete_slices AS (
-			SELECT sl.id::text AS slice_id, s.id::text AS session_id, s.session_ref, s.agent_type,
-				src.id::text AS source_id, g.id::text AS generation_id, rev.id::text AS revision_id,
-				sl.start_cursor, sl.end_cursor, MIN(e.occurred_at) AS activity_start_at,
-				MAX(e.occurred_at) AS activity_end_at,
-				COALESCE((
-					SELECT NULLIF(btrim(e2.summary), '')
-					FROM session_content_events e2
-					WHERE e2.content_projection_revision_id = rev.id
-						AND e2.source_start_cursor >= sl.start_cursor
-						AND e2.source_end_cursor <= sl.end_cursor
-						AND NULLIF(btrim(e2.summary), '') IS NOT NULL
-						AND e2.event_type NOT IN ('response_item.custom_tool_call', 'response_item.function_call')
-					ORDER BY CASE e2.event_type
-						WHEN 'event_msg.user_message' THEN 0
-						WHEN 'event_msg.agent_message' THEN 1
-						WHEN 'response_item.message' THEN 2
-						ELSE 3
-					END, e2.source_start_cursor, e2.id
-					LIMIT 1
-				), 'Session 增量内容（' || COUNT(*)::text || ' 条记录）') AS summary,
-				s.content_status, s.content_epoch, COUNT(*) AS content_event_count
-			FROM sessions s
-			JOIN session_sources src ON src.session_id = s.id
-			JOIN session_source_generations g
-				ON g.id = src.active_generation_id AND g.status = 'active'
-			JOIN session_content_slices sl
-				ON sl.session_id = s.id AND sl.source_id = src.id AND sl.generation_id = g.id
-			JOIN session_content_projection_revisions rev
-				ON rev.id = src.active_content_projection_revision_id
-				AND rev.generation_id = g.id AND rev.status = 'active'
-			JOIN session_content_events e
-				ON e.content_projection_revision_id = rev.id
-				AND e.source_start_cursor >= sl.start_cursor
-				AND e.source_end_cursor <= sl.end_cursor
-			WHERE s.user_id = $1 AND s.content_status = 'available'
-				AND rev.content_indexed_cursor >= sl.end_cursor
-			GROUP BY s.id, src.id, g.id, rev.id, sl.id
-		)
-		SELECT slice_id, session_id, session_ref, agent_type, source_id, generation_id, revision_id,
-			start_cursor, end_cursor, activity_start_at, activity_end_at, summary,
-			content_status, content_epoch, content_event_count
-		FROM complete_slices
-		WHERE (activity_end_at AT TIME ZONE 'Asia/Shanghai')::date >= $2::date
-			AND (activity_start_at AT TIME ZONE 'Asia/Shanghai')::date <= $3::date
-		ORDER BY activity_start_at, session_ref, start_cursor`,
+		SELECT catalog.slice_id::text, s.id::text, s.session_ref, s.agent_type,
+			catalog.source_id::text, catalog.generation_id::text,
+			catalog.content_projection_revision_id::text,
+			catalog.start_cursor, catalog.end_cursor, catalog.activity_start_at,
+			catalog.activity_end_at, catalog.summary, s.content_status,
+			s.content_epoch, catalog.event_count
+		FROM report_source_slice_catalog catalog
+		JOIN sessions s
+			ON s.id = catalog.session_id AND s.user_id = catalog.user_id
+		JOIN session_sources source
+			ON source.id = catalog.source_id AND source.session_id = s.id
+			AND source.active_generation_id = catalog.generation_id
+			AND source.active_content_projection_revision_id = catalog.content_projection_revision_id
+		JOIN session_source_generations generation
+			ON generation.id = catalog.generation_id AND generation.status = 'active'
+		JOIN session_content_projection_revisions revision
+			ON revision.id = catalog.content_projection_revision_id
+			AND revision.generation_id = generation.id AND revision.status = 'active'
+		WHERE catalog.user_id = $1 AND catalog.status = 'ready'
+			AND s.content_status = 'available'
+			AND s.content_epoch = catalog.content_epoch
+			AND (catalog.activity_end_at AT TIME ZONE 'Asia/Shanghai')::date >= $2::date
+			AND (catalog.activity_start_at AT TIME ZONE 'Asia/Shanghai')::date <= $3::date
+		ORDER BY catalog.activity_start_at, s.session_ref, catalog.start_cursor, catalog.slice_id`,
 		userID, start.Format("2006-01-02"), end.Format("2006-01-02"))
 	if err != nil {
 		return nil, err

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	projectdb "github.com/aidashboard/api/db"
+	"github.com/aidashboard/api/internal/reportsourcecatalog"
 )
 
 func TestReportSourceSelectionLifecycleIntegration(t *testing.T) {
@@ -62,6 +63,46 @@ func TestReportSourceSelectionLifecycleIntegration(t *testing.T) {
 	if page.Total != 2 || len(page.Items) != 2 || page.Items[0].SessionRef != "report-source-e2e" ||
 		page.Items[0].ContentIndexStatus != "ready" {
 		t.Fatalf("candidate page=%+v", page)
+	}
+	firstCandidatePage, err := service.ListCandidates(ctx, "990040", CandidateQuery{Page: 1, PageSize: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondCandidatePage, err := service.ListCandidates(ctx, "990040", CandidateQuery{Page: 2, PageSize: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstCandidatePage.Total != 2 || secondCandidatePage.Total != 2 ||
+		len(firstCandidatePage.Items) != 1 || len(secondCandidatePage.Items) != 1 ||
+		firstCandidatePage.Items[0].SliceKey == secondCandidatePage.Items[0].SliceKey {
+		t.Fatalf("candidate pagination first=%+v second=%+v", firstCandidatePage, secondCandidatePage)
+	}
+	deepEmptyPage, err := service.ListCandidates(ctx, "990040", CandidateQuery{Page: 100, PageSize: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deepEmptyPage.Total != 2 || len(deepEmptyPage.Items) != 0 {
+		t.Fatalf("deep empty candidate page=%+v", deepEmptyPage)
+	}
+	activityFrom := fixture.times[2]
+	activityPage, err := service.ListCandidates(ctx, "990040", CandidateQuery{
+		ActivityFrom: &activityFrom, Page: 1, PageSize: 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if activityPage.Total != 1 || len(activityPage.Items) != 1 ||
+		activityPage.Items[0].SliceKey != fixture.sliceKeys[1] {
+		t.Fatalf("activity filtered candidate page=%+v", activityPage)
+	}
+	missingPage, err := service.ListCandidates(ctx, "990040", CandidateQuery{
+		Query: "not-present", Page: 1, PageSize: 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if missingPage.Total != 0 || len(missingPage.Items) != 0 {
+		t.Fatalf("missing query candidate page=%+v", missingPage)
 	}
 
 	selection, err := service.CreateExplicit(ctx, "990040", "personal_weekly", Period{
@@ -210,6 +251,12 @@ func TestReportSourceSelectionLifecycleIntegration(t *testing.T) {
 		FROM session_content_slices WHERE id = $2
 		RETURNING id::text`, fixture.sessionID, fixture.sliceKeys[0]).Scan(&pagedSliceKey); err != nil {
 		t.Fatal(err)
+	}
+	if err := reportsourcecatalog.EnsureSlice(ctx, database, pagedSliceKey); err != nil {
+		t.Fatal(err)
+	}
+	if count, err := reportsourcecatalog.ReconcileRevision(ctx, database, fixture.revisionID, 10); err != nil || count != 1 {
+		t.Fatalf("paged catalog count=%d err=%v", count, err)
 	}
 	pagedSelection, err := service.CreateExplicit(ctx, "990040", "personal_weekly", selection.Period,
 		[]SourceInput{{SliceKey: pagedSliceKey}})
@@ -400,6 +447,14 @@ func insertReportSourceFixture(t *testing.T, database *sql.DB, userID int64) rep
 			t.Fatal(err)
 		}
 		sliceKeys = append(sliceKeys, sliceKey)
+	}
+	for _, sliceKey := range sliceKeys {
+		if err := reportsourcecatalog.EnsureSlice(context.Background(), database, sliceKey); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if count, err := reportsourcecatalog.ReconcileRevision(context.Background(), database, revisionID, len(sliceKeys)); err != nil || count != int64(len(sliceKeys)) {
+		t.Fatalf("catalog count=%d err=%v", count, err)
 	}
 	return reportSourceFixture{sessionID: sessionID, revisionID: revisionID, chunkID: chunkID, sliceKeys: sliceKeys, times: times}
 }

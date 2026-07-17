@@ -11,27 +11,37 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
-func TestListCandidatesDoesNotQueryUsageMetrics(t *testing.T) {
+func TestListCandidatesReadsOnlyCatalogAndLightweightIdentityTables(t *testing.T) {
 	queryMatcher := sqlmock.QueryMatcherFunc(func(_ string, actualSQL string) error {
 		for _, forbidden := range []string{
+			"session_content_events",
+			"session_content_event_index",
 			"session_usage_components",
 			"normalized_total_tokens",
-			"GROUP BY sl.id, s.id, rev.id",
+			"session_slice_digest_revisions",
+			"digest_json",
+			"content_payload",
+			"session_content_slices",
+			"src.active_generation_id",
 		} {
 			if strings.Contains(actualSQL, forbidden) {
-				return fmt.Errorf("candidate query still contains %s", forbidden)
+				return fmt.Errorf("candidate query contains forbidden %s", forbidden)
 			}
 		}
 		for _, required := range []string{
-			"ORDER BY e.occurred_at ASC",
-			"ORDER BY e.occurred_at DESC",
-			"LEFT JOIN LATERAL",
+			"WITH valid_sources AS MATERIALIZED",
+			"FROM report_source_slice_catalog catalog",
+			"catalog.status = 'ready'",
+			"revision.id = src.active_content_projection_revision_id",
+			"valid.content_epoch = catalog.content_epoch",
+			"ORDER BY activity_end_at DESC, session_ref ASC, slice_key ASC",
 		} {
 			if !strings.Contains(actualSQL, required) {
 				return fmt.Errorf("candidate query is missing %s", required)
 			}
 		}
-		if !strings.Contains(actualSQL, "FROM paged p CROSS JOIN totals t") {
+		if !strings.Contains(actualSQL, "FROM paged p") ||
+			!strings.Contains(actualSQL, "(SELECT COUNT(*) FROM candidates) AS total_count") {
 			return fmt.Errorf("unexpected candidate query")
 		}
 		return nil
@@ -43,7 +53,7 @@ func TestListCandidatesDoesNotQueryUsageMetrics(t *testing.T) {
 	defer database.Close()
 
 	now := time.Date(2026, 7, 17, 8, 30, 0, 0, time.UTC)
-	mock.ExpectQuery("candidate list without usage metrics").
+	mock.ExpectQuery("candidate list from catalog").
 		WithArgs("307", "%%", nil, nil, 10, 0).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"slice_key", "session_ref", "agent_type", "summary", "last_activity_at",
