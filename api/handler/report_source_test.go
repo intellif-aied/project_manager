@@ -62,7 +62,7 @@ func TestReportSourceCapabilityRequiresAuthentication(t *testing.T) {
 	}
 }
 
-func TestParseCandidateActivityRangeFallsBackToReportPeriod(t *testing.T) {
+func TestParseCandidateActivityRangeDoesNotTreatReportPeriodAsActivityFilter(t *testing.T) {
 	from, to, err := parseCandidateActivityRange(url.Values{
 		"period_start": {"2026-07-17"},
 		"period_end":   {"2026-07-17"},
@@ -70,13 +70,8 @@ func TestParseCandidateActivityRangeFallsBackToReportPeriod(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantFrom := time.Date(2026, 7, 17, 0, 0, 0, 0, time.FixedZone("Asia/Shanghai", 8*60*60))
-	wantTo := wantFrom.Add(24*time.Hour - time.Nanosecond)
-	if from == nil || !from.Equal(wantFrom) {
-		t.Fatalf("from = %v, want %v", from, wantFrom)
-	}
-	if to == nil || !to.Equal(wantTo) {
-		t.Fatalf("to = %v, want %v", to, wantTo)
+	if from != nil || to != nil {
+		t.Fatalf("report period unexpectedly became activity filter: %v..%v", from, to)
 	}
 }
 

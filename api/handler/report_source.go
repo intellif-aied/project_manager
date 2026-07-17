@@ -66,10 +66,6 @@ func (h *ReportSourceHandler) ListCandidates(w http.ResponseWriter, r *http.Requ
 func parseCandidateActivityRange(values url.Values) (*time.Time, *time.Time, error) {
 	fromValue := strings.TrimSpace(values.Get("activity_from"))
 	toValue := strings.TrimSpace(values.Get("activity_to"))
-	if fromValue == "" && toValue == "" {
-		fromValue = strings.TrimSpace(values.Get("period_start"))
-		toValue = strings.TrimSpace(values.Get("period_end"))
-	}
 	activityFrom, err := parseOptionalActivityTime(fromValue, false)
 	if err != nil {
 		return nil, nil, err
