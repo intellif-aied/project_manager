@@ -205,6 +205,4 @@ if [ -n "$PATH_RC_FILE" ]; then
 fi
 echo "  ${step}. Login: aida login"
 step=$((step + 1))
-echo "  ${step}. List local sessions: aida sessions"
-step=$((step + 1))
-echo "  ${step}. Upload sessions: aida upload --all"
+echo "  ${step}. Select and upload sessions: aida upload"

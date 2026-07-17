@@ -21,6 +21,7 @@ type Config struct {
 	ReleaseURL       string `yaml:"release_url,omitempty"`
 	AutoUpdate       bool   `yaml:"auto_update,omitempty"`
 	LastUpdateCheck  string `yaml:"last_update_check,omitempty"`
+	LastKnownVersion string `yaml:"last_known_version,omitempty"`
 	Token            string `yaml:"token"`
 	ServerInfo       string `yaml:"server_info,omitempty"`
 	ActiveAPIURL     string `yaml:"-"`
@@ -87,59 +88,74 @@ func configFromEnv(cfg *Config) *Config {
 	return cfg
 }
 
-func saveConfig(cfg *Config) {
-	data, _ := yaml.Marshal(cfg)
-	os.WriteFile(configPath(), data, 0600)
+func saveConfig(cfg *Config) error {
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(configPath(), data, 0600)
 }
 
-func requireAuth(cfg *Config) {
+func requireAuth(cfg *Config) error {
 	if cfg.Token == "" {
-		fmt.Println("Not logged in. Run: aida login")
-		os.Exit(1)
+		return fmt.Errorf("not logged in; run: aida login")
 	}
 	if cfg.APIURL == "" {
-		fmt.Println("Server URL not set. Run: aida login --server <url>")
-		os.Exit(1)
+		return fmt.Errorf("server URL not set; run: aida login")
 	}
+	return nil
 }
 
 func main() {
-	if len(os.Args) < 2 {
-		printUsage()
-		os.Exit(0)
-	}
-
-	switch os.Args[1] {
-	case "login":
-		requireCurrentVersion(loadConfig())
-		cmdLogin(os.Args[2:])
-	case "sessions", "ls":
-		requireCurrentVersion(loadConfig())
-		cmdSessions(os.Args[2:])
-	case "upload", "push":
-		requireCurrentVersion(loadConfig())
-		cmdUpload(os.Args[2:])
-	case "status":
-		requireCurrentVersion(loadConfig())
-		cmdStatus()
-	case "update":
-		cmdUpdate()
-	case "version", "--version", "-v":
-		fmt.Printf("aida %s\n", Version)
-	case "help", "--help", "-h":
-		printUsage()
-	default:
-		fmt.Printf("Unknown command: %s\n\n", os.Args[1])
-		printUsage()
-		os.Exit(1)
-	}
+	os.Exit(run(os.Args[1:]))
 }
 
-func requireCurrentVersion(cfg *Config) {
-	if err := maybeAutoUpdate(cfg); err != nil {
-		fmt.Fprintf(os.Stderr, "Aida update required but failed: %v\n", err)
-		fmt.Fprintln(os.Stderr, "Run 'aida update' or reinstall Aida, then retry this command.")
-		os.Exit(1)
+func run(args []string) int {
+	if len(args) < 1 {
+		printUsage()
+		return 0
+	}
+
+	requireUpdate := func() bool {
+		if err := maybeAutoUpdate(loadConfig()); err != nil {
+			fmt.Fprintf(os.Stderr, "Aida update required but failed: %v\n", err)
+			fmt.Fprintln(os.Stderr, "Run 'aida update' or reinstall Aida, then retry this command.")
+			return false
+		}
+		return true
+	}
+
+	switch args[0] {
+	case "login":
+		if !requireUpdate() {
+			return 3
+		}
+		return cmdLogin(args[1:])
+	case "sessions", "ls":
+		fmt.Fprintln(os.Stderr, "aida sessions 已移除，请使用 aida upload 查看并选择本地 Session。")
+		return 2
+	case "upload", "push":
+		if !requireUpdate() {
+			return 3
+		}
+		return cmdUpload(args[1:])
+	case "status":
+		if !requireUpdate() {
+			return 3
+		}
+		return cmdStatus()
+	case "update":
+		return cmdUpdate()
+	case "version", "--version", "-v":
+		fmt.Printf("aida %s\n", Version)
+		return 0
+	case "help", "--help", "-h":
+		printUsage()
+		return 0
+	default:
+		fmt.Printf("Unknown command: %s\n\n", args[0])
+		printUsage()
+		return 2
 	}
 }
 
@@ -151,8 +167,6 @@ Usage:
 
 Commands:
   login                                      Enter your personal token interactively
-  sessions [--all] [--project <dir>] [--page N] [--page-size N] [--json]
-                                            List local Claude Code and Codex sessions
   upload   [numbers...] [--all] [--page-size N]
                                             Upload sessions to server
   status                                     Show current login status
@@ -162,18 +176,6 @@ Commands:
 Examples:
   # Login interactively using the service address installed with Aida
   aida login
-
-  # List recent sessions (last 48h)
-  aida sessions
-
-  # List all sessions
-  aida sessions --all
-
-  # Show page 2 with 50 sessions per page
-  aida sessions --all --page 2 --page-size 50
-
-  # Filter by project directory
-  aida sessions --project project-manager
 
   # Upload specific sessions by number
   aida upload 1 3 5

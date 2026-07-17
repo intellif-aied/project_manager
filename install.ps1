@@ -200,5 +200,4 @@ if (Get-Command aida -ErrorAction SilentlyContinue) {
     Write-Host '  $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [Environment]::GetEnvironmentVariable("Path", "User")'
 }
 Write-Host "Login: aida login"
-Write-Host "List local sessions: aida sessions"
-Write-Host "Upload sessions:     aida upload --all"
+Write-Host "Select and upload sessions: aida upload"

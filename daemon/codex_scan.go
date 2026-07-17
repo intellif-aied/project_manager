@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"encoding/json"
 	"io/fs"
 	"os"
@@ -115,9 +114,7 @@ func parseCodexJSONL(path string) *SessionInfo {
 		ToolCalls: make(map[string]int),
 	}
 
-	scanner := bufio.NewScanner(f)
-	buf := make([]byte, 0, 1024*1024)
-	scanner.Buffer(buf, 10*1024*1024)
+	scanner := newJSONLScanner(f, defaultParseMaxLineBytes)
 
 	var lastTokens codexTokenInfo
 	var sawTokens bool
@@ -252,6 +249,7 @@ func parseCodexJSONL(path string) *SessionInfo {
 			}
 		}
 	}
+	s.ParseWarningCount = scanner.Skipped()
 
 	if sawTokens && s.ParentSessionRef == "" {
 		s.InputTok = lastTokens.Total.InputTokens
@@ -304,7 +302,7 @@ func parseCodexJSONL(path string) *SessionInfo {
 	}
 
 	summaryCollector.Apply(s)
-	if s.Summary == "" && scanner.Err() != nil {
+	if s.Summary == "" && (scanner.Err() != nil || s.ParseWarningCount > 0) {
 		s.SummaryStatus = "parse_error"
 	} else if s.Summary == "" {
 		s.SummaryStatus = "empty"

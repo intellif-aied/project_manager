@@ -87,6 +87,7 @@ type SessionInfo struct {
 	SelectionActiveAt    time.Time      `json:"-"`
 	SelectionMissingRoot bool           `json:"-"`
 	SelectionIssue       string         `json:"-"`
+	ParseWarningCount    int            `json:"-"`
 }
 
 type ActivitySlice struct {
@@ -334,7 +335,7 @@ func truncateMiddle(s string, n int) string {
 	return string(runes[:left]) + ".." + string(runes[len(runes)-right:])
 }
 
-func cmdLogin(args []string) {
+func cmdLogin(args []string) int {
 	cfg := loadConfig()
 
 	server := ""
@@ -363,13 +364,13 @@ func cmdLogin(args []string) {
 	}
 
 	if token == "" {
-		fmt.Print("Enter API token: ")
+		fmt.Print("请输入个人令牌（输入内容不会显示，粘贴后按 Enter）：")
 		if inputInfo, err := os.Stdin.Stat(); err == nil && inputInfo.Mode()&os.ModeCharDevice != 0 {
 			input, readErr := term.ReadPassword(os.Stdin.Fd())
 			fmt.Println()
 			if readErr != nil {
 				fmt.Printf("Error: failed to read token: %v\n", readErr)
-				os.Exit(1)
+				return 1
 			}
 			token = strings.TrimSpace(string(input))
 		} else {
@@ -381,8 +382,9 @@ func cmdLogin(args []string) {
 
 	if token == "" {
 		fmt.Println("Error: token is required")
-		os.Exit(1)
+		return 1
 	}
+	fmt.Println("已接收令牌，正在验证...")
 	cfg.Token = token
 
 	// Verify
@@ -390,7 +392,7 @@ func cmdLogin(args []string) {
 	if err != nil {
 		fmt.Printf("Login failed: %v\n", err)
 		fmt.Println("Check your token and server URL")
-		os.Exit(1)
+		return 1
 	}
 
 	var user struct {
@@ -400,93 +402,24 @@ func cmdLogin(args []string) {
 	json.Unmarshal(resp, &user)
 
 	cfg.ServerInfo = fmt.Sprintf("%s (%s)", user.Name, user.Role)
-	saveConfig(cfg)
+	if err := saveConfig(cfg); err != nil {
+		fmt.Printf("Login failed: unable to save config: %v\n", err)
+		return 1
+	}
 
 	fmt.Printf("Logged in as %s (%s) at %s\n", user.Name, user.Role, cfg.APIURL)
 	fmt.Printf("Config saved to %s\n", configPath())
-}
-
-// ---- sessions ----
-
-func cmdSessions(args []string) {
-	showAll := false
-	jsonOutput := false
-	projectFilter := ""
-	pageNumber := 1
-	pageSize := defaultSessionPageSize
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--all", "-a":
-			showAll = true
-		case "--json":
-			jsonOutput = true
-		case "--project", "-p":
-			if i+1 < len(args) {
-				projectFilter = args[i+1]
-				i++
-			}
-		case "--page":
-			if i+1 < len(args) {
-				pageNumber, _ = strconv.Atoi(args[i+1])
-				i++
-			}
-		case "--page-size":
-			if i+1 < len(args) {
-				pageSize, _ = strconv.Atoi(args[i+1])
-				i++
-			}
-		}
-	}
-
-	home, _ := os.UserHomeDir()
-	claudeDir := filepath.Join(home, ".claude", "projects")
-	codexDir := filepath.Join(home, ".codex", "sessions")
-
-	sessions := scanSessionsForCommand(claudeDir, codexDir, showAll, !jsonOutput)
-	if projectFilter != "" {
-		var filtered []*SessionInfo
-		for _, s := range sessions {
-			if sessionSelectionMatchesProject(s, projectFilter) {
-				filtered = append(filtered, s)
-			}
-		}
-		sessions = filtered
-	}
-
-	if len(sessions) == 0 {
-		if jsonOutput {
-			writeSessionsJSON(os.Stdout, sessions, 1, pageSize)
-			return
-		}
-		fmt.Println("No sessions found.")
-		fmt.Println()
-		fmt.Println("Claude Code session logs are stored at:")
-		fmt.Printf("  %s/\n", claudeDir)
-		fmt.Println()
-		fmt.Println("Each .jsonl file = one session. Sub-agent sessions are excluded.")
-		return
-	}
-
-	page, err := paginateSessions(sessions, pageNumber, pageSize)
-	if err != nil {
-		fmt.Printf("Invalid pagination: %v\n", err)
-		return
-	}
-	if jsonOutput {
-		writeSessionsJSON(os.Stdout, sessions, pageNumber, pageSize)
-		return
-	}
-	writeSessionPage(os.Stdout, "Session 列表", page, nil)
-
-	fmt.Printf("  Claude logs: %s/\n", claudeDir)
-	fmt.Printf("  Codex logs:  %s/\n\n", codexDir)
+	return 0
 }
 
 // ---- upload ----
 
-func cmdUpload(args []string) {
+func cmdUpload(args []string) int {
 	cfg := loadConfig()
-	requireAuth(cfg)
+	if err := requireAuth(cfg); err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return 1
+	}
 	resolveAPIEndpoint(cfg)
 
 	uploadAll := false
@@ -506,7 +439,7 @@ func cmdUpload(args []string) {
 	}
 	if !allowedSessionPageSizes[pageSize] {
 		fmt.Println("Invalid page size: use 10, 20, 50, or 100")
-		return
+		return 2
 	}
 
 	home, _ := os.UserHomeDir()
@@ -514,7 +447,7 @@ func cmdUpload(args []string) {
 
 	if len(sessions) == 0 {
 		fmt.Println("No sessions found to upload.")
-		return
+		return 0
 	}
 
 	var toUpload []*SessionInfo
@@ -525,7 +458,7 @@ func cmdUpload(args []string) {
 		for _, idx := range selectedIdx {
 			if idx < 1 || idx > len(sessions) {
 				fmt.Printf("Invalid session number: %d (range 1-%d)\n", idx, len(sessions))
-				os.Exit(1)
+				return 2
 			}
 			toUpload = append(toUpload, sessions[idx-1])
 		}
@@ -539,7 +472,7 @@ func cmdUpload(args []string) {
 		}
 		if err != nil {
 			fmt.Printf("Session selection failed: %v\n", err)
-			return
+			return 1
 		}
 	}
 
@@ -549,7 +482,7 @@ func cmdUpload(args []string) {
 
 	if len(toUpload) == 0 {
 		fmt.Println("No sessions selected.")
-		return
+		return 0
 	}
 
 	fmt.Printf("\nUploading %d session(s) to %s (%s) ...\n\n", len(toUpload), apiBaseURL(cfg), cfg.ActiveRoute)
@@ -726,6 +659,10 @@ func cmdUpload(args []string) {
 	if totalUploaded > 0 || totalSubs > 0 {
 		fmt.Printf("Dashboard: %s\n", strings.Replace(apiBaseURL(cfg), "/api/v1", "", 1))
 	}
+	if totalFailed > 0 {
+		return 1
+	}
+	return 0
 }
 
 // ---- consume ----
@@ -807,13 +744,13 @@ func shortRef(ref string) string {
 	}
 	return ref[:12]
 }
-func cmdStatus() {
+func cmdStatus() int {
 	cfg := loadConfig()
 
 	if cfg.Token == "" {
 		fmt.Println("Not logged in.")
-		fmt.Println("\nRun: aida login --server <url> --token <token>")
-		return
+		fmt.Println("\nRun: aida login")
+		return 1
 	}
 
 	resolveAPIEndpoint(cfg)
@@ -828,7 +765,7 @@ func cmdStatus() {
 	resp, err := apiGet(cfg, "/auth/me")
 	if err != nil {
 		fmt.Printf("Status:  disconnected (%v)\n", err)
-		return
+		return 1
 	}
 	var user struct {
 		Name string `json:"name"`
@@ -836,6 +773,7 @@ func cmdStatus() {
 	}
 	json.Unmarshal(resp, &user)
 	fmt.Printf("Status:  logged in as %s (%s)\n", user.Name, user.Role)
+	return 0
 }
 
 // ---- scanning ----
@@ -923,9 +861,7 @@ func parseJSONL(path string) *SessionInfo {
 		ToolCalls: make(map[string]int),
 	}
 
-	scanner := bufio.NewScanner(f)
-	buf := make([]byte, 0, 1024*1024)
-	scanner.Buffer(buf, 10*1024*1024)
+	scanner := newJSONLScanner(f, defaultParseMaxLineBytes)
 
 	var lastTS time.Time
 	summaryCollector := sessionSummaryCollector{}
@@ -1023,6 +959,7 @@ func parseJSONL(path string) *SessionInfo {
 			}
 		}
 	}
+	s.ParseWarningCount = scanner.Skipped()
 
 	s.TotalTok = s.InputTok + s.OutputTok + s.CacheCreateTok + s.CacheReadTok
 	if !lastTS.IsZero() {
@@ -1031,7 +968,7 @@ func parseJSONL(path string) *SessionInfo {
 	summaryCollector.Apply(s)
 	finalizeActivitySlices(s, activitySlices)
 	if s.Summary == "" {
-		if scanner.Err() != nil {
+		if scanner.Err() != nil || s.ParseWarningCount > 0 {
 			s.SummaryStatus = "parse_error"
 		} else {
 			s.SummaryStatus = "empty"

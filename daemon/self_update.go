@@ -29,8 +29,24 @@ func maybeAutoUpdate(cfg *Config) error {
 	}
 	latest, err := latestReleaseVersion(cfg.ReleaseURL)
 	if err != nil {
+		knownVersion := strings.TrimSpace(cfg.LastKnownVersion)
+		if knownVersion != "" && versionGreater(knownVersion, Version) {
+			fmt.Fprintf(os.Stderr, "Unable to refresh Aida version metadata; retrying required update %s -> %s.\n", Version, cfg.LastKnownVersion)
+			updated, updateErr := performSelfUpdateVersion(cfg)
+			if updateErr != nil {
+				return updateErr
+			}
+			if updated {
+				return restartAfterUpdate()
+			}
+		}
 		fmt.Fprintf(os.Stderr, "Warning: unable to check for Aida updates: %v\n", err)
 		return nil
+	}
+	cfg.LastKnownVersion = latest
+	cfg.LastUpdateCheck = time.Now().UTC().Format(time.RFC3339)
+	if saveErr := saveConfig(cfg); saveErr != nil {
+		fmt.Fprintf(os.Stderr, "Warning: unable to cache Aida update status: %v\n", saveErr)
 	}
 	if !versionGreater(latest, Version) {
 		return nil
@@ -46,22 +62,23 @@ func maybeAutoUpdate(cfg *Config) error {
 	return restartAfterUpdate()
 }
 
-func cmdUpdate() {
+func cmdUpdate() int {
 	cfg := loadConfig()
 	if strings.TrimSpace(cfg.ReleaseURL) == "" {
 		fmt.Println("Update unavailable: release_url is not configured. Re-run the installer once to enable self-update.")
-		return
+		return 1
 	}
 	updated, err := performSelfUpdate(cfg)
 	if err != nil {
 		fmt.Printf("Update failed: %v\n", err)
-		return
+		return 1
 	}
 	if !updated {
 		fmt.Printf("aida v%s is already current.\n", Version)
-		return
+		return 0
 	}
 	fmt.Println("Update installed. The new version will be used on the next command.")
+	return 0
 }
 
 func performSelfUpdate(cfg *Config) (bool, error) {
@@ -181,7 +198,11 @@ func restartAfterUpdate() error {
 	command.Stdout = os.Stdout
 	command.Stderr = os.Stderr
 	command.Env = os.Environ()
-	if err := command.Start(); err != nil {
+	if err := command.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			os.Exit(exitErr.ExitCode())
+		}
 		return fmt.Errorf("restart updated command: %w", err)
 	}
 	os.Exit(0)

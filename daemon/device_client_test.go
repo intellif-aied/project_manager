@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,6 +10,35 @@ import (
 	"testing"
 	"time"
 )
+
+func TestParseClaudeJSONLContinuesAfterElevenMiBEvent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "large-event.jsonl")
+	largeText := strings.Repeat("x", 11<<20)
+	content := strings.Join([]string{
+		`{"type":"user","sessionId":"large-session","timestamp":"2026-07-17T01:00:00Z","message":{"content":[{"type":"text","text":"first request"}]}}`,
+		fmt.Sprintf(`{"type":"assistant","sessionId":"large-session","timestamp":"2026-07-17T01:01:00Z","message":{"model":"test-model","usage":{"input_tokens":7,"output_tokens":3},"content":[{"type":"text","text":"%s"}]}}`, largeText),
+		`{"type":"user","sessionId":"large-session","timestamp":"2026-07-17T01:02:00Z","message":{"content":[{"type":"text","text":"final request"}]}}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	session := parseJSONL(path)
+	if session == nil {
+		t.Fatal("parseJSONL returned nil")
+	}
+	if session.NumLines != 3 || session.TotalTok != 10 || session.ParseWarningCount != 0 {
+		t.Fatalf("lines=%d tokens=%d warnings=%d", session.NumLines, session.TotalTok, session.ParseWarningCount)
+	}
+	if session.RecentSummary != "final request" || session.EndedAt.Format(time.RFC3339) != "2026-07-17T01:02:00Z" {
+		t.Fatalf("recent=%q ended=%s", session.RecentSummary, session.EndedAt)
+	}
+}
+
+func TestRemovedSessionsCommandReturnsUsageError(t *testing.T) {
+	if code := run([]string{"sessions"}); code != 2 {
+		t.Fatalf("exit code=%d, want 2", code)
+	}
+}
 
 func TestSessionUploadRequestTimeoutIsLongerThanDefault(t *testing.T) {
 	if sessionUploadRequestTimeout <= defaultRequestTimeout {
