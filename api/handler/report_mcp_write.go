@@ -73,43 +73,6 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 	if content == "" {
 		return nil, mcpErr("INVALID_ARGUMENT", "content is required")
 	}
-	validationIssues := reportContentValidationIssues(content, args.ReportType, date, ws, we)
-	if summary := strings.TrimSpace(args.Summary); summary != "" {
-		for _, issue := range reportContentValidationIssues(summary, args.ReportType, date, ws, we) {
-			validationIssues = append(validationIssues, "摘要："+issue)
-		}
-	}
-	consistencyText := content
-	if summary := strings.TrimSpace(args.Summary); summary != "" {
-		consistencyText += "\n" + summary
-	}
-	sourceIssues, err := reportSourceConsistencyIssues(r.Context(), h.db, args.ReportType, date, ws, we, target, consistencyText)
-	if err != nil {
-		return nil, errMCPInternal
-	}
-	validationIssues = append(validationIssues, sourceIssues...)
-	activityIssues, err := reportPersonalSourceActivityIssues(r.Context(), h.db, run.InputRef, args.ReportType, consistencyText)
-	if err != nil {
-		return nil, errMCPInternal
-	}
-	validationIssues = append(validationIssues, activityIssues...)
-	coverageIssues, err := reportPersonalDigestOutcomeCoverageIssues(
-		r.Context(), h.db, run.InputRef, args.ReportType, date, content,
-	)
-	if err != nil {
-		return nil, errMCPInternal
-	}
-	validationIssues = append(validationIssues, coverageIssues...)
-	followupIssues, err := reportPersonalDigestFollowupEvidenceIssues(
-		r.Context(), h.db, run.InputRef, args.ReportType, date, content,
-	)
-	if err != nil {
-		return nil, errMCPInternal
-	}
-	validationIssues = append(validationIssues, followupIssues...)
-	if len(validationIssues) > 0 {
-		return nil, mcpErr("REPORT_CONTENT_INVALID", strings.Join(validationIssues, "；"))
-	}
 	resultHash := reportResultHash(content)
 	if idempotent, reportID, err := validateReportWriteAllowed(run, args.ReportType, date, ws, we, target, resultHash); err != nil {
 		return nil, err

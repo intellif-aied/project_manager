@@ -108,6 +108,13 @@ func (h *ReportSourceHandler) CreateSelection(w http.ResponseWriter, r *http.Req
 		writeReportSourceError(w, err)
 		return
 	}
+	selection, err = h.service.PrepareExplicitSelection(
+		r.Context(), u.ID, request.ReportType, period, selection.ID,
+	)
+	if err != nil {
+		writeReportSourceError(w, err)
+		return
+	}
 	writeJSON(w, http.StatusCreated, selection)
 }
 
@@ -130,6 +137,7 @@ func parseOptionalActivityTime(value string, endOfDay bool) (*time.Time, error) 
 }
 
 func writeReportSourceError(w http.ResponseWriter, err error) {
+	var largeContextErr *reportsource.LargeContextConfirmationError
 	switch {
 	case errors.Is(err, reportsource.ErrInvalidRequest):
 		writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REPORT_SOURCE", "error": err.Error()})
@@ -149,6 +157,16 @@ func writeReportSourceError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusConflict, map[string]string{"code": "REPORT_SOURCE_READ_MODE_MISMATCH", "error": "report source read mode does not match"})
 	case errors.Is(err, reportsource.ErrDigestCorrupt):
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"code": "REPORT_SOURCE_DIGEST_FAILED", "error": "report source digest integrity check failed"})
+	case errors.As(err, &largeContextErr):
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":                     "confirmation_required",
+			"code":                       "LARGE_REPORT_CONTEXT_CONFIRMATION_REQUIRED",
+			"message":                    "所选会话内容较多，可能消耗较多 Token，部分模型可能无法完整处理。你可以更换模型、减少所选会话，或继续生成。",
+			"report_source_selection_id": largeContextErr.SelectionID,
+			"context_bytes":              largeContextErr.ContextBytes,
+			"warning_required":           true,
+			"warning_code":               reportsource.LargeContextWarningCode,
+		})
 	default:
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "REPORT_SOURCE_FAILED", "error": err.Error()})
 	}

@@ -54,7 +54,7 @@ func TestDigestSelectionFreezeReadAndWriteGuardIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, _, err := service.CreateAttachedRun(ctx, userIDText, "personal_weekly", period,
-		selection.ID, "report_agent_run", "agent-test", "", map[string]any{"report_type": "personal_weekly"}); !errors.Is(err, ErrDigestNotReady) {
+		selection.ID, "report_agent_run", "agent-test", "", false, map[string]any{"report_type": "personal_weekly"}); !errors.Is(err, ErrDigestNotReady) {
 		t.Fatalf("attach without ready digests must fail before run creation: %v", err)
 	}
 	var runCount int
@@ -86,7 +86,7 @@ func TestDigestSelectionFreezeReadAndWriteGuardIntegration(t *testing.T) {
 	}
 
 	runID, attached, err := service.CreateAttachedRun(ctx, userIDText, "personal_weekly", period,
-		selection.ID, "report_agent_run", "agent-test", "", map[string]any{"report_type": "personal_weekly"})
+		selection.ID, "report_agent_run", "agent-test", "", false, map[string]any{"report_type": "personal_weekly"})
 	if err != nil {
 		t.Fatal(err)
 	}

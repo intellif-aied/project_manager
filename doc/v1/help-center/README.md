@@ -27,6 +27,6 @@
 - 指南交互：`web/src/layouts/HelpCenter/HelpCenter.tsx`
 - 路由归类：`web/src/layouts/HelpCenter/helpCenterConfig.ts`
 - 页面样式：`web/src/layouts/HelpCenter/HelpCenter.css`
-- 截图资产：`web/public/help-center/screenshots/v1/`
+- 截图资产：`web/public/help-center/screenshots/`，按 `v1/`、`v2/` 等界面版本维护
 
 更新页面或权限时，应同时更新文章内容、角色矩阵、截图索引和对应截图，避免产品行为与帮助内容分叉。

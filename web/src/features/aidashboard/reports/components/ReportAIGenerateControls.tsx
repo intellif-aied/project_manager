@@ -7,8 +7,18 @@ import {
   RobotOutlined
 } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { App, Button, DatePicker, Drawer, Modal, Space, Table, Tag, Tooltip } from "antd";
-import type { ColumnsType } from "antd/es/table";
+import {
+  App,
+  Button,
+  Checkbox,
+  DatePicker,
+  Drawer,
+  Empty,
+  Modal,
+  Pagination,
+  Space,
+  Tag
+} from "antd";
 import type { Dayjs } from "dayjs";
 import { useEffect, useMemo, useState } from "react";
 
@@ -21,6 +31,7 @@ import {
 } from "../../api/client";
 import type {
   AIRun,
+  ManagedReportAgentConfirmationRequired,
   ManagedReportAgentUnavailable,
   ManagedReportAgentRunResponse,
   ManagedReportAgentRunPayload,
@@ -73,11 +84,6 @@ interface ReportAISettingsPanelProps {
 }
 
 const MAX_SELECTED_SESSIONS = 200;
-
-function formatNumber(value?: number) {
-  return typeof value === "number" ? value.toLocaleString() : "-";
-}
-
 function selectedSourceKey(source: ReportSourceInput) {
   return source.slice_key;
 }
@@ -122,6 +128,26 @@ function confirmDefaultReportInitialization() {
       onCancel: () => resolve(false)
     });
   });
+}
+
+function confirmLargeReportContext() {
+  return new Promise<boolean>((resolve) => {
+    Modal.confirm({
+      title: "所选会话内容较多",
+      content:
+        "所选会话内容较多，可能消耗较多 Token，部分模型可能无法完整处理。你可以更换模型、减少所选会话，或继续生成。",
+      okText: "继续生成",
+      cancelText: "返回调整",
+      onOk: () => resolve(true),
+      onCancel: () => resolve(false)
+    });
+  });
+}
+
+function isReportAgentConfirmationRequired(
+  response: ManagedReportAgentRunResponse
+): response is ManagedReportAgentConfirmationRequired {
+  return "status" in response && response.status === "confirmation_required";
 }
 
 export function ReportAIGenerateControls(props: ReportAIGenerateControlsProps) {
@@ -206,6 +232,7 @@ function ReportAIGenerateControlsState({
         }
       }
       let reportSourceSelectionId: string | undefined;
+      let largeContextConfirmed = false;
       if (allowSessionSelection && selectedSessionSources.length > 0) {
         const selection = await createReportSourceSelection({
           report_type: reportType as "personal_daily" | "personal_weekly",
@@ -213,14 +240,35 @@ function ReportAIGenerateControlsState({
           selected_slice_keys: selectedSessionSources.map((source) => source.slice_key)
         });
         reportSourceSelectionId = selection.selection_id;
+        if (selection.warning_required && !largeContextConfirmed) {
+          const confirmed = await confirmLargeReportContext();
+          if (!confirmed) throw new Error("__AIDA_REPORT_AI_CANCELLED__");
+          largeContextConfirmed = true;
+        }
       }
       const payload: ManagedReportAgentRunPayload = {
         report_type: reportType,
         period,
         target,
-        report_source_selection_id: reportSourceSelectionId
+        report_source_selection_id: reportSourceSelectionId,
+        large_context_confirmed: largeContextConfirmed || undefined
       };
-      let run = await startReportAgentRun("default", payload, { skipErrorHandler: true });
+      const startRun = async () => {
+        const response = await startReportAgentRun("default", payload, { skipErrorHandler: true });
+        if (isReportAgentConfirmationRequired(response)) {
+          const confirmed = await confirmLargeReportContext();
+          if (!confirmed) throw new Error("__AIDA_REPORT_AI_CANCELLED__");
+          payload.report_source_selection_id = response.report_source_selection_id;
+          payload.large_context_confirmed = true;
+          const retry = await startReportAgentRun("default", payload, { skipErrorHandler: true });
+          if (isReportAgentConfirmationRequired(retry)) {
+            throw new Error("大上下文确认未生效，请重试");
+          }
+          return retry;
+        }
+        return response;
+      };
+      let run = await startRun();
       if (!isReportAgentUnavailable(run)) return run;
 
       const confirmed = await confirmDefaultReportInitialization();
@@ -233,7 +281,7 @@ function ReportAIGenerateControlsState({
         throw new Error(`日报生成能力初始化失败：${errorMessage(err)}`);
       }
       void queryClient.invalidateQueries({ queryKey: ["managed-agents"] });
-      run = await startReportAgentRun("default", payload, { skipErrorHandler: true });
+      run = await startRun();
       if (isReportAgentUnavailable(run)) {
         throw new Error("日报生成能力初始化完成，但默认 Agent 仍不可用，请稍后重试");
       }
@@ -342,19 +390,21 @@ function ReportAIGenerateControlsState({
       {!generating ? (
         <Space.Compact className="report-ai-generate-controls">
           <Button icon={<RobotOutlined />} disabled={disabled} onClick={() => runMutation.mutate()}>
-            {lastOutcome?.type === "error" ? "重新生成" : "AI 生成"}
+            {selectedSessionSources.length > 0
+              ? `使用 ${selectedSessionSources.length} 个 Session 生成`
+              : lastOutcome?.type === "error"
+                ? "重新生成"
+                : "AI 生成"}
           </Button>
-          {allowSessionSelection ? (
+          {allowSessionSelection && !settingsOpen ? (
             <Button
               icon={<FileSearchOutlined />}
               className={settingsOpen ? "is-active" : undefined}
               disabled={disabled}
-              title="选择参与生成的 session"
+              title="选择参与生成的 Session"
               onClick={onToggleSettings}
             >
-              {selectedSessionSources.length > 0
-                ? `已选 ${selectedSessionSources.length} 个 session`
-                : "选择 session"}
+              {selectedSessionSources.length > 0 ? "调整 Session" : "选择 Session"}
             </Button>
           ) : null}
         </Space.Compact>
@@ -380,7 +430,7 @@ function SnapshotReportAISettingsPanel({
   const periodStart = period.date ?? period.week_start ?? "";
   const periodEnd = period.date ?? period.week_end ?? periodStart;
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const pageSize = 10;
   const [queryRange, setQueryRange] = useState<[Dayjs, Dayjs] | null>(null);
   const queryFrom = queryRange?.[0].format("YYYY-MM-DD");
   const queryTo = queryRange?.[1].format("YYYY-MM-DD");
@@ -416,43 +466,26 @@ function SnapshotReportAISettingsPanel({
     }
     onSelectedSourcesChange(next.slice(0, MAX_SELECTED_SESSIONS));
   };
-  const columns = useMemo<ColumnsType<ReportSourceCandidate>>(
-    () => [
-      {
-        title: "活动时间",
-        key: "activity_date",
-        width: 176,
-        render: (_, record) => sessionActivityRange(record)
-      },
-      {
-        title: "session / 摘要",
-        key: "session",
-        render: (_, record) => (
-          <span className="report-ai-session-cell">
-            <span className="report-ai-session-id">{record.session_ref}</span>
-            <Tooltip title={record.summary || "暂无摘要"} mouseEnterDelay={0.25}>
-              <span className="report-ai-session-summary">{record.summary || "暂无摘要"}</span>
-            </Tooltip>
-          </span>
-        )
-      },
-      {
-        title: "Token",
-        dataIndex: "total_tokens",
-        width: 88,
-        align: "right",
-        render: formatNumber
-      }
-    ],
-    []
+  const candidates = sessionsQuery.data?.items ?? [];
+  const totalCandidates = sessionsQuery.data?.total ?? 0;
+  const selectedKeys = useMemo(
+    () => new Set(selectedSources.map(selectedSourceKey)),
+    [selectedSources]
   );
+  const selectedOnPage = candidates.filter((record) => selectedKeys.has(sessionSourceKey(record)));
+  const allOnPageSelected = candidates.length > 0 && selectedOnPage.length === candidates.length;
+  const someOnPageSelected = selectedOnPage.length > 0 && !allOnPageSelected;
+
+  const toggleSourceSelection = (record: ReportSourceCandidate) => {
+    updateSourceSelection([record], !selectedKeys.has(sessionSourceKey(record)));
+  };
 
   const selectionSummary =
     selectedSources.length > 0
-      ? `已选 ${selectedSources.length} 个 session`
-      : "未选择时按报告周期自动取数";
+      ? `已选择 ${selectedSources.length} 个 Session，生成时仅使用这些内容`
+      : "未选择时，将自动汇总当前报告周期";
   const settingsBody = (
-    <>
+    <div className="report-ai-session-browser">
       <div className="report-ai-settings-panel__toolbar">
         <DatePicker.RangePicker
           size="small"
@@ -464,61 +497,98 @@ function SnapshotReportAISettingsPanel({
             setPage(1);
           }}
         />
-        <Tooltip title="清空已选 Session">
-          <Button
-            size="small"
-            className="report-ai-settings-panel__clear"
-            type="text"
-            icon={<ClearOutlined />}
-            disabled={selectedSources.length === 0}
-            aria-label="清空已选 Session"
-            onClick={() => onSelectedSourcesChange([])}
-          />
-        </Tooltip>
+        <Button
+          size="small"
+          className="report-ai-settings-panel__clear"
+          type="text"
+          icon={<ClearOutlined />}
+          disabled={selectedSources.length === 0}
+          aria-label="清空已选 Session"
+          onClick={() => onSelectedSourcesChange([])}
+        >
+          清空已选
+        </Button>
       </div>
-      <Table<ReportSourceCandidate>
-        rowKey={sessionSourceKey}
-        size="small"
-        columns={columns}
-        dataSource={sessionsQuery.data?.items ?? []}
-        loading={sessionsQuery.isLoading}
-        rowSelection={{
-          preserveSelectedRowKeys: true,
-          selectedRowKeys: selectedSources.map(selectedSourceKey),
-          onSelect: (record, selected) => updateSourceSelection([record], selected),
-          onSelectAll: (selected, _selectedRows, changedRows) =>
-            updateSourceSelection(changedRows, selected)
-        }}
-        onRow={(record) => ({
-          onClick: (event) => {
-            const target = event.target as HTMLElement;
-            if (target.closest("a, button, input, label, .ant-checkbox-wrapper")) return;
-            const selected = selectedSources.some(
-              (source) => selectedSourceKey(source) === sessionSourceKey(record)
+      <div className="report-ai-session-browser__selection-bar">
+        <Checkbox
+          checked={allOnPageSelected}
+          indeterminate={someOnPageSelected}
+          disabled={candidates.length === 0}
+          onChange={(event) => updateSourceSelection(candidates, event.target.checked)}
+        >
+          选择本页
+        </Checkbox>
+        <span>共 {totalCandidates} 个 Session</span>
+      </div>
+      <div className="report-ai-session-list" aria-busy={sessionsQuery.isLoading}>
+        {sessionsQuery.isLoading ? (
+          <div className="report-ai-session-list__state">
+            <LoadingOutlined spin />
+            <span>正在加载 Session</span>
+          </div>
+        ) : sessionsQuery.isError ? (
+          <div className="report-ai-session-list__state is-error">
+            <span>Session 加载失败</span>
+            <Button size="small" type="link" onClick={() => void sessionsQuery.refetch()}>
+              重新加载
+            </Button>
+          </div>
+        ) : candidates.length === 0 ? (
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前范围没有可用 Session" />
+        ) : (
+          candidates.map((record) => {
+            const selected = selectedKeys.has(sessionSourceKey(record));
+            return (
+              <div
+                key={sessionSourceKey(record)}
+                className={`report-ai-session-option${selected ? " is-selected" : ""}`}
+                role="checkbox"
+                aria-checked={selected}
+                tabIndex={0}
+                onClick={() => toggleSourceSelection(record)}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter" && event.key !== " ") return;
+                  event.preventDefault();
+                  toggleSourceSelection(record);
+                }}
+              >
+                <Checkbox
+                  checked={selected}
+                  tabIndex={-1}
+                  onClick={(event) => event.stopPropagation()}
+                  onChange={() => toggleSourceSelection(record)}
+                  aria-label={`选择 ${record.session_ref}`}
+                />
+                <span className="report-ai-session-option__content">
+                  <span className="report-ai-session-option__head">
+                    <strong>{record.session_ref}</strong>
+                    <time>{sessionActivityRange(record)}</time>
+                  </span>
+                  <span
+                    className="report-ai-session-option__summary"
+                    title={record.summary || "暂无摘要"}
+                  >
+                    {record.summary || "暂无摘要"}
+                  </span>
+                </span>
+              </div>
             );
-            updateSourceSelection([record], !selected);
-          }
-        })}
-        pagination={{
-          current: page,
-          pageSize,
-          total: sessionsQuery.data?.total ?? 0,
-          size: "small",
-          showSizeChanger: true,
-          pageSizeOptions: [5, 10, 20],
-          onChange: (nextPage, nextPageSize) => {
-            setPage(nextPage);
-            setPageSize(nextPageSize);
-          }
-        }}
-        scroll={{
-          y:
-            variant === "drawer"
-              ? "calc(100dvh - 230px)"
-              : "clamp(150px, calc(100dvh - 560px), 230px)"
-        }}
-      />
-    </>
+          })
+        )}
+      </div>
+      {totalCandidates > pageSize ? (
+        <Pagination
+          className="report-ai-session-browser__pagination"
+          current={page}
+          pageSize={pageSize}
+          total={totalCandidates}
+          size="small"
+          showLessItems
+          showSizeChanger={false}
+          onChange={setPage}
+        />
+      ) : null}
+    </div>
   );
 
   if (!open) return null;
@@ -529,7 +599,7 @@ function SnapshotReportAISettingsPanel({
         className="report-ai-settings-drawer"
         title={
           <span className="report-ai-settings-drawer__title">
-            <strong>选择 session</strong>
+            <strong>选择 Session</strong>
             <em>{selectionSummary}</em>
           </span>
         }
@@ -561,7 +631,7 @@ function SnapshotReportAISettingsPanel({
     <aside className="report-ai-settings-panel">
       <div className="report-ai-settings-panel__head">
         <span>
-          <strong>选择参与生成的 session</strong>
+          <strong>选择参与生成的 Session</strong>
           <em>{selectionSummary}</em>
         </span>
         <Button size="small" type="text" onClick={onClose}>

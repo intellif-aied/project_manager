@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -56,5 +57,31 @@ func TestReportSourceCapabilityRequiresAuthentication(t *testing.T) {
 	handler.Capability(response, httptest.NewRequest(http.MethodGet, "/report-source-capability", nil))
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestWriteReportSourceErrorReturnsRetryableLargeContextWarning(t *testing.T) {
+	response := httptest.NewRecorder()
+	writeReportSourceError(response, &reportsource.LargeContextConfirmationError{
+		SelectionID:  "selection-large",
+		ContextBytes: reportsource.LargeContextWarningBytes + 1,
+	})
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["status"] != "confirmation_required" ||
+		payload["code"] != "LARGE_REPORT_CONTEXT_CONFIRMATION_REQUIRED" ||
+		payload["warning_code"] != reportsource.LargeContextWarningCode ||
+		payload["report_source_selection_id"] != "selection-large" ||
+		payload["warning_required"] != true {
+		t.Fatalf("unexpected payload: %#v", payload)
+	}
+	message, _ := payload["message"].(string)
+	if message == "" || strings.Contains(message, "Digest") || strings.Contains(message, "清洗") {
+		t.Fatalf("warning exposed internal details: %q", message)
 	}
 }

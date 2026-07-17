@@ -582,7 +582,7 @@ function WeeklyReportEditorModal({
       className="console-report-workflow-modal"
       title={`${title}内容管理`}
       open={open}
-      width={860}
+      width={showSessionSettings ? 1480 : 860}
       onCancel={handleClose}
       destroyOnHidden
       keyboard={!settingsOpen}
@@ -606,7 +606,10 @@ function WeeklyReportEditorModal({
               disabled={reportQuery.isLoading || saveMutation.isPending}
               onBeforeGenerate={confirmBeforeAIGenerate}
               onGenerated={handleAIGenerated}
-              onGeneratingChange={setAIGenerating}
+              onGeneratingChange={(generating) => {
+                setAIGenerating(generating);
+                if (generating) setSettingsOpen(false);
+              }}
             />
           ) : null}
           <Button
@@ -662,7 +665,11 @@ function WeeklyReportEditorModal({
           </span>
           {weeklyReportStatusTag(scope, report)}
         </div>
-        <div className="console-report-management__content">
+        <div
+          className={`console-report-management__content${
+            showSessionSettings ? " is-session-settings-open" : ""
+          }`}
+        >
           <div className="console-report-management__main">
             {reportQuery.isLoading ? (
               <div className="console-session-empty">正在加载报告内容...</div>
@@ -706,7 +713,7 @@ function WeeklyReportEditorModal({
               selectedSources={selectedSessionSources}
               onSelectedSourcesChange={setSelectedSessionSources}
               onClose={() => setSettingsOpen(false)}
-              variant="drawer"
+              variant="panel"
             />
           ) : null}
         </div>

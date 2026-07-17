@@ -57,11 +57,25 @@ func TestProductConfigUsesCurrentDigestV2ForAllUsers(t *testing.T) {
 	if config.SessionReadMode != ReadModeDigestV2 ||
 		config.DigestVersion != sessiondigestv2.Version ||
 		config.RedactionVersion != sessiondigestv2.RedactionVersion ||
-		config.DigestTargetBytes != defaultDigestTargetBytes ||
-		config.DigestHardLimit != defaultDigestHardLimitBytes ||
+		config.DigestTargetBytes != productDigestEnvelopeBytes ||
+		config.DigestHardLimit != productDigestEnvelopeBytes ||
 		config.RequiredReadMode("42") != ReadModeDigestV2 ||
 		len(config.DigestCanaryUserIDs) != 0 {
 		t.Fatalf("unexpected product report-source policy: %#v", config)
+	}
+}
+
+func TestLargeContextWarningIsAdvisoryAndUsesExactBoundary(t *testing.T) {
+	atLimit := Selection{ContextBytes: LargeContextWarningBytes}
+	applySelectionContextWarning(&atLimit)
+	if atLimit.WarningRequired || atLimit.WarningCode != "" {
+		t.Fatalf("exactly 1 MiB must not warn: %+v", atLimit)
+	}
+
+	overLimit := Selection{ContextBytes: LargeContextWarningBytes + 1}
+	applySelectionContextWarning(&overLimit)
+	if !overLimit.WarningRequired || overLimit.WarningCode != LargeContextWarningCode {
+		t.Fatalf("context over 1 MiB must warn without rejecting: %+v", overLimit)
 	}
 }
 
@@ -72,6 +86,7 @@ func TestReportSourceConfigRejectsUnsafeValues(t *testing.T) {
 		{SessionReadMode: ReadModeDigestV2, DigestVersion: sessiondigest.Version, RedactionVersion: sessiondigest.RedactionVersion, DigestTargetBytes: 1024, DigestHardLimit: 2048},
 		{SessionReadMode: ReadModeDigestV1, DigestVersion: sessiondigestv2.Version, RedactionVersion: sessiondigest.RedactionVersion, DigestTargetBytes: 1024, DigestHardLimit: 2048},
 		{SessionReadMode: ReadModeFull, DigestVersion: sessiondigest.Version, RedactionVersion: sessiondigest.RedactionVersion, DigestTargetBytes: 4096, DigestHardLimit: 2048},
+		{SessionReadMode: ReadModeFull, DigestVersion: sessiondigest.Version, RedactionVersion: sessiondigest.RedactionVersion, DigestTargetBytes: 1024, DigestHardLimit: productDigestEnvelopeBytes + 1},
 		{SessionReadMode: ReadModeDigestV1, DigestVersion: sessiondigest.Version, RedactionVersion: sessiondigest.RedactionVersion, DigestTargetBytes: 1024, DigestHardLimit: 2048, DigestRolloutPct: 101},
 		{SessionReadMode: ReadModeDigestV1, DigestVersion: sessiondigest.Version, RedactionVersion: sessiondigest.RedactionVersion, DigestTargetBytes: 1024, DigestHardLimit: 2048, DigestCanaryUserIDs: []string{"not-a-number"}},
 		{SessionReadMode: ReadModeDigestV1, DigestVersion: sessiondigest.Version, RedactionVersion: sessiondigest.RedactionVersion, DigestTargetBytes: 1024, DigestHardLimit: 2048, DigestCanaryUserIDs: []string{"-42"}},

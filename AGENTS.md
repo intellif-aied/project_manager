@@ -5,7 +5,7 @@
 This repository contains the Aida platform.
 
 - `api/`: Go HTTP API, handlers in `api/handler`, services in `api/service`, config in `api/config`, migrations in `api/db/migrations`
-- `daemon/`: Go CLI and report generator service
+- `daemon/`: Go `aida` CLI and Session upload client; it is not a production consumer service
 - `web/`: Vite + React + TypeScript frontend
 - `doc/`: product, rule, and validation documents
 - `docker-compose.yml`: local integration stack
@@ -35,12 +35,12 @@ pnpm install
 pnpm dev
 ```
 
-### Daemon / consumer
+### CLI
 
 ```bash
 cd daemon
 go build -o aida .
-./aida serve
+./aida version
 ```
 
 ## Validation Commands
@@ -116,11 +116,9 @@ Current requirement/task field validation is intentionally loose. Treat it as sa
 - API startup applies migrations automatically
 - use forward migrations for schema fixes
 
-Important existing migrations:
-
-- `005_user_auth.sql`
-- `007_requirements_p0.sql`
-- `016_requirement_task_versions.sql`
+Before an API release, compare the target database `schema_migrations` with the
+current highest file in `api/db/migrations`. Do not treat a historical migration
+number in documentation as the latest version.
 
 ## Release Notes
 
@@ -133,88 +131,32 @@ make release-prod-dir
 
 Use the test package only for the fixed internal test distribution path. Do not reuse it for production.
 
-## Fast Aida Report Skill Refresh
+## Production Deployment and System Report Assets
 
-The system report skill is generated from `api/service/daily_report_skill.go` and published to the managed agent platform as `aida-report@1.0.0`. Keep the version at `1.0.0` during development unless the user explicitly asks for a version change.
+The production runtime services are `db`, `minio`, `api`, and `web`. There is
+no production `consumer`; `daemon/` is packaged as the user-facing CLI.
 
-Do not edit `/home/intellif/dev/sandboxed-agent-platform` source for this. That repo is only a reference and runtime dependency.
+Use immutable service image tags. Build and restart only the service in scope.
+The checked-in single-port Compose template currently shares `IMAGE_TAG`
+between API and Web, so a single-service release must not change that shared
+value or run an unqualified `docker compose up -d`. Follow the service-specific
+tag and container-ID checks in the deployment document.
 
-Fast path after changing the skill source:
+The system report skill source is `api/service/daily_report_skill.go`. Skill
+versions are immutable: publish a new version under the environment-specific
+owner, verify it is uniquely resolvable in the public Registry, and only then
+update Aida configuration. Never delete managed-agent database rows as a normal
+refresh mechanism.
 
-1. Build and push the current `project_manager` images from `192.168.14.157`.
+Production owner is `10086`; test owner is `100866`. The default report Agent
+uses Aida's inline Report MCP with the current running user's token. Do not use
+the system account token to read user data, and do not modify
+`/home/intellif/dev/sandboxed-agent-platform` for Aida deployment work.
 
-```bash
-ssh 157 'cd /home/intellif/dev/project_manager && set -e
-REG=192.168.14.129:80/aied
-TAG=$(date +%Y%m%d)-$(git rev-parse --short HEAD)-$(date +%H%M)
-for svc in api web daemon; do
-  case "$svc" in
-    api) repo=ai-coding-console-api ;;
-    web) repo=ai-coding-console-web ;;
-    daemon) repo=ai-coding-console-consumer ;;
-  esac
-  docker build -t "$REG/$repo:$TAG" -t "$REG/$repo:latest" "./$svc"
-  docker push "$REG/$repo:$TAG"
-  docker push "$REG/$repo:latest"
-done
-echo "$TAG"'
-```
+Canonical documents:
 
-2. Update production `/home/luoxian/aida/.env` to the new `IMAGE_TAG`, keep `MANAGED_AGENT_REPORT_SKILL_VERSION=1.0.0`, then restart production services.
-
-```bash
-ssh luoxian@192.168.14.182
-cd /home/luoxian/aida
-docker compose pull api web consumer
-docker compose up -d api web consumer
-docker compose ps
-docker compose exec -T api printenv | grep MANAGED_AGENT_REPORT_SKILL_VERSION
-curl -fsS http://localhost/health
-```
-
-3. Force the managed agent platform to rebuild the system skill from the newly deployed API code. The existing `ensureUserReportSkill` path does not overwrite an active `aida-report@1.0.0`; delete the old active `1.0.0` row and archive all other versions first.
-
-```bash
-ssh 157 'docker run --rm --network host -e PGPASSWORD="$SAP_PG_PASSWORD" postgres:16-alpine \
-  psql -h 192.168.18.107 -p 15434 -U sap -d sap -v ON_ERROR_STOP=1 -c "
-begin;
-update skills set archived=true, updated_at=now()
-where slug='\''aida-report'\'' and version <> '\''1.0.0'\'' and archived=false;
-delete from skills
-where slug='\''aida-report'\'' and version = '\''1.0.0'\'';
-commit;"'
-```
-
-Use the known managed-agent Postgres password from the deployment environment as `SAP_PG_PASSWORD`; do not commit that secret.
-
-4. Trigger rebuild with a valid production Aida JWT for the target owner, normally a test/admin user such as `t03`.
-
-```bash
-curl -fsS 'http://113.100.143.91:9180/api/v1/ai-assets/skills?scope=mine&include_system=true' \
-  -H 'Accept: application/json' \
-  -H "Authorization: Bearer $AIDA_JWT" \
-  --insecure
-```
-
-5. Verify only the latest active skill remains.
-
-```bash
-ssh 157 'docker run --rm --network host -e PGPASSWORD="$SAP_PG_PASSWORD" postgres:16-alpine \
-  psql -h 192.168.18.107 -p 15434 -U sap -d sap -c "
-select version, archived, count(*)
-from skills
-where slug='\''aida-report'\''
-group by version, archived
-order by version, archived;
-select count(*) as active_non_100
-from skills
-where slug='\''aida-report'\'' and archived=false and version <> '\''1.0.0'\'';
-select count(*) as active_100
-from skills
-where slug='\''aida-report'\'' and archived=false and version = '\''1.0.0'\'';"'
-```
-
-Expected result: `active_non_100 = 0`, `active_100 = 1`. Also fetch `skill-md` and check the current rules exist before running report regression.
+- `doc/Aida部署与运维基准.md`
+- `doc/系统资源skill+mcp管理文档.md`
 
 ## Documentation
 

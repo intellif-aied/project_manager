@@ -89,16 +89,17 @@ Report Skill/MCP 的 slug、MCP 协议版本、凭据槽、默认 Agent 文案�
 
 单次发布的具体值填写在 `doc/v2/发布事项/YYYYMMDD-*.md`，本文只规定顺序：
 
-1. 冻结本次范围内 API、Web 和 CLI 的源码提交，排除备份及临时文件。
-2. 记录生产当前容器、配置和数据库状态。
-3. 备份 PostgreSQL 并校验 SHA256。
-4. 分别用不可变标签构建并推送本次范围内的 API/Web 镜像。
-5. 先更新 API，执行正向迁移并检查健康状态。
-6. 完成 Digest/后台数据准备后，确认所有新报告使用规定的读取模式。
-7. 发布或修复 Report Skill、MCP 和默认 Agent 绑定。
-8. 更新 Web。
-9. 构建并发布 CLI，最后再切换 CLI 版本发现文件。
-10. 执行固定验收并填写单次发布记录。
+1. 先生成发布范围清单，按 API/后台、Report Skill、MCP/默认 Agent、数据库迁移、Web、CLI 六类逐项标记“发布/不发布/仅核对”。不得把最后一个提交、最后一个 Bug 或最后一次对话修改当成本次完整发布范围。
+2. 冻结本次范围内 API、Web 和 CLI 的源码提交或工作区快照，排除备份及临时文件，并记录实际构建目录、镜像标签和源码状态。
+3. 记录生产当前容器、配置和数据库状态。
+4. 备份 PostgreSQL 并校验 SHA256。
+5. 分别用不可变标签构建并推送本次范围内的 API/Web 镜像。
+6. 先更新 API，执行正向迁移并检查健康状态。
+7. 完成 Digest/后台数据准备后，确认所有新报告使用规定的读取模式。
+8. 发布或修复 Report Skill、MCP 和默认 Agent 绑定。
+9. 更新 Web。
+10. 构建并发布 CLI，最后再切换 CLI 版本发现文件。
+11. 执行固定验收并填写单次发布记录。
 
 API-only 或 Web-only 发布只能更新并重建指定服务；`API_IMAGE_TAG` 与 `WEB_IMAGE_TAG` 必须独立维护，禁止使用共享标签导致另一服务被意外替换。
 
@@ -137,7 +138,32 @@ API-only 或 Web-only 发布只能更新并重建指定服务；`API_IMAGE_TAG` 
 6. 重启 API；
 7. 触发默认 Report Agent 创建或运行，确认 Agent 引用新 Skill。
 
+owner-qualified derive 使用 `multipart/form-data`，新正文必须通过字段名 `file:SKILL.md` 上传。禁止使用 `skill_md`、`artifact` 或其他猜测字段；这些字段可能被平台忽略并静默复制旧正文。
+
+生产示例：
+
+```bash
+skill_file=/tmp/aida-report-SKILL.md
+managed_agent_url=<MANAGED_AGENT_URL>
+managed_agent_token=<MANAGED_AGENT_TOKEN>
+
+curl -fsS -X POST \
+  -H "Authorization: Bearer ${managed_agent_token}" \
+  --form-string 'base_version=<当前生产版本>' \
+  --form-string 'version=<新不可变版本>' \
+  --form-string 'name=Aida Report Skill' \
+  --form-string 'description=<本次 Skill 说明>' \
+  -F "file:SKILL.md=@${skill_file};filename=SKILL.md" \
+  "${managed_agent_url}/api/skill/10086/aida-report/derive"
+```
+
+接口成功后必须核对返回值中的 `owner=10086`、`slug=aida-report`、新版本号和 `sha256`。再从 public registry 读取 `SKILL.md`，与待发布文件计算 SHA-256；两者不一致时禁止切换 API 配置。
+
+普通 `POST /api/skill` 会按当前管理 Token 的账号发布，提交 `owner=10086` 也可能被忽略，因此不能用于生产系统 Skill。derive 返回成功但哈希仍等于旧版本时，说明新文件没有按 `file:SKILL.md` 提交，不能继续切换。
+
 禁止直接使用普通 `POST /api/skill` 代替 owner-qualified derive；普通接口可能把 Skill 发布到当前管理 Token 的 owner，导致生产 API 找不到配置的 `10086` Skill。禁止覆盖同版本或直接删除平台数据库记录。
+
+默认 Agent 不做管理员 Token 的全用户批量覆盖。生产配置切换后，手动报告运行和定时报告运行都会在提交任务前调用统一修复逻辑，把当前用户的默认 Agent 更新到新 Skill；修复失败时不得启动报告任务。发布验收至少使用一个生产测试账号主动触发默认 Agent 修复并核对 SkillRef。
 
 ### 7.2 MCP 发布
 

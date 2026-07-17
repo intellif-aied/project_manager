@@ -58,6 +58,7 @@ func TestDigestV2SelectionFreezeReadAndWriteGuardIntegration(t *testing.T) {
 	if _, _, err := service.CreateAttachedRun(
 		ctx, userIDText, "personal_weekly", period, selection.ID,
 		"report_agent_run", "agent-v2-test", "",
+		false,
 		map[string]any{"report_type": "personal_weekly"},
 	); !errors.Is(err, ErrDigestNotReady) {
 		t.Fatalf("attach without ready v2 digests must fail: %v", err)
@@ -133,6 +134,7 @@ func TestDigestV2SelectionFreezeReadAndWriteGuardIntegration(t *testing.T) {
 	runID, attached, err := service.CreateAttachedRun(
 		ctx, userIDText, "personal_weekly", period, selection.ID,
 		"report_agent_run", "agent-v2-test", "",
+		false,
 		map[string]any{"report_type": "personal_weekly"},
 	)
 	if err != nil {

@@ -4,7 +4,7 @@
   flex-direction: column;
   overflow: hidden;
   top: clamp(12px, 3vh, 24px);
-  max-width: min(1180px, calc(100vw - 32px));
+  max-width: min(1480px, calc(100vw - 32px));
   padding: 0;
   border: 1px solid #e5edf6;
   border-radius: 12px;
@@ -208,17 +208,51 @@
 }
 
 .console-report-management__content {
+  --report-session-panel-width: clamp(460px, 36vw, 560px);
+
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 14px;
   max-height: 100%;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
+}
+
+.console-report-management__content.is-session-settings-open {
+  padding-right: calc(var(--report-session-panel-width) + 16px);
+}
+
+.console-report-management__content.is-session-settings-open > .report-ai-settings-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: var(--report-session-panel-width);
+  height: auto;
+  max-height: none;
 }
 
 .console-report-management__main {
   min-width: 0;
   min-height: 0;
+}
+
+@media (max-width: 1180px) {
+  .console-report-management__content.is-session-settings-open {
+    padding-right: 0;
+  }
+
+  .console-report-management__content.is-session-settings-open > .console-report-management__main {
+    visibility: hidden;
+    pointer-events: none;
+  }
+
+  .console-report-management__content.is-session-settings-open > .report-ai-settings-panel {
+    left: 0;
+    width: auto;
+  }
 }
 
 .console-report-management__summary > span {
@@ -715,13 +749,20 @@
 
   .console-report-workflow-modal .ant-modal-footer .report-ai-generate-controls {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.75fr);
   }
 
   .console-report-workflow-modal .ant-modal-footer .report-ai-generate-controls .ant-btn {
     width: 100%;
     min-width: 0;
     padding-inline: 8px;
+  }
+
+  .console-report-workflow-modal
+    .ant-modal-footer
+    .report-ai-generate-controls
+    .ant-btn:only-child {
+    grid-column: 1 / -1;
   }
 
   .console-report-workflow-modal .console-report-editor-layout__content-input.ant-input {

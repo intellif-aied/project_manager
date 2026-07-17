@@ -10,8 +10,7 @@ func TestReportSkillMarkdownUsesDeterministicDisplayContext(t *testing.T) {
 	required := []string{
 		"calendar_context: authoritative timezone, report date, weekday, and date_label values computed by Aida",
 		"use scope_context.department_name as the department display name",
-		"Never expose raw identifiers in the report body",
-		"REPORT_CONTENT_INVALID",
+		"Never show user_id, team_id, report_id, session_id, or run_id in the report body",
 		`"report_kind": "daily", "date_range": date_range`,
 		`"report_kind": "weekly", "week_range": week_range`,
 		"total_members is roster size only",
@@ -27,43 +26,31 @@ func TestReportSkillMarkdownUsesDeterministicDisplayContext(t *testing.T) {
 		"report_period_summary.days[].highlights",
 		"selection-level report_period_summary",
 		"Nested item report_period_summary values are intentionally absent",
-		"nested item summaries are intentionally omitted",
-		"Synthesize outcomes, not a turn-by-turn conversation recap",
+		"Nested item summaries are intentionally omitted",
 		"Out-of-period facts may appear only as clearly labeled context",
-		"already converted by Aida to Asia/Shanghai",
+		"MCP business timestamps already use Asia/Shanghai",
 		"never add or subtract 8 hours again",
 		"今日/当天 means period.date only",
-		"Never apply a second timezone conversion",
+		"Do not apply a second timezone conversion",
 		"never claim there was no activity or no record",
 		"Raw Token values inside Session events are cumulative telemetry",
 		"never in selected_session_slice_keys",
-		"Do not state aggregate work-item counts",
-		"Never create sections titled 验证结果",
-		"Never output raw URLs, file paths, file names",
-		"Never output document counts, file counts, line counts",
-		"retain distinct lifecycle milestones",
-		"Do not expose Registry owner, Skill ID, test account",
+		"preserve materially distinct facts",
 		"there is no fixed 3-to-5 or maximum-6 limit",
-		"cover every meaningful completed highlight",
+		"cover every materially distinct outcome",
 		"outcome_coverage.complete=true",
-		"does not rank or choose a Top-K",
-		"never write “无”, “暂无”",
-		"coverage check keyed by every canonical highlight work_unit_ref",
-		"If any materially distinct ref is missing",
-		"health-check status",
-		"silently rewrite every highlight into a user-facing outcome",
-		"Never omit a material outcome merely because it contains noisy implementation evidence",
-		"must not be a title-only label",
-		"Title-only numbered items are invalid",
-		"Do not retain an item whose only result is tests passed",
-		"Never output a standalone outcome such as “全流程测试完成”",
-		"the latest completed highlight controls the user-facing current state",
-		"never let an earlier version replace a later completed outcome",
-		"Never rewrite a test/staging/target environment as production",
-		"A historical/intermediate partial highlight is not automatically a follow-up",
-		"a later highlight completes the same initiative",
-		"must be at least outcome_coverage.source_count",
-		"Rewrite proof-only highlights into the user-facing capability they establish instead of deleting them",
+		"Preserve concrete project, product, feature, bug, document, decision, environment, and delivery names",
+		"PRD/ADR references, meaningful file names, versions, test results, deployment targets, and technical terms are valid report content",
+		"Treat Digest output as a complete, low-loss evidence source, not as a ready-made report outline",
+		"Do not collapse many distinct subjects into category-only headings",
+		"Digest coverage fields and extraction statistics are internal diagnostics",
+		"Never invent a 明日计划 or 后续计划 section",
+		"Removing diagnostic counts must never remove the underlying named work",
+		"Completeness outranks brevity",
+		"Never choose a representative Top-K",
+		"Avoid category-only language",
+		"Validation, testing, review, commands, files, paths, versions, and implementation details may be included",
+		"it does not rewrite or judge the report's prose",
 	}
 	for _, expected := range required {
 		if !strings.Contains(markdown, expected) {
@@ -75,5 +62,15 @@ func TestReportSkillMarkdownUsesDeterministicDisplayContext(t *testing.T) {
 	}
 	if strings.Contains(markdown, "session-digest Skill") || strings.Contains(markdown, "run session-digest") {
 		t.Fatal("default report skill must rely on the server-side digest, not an Agent-side digest skill")
+	}
+	for _, obsolete := range []string{
+		"REPORT_CONTENT_INVALID",
+		"Never output raw URLs, file paths, file names",
+		"It must contain no exact commit hash, PRD/ADR number or artifact name",
+		"Never create sections titled 验证结果",
+	} {
+		if strings.Contains(markdown, obsolete) {
+			t.Fatalf("skill markdown still contains obsolete censorship rule %q", obsolete)
+		}
 	}
 }

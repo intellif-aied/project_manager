@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -405,121 +406,6 @@ func TestReportSourceDigestReturnsFrozenPayloadWithoutReassembly(t *testing.T) {
 	}
 }
 
-func TestReportSourceConsistencyRejectsFalseZeroCoverage(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	mock.ExpectQuery("SELECT COUNT\\(\\*\\)").
-		WithArgs("2026-05-18", "312").
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(3))
-
-	issues, err := reportSourceConsistencyIssues(
-		context.Background(), db, reportTypeDepartmentDaily, "2026-05-18", "", "",
-		reportTarget{Type: "department", DepartmentID: "312"},
-		"本部门当日无小组日报记录。小组日报：缺失 1 个小组。",
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(issues) != 1 || !strings.Contains(issues[0], "实际包含 3 份小组日报") {
-		t.Fatalf("issues=%#v", issues)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestReportSourceConsistencySkipsContentWithoutZeroClaim(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	issues, err := reportSourceConsistencyIssues(
-		context.Background(), db, reportTypeDepartmentDaily, "2026-05-18", "", "",
-		reportTarget{Type: "department", DepartmentID: "312"},
-		"小组日报已提交 3 份，缺失 1 个小组。",
-	)
-	if err != nil || len(issues) != 0 {
-		t.Fatalf("issues=%#v err=%v", issues, err)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestReportSourceConsistencyRejectsUnsupportedFullParticipation(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	mock.ExpectQuery("SELECT COUNT\\(\\*\\)").
-		WithArgs("2026-05-18", "312").
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(3))
-	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM teams").
-		WithArgs("312").
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(4))
-
-	issues, err := reportSourceConsistencyIssues(
-		context.Background(), db, reportTypeDepartmentDaily, "2026-05-18", "", "",
-		reportTarget{Type: "department", DepartmentID: "312"},
-		"小组全员参与生产发布回归测试。小组日报提交 3 份，缺失 1 个小组。",
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(issues) != 1 || !strings.Contains(issues[0], "范围共有 4个小组") {
-		t.Fatalf("issues=%#v", issues)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestReportSourceConsistencyAllowsPartialMissingWeeklyReports(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	issues, err := reportSourceConsistencyIssues(
-		context.Background(), db, reportTypeTeamWeekly, "", "2026-05-18", "2026-05-24",
-		reportTarget{Type: "team", TeamID: "team-1"},
-		"个人周报已提交 2 份。缺失成员：测试08暂无个人周报记录，测试09暂无个人周报记录。",
-	)
-	if err != nil || len(issues) != 0 {
-		t.Fatalf("issues=%#v err=%v", issues, err)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestReportSourceConsistencyRejectsWeeklyCoverageInDailyReport(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	issues, err := reportSourceConsistencyIssues(
-		context.Background(), db, reportTypeDepartmentDaily, "2026-05-18", "", "",
-		reportTarget{Type: "department", DepartmentID: "312"},
-		"个人日报提交 3 人，缺失 1 人（测试09）。个人周报：缺失 4 人。",
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(issues) != 1 || !strings.Contains(issues[0], "日报正文不应统计") {
-		t.Fatalf("issues=%#v", issues)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestReportMCPInitializeReturnsServerInfo(t *testing.T) {
 	db, _, _ := sqlmock.New()
 	defer db.Close()
@@ -613,360 +499,7 @@ func TestReportMCPWriteReportResultUnsupportedType(t *testing.T) {
 	}
 }
 
-func TestReportContentValidationRejectsWrongWeekdayAndInternalIDs(t *testing.T) {
-	tests := []struct {
-		name       string
-		reportType string
-		content    string
-		want       int
-	}{
-		{name: "valid weekday", content: "# 周报\n- 2026-06-08（周一）：完成回归\n- 部门共 4 位成员", want: 0},
-		{name: "valid range with later weekday", content: "本周（2026-06-08 至 2026-06-14）有 1 天活动，周一（2026-06-08）完成回归", want: 0},
-		{name: "wrong ISO weekday", content: "# 周报\n- 2026-06-08（周日）：完成回归", want: 1},
-		{name: "wrong ISO weekday without brackets", content: "# 周报\n- 2026-06-08 周日：完成回归", want: 1},
-		{name: "wrong partial weekday", content: "# 周报\n- 6 月 8 日（周日）：完成回归", want: 1},
-		{name: "internal ID label", content: "# 日报\n- 用户ID：310", want: 1},
-		{name: "director ID label", content: "# 部门日报\n- 总监ID：304", want: 1},
-		{name: "raw ID field", content: "# 日报\n- user_id: 310", want: 1},
-		{name: "UUID", content: "# 小组日报\n- 团队：b44b1277-db0f-4bd3-bc53-0a24160704c6", want: 1},
-		{name: "engineering section", content: "# 日报\n### 验证状态\n- go test 通过", want: 1},
-		{name: "empty followup section", content: "# 日报\n### 进行中与待跟进\n\n（无）", want: 1},
-		{name: "inline empty followup section", content: "# 日报\n**进行中与待跟进**：无", want: 1},
-		{name: "generation time is forbidden", content: "# 日报\n- 完成交付\n\n*报告生成时间：2026-07-16*", want: 1},
-		{name: "report time is forbidden", content: "# 日报\n- 完成交付\n\n*报告时间：2026-07-17*", want: 1},
-		{name: "nonempty followup section", content: "# 日报\n### 进行中与待跟进\n\n1. 复制按钮兼容性仍待修复", want: 0},
-		{name: "file count", content: "# 日报\n- 今日共产生 190 项文件变更", want: 1},
-		{name: "validation attempts", content: "# 日报\n- go test：40 次尝试后通过", want: 1},
-		{name: "work item aggregate", content: "# 日报\n今日有 17 个有结果工作项", want: 1},
-		{name: "internal asset label", content: "# 日报\n- Registry owner：100866", want: 1},
-		{name: "skill version", content: "# 日报\n- 最新 Skill 1.0.12 已部署", want: 1},
-		{name: "test account", content: "# 日报\n- 使用测试账号发起运行", want: 1},
-		{name: "internal host", content: "# 日报\n- 14.157 API 已切换", want: 1},
-		{name: "operational validation", content: "# 日报\n- 健康检查正常，E2E 已通过", want: 1},
-		{name: "validation status", content: "# 日报\n- 真实数据链验证通过", want: 1},
-		{name: "raw URL", content: "# 日报\n- 调研 https://github.com/rtk-ai/rtk", want: 1},
-		{name: "technical file", content: "# 日报\n- 合并 `018_report_digest.sql` 并更新 `15点.md`", want: 1},
-		{name: "technical path", content: "# 日报\n- 更新 /doc/v2/agent优化/第二阶段/ 方案", want: 1},
-		{name: "relative technical path", content: "# 日报\n- 更新 doc/v2/agent优化/ 方案", want: 1},
-		{name: "document count", content: "# 日报\n- 完成 10 份方案文档", want: 1},
-		{name: "document lines", content: "# 日报\n- 方案共 2,411 行文档", want: 1},
-		{name: "standalone full flow test", content: "# 日报\n- 完成真实全流程测试", want: 1},
-		{name: "preflight is not outcome", content: "# 日报\n- 确认开发任务与其他开发无冲突，可以开始", want: 1},
-		{name: "code commit is not outcome", content: "# 日报\n- 完成代码提交，修复日报时区", want: 1},
-		{
-			name:       "personal report may retain all material outcomes",
-			reportType: reportTypePersonalDaily,
-			content:    "# 日报\n1. 结果一\n2. 结果二\n3. 结果三\n4. 结果四\n5. 结果五\n6. 结果六\n7. 结果七",
-			want:       0,
-		},
-		{
-			name:       "organization report may list more owners",
-			reportType: reportTypeTeamDaily,
-			content:    "# 小组日报\n1. 成员一\n2. 成员二\n3. 成员三\n4. 成员四\n5. 成员五\n6. 成员六\n7. 成员七",
-			want:       0,
-		},
-		{name: "conflicting asset versions", content: "# 日报\n- aida-report@1.0.6\n- aida-report@1.0.11", want: 1},
-		{name: "conflicting digest versions", content: "# 日报\n- Digest v2.2\n- Session Digest v2.3", want: 1},
-		{name: "single current asset version", content: "# 日报\n- 已发布 aida-report@1.0.11", want: 0},
-		{name: "personal single asset version", reportType: reportTypePersonalDaily, content: "# 日报\n- 已发布 aida-report@1.0.11", want: 1},
-		{name: "personal digest version", reportType: reportTypePersonalDaily, content: "# 日报\n- 完成 Session Digest v2.1 开发", want: 1},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			issues := reportContentValidationIssues(
-				tt.content,
-				tt.reportType,
-				"",
-				"2026-06-08",
-				"2026-06-14",
-			)
-			if len(issues) != tt.want {
-				t.Fatalf("issues=%#v, want count=%d", issues, tt.want)
-			}
-		})
-	}
-}
-
-func TestReportContentValidationRejectsConflictingDailyDateMetadata(t *testing.T) {
-	tests := []struct {
-		name    string
-		content string
-		want    int
-	}{
-		{name: "matching metadata", content: "报告日期：2026-07-16\n今日（2026-07-16）完成回归\n昨日（2026-07-15）完成开发", want: 0},
-		{name: "wrong report date", content: "报告日期：2026-07-15", want: 1},
-		{name: "wrong today", content: "今日（2026-07-15）完成回归", want: 1},
-		{name: "wrong yesterday", content: "昨日（2026-07-14）完成开发", want: 1},
-		{name: "historical task date is allowed", content: "修复 2026-07-01 创建的历史任务", want: 0},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			issues := reportContentValidationIssues(
-				test.content,
-				reportTypePersonalDaily,
-				"2026-07-16",
-				"",
-				"",
-			)
-			if len(issues) != test.want {
-				t.Fatalf("issues=%#v want=%d", issues, test.want)
-			}
-		})
-	}
-}
-
-func TestReportPersonalSourceActivityIssuesRejectsFalseNoActivityClaim(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	mock.ExpectQuery("SELECT EXISTS").
-		WithArgs("selection-1").
-		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
-
-	issues, err := reportPersonalSourceActivityIssues(context.Background(), db,
-		map[string]any{"report_source_selection_id": "selection-1"}, reportTypePersonalDaily,
-		"# 个人日报\n今日无活动记录。")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(issues) != 1 || !strings.Contains(issues[0], "来源快照包含工作记录") {
-		t.Fatalf("issues = %#v", issues)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestReportPersonalSourceActivityIssuesUsesDigestCoverage(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	mock.ExpectQuery("session_slice_digest_revisions").
-		WithArgs("selection-1").
-		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
-
-	issues, err := reportPersonalSourceActivityIssues(context.Background(), db,
-		map[string]any{
-			"report_source_selection_id": "selection-1",
-			"report_source_read_mode":    "digest_v1",
-		}, reportTypePersonalDaily, "# 个人日报\n今日无活动记录。")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(issues) != 1 {
-		t.Fatalf("issues = %#v", issues)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestReportPersonalSourceActivityIssuesAllowsFactualContentWithoutQuery(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-
-	issues, err := reportPersonalSourceActivityIssues(context.Background(), db,
-		map[string]any{"report_source_selection_id": "selection-1"}, reportTypePersonalDaily,
-		"# 个人日报\n完成跨日来源设计与接口核对。")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(issues) != 0 {
-		t.Fatalf("issues = %#v", issues)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestReportPersonalDigestOutcomeCoverageIssuesRejectsDroppedHighlights(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	mock.ExpectQuery("COUNT\\(DISTINCT highlight").
-		WithArgs("selection-1", "2026-07-16").
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(18))
-
-	issues, err := reportPersonalDigestOutcomeCoverageIssues(
-		context.Background(), db,
-		map[string]any{
-			"report_source_selection_id": "selection-1",
-			"report_source_read_mode":    "digest_v2",
-		},
-		reportTypePersonalDaily,
-		"2026-07-16",
-		"## 今日完成\n- 成果一\n- 成果二",
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(issues) != 1 || !strings.Contains(issues[0], "18 个成果 highlight") {
-		t.Fatalf("issues = %#v", issues)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestReportPersonalDigestOutcomeCoverageIssuesAcceptsOneItemPerHighlight(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	mock.ExpectQuery("COUNT\\(DISTINCT highlight").
-		WithArgs("selection-1", "2026-07-16").
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(3))
-
-	issues, err := reportPersonalDigestOutcomeCoverageIssues(
-		context.Background(), db,
-		map[string]any{
-			"report_source_selection_id": "selection-1",
-			"report_source_read_mode":    "digest_v2",
-		},
-		reportTypePersonalDaily,
-		"2026-07-16",
-		"## 今日完成\n1. 成果一\n2. 成果二\n3. 成果三",
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(issues) != 0 {
-		t.Fatalf("issues = %#v", issues)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestReportPersonalDigestOutcomeCoverageIssuesSkipsNonDigestV2(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-
-	issues, err := reportPersonalDigestOutcomeCoverageIssues(
-		context.Background(), db,
-		map[string]any{
-			"report_source_selection_id": "selection-1",
-			"report_source_read_mode":    "digest_v1",
-		},
-		reportTypePersonalDaily,
-		"2026-07-16",
-		"## 今日完成\n- 成果一",
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(issues) != 0 {
-		t.Fatalf("issues = %#v", issues)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestReportPersonalDigestFollowupEvidenceIssuesRejectsUnfoundedFollowup(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	mock.ExpectQuery("SELECT EXISTS").
-		WithArgs("selection-1", "2026-07-16").
-		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
-
-	issues, err := reportPersonalDigestFollowupEvidenceIssues(
-		context.Background(), db,
-		map[string]any{
-			"report_source_selection_id": "selection-1",
-			"report_source_read_mode":    "digest_v2",
-		},
-		reportTypePersonalDaily,
-		"2026-07-16",
-		"## 今日完成\n- 成果\n\n## 进行中与待跟进\n- 待重启",
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(issues) != 1 || !strings.Contains(issues[0], "status=partial") {
-		t.Fatalf("issues = %#v", issues)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestReportPersonalDigestFollowupEvidenceIssuesAllowsConcreteFollowup(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	mock.ExpectQuery("SELECT EXISTS").
-		WithArgs("selection-1", "2026-07-16").
-		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
-
-	issues, err := reportPersonalDigestFollowupEvidenceIssues(
-		context.Background(), db,
-		map[string]any{
-			"report_source_selection_id": "selection-1",
-			"report_source_read_mode":    "digest_v2",
-		},
-		reportTypePersonalDaily,
-		"2026-07-16",
-		"## 今日完成\n- 成果\n\n## 进行中与待跟进\n- 阻塞事项",
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(issues) != 0 {
-		t.Fatalf("issues = %#v", issues)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestReportPersonalDigestFollowupEvidenceIssuesSkipsWithoutSection(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-
-	issues, err := reportPersonalDigestFollowupEvidenceIssues(
-		context.Background(), db,
-		map[string]any{
-			"report_source_selection_id": "selection-1",
-			"report_source_read_mode":    "digest_v2",
-		},
-		reportTypePersonalDaily,
-		"2026-07-16",
-		"## 今日完成\n- 成果",
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(issues) != 0 {
-		t.Fatalf("issues = %#v", issues)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestReportMCPWriteReportResultRejectsInvalidContentBeforeWrite(t *testing.T) {
+func TestReportMCPWriteReportResultAcceptsSkillAuthoredContent(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
@@ -974,10 +507,23 @@ func TestReportMCPWriteReportResultRejectsInvalidContentBeforeWrite(t *testing.T
 	defer db.Close()
 	h := NewReportMCPHandler(db)
 	now := time.Date(2026, 6, 8, 8, 0, 0, 0, time.UTC)
+	inputRef := []byte(`{"report_type":"personal_weekly","period":{"week_start":"2026-06-08","week_end":"2026-06-14"},"target":{"type":"self","user_id":"310"}}`)
 	mock.ExpectQuery("SELECT id::text, business_type").
 		WithArgs("run-1", "310").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "business_type", "agent_id", "model_id", "status", "input_ref_json", "output_ref_json", "created_at"}).
-			AddRow("run-1", reportAgentRunBusinessType, "agent-1", "MiniMax-M2.5", "running", []byte(`{}`), []byte(`{}`), now))
+			AddRow("run-1", reportAgentRunBusinessType, "agent-1", "MiniMax-M2.5", "running", inputRef, []byte(`{}`), now))
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT id::text, edited, updated_at FROM personal_weekly_reports").
+		WithArgs("310", "2026-06-08", "2026-06-14").
+		WillReturnError(sql.ErrNoRows)
+	content := "# 周报\n- PRD 042 已按 TDD 完成，详见 `docs/prd/042.md`。\n- `go test ./...` 验证通过，参考 https://example.com/result。"
+	mock.ExpectQuery("INSERT INTO personal_weekly_reports").
+		WithArgs("310", "2026-06-08", "2026-06-14", content, "run-1", "agent-1", "MiniMax-M2.5").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("report-1"))
+	mock.ExpectExec("UPDATE ai_runs").
+		WithArgs("report-1", sqlmock.AnyArg(), "run-1", "310").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	req := newReportMCPRequest("tools/call", map[string]any{
 		"jsonrpc": "2.0",
@@ -990,15 +536,16 @@ func TestReportMCPWriteReportResultRejectsInvalidContentBeforeWrite(t *testing.T
 				"period":      map[string]any{"week_start": "2026-06-08", "week_end": "2026-06-14"},
 				"target":      map[string]any{"type": "self"},
 				"run_id":      "run-1",
-				"content":     "# 周报\n6 月 8 日（周日）完成回归，用户ID：310",
+				"content":     content,
 			},
 		},
 	})
 	req = requestWithUser(req, &model.User{ID: "310", Role: "employee"})
 	rec := httptest.NewRecorder()
 	h.Serve(rec, req)
-	if code := reportMCPError(t, rec); code != "REPORT_CONTENT_INVALID" {
-		t.Fatalf("expected REPORT_CONTENT_INVALID, got %s body=%s", code, rec.Body.String())
+	payload := reportMCPTextPayload(t, reportMCPBody(t, rec))
+	if payload["status"] != "saved" || payload["report_id"] != "report-1" {
+		t.Fatalf("unexpected write payload: %#v", payload)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

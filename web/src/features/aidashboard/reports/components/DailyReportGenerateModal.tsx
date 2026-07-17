@@ -351,7 +351,7 @@ export function DailyReportGenerateModal({
       className="console-report-workflow-modal"
       title={title ?? `${scopeName(scope)}内容管理`}
       open={open}
-      width={860}
+      width={showSessionSettings ? 1480 : 860}
       onCancel={handleClose}
       keyboard={!settingsOpen}
       mask={{ enabled: true, closable: !settingsOpen }}
@@ -374,7 +374,10 @@ export function DailyReportGenerateModal({
               disabled={loading || saveMutation.isPending}
               onBeforeGenerate={confirmBeforeAIGenerate}
               onGenerated={handleAIGenerated}
-              onGeneratingChange={setAIGenerating}
+              onGeneratingChange={(generating) => {
+                setAIGenerating(generating);
+                if (generating) setSettingsOpen(false);
+              }}
             />
           ) : null}
           <Button
@@ -440,7 +443,11 @@ export function DailyReportGenerateModal({
           </span>
           {reportStatus(currentReport)}
         </div>
-        <div className="console-report-management__content">
+        <div
+          className={`console-report-management__content${
+            showSessionSettings ? " is-session-settings-open" : ""
+          }`}
+        >
           <div className="console-report-management__main">
             {loading ? (
               <div className="console-session-empty">正在加载报告内容...</div>
@@ -493,7 +500,7 @@ export function DailyReportGenerateModal({
               selectedSources={selectedSessionSources}
               onSelectedSourcesChange={setSelectedSessionSources}
               onClose={() => setSettingsOpen(false)}
-              variant="drawer"
+              variant="panel"
             />
           ) : null}
         </div>

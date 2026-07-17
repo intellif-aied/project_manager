@@ -84,14 +84,14 @@ func TestReportSourceSelectionLifecycleIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, _, err := service.CreateAttachedRun(ctx, "990040", "personal_weekly", selection.Period,
-		selection.ID, "report_agent_run", "agent-test", "MiniMax-M2.5", map[string]any{}); !errors.Is(err, ErrSourceUnavailable) {
+		selection.ID, "report_agent_run", "agent-test", "MiniMax-M2.5", false, map[string]any{}); !errors.Is(err, ErrSourceUnavailable) {
 		t.Fatalf("attach clearing source err=%v", err)
 	}
 	if _, err := database.Exec(`UPDATE sessions SET content_status = 'available' WHERE id = $1`, fixture.sessionID); err != nil {
 		t.Fatal(err)
 	}
 	runID, attached, err := service.CreateAttachedRun(ctx, "990040", "personal_weekly", selection.Period,
-		selection.ID, "report_agent_run", "agent-test", "MiniMax-M2.5", map[string]any{"report_type": "personal_weekly"})
+		selection.ID, "report_agent_run", "agent-test", "MiniMax-M2.5", false, map[string]any{"report_type": "personal_weekly"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestReportSourceSelectionLifecycleIntegration(t *testing.T) {
 	}
 
 	defaultRunID, defaultSelection, err := service.CreateAttachedRun(ctx, "990040", "personal_daily",
-		Period{Start: "2026-07-10", End: "2026-07-10"}, "", "report_agent_run", "agent-test", "", map[string]any{"report_type": "personal_daily"})
+		Period{Start: "2026-07-10", End: "2026-07-10"}, "", "report_agent_run", "agent-test", "", false, map[string]any{"report_type": "personal_daily"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +171,7 @@ func TestReportSourceSelectionLifecycleIntegration(t *testing.T) {
 	}
 
 	emptyRunID, emptySelection, err := service.CreateAttachedRun(ctx, "990040", "personal_daily",
-		Period{Start: "2026-07-08", End: "2026-07-08"}, "", "report_agent_run", "agent-test", "", map[string]any{"report_type": "personal_daily"})
+		Period{Start: "2026-07-08", End: "2026-07-08"}, "", "report_agent_run", "agent-test", "", false, map[string]any{"report_type": "personal_daily"})
 	if err != nil || emptyRunID == "" || len(emptySelection.Items) != 0 {
 		t.Fatalf("empty default selection=%+v run=%s err=%v", emptySelection, emptyRunID, err)
 	}
@@ -217,7 +217,7 @@ func TestReportSourceSelectionLifecycleIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	pagedRunID, pagedAttached, err := service.CreateAttachedRun(ctx, "990040", "personal_weekly", selection.Period,
-		pagedSelection.ID, "report_agent_run", "agent-test", "", map[string]any{"report_type": "personal_weekly"})
+		pagedSelection.ID, "report_agent_run", "agent-test", "", false, map[string]any{"report_type": "personal_weekly"})
 	if err != nil {
 		t.Fatal(err)
 	}

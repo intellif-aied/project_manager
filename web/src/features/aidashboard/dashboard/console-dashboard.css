@@ -1053,7 +1053,7 @@
   flex-direction: column;
   overflow: hidden;
   top: clamp(12px, 3vh, 24px);
-  max-width: min(1180px, calc(100vw - 32px));
+  max-width: min(1480px, calc(100vw - 32px));
   padding: 0;
   border: 1px solid #e5edf6;
   border-radius: 12px;

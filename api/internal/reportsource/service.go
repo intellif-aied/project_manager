@@ -14,13 +14,14 @@ import (
 )
 
 var (
-	ErrInvalidRequest      = errors.New("invalid report source request")
-	ErrSelectionNotFound   = errors.New("report source selection not found")
-	ErrSourceUnavailable   = errors.New("report source content is unavailable")
-	ErrSelectionConflict   = errors.New("report source selection cannot be attached")
-	ErrSelectionMismatch   = errors.New("report source selection does not match the managed report run")
-	ErrSourceIncomplete    = errors.New("report source selection has not been read completely")
-	ErrContentItemTooLarge = errors.New("report source content item exceeds the page limit")
+	ErrInvalidRequest                   = errors.New("invalid report source request")
+	ErrSelectionNotFound                = errors.New("report source selection not found")
+	ErrSourceUnavailable                = errors.New("report source content is unavailable")
+	ErrSelectionConflict                = errors.New("report source selection cannot be attached")
+	ErrSelectionMismatch                = errors.New("report source selection does not match the managed report run")
+	ErrSourceIncomplete                 = errors.New("report source selection has not been read completely")
+	ErrContentItemTooLarge              = errors.New("report source content item exceeds the page limit")
+	ErrLargeContextConfirmationRequired = errors.New("large report context confirmation is required")
 )
 
 const preparedSelectionTTL = 30 * time.Minute
@@ -84,7 +85,23 @@ type Selection struct {
 	Status            string          `json:"status"`
 	ContentSnapshotAt time.Time       `json:"content_snapshot_at"`
 	RequiredReadMode  string          `json:"required_read_mode,omitempty"`
+	ContextBytes      int             `json:"context_bytes,omitempty"`
+	WarningRequired   bool            `json:"warning_required"`
+	WarningCode       string          `json:"warning_code,omitempty"`
 	Items             []SelectionItem `json:"items"`
+}
+
+type LargeContextConfirmationError struct {
+	SelectionID  string
+	ContextBytes int
+}
+
+func (e *LargeContextConfirmationError) Error() string {
+	return ErrLargeContextConfirmationRequired.Error()
+}
+
+func (e *LargeContextConfirmationError) Unwrap() error {
+	return ErrLargeContextConfirmationRequired
 }
 
 type Candidate struct {
@@ -302,11 +319,56 @@ func (s *Service) CreateExplicit(
 	return selection, nil
 }
 
+// PrepareExplicitSelection freezes the exact representation that a managed
+// report Agent will read. It is called by the selection API so the UI can make
+// a warning decision from the real context size rather than raw Session size
+// or a token estimate. The selection remains prepared and can be attached once.
+func (s *Service) PrepareExplicitSelection(
+	ctx context.Context,
+	userID, reportType string,
+	period Period,
+	selectionID string,
+) (Selection, error) {
+	if !validPersonalReportType(reportType) || strings.TrimSpace(userID) == "" ||
+		strings.TrimSpace(selectionID) == "" {
+		return Selection{}, ErrInvalidRequest
+	}
+	periodStart, periodEnd, err := parsePeriod(period)
+	if err != nil {
+		return Selection{}, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Selection{}, err
+	}
+	defer tx.Rollback()
+	selection, err := lockPreparedSelection(
+		ctx, tx, userID, selectionID, reportType, periodStart, periodEnd,
+	)
+	if err != nil {
+		return Selection{}, err
+	}
+	if selection.Mode != "explicit" {
+		return Selection{}, ErrSelectionConflict
+	}
+	if err := validateSelectionSourcesAvailable(ctx, tx, selection.ID); err != nil {
+		return Selection{}, err
+	}
+	if err := s.ensureSelectionContextFrozen(ctx, tx, &selection, userID); err != nil {
+		return Selection{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Selection{}, err
+	}
+	return selection, nil
+}
+
 func (s *Service) CreateAttachedRun(
 	ctx context.Context,
 	userID, reportType string,
 	period Period,
 	selectionID, businessType, agentID, modelID string,
+	largeContextConfirmed bool,
 	inputRef map[string]any,
 ) (string, Selection, error) {
 	if !validPersonalReportType(reportType) || strings.TrimSpace(userID) == "" {
@@ -340,11 +402,21 @@ func (s *Service) CreateAttachedRun(
 	if err := validateSelectionSourcesAvailable(ctx, tx, selection.ID); err != nil {
 		return "", Selection{}, err
 	}
-	requiredReadMode := s.config.RequiredReadMode(userID)
-	if err := s.freezeSelectionForRun(ctx, tx, selection, requiredReadMode); err != nil {
+	if err := s.ensureSelectionContextFrozen(ctx, tx, &selection, userID); err != nil {
 		return "", Selection{}, err
 	}
-	selection.RequiredReadMode = requiredReadMode
+	if selection.WarningRequired && !largeContextConfirmed {
+		// Keep the exact frozen prepared selection for the confirmation retry.
+		// No ai_run, credential, or managed Agent Session has been created yet.
+		if err := tx.Commit(); err != nil {
+			return "", Selection{}, err
+		}
+		return "", selection, &LargeContextConfirmationError{
+			SelectionID:  selection.ID,
+			ContextBytes: selection.ContextBytes,
+		}
+	}
+	requiredReadMode := selection.RequiredReadMode
 	if inputRef == nil {
 		inputRef = map[string]any{}
 	}
@@ -384,6 +456,63 @@ func (s *Service) CreateAttachedRun(
 		return "", Selection{}, err
 	}
 	return runID, selection, nil
+}
+
+func (s *Service) ensureSelectionContextFrozen(
+	ctx context.Context,
+	tx *sql.Tx,
+	selection *Selection,
+	userID string,
+) error {
+	if selection == nil {
+		return ErrSelectionConflict
+	}
+	requiredReadMode := s.config.RequiredReadMode(userID)
+	needsFreeze := selection.RequiredReadMode != requiredReadMode
+	if requiredReadMode == ReadModeFull {
+		// A newly inserted selection also starts with required_read_mode=full,
+		// so run the idempotent full-mode freeze to clear any stale snapshots.
+		needsFreeze = true
+	} else if selection.ContextBytes <= 0 {
+		needsFreeze = true
+	}
+	if needsFreeze {
+		if err := s.freezeSelectionForRun(ctx, tx, *selection, requiredReadMode); err != nil {
+			return err
+		}
+	}
+	var contextBytes int
+	var storedMode string
+	err := tx.QueryRowContext(ctx, `
+		SELECT required_read_mode, COALESCE(selection_digest_bytes, 0)
+		FROM report_source_selections
+		WHERE id = $1 AND status = 'prepared'`, selection.ID,
+	).Scan(&storedMode, &contextBytes)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrSelectionConflict
+	}
+	if err != nil {
+		return err
+	}
+	if storedMode != requiredReadMode ||
+		((storedMode == ReadModeDigestV1 || storedMode == ReadModeDigestV2) && contextBytes <= 0) {
+		return ErrDigestCorrupt
+	}
+	selection.RequiredReadMode = storedMode
+	selection.ContextBytes = contextBytes
+	applySelectionContextWarning(selection)
+	return nil
+}
+
+func applySelectionContextWarning(selection *Selection) {
+	if selection == nil {
+		return
+	}
+	selection.WarningRequired = selection.ContextBytes > LargeContextWarningBytes
+	selection.WarningCode = ""
+	if selection.WarningRequired {
+		selection.WarningCode = LargeContextWarningCode
+	}
 }
 
 func (s *Service) ReadAttachedSelection(
@@ -874,11 +1003,13 @@ func lockPreparedSelection(
 	var expires sql.NullTime
 	err := tx.QueryRowContext(ctx, `
 		SELECT id::text, report_type, period_start, period_end, selection_mode, status,
-			content_snapshot_at, expires_at
+			content_snapshot_at, expires_at, required_read_mode,
+			COALESCE(selection_digest_bytes, 0)
 		FROM report_source_selections
 		WHERE id = $1 AND user_id = $2 FOR UPDATE`, selectionID, userID).Scan(
 		&selection.ID, &selection.ReportType, &start, &end, &selection.Mode, &selection.Status,
-		&selection.ContentSnapshotAt, &expires,
+		&selection.ContentSnapshotAt, &expires, &selection.RequiredReadMode,
+		&selection.ContextBytes,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Selection{}, ErrSelectionNotFound

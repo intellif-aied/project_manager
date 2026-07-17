@@ -182,13 +182,12 @@ func TestManagedAgentRunStatusSyncerFailsCompletedReportSessionWithoutWriteback(
 	finishedAt := now.Add(-ManagedAgentReportWritebackGrace - time.Second).Unix()
 	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/task/session-report/result" {
-			_, _ = w.Write([]byte(`{"task_id":"session-report","status":"completed","finished_at":` + managedStringFromAny(finishedAt) + `}`))
-			return
+			t.Fatal("report run without MCP writeback must not fetch or persist task final text")
 		}
 		if r.URL.Path != "/api/task/session-report/status" {
 			t.Fatalf("platform path = %s", r.URL.Path)
 		}
-		_, _ = w.Write([]byte(`{"task_id":"session-report","status":"completed","finished_at":` + managedStringFromAny(finishedAt) + `}`))
+		_, _ = w.Write([]byte(`{"task_id":"session-report","status":"completed","result":"# 未经 MCP 回写的日报","finished_at":` + managedStringFromAny(finishedAt) + `}`))
 	}))
 	defer platform.Close()
 
@@ -199,55 +198,6 @@ func TestManagedAgentRunStatusSyncerFailsCompletedReportSessionWithoutWriteback(
 			AddRow("run-report", "", "session-report", "running", "report_agent_run", "", []byte(`{}`), startedAt))
 	mock.ExpectExec("UPDATE ai_runs SET").
 		WithArgs("failed", outputRefWithoutResult{status: "completed", taskID: "session-report", sessionID: "session-report", errText: reportWritebackMissingErrorMessage}, nil, reportWritebackMissingErrorMessage, now, "run-report").
-		WillReturnResult(sqlmock.NewResult(0, 1))
-
-	syncer := NewManagedAgentRunStatusSyncer(db, NewManagedAgentClient(platform.URL, "platform-token"))
-	if err := syncer.RunOnce(t.Context(), now); err != nil {
-		t.Fatal(err)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("sql expectations: %v", err)
-	}
-}
-
-func TestManagedAgentRunStatusSyncerFallsBackToTaskResultWriteback(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-
-	now := time.Date(2026, 6, 29, 10, 0, 0, 0, time.UTC)
-	finishedAt := now.Add(-ManagedAgentReportWritebackGrace - time.Second).Unix()
-	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/task/session-report/status":
-			_, _ = w.Write([]byte(`{"task_id":"session-report","status":"completed","agent_version_id":4,"model_id":"MiniMax-M2.5","finished_at":` + managedStringFromAny(finishedAt) + `}`))
-		case "/api/task/session-report/result":
-			_, _ = w.Write([]byte(`{"task_id":"session-report","status":"completed","agent_version_id":4,"model_id":"MiniMax-M2.5","result":"Generated report","finished_at":` + managedStringFromAny(finishedAt) + `}`))
-		default:
-			t.Fatalf("platform path = %s", r.URL.Path)
-		}
-	}))
-	defer platform.Close()
-
-	startedAt := now.Add(-10 * time.Minute)
-	inputRef := []byte(`{"report_type":"personal_daily","period":{"date":"2026-07-07"},"target":{"type":"self","user_id":"6"}}`)
-	mock.ExpectQuery(managedRunSyncQueryPattern).
-		WithArgs(100).
-		WillReturnRows(managedRunStatusRows().
-			AddRow("run-report", "", "session-report", "running", "report_agent_run", "", []byte(`{}`), startedAt))
-	mock.ExpectQuery(`SELECT user_id::text, agent_id, COALESCE\(input_ref_json, '\{\}'::jsonb\)\s+FROM ai_runs\s+WHERE id::text = \$1`).
-		WithArgs("run-report").
-		WillReturnRows(sqlmock.NewRows([]string{"user_id", "agent_id", "input_ref_json"}).
-			AddRow("6", "agent-1", inputRef))
-	mock.ExpectBegin()
-	mock.ExpectQuery(`INSERT INTO daily_reports`).
-		WithArgs("6", "2026-07-07", "Generated report", "run-report", "agent-1", 4, "MiniMax-M2.5").
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("report-1"))
-	mock.ExpectCommit()
-	mock.ExpectExec("UPDATE ai_runs SET").
-		WithArgs("succeeded", outputRefWithoutResult{status: "completed", taskID: "session-report", sessionID: "session-report", reportID: "report-1"}, 4, "MiniMax-M2.5", "report-1", now, "run-report").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	syncer := NewManagedAgentRunStatusSyncer(db, NewManagedAgentClient(platform.URL, "platform-token"))

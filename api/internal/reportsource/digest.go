@@ -25,6 +25,18 @@ const (
 
 	defaultDigestTargetBytes    = 64 << 10
 	defaultDigestHardLimitBytes = 128 << 10
+
+	// LargeContextWarningBytes is a product warning threshold, not a run
+	// limit. The UI asks for confirmation when the exact frozen report source
+	// payload is larger than this value and the caller may still continue.
+	LargeContextWarningBytes = 1 << 20
+	LargeContextWarningCode  = "LARGE_REPORT_CONTEXT"
+
+	// Digest v2 items are already bounded while they are built. Keep the
+	// selection-level envelope wide enough to avoid a second lossy compaction
+	// pass across many selected Sessions. The 200-slice request limit and the
+	// per-item Digest budget remain the effective capacity controls.
+	productDigestEnvelopeBytes = 64 << 20
 )
 
 var (
@@ -66,8 +78,8 @@ func ProductConfig() Config {
 		SessionReadMode:   ReadModeDigestV2,
 		DigestVersion:     sessiondigestv2.Version,
 		RedactionVersion:  sessiondigestv2.RedactionVersion,
-		DigestTargetBytes: defaultDigestTargetBytes,
-		DigestHardLimit:   defaultDigestHardLimitBytes,
+		DigestTargetBytes: productDigestEnvelopeBytes,
+		DigestHardLimit:   productDigestEnvelopeBytes,
 		DigestRolloutPct:  100,
 	}
 }
@@ -102,7 +114,7 @@ func (c Config) Normalized() (Config, error) {
 		(c.SessionReadMode == ReadModeDigestV2 && c.DigestVersion != sessiondigestv2.Version) {
 		return Config{}, errors.New("report read mode and digest version do not match")
 	}
-	if c.DigestTargetBytes < 1024 || c.DigestHardLimit < c.DigestTargetBytes || c.DigestHardLimit > 4<<20 {
+	if c.DigestTargetBytes < 1024 || c.DigestHardLimit < c.DigestTargetBytes || c.DigestHardLimit > productDigestEnvelopeBytes {
 		return Config{}, errors.New("invalid report digest byte budget")
 	}
 	if c.DigestRolloutPct < 0 || c.DigestRolloutPct > 100 {

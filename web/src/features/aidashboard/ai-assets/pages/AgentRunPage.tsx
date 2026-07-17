@@ -34,6 +34,7 @@ import type {
   AIRun,
   ManagedAgent,
   ManagedCredential,
+  ManagedReportAgentConfirmationRequired,
   ManagedReportAgentUnavailable,
   ManagedReportAgentRunResponse,
   ReportSourceCandidate,
@@ -200,6 +201,12 @@ function isReportAgentUnavailable(
   response: ManagedReportAgentRunResponse
 ): response is ManagedReportAgentUnavailable {
   return "available" in response && response.available === false;
+}
+
+function isReportAgentConfirmationRequired(
+  response: ManagedReportAgentRunResponse
+): response is ManagedReportAgentConfirmationRequired {
+  return "status" in response && response.status === "confirmation_required";
 }
 
 function cleanAgentDescription(agent: ManagedAgent, reportAgent: boolean) {
@@ -1078,6 +1085,10 @@ function ReportAgentRunForm({ agent }: { agent: ManagedAgent }) {
     onSuccess: (run) => {
       if (isReportAgentUnavailable(run)) {
         message.warning(run.message || "未配置默认报告 Agent");
+        return;
+      }
+      if (isReportAgentConfirmationRequired(run)) {
+        message.warning(run.message);
         return;
       }
       message.success("Report Agent 已提交运行");

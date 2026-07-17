@@ -1018,6 +1018,7 @@ type ManagedReportAgentRunRequest struct {
 	ModelID                  string                 `json:"model_id,omitempty"`
 	SelectedSessionSliceKeys []string               `json:"selected_session_slice_keys,omitempty"`
 	ReportSourceSelectionID  string                 `json:"report_source_selection_id,omitempty"`
+	LargeContextConfirmed    bool                   `json:"large_context_confirmed,omitempty"`
 	StartPromptValues        map[string]string      `json:"start_prompt_values,omitempty"`
 	Message                  string                 `json:"message,omitempty"`
 	CredentialOverrides      map[string]string      `json:"credential_overrides,omitempty"`

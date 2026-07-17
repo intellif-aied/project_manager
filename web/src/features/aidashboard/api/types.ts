@@ -644,6 +644,7 @@ export interface ManagedReportAgentRunPayload {
   model_id?: string;
   selected_session_slice_keys?: string[];
   report_source_selection_id?: string;
+  large_context_confirmed?: boolean;
   start_prompt_values?: Record<string, string>;
   message?: string;
   credential_overrides?: Record<string, string>;
@@ -683,6 +684,10 @@ export interface ReportSourceSelection {
   selection_mode: "explicit";
   status: "prepared";
   content_snapshot_at: string;
+  required_read_mode?: string;
+  context_bytes?: number;
+  warning_required: boolean;
+  warning_code?: "LARGE_REPORT_CONTEXT";
   items: Array<{
     id: string;
     session_ref: string;
@@ -701,7 +706,20 @@ export interface ManagedReportAgentUnavailable {
   message: string;
 }
 
-export type ManagedReportAgentRunResponse = AIRun | ManagedReportAgentUnavailable;
+export interface ManagedReportAgentConfirmationRequired {
+  status: "confirmation_required";
+  code: "LARGE_REPORT_CONTEXT_CONFIRMATION_REQUIRED";
+  message: string;
+  report_source_selection_id: string;
+  context_bytes: number;
+  warning_required: true;
+  warning_code: "LARGE_REPORT_CONTEXT";
+}
+
+export type ManagedReportAgentRunResponse =
+  | AIRun
+  | ManagedReportAgentUnavailable
+  | ManagedReportAgentConfirmationRequired;
 
 export interface ManagedAgentSchedule {
   id: string;

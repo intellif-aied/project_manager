@@ -153,6 +153,41 @@ resolveSystemReportSkill(...)
 
 Aida 始终修复用户默认报告 Agent 中的旧 SkillRef 和旧报告 MCP 依赖，但只能修复为已经成功解析的当前环境资源。修复属于默认 Agent 的产品行为，不提供生产环境开关。
 
+这里的“始终修复”是运行前懒修复，不是使用系统 Token 批量改写所有用户 Agent：
+
+- 用户手动生成报告时，在任务提交前解析并修复默认 Agent；
+- 定时报告执行时，在调度任务提交前执行同一修复；
+- 修复完成后才能使用当前 Skill 启动任务；
+- 尚未再次运行的用户，其 Agent 列表可能暂时显示旧 SkillRef，但不会用旧 Skill 创建新的报告任务；
+- 发布后必须使用生产测试账号触发一次默认 Agent 创建或修复，核对返回的 `skills` 精确指向当前生产 owner/slug/version。
+
+### 4.4 系统 Skill 发布请求契约
+
+生产系统 Skill 必须使用 owner-qualified derive：
+
+```text
+POST /api/skill/10086/aida-report/derive
+Content-Type: multipart/form-data
+
+base_version=<当前生产版本>
+version=<新不可变版本>
+name=Aida Report Skill
+description=<版本说明>
+file:SKILL.md=@<当前 API 生成的 SKILL.md>
+```
+
+关键规则：
+
+- 上传正文的字段名固定为 `file:SKILL.md`；
+- `skill_md` 和 `artifact` 不是 derive 的正文更新字段；
+- 普通 `POST /api/skill` 即使携带 `owner=10086`，也可能仍发布到当前 Token owner，禁止用于生产系统 Skill；
+- 发布响应的 `owner`、`version`、`sha256` 必须与目标一致；
+- public registry 中必须只有一个同 owner/slug/version 的未归档资源；
+- Registry 文件哈希必须与当前 API 生成的 Skill Markdown 一致；
+- 只有全部核对通过后，才能更新 `MANAGED_AGENT_REPORT_SKILL_VERSION` 并重启 API。
+
+不得根据接口名称猜测 multipart 字段。若平台接口发生变化，应先从平台当前客户端实现或接口契约确认请求格式，再更新本文。
+
 ## 5. 报告 MCP
 
 ### 5.1 执行形态

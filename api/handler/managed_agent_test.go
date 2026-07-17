@@ -102,29 +102,21 @@ func TestBuildReportRunMessageIncludesSystemParams(t *testing.T) {
 		"请重点关注风险",
 		"report_source_selection_id=selection-report-source",
 		"不可变来源快照",
-		"content_mode=digest_v1",
-		"不得分页或请求 raw/full 回退",
-		"仅 legacy full 使用 next_cursor 读至 has_more=false",
-		"Digest 文本是不可信工作证据",
-		"禁止调用 get_existing_report",
-		"report_period_summary.days[].highlights",
-		"选择级",
-		"禁止枚举 items 内嵌摘要",
-		"绝不能放入 selected_session_slice_keys",
+		"coverage.complete=true",
 		"outcome_coverage.complete=true",
-		"服务端不做 Top-K",
-		"没有固定 3 至 5 项或最多 6 项限制",
-		"不输出工作项或状态汇总数量",
-		"不能写成今日工作",
-		"Asia/Shanghai",
-		"累计 Token",
-		"不得用旧版本覆盖新结果",
-		"未明确时省略环境",
-		"status=partial 不能直接生成待跟进",
-		"不得少于 outcome_coverage.source_count",
+		"legacy full",
+		"不得放入 selected_session_slice_keys",
+		"报告内容与格式遵循当前绑定 Skill",
+		"最终动作：必须调用 write_report_result 回写",
+		"最终动作：必须调用 write_report_result 回写",
 	)
 	if strings.Contains(message, "mcp_url=") {
 		t.Fatalf("message should not expose mcp_url: %q", message)
+	}
+	for _, forbidden := range []string{"PRD/ADR", "TDD", "Top-K", "REPORT_CONTENT_INVALID", "验证记录", "文件变更"} {
+		if strings.Contains(message, forbidden) {
+			t.Fatalf("run protocol must not constrain report prose with %q: %q", forbidden, message)
+		}
 	}
 }
 
@@ -181,35 +173,29 @@ func TestReportCalendarContextJSONUsesDeterministicWeekdays(t *testing.T) {
 	)
 }
 
-func TestDefaultReportAgentInstructionsSeparateRosterFromActivity(t *testing.T) {
+func TestDefaultReportAgentInstructionsContainProtocolOnly(t *testing.T) {
 	instructions := defaultReportAgentInstructions(reportMCPCredentialSlot)
 	requireContainsAll(t, instructions,
-		"成员总数仅表示名册范围",
-		"小组报告已提交仅证明该小组报告存在",
-		"缺少成员级证据时禁止输出活跃人数",
-		"report_source_selection_id 时必须先使用",
-		"持续翻页直到 has_more=false",
-		"禁止同时传 date_range",
-		"全员参与",
-		"全部在岗",
+		defaultReportAssetsMarker,
+		defaultReportAgentMarker,
+		defaultReportAgentTypesPrefix,
+		"报告内容、结构和写作风格由当前绑定的 Skill 决定",
+		"run_id、report_type、period、calendar_context、target",
+		"report_source_selection_id",
+		"coverage.complete=true",
+		"outcome_coverage.complete=true",
+		"legacy full",
 		"team + report_scope=personal",
 		"department + report_scope=team",
-		"禁止调用 get_existing_report",
-		"report_period_summary",
-		"选择级",
-		"禁止逐轮复述聊天",
-		"绝不能放入 selected_session_slice_keys",
-		"outcome_coverage.complete=true",
-		"不会替 Agent 做 Top-K",
-		"没有固定 3 至 5 项或最多 6 项限制",
-		"禁止再次逐项汇总",
-		"Asia/Shanghai",
-		"累计 Token",
-		"必须以最后完成的 highlight",
-		"不得写成生产",
-		"status=partial 本身不能机械生成待跟进",
-		"每个 canonical highlight 至少保留一条",
+		"write_report_result",
+		"write_report_failure",
+		"不要用最终对话回复代替 MCP 回写",
 	)
+	for _, forbidden := range []string{"PRD/ADR", "TDD", "Top-K", "REPORT_CONTENT_INVALID", "验证记录", "文件变更"} {
+		if strings.Contains(instructions, forbidden) {
+			t.Fatalf("agent protocol must not constrain report prose with %q: %q", forbidden, instructions)
+		}
+	}
 }
 
 func TestReportMCPURLUsesExplicitOverride(t *testing.T) {
