@@ -632,6 +632,7 @@ func TestReportContentValidationRejectsWrongWeekdayAndInternalIDs(t *testing.T) 
 		{name: "engineering section", content: "# 日报\n### 验证状态\n- go test 通过", want: 1},
 		{name: "empty followup section", content: "# 日报\n### 进行中与待跟进\n\n（无）", want: 1},
 		{name: "inline empty followup section", content: "# 日报\n**进行中与待跟进**：无", want: 1},
+		{name: "generation time is forbidden", content: "# 日报\n- 完成交付\n\n*报告生成时间：2026-07-16*", want: 1},
 		{name: "nonempty followup section", content: "# 日报\n### 进行中与待跟进\n\n1. 复制按钮兼容性仍待修复", want: 0},
 		{name: "file count", content: "# 日报\n- 今日共产生 190 项文件变更", want: 1},
 		{name: "validation attempts", content: "# 日报\n- go test：40 次尝试后通过", want: 1},
@@ -862,6 +863,96 @@ func TestReportPersonalDigestOutcomeCoverageIssuesSkipsNonDigestV2(t *testing.T)
 		reportTypePersonalDaily,
 		"2026-07-16",
 		"## 今日完成\n- 成果一",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 0 {
+		t.Fatalf("issues = %#v", issues)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReportPersonalDigestFollowupEvidenceIssuesRejectsUnfoundedFollowup(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mock.ExpectQuery("SELECT EXISTS").
+		WithArgs("selection-1", "2026-07-16").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+
+	issues, err := reportPersonalDigestFollowupEvidenceIssues(
+		context.Background(), db,
+		map[string]any{
+			"report_source_selection_id": "selection-1",
+			"report_source_read_mode":    "digest_v2",
+		},
+		reportTypePersonalDaily,
+		"2026-07-16",
+		"## 今日完成\n- 成果\n\n## 进行中与待跟进\n- 待重启",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 1 || !strings.Contains(issues[0], "status=partial") {
+		t.Fatalf("issues = %#v", issues)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReportPersonalDigestFollowupEvidenceIssuesAllowsConcreteFollowup(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mock.ExpectQuery("SELECT EXISTS").
+		WithArgs("selection-1", "2026-07-16").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+
+	issues, err := reportPersonalDigestFollowupEvidenceIssues(
+		context.Background(), db,
+		map[string]any{
+			"report_source_selection_id": "selection-1",
+			"report_source_read_mode":    "digest_v2",
+		},
+		reportTypePersonalDaily,
+		"2026-07-16",
+		"## 今日完成\n- 成果\n\n## 进行中与待跟进\n- 阻塞事项",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 0 {
+		t.Fatalf("issues = %#v", issues)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReportPersonalDigestFollowupEvidenceIssuesSkipsWithoutSection(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	issues, err := reportPersonalDigestFollowupEvidenceIssues(
+		context.Background(), db,
+		map[string]any{
+			"report_source_selection_id": "selection-1",
+			"report_source_read_mode":    "digest_v2",
+		},
+		reportTypePersonalDaily,
+		"2026-07-16",
+		"## 今日完成\n- 成果",
 	)
 	if err != nil {
 		t.Fatal(err)

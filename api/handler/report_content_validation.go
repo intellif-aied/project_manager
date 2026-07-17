@@ -17,6 +17,7 @@ var (
 	reportISOWeekdayPattern               = regexp.MustCompile(`(20[0-9]{2})-([0-9]{1,2})-([0-9]{1,2})\s*(?:[（(]\s*)?(?:周|星期)([一二三四五六日天])\s*[）)]?`)
 	reportChineseWeekdayPattern           = regexp.MustCompile(`(?:(20[0-9]{2})\s*年\s*)?([0-9]{1,2})\s*月\s*([0-9]{1,2})\s*日\s*(?:[（(]\s*)?(?:周|星期)([一二三四五六日天])\s*[）)]?`)
 	reportMetadataDatePattern             = regexp.MustCompile(`(?m)(?:报告日期|日报日期|报告生成时间|生成时间)\s*[:：]\s*(20[0-9]{2})-([0-9]{1,2})-([0-9]{1,2})`)
+	reportGenerationTimePattern           = regexp.MustCompile(`(?m)(?:报告生成时间|生成时间)\s*[:：]`)
 	reportTodayDatePattern                = regexp.MustCompile(`(?m)(?:今日|当天)\s*(?:[（(]\s*)?(20[0-9]{2})-([0-9]{1,2})-([0-9]{1,2})`)
 	reportYesterdayDatePattern            = regexp.MustCompile(`(?m)昨日\s*(?:[（(]\s*)?(20[0-9]{2})-([0-9]{1,2})-([0-9]{1,2})`)
 	reportNoPersonalDailyPattern          = regexp.MustCompile(`(?m)(?:(?:^|[。；;\n])\s*(?:(?:本)?(?:小组|团队)(?:当日|本周)?\s*)?无(?:任何)?个人日报(?:记录)?|个人日报\s*[:：]?\s*(?:0\s*份|零份|无人提交|均未提交))`)
@@ -73,6 +74,9 @@ func reportContentValidationIssues(content, reportType, date, weekStart, weekEnd
 	}
 	if hasEmptyReportFollowupSection(content) {
 		add("进行中与待跟进为空时必须整段省略，不得填写“无”或“暂无”")
+	}
+	if reportGenerationTimePattern.MatchString(content) {
+		add("报告正文不得将业务日期写成“报告生成时间”；请删除生成时间元信息")
 	}
 	if reportFileChangeMetricPattern.MatchString(content) {
 		add("报告正文不得展示文件或代码变更数量；文件证据仅用于内部判断结果可信度")
@@ -196,6 +200,20 @@ func hasEmptyReportFollowupSection(content string) bool {
 			return isEmptyReportFollowupValue(value)
 		}
 		return true
+	}
+	return false
+}
+
+func hasReportFollowupSection(content string) bool {
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.NewReplacer("**", "", "__", "", "`", "").Replace(line)
+		line = strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(line), "#"))
+		for _, heading := range []string{"进行中与待跟进", "进行中", "待跟进"} {
+			if line == heading || strings.HasPrefix(line, heading+"：") ||
+				strings.HasPrefix(line, heading+":") {
+				return true
+			}
+		}
 	}
 	return false
 }
@@ -336,6 +354,53 @@ func reportPersonalDigestOutcomeCoverageIssues(
 		"来源 Digest 完整保留了 %d 个成果 highlight，正文只有 %d 个顶层成果条目；请为每个 highlight 保留一条用户化成果表达，将路径、测试和实现证据改写为它所支撑的能力，不得通过删除条目来规避校验",
 		expected, actual,
 	)}, nil
+}
+
+func reportPersonalDigestFollowupEvidenceIssues(
+	ctx context.Context,
+	db *sql.DB,
+	inputRef map[string]any,
+	reportType string,
+	date string,
+	content string,
+) ([]string, error) {
+	if reportType != reportTypePersonalDaily ||
+		strings.TrimSpace(stringFromAny(inputRef["report_source_read_mode"])) != "digest_v2" ||
+		!hasReportFollowupSection(content) {
+		return nil, nil
+	}
+	selectionID := strings.TrimSpace(stringFromAny(inputRef["report_source_selection_id"]))
+	if selectionID == "" || strings.TrimSpace(date) == "" {
+		return nil, nil
+	}
+	var hasConcreteFollowup bool
+	err := db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM report_source_selection_items item
+			JOIN session_slice_digest_revisions digest ON digest.id = item.digest_revision_id
+			CROSS JOIN LATERAL jsonb_array_elements(
+				COALESCE(digest.digest_json->'daily_summaries', '[]'::jsonb)
+			) day
+			CROSS JOIN LATERAL jsonb_array_elements(
+				COALESCE(day->'highlights', '[]'::jsonb)
+			) highlight
+			WHERE item.selection_id = $1
+				AND digest.status = 'ready'
+				AND day->>'date' = $2
+				AND (
+					COALESCE(jsonb_array_length(highlight->'unresolved'), 0) > 0
+					OR highlight->>'status' IN ('blocked', 'failed')
+				)
+		)`, selectionID, date,
+	).Scan(&hasConcreteFollowup)
+	if err != nil {
+		return nil, err
+	}
+	if hasConcreteFollowup {
+		return nil, nil
+	}
+	return []string{"来源 Digest 在报告期内没有具体 unresolved、blocked 或 failed 事项；status=partial 不能单独证明当前仍待跟进，请省略“进行中与待跟进”章节并将相关 highlight 保留在今日成果中"}, nil
 }
 
 func reportValidationPeriodBounds(date, weekStart, weekEnd string) (time.Time, time.Time) {
