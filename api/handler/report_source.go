@@ -3,6 +3,7 @@ package handler
 import (
 	"errors"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -46,12 +47,7 @@ func (h *ReportSourceHandler) ListCandidates(w http.ResponseWriter, r *http.Requ
 	}
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
-	activityFrom, err := parseOptionalActivityTime(r.URL.Query().Get("activity_from"), false)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REPORT_SOURCE", "error": err.Error()})
-		return
-	}
-	activityTo, err := parseOptionalActivityTime(r.URL.Query().Get("activity_to"), true)
+	activityFrom, activityTo, err := parseCandidateActivityRange(r.URL.Query())
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REPORT_SOURCE", "error": err.Error()})
 		return
@@ -65,6 +61,24 @@ func (h *ReportSourceHandler) ListCandidates(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func parseCandidateActivityRange(values url.Values) (*time.Time, *time.Time, error) {
+	fromValue := strings.TrimSpace(values.Get("activity_from"))
+	toValue := strings.TrimSpace(values.Get("activity_to"))
+	if fromValue == "" && toValue == "" {
+		fromValue = strings.TrimSpace(values.Get("period_start"))
+		toValue = strings.TrimSpace(values.Get("period_end"))
+	}
+	activityFrom, err := parseOptionalActivityTime(fromValue, false)
+	if err != nil {
+		return nil, nil, err
+	}
+	activityTo, err := parseOptionalActivityTime(toValue, true)
+	if err != nil {
+		return nil, nil, err
+	}
+	return activityFrom, activityTo, nil
 }
 
 func (h *ReportSourceHandler) CreateSelection(w http.ResponseWriter, r *http.Request) {

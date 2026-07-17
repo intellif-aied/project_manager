@@ -13,9 +13,22 @@ import (
 
 func TestListCandidatesDoesNotQueryUsageMetrics(t *testing.T) {
 	queryMatcher := sqlmock.QueryMatcherFunc(func(_ string, actualSQL string) error {
-		for _, forbidden := range []string{"session_usage_components", "normalized_total_tokens"} {
+		for _, forbidden := range []string{
+			"session_usage_components",
+			"normalized_total_tokens",
+			"GROUP BY sl.id, s.id, rev.id",
+		} {
 			if strings.Contains(actualSQL, forbidden) {
 				return fmt.Errorf("candidate query still contains %s", forbidden)
+			}
+		}
+		for _, required := range []string{
+			"ORDER BY e.occurred_at ASC",
+			"ORDER BY e.occurred_at DESC",
+			"LEFT JOIN LATERAL",
+		} {
+			if !strings.Contains(actualSQL, required) {
+				return fmt.Errorf("candidate query is missing %s", required)
 			}
 		}
 		if !strings.Contains(actualSQL, "FROM paged p CROSS JOIN totals t") {

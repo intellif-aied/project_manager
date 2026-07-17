@@ -185,9 +185,39 @@ func (s *Service) ListCandidates(ctx context.Context, userID string, query Candi
 		to = query.ActivityTo.UTC()
 	}
 	const candidateCTE = `
-		WITH all_candidates AS (
+		WITH candidates AS MATERIALIZED (
 			SELECT sl.id::text AS slice_key, s.session_ref, s.agent_type,
-				COALESCE((
+				first_event.occurred_at AS activity_start_at,
+				last_event.occurred_at AS activity_end_at,
+				COALESCE(s.cwd, '') AS cwd, COALESCE(s.models, '{}') AS models,
+				s.content_status, rev.id AS content_projection_revision_id,
+				sl.start_cursor, sl.end_cursor
+			FROM session_content_slices sl
+			JOIN sessions s ON s.id = sl.session_id
+			JOIN session_sources src ON src.id = sl.source_id AND src.session_id = s.id
+			JOIN session_content_projection_revisions rev
+				ON rev.id = src.active_content_projection_revision_id
+				AND rev.generation_id = sl.generation_id AND rev.status = 'active'
+			JOIN LATERAL (
+				SELECT e.occurred_at
+				FROM session_content_events e
+				WHERE e.content_projection_revision_id = rev.id
+					AND e.source_start_cursor >= sl.start_cursor
+					AND e.source_end_cursor <= sl.end_cursor
+				ORDER BY e.occurred_at ASC
+				LIMIT 1
+			) first_event ON true
+			JOIN LATERAL (
+				SELECT e.occurred_at
+				FROM session_content_events e
+				WHERE e.content_projection_revision_id = rev.id
+					AND e.source_start_cursor >= sl.start_cursor
+					AND e.source_end_cursor <= sl.end_cursor
+				ORDER BY e.occurred_at DESC
+				LIMIT 1
+			) last_event ON true
+			LEFT JOIN LATERAL (
+				SELECT COALESCE((
 					SELECT NULLIF(btrim(e2.summary), '')
 					FROM session_content_events e2
 					WHERE e2.content_projection_revision_id = rev.id
@@ -202,45 +232,59 @@ func (s *Service) ListCandidates(ctx context.Context, userID string, query Candi
 						ELSE 3
 					END, e2.source_start_cursor, e2.id
 					LIMIT 1
-				), 'Session 增量内容（' || COUNT(*)::text || ' 条记录）') AS summary,
-				MAX(e.occurred_at) AS last_activity_at,
-				MIN(e.occurred_at) AS activity_start_at,
-				MAX(e.occurred_at) AS activity_end_at,
-				COALESCE(s.cwd, '') AS cwd, COALESCE(s.models, '{}') AS models,
-				s.content_status, MAX(e.occurred_at) AS available_through_at
-			FROM session_content_slices sl
-			JOIN sessions s ON s.id = sl.session_id
-			JOIN session_sources src ON src.id = sl.source_id AND src.session_id = s.id
-			JOIN session_content_projection_revisions rev
-				ON rev.id = src.active_content_projection_revision_id
-				AND rev.generation_id = sl.generation_id AND rev.status = 'active'
-			JOIN session_content_events e
-				ON e.content_projection_revision_id = rev.id
-				AND e.source_start_cursor >= sl.start_cursor
-				AND e.source_end_cursor <= sl.end_cursor
+				), 'Session 增量内容（' || (
+					SELECT COUNT(*)
+					FROM session_content_events e3
+					WHERE e3.content_projection_revision_id = rev.id
+						AND e3.source_start_cursor >= sl.start_cursor
+						AND e3.source_end_cursor <= sl.end_cursor
+				)::text || ' 条记录）') AS summary
+				WHERE $2 <> '%%'
+			) search_summary ON true
 			WHERE s.user_id = $1 AND s.content_status = 'available'
 				AND rev.content_indexed_cursor >= sl.end_cursor
-			GROUP BY sl.id, s.id, rev.id
-		), candidates AS MATERIALIZED (
-			SELECT * FROM all_candidates
-			WHERE ($2 = '%%' OR lower(session_ref) LIKE $2 OR lower(summary) LIKE $2)
-				AND ($3::timestamptz IS NULL OR activity_end_at >= $3)
-				AND ($4::timestamptz IS NULL OR activity_start_at <= $4)
+				AND ($3::timestamptz IS NULL OR last_event.occurred_at >= $3)
+				AND ($4::timestamptz IS NULL OR first_event.occurred_at <= $4)
+				AND ($2 = '%%' OR lower(s.session_ref) LIKE $2 OR lower(search_summary.summary) LIKE $2)
 		)`
 	var total int
 	rows, err := s.db.QueryContext(ctx, candidateCTE+`,
 		paged AS (
 			SELECT * FROM candidates
-			ORDER BY last_activity_at DESC, session_ref ASC
+			ORDER BY activity_end_at DESC, session_ref ASC
 			LIMIT $5 OFFSET $6
 		), totals AS (
 			SELECT COUNT(*) AS total_count FROM candidates
 		)
-		SELECT p.slice_key, p.session_ref, p.agent_type, p.summary, p.last_activity_at, p.activity_start_at,
-			p.activity_end_at, p.cwd, p.models, p.content_status, p.available_through_at,
+		SELECT p.slice_key, p.session_ref, p.agent_type,
+			COALESCE(page_summary.summary, 'Session 增量内容（' || (
+				SELECT COUNT(*)
+				FROM session_content_events e3
+				WHERE e3.content_projection_revision_id = p.content_projection_revision_id
+					AND e3.source_start_cursor >= p.start_cursor
+					AND e3.source_end_cursor <= p.end_cursor
+			)::text || ' 条记录）') AS summary,
+			p.activity_end_at AS last_activity_at, p.activity_start_at,
+			p.activity_end_at, p.cwd, p.models, p.content_status, p.activity_end_at AS available_through_at,
 			t.total_count
 		FROM paged p CROSS JOIN totals t
-		ORDER BY p.last_activity_at DESC, p.session_ref ASC`, userID, search, from, to, query.PageSize, (query.Page-1)*query.PageSize)
+		LEFT JOIN LATERAL (
+			SELECT NULLIF(btrim(e2.summary), '') AS summary
+			FROM session_content_events e2
+			WHERE e2.content_projection_revision_id = p.content_projection_revision_id
+				AND e2.source_start_cursor >= p.start_cursor
+				AND e2.source_end_cursor <= p.end_cursor
+				AND NULLIF(btrim(e2.summary), '') IS NOT NULL
+				AND e2.event_type NOT IN ('response_item.custom_tool_call', 'response_item.function_call')
+			ORDER BY CASE e2.event_type
+				WHEN 'event_msg.user_message' THEN 0
+				WHEN 'event_msg.agent_message' THEN 1
+				WHEN 'response_item.message' THEN 2
+				ELSE 3
+			END, e2.source_start_cursor, e2.id
+			LIMIT 1
+		) page_summary ON true
+		ORDER BY p.activity_end_at DESC, p.session_ref ASC`, userID, search, from, to, query.PageSize, (query.Page-1)*query.PageSize)
 	if err != nil {
 		return CandidatePage{}, err
 	}

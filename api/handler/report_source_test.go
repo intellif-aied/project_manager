@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/aidashboard/api/internal/reportsource"
@@ -57,6 +59,41 @@ func TestReportSourceCapabilityRequiresAuthentication(t *testing.T) {
 	handler.Capability(response, httptest.NewRequest(http.MethodGet, "/report-source-capability", nil))
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestParseCandidateActivityRangeFallsBackToReportPeriod(t *testing.T) {
+	from, to, err := parseCandidateActivityRange(url.Values{
+		"period_start": {"2026-07-17"},
+		"period_end":   {"2026-07-17"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantFrom := time.Date(2026, 7, 17, 0, 0, 0, 0, time.FixedZone("Asia/Shanghai", 8*60*60))
+	wantTo := wantFrom.Add(24*time.Hour - time.Nanosecond)
+	if from == nil || !from.Equal(wantFrom) {
+		t.Fatalf("from = %v, want %v", from, wantFrom)
+	}
+	if to == nil || !to.Equal(wantTo) {
+		t.Fatalf("to = %v, want %v", to, wantTo)
+	}
+}
+
+func TestParseCandidateActivityRangePrefersExplicitActivityRange(t *testing.T) {
+	from, to, err := parseCandidateActivityRange(url.Values{
+		"period_start":  {"2026-07-17"},
+		"period_end":    {"2026-07-17"},
+		"activity_from": {"2026-07-15"},
+		"activity_to":   {"2026-07-16"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantFrom := time.Date(2026, 7, 15, 0, 0, 0, 0, time.FixedZone("Asia/Shanghai", 8*60*60))
+	wantTo := time.Date(2026, 7, 16, 0, 0, 0, 0, time.FixedZone("Asia/Shanghai", 8*60*60)).Add(24*time.Hour - time.Nanosecond)
+	if from == nil || !from.Equal(wantFrom) || to == nil || !to.Equal(wantTo) {
+		t.Fatalf("range = %v..%v, want %v..%v", from, to, wantFrom, wantTo)
 	}
 }
 
