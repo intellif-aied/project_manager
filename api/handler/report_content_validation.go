@@ -17,7 +17,7 @@ var (
 	reportISOWeekdayPattern               = regexp.MustCompile(`(20[0-9]{2})-([0-9]{1,2})-([0-9]{1,2})\s*(?:[（(]\s*)?(?:周|星期)([一二三四五六日天])\s*[）)]?`)
 	reportChineseWeekdayPattern           = regexp.MustCompile(`(?:(20[0-9]{2})\s*年\s*)?([0-9]{1,2})\s*月\s*([0-9]{1,2})\s*日\s*(?:[（(]\s*)?(?:周|星期)([一二三四五六日天])\s*[）)]?`)
 	reportMetadataDatePattern             = regexp.MustCompile(`(?m)(?:报告日期|日报日期|报告生成时间|生成时间)\s*[:：]\s*(20[0-9]{2})-([0-9]{1,2})-([0-9]{1,2})`)
-	reportGenerationTimePattern           = regexp.MustCompile(`(?m)(?:报告生成时间|生成时间)\s*[:：]`)
+	reportGenerationTimePattern           = regexp.MustCompile(`(?m)(?:报告生成时间|报告时间|生成时间)\s*[:：]`)
 	reportTodayDatePattern                = regexp.MustCompile(`(?m)(?:今日|当天)\s*(?:[（(]\s*)?(20[0-9]{2})-([0-9]{1,2})-([0-9]{1,2})`)
 	reportYesterdayDatePattern            = regexp.MustCompile(`(?m)昨日\s*(?:[（(]\s*)?(20[0-9]{2})-([0-9]{1,2})-([0-9]{1,2})`)
 	reportNoPersonalDailyPattern          = regexp.MustCompile(`(?m)(?:(?:^|[。；;\n])\s*(?:(?:本)?(?:小组|团队)(?:当日|本周)?\s*)?无(?:任何)?个人日报(?:记录)?|个人日报\s*[:：]?\s*(?:0\s*份|零份|无人提交|均未提交))`)

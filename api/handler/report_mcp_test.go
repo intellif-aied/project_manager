@@ -633,6 +633,7 @@ func TestReportContentValidationRejectsWrongWeekdayAndInternalIDs(t *testing.T) 
 		{name: "empty followup section", content: "# 日报\n### 进行中与待跟进\n\n（无）", want: 1},
 		{name: "inline empty followup section", content: "# 日报\n**进行中与待跟进**：无", want: 1},
 		{name: "generation time is forbidden", content: "# 日报\n- 完成交付\n\n*报告生成时间：2026-07-16*", want: 1},
+		{name: "report time is forbidden", content: "# 日报\n- 完成交付\n\n*报告时间：2026-07-17*", want: 1},
 		{name: "nonempty followup section", content: "# 日报\n### 进行中与待跟进\n\n1. 复制按钮兼容性仍待修复", want: 0},
 		{name: "file count", content: "# 日报\n- 今日共产生 190 项文件变更", want: 1},
 		{name: "validation attempts", content: "# 日报\n- go test：40 次尝试后通过", want: 1},
