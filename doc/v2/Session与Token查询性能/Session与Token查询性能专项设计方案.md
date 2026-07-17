@@ -131,7 +131,7 @@ Digest、冻结来源读取和 Session 内容详情不得继续自行查询 JSON
 - 会同时破坏当前 Digest 读取；
 - 回滚困难。
 
-安全路径是新增轻量表、双写/回填、切换消费者、完成观察期后再整体下线旧载荷表。
+安全路径是新增轻量表、开发迁移期临时并存与回填、测试服全量对账、切换消费者、完成观察期后再整体下线旧载荷表。
 
 ## 6. Token Analytics 目标方案
 
@@ -170,15 +170,15 @@ summary、trends、rankings、sessions 继续读取同一快照。默认 Session
 
 | 发布单元 | 内容 | 明确不包含 |
 | --- | --- | --- |
-| R1 | Report Source 切片目录、回填、影子对账、灰度读取 | MinIO 读取切换、历史清理、Token 重构 |
-| R2 | 轻量事件索引、统一 MinIO 内容读取器、消费者影子校验 | 停写旧载荷、删除历史数据 |
+| R1 | Report Source 切片目录、回填、测试服全量对账与整体切换 | MinIO 读取切换、历史清理、Token 重构 |
+| R2 | 轻量事件索引、统一 MinIO 内容读取器、消费者全量校验与整体切换 | 停写旧载荷、删除历史数据 |
 | R3 | 新写入不再保存 PostgreSQL 完整载荷 | 历史载荷删除 |
 | R4 | 观察期后下线旧载荷表并回收空间 | Token Analytics |
-| R5A | Usage Contribution、Session family、三维 Rollup 影子建设 | Token API 切换 |
-| R5B | 轻量 Snapshot、Token API/前端/MCP ad-hoc 分别灰度 | 旧路径删除 |
+| R5A | Usage Contribution、Session family、三维 Rollup 建设与全量对账 | Token API 切换 |
+| R5B | 轻量 Snapshot、Token API/前端/MCP ad-hoc 同版本整体切换 | 旧路径删除 |
 | R5C | 兼容 Snapshot/字段/表的独立下线评审 | Report Source/内容存储改造 |
 
-每个发布单元都必须有独立开关和旧路径回退能力。
+每个发布单元在测试服全量验收后整体切换。内测期不建设用户灰度、百分比 rollout 或 `legacy/shadow/new` 运行时开关；回滚使用上一 Git 提交/已验证镜像，且当期保留旧表和旧数据。
 
 ## 8. 成功标准
 
@@ -190,6 +190,6 @@ summary、trends、rankings、sessions 继续读取同一快照。默认 Session
 - Digest、MCP 和其他接口逐项通过 [接口回归矩阵](./06-Digest与接口影响回归矩阵.md)；
 - Token 家族总量、逐日和新增 Chunk 三维精确对账，Subagent 父历史不重复；
 - Token 页面各模块保持同一快照，统计、成本、权限和质量状态一致；
-- 任一新路径异常时，可以通过配置开关回旧读路径，不需要回滚数据迁移。
+- 任一新路径异常时，可以回滚到上一 Git 提交/已验证镜像；当期不做破坏性数据清理，因此不需要反向回滚已完成的附加表回填。
 
 详细步骤与测试见 [开发、迁移与测试验收](./05-开发迁移与测试验收.md)。

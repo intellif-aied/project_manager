@@ -44,13 +44,13 @@ MinIO 故障只允许使尚未生成的 Digest 延迟或失败，不能生成空
 
 该模式不应因 MinIO Reader 上线增加在线延迟，也不改变 MCP Schema。
 
-### 3.2 Attached legacy full 模式
+### 3.2 Attached full 兼容模式
 
 当前 full 模式会分页读取 `session_content_events.content_payload`。它是 R2 必须迁移的消费者：
 
 - 外部 MCP 参数、分页 cursor 和返回事件结构保持不变；
 - 内部改为按冻结 revision/cursor 从 MinIO 流式读取；
-- full 模式尚未完成对账前，禁止进入 `index_only`，更禁止清理旧 Payload。
+- full 模式尚未在测试服完成全量对账前，禁止停止新增 PostgreSQL 完整 Payload，更禁止清理旧 Payload。
 
 ### 3.3 Ad-hoc 日期查询模式
 
@@ -58,7 +58,7 @@ MinIO 故障只允许使尚未生成的 Digest 延迟或失败，不能生成空
 
 - 本专项不删除该路径的 Token 字段；
 - Report Source 选择器不再显示 Token，不代表 MCP ad-hoc `get_sessions` 可以删除 Token；
-- 后续 Token 三维统计切换时，需要单独影子对账该路径。
+- 后续 Token 三维统计切换时，该路径必须纳入测试服全量对账，并与 Token API/前端同版本切换。
 
 其余报告、任务、需求等 MCP 工具不读取 Session 完整事件，本专项不改变其工具定义和返回结构。
 
@@ -76,7 +76,7 @@ MinIO 故障只允许使尚未生成的 Digest 延迟或失败，不能生成空
 | MCP `write_report_result` | 无数据源变化 | 读取完成、版本、hash 门禁不变 | 全阶段回归 |
 | Session 内容详情/导出 | 改为 MinIO Reader | 返回内容和权限不变 | R2 |
 | 内容清理/恢复 | 同步处理对象、索引、Digest、Rollup | 授权和审计语义不变 | R2/R5A |
-| Token Analytics | 改读三维 Rollup + 轻量 Snapshot | 权限、筛选和 snapshot token 保持；新增字段只能附加 | R5B |
+| Token Analytics | 改读三维 Rollup + 轻量 Snapshot | 权限、筛选和 snapshot token 保持；字段语义显式，API/前端/MCP 同版本切换 | R5B |
 | 其他报告/任务/需求 MCP | 无变化 | 无变化 | 冒烟回归 |
 
 ## 5. 必须逐项执行的回归用例
@@ -87,7 +87,7 @@ MinIO 故障只允许使尚未生成的 Digest 延迟或失败，不能生成空
 | --- | --- | --- |
 | REG-UP-001 | 新 Chunk 上传 | 上传响应不等待 projection、Digest 或 Rollup |
 | REG-DIG-001 | fully indexed slice | 周期任务只创建一个目标版本 Digest Job |
-| REG-DIG-002 | Digest PostgreSQL/MinIO shadow | 事件顺序、source hash、数量和最终 digest hash 一致 |
+| REG-DIG-002 | Digest PostgreSQL/MinIO 离线对账 | 事件顺序、source hash、数量和最终 digest hash 一致 |
 | REG-DIG-003 | Digest 重试 | 不产生重复 ready revision |
 | REG-DIG-004 | MinIO 对象缺失/hash 错误 | 明确失败，不生成空 Digest |
 | REG-DIG-005 | Digest 版本升级 | 新旧 revision 并存，旧冻结报告仍可读 |
@@ -126,7 +126,7 @@ MinIO 故障只允许使尚未生成的 Digest 延迟或失败，不能生成空
 | REG-API-002 | Session 导出 | 字节边界、权限和取消行为一致 |
 | REG-API-003 | Token summary/trends/rankings/sessions | 同一 Snapshot 总量可对账 |
 | REG-API-004 | 内容清理与恢复 | MinIO、派生索引、Digest、Token 生命周期一致 |
-| REG-API-005 | 前台并发 | 回填/影子开启后既有接口 p95 回归不超过 5% |
+| REG-API-005 | 前台并发 | 回填/离线对账开启后既有接口 p95 回归不超过 5% |
 
 ## 6. 停止条件
 
@@ -134,5 +134,5 @@ MinIO 故障只允许使尚未生成的 Digest 延迟或失败，不能生成空
 - MCP full 模式仍直接依赖 `content_payload`；
 - attached Digest 读取开始依赖实时 MinIO；
 - `write_report_result` 完整性门禁被弱化；
-- ad-hoc MCP Token 字段被误删或口径未完成影子对账；
-- 回填/影子任务造成现有接口明显回归。
+- ad-hoc MCP Token 字段被误删或口径未完成测试服全量对账；
+- 回填/离线对账任务造成现有接口明显回归。

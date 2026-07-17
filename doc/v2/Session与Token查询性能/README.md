@@ -10,7 +10,7 @@
 - Report Source 只查询切片目录读模型，分页成本只与候选切片数量有关；
 - MinIO 保存唯一的原始 JSONL，PostgreSQL 只保留可重建的索引、摘要、Usage 和业务状态；
 - Token Analytics 使用不可变的 Usage Contribution，预生成 Session 家族、按天、按新增 Chunk 三种可对账 Rollup；
-- 所有改造均采用附加表、影子对账、灰度开关和可回滚切换，不直接改写或删除现有 7GB 事件表。
+- 所有改造均采用附加表、测试服全量对账、分阶段整体切换和 Git/镜像回滚，不直接改写或删除现有 7GB 事件表。
 
 ## 已确认的硬边界
 
@@ -19,7 +19,7 @@
 3. 只有用户显式传入 `activity_from`、`activity_to` 时才过滤活动时间。
 4. 候选分页 SQL 不得访问 `session_content_events`、Usage 明细或现场生成 Digest。
 5. Report Source 不再展示或计算 Token，候选接口不得为 Token 统计付出成本。
-6. MinIO 原始对象没有完成完整性校验、消费者迁移、影子对账和回滚观察前，不得清理 PostgreSQL 历史载荷。
+6. MinIO 原始对象没有完成完整性校验、消费者迁移、测试服全量对账和回滚演练前，不得清理 PostgreSQL 历史载荷。
 7. Report Source、原始内容存储治理、Token Analytics 分三条发布链路，禁止一次性大迁移。
 8. 顶层 Session 总量包含全部层级 Subagent，但父历史不得在子 Agent 重复计数。
 9. Session 家族总量、逐日总量、全部新增 Chunk 总量在同一版本下必须精确相等。
@@ -32,7 +32,7 @@
 3. [现状产品形态与核心边界](./01-现状产品形态与核心边界.md)
 4. [目标架构与最小破坏演进](./02-目标架构与最小破坏演进.md)
 5. [关键决策与待确认项](./03-关键决策与待评审问题.md)
-6. [四轮 Review 记录](./04-Review记录.md)
+6. [五轮 Review 记录](./04-Review记录.md)
 7. [开发、迁移与测试验收](./05-开发迁移与测试验收.md)
 8. [Digest 与接口影响回归矩阵](./06-Digest与接口影响回归矩阵.md)
 9. [Token 三维统计与对账模型](./07-Token三维统计与对账模型.md)
@@ -48,7 +48,8 @@ Report Source 切片目录
 
 Token Contribution + Session 家族/按天/按 Chunk Rollup
   -> 轻量 Snapshot
-  -> Token API、前端、MCP ad-hoc 分别灰度
+  -> 测试服全量回归与对账
+  -> Token API、前端、MCP ad-hoc 同版本整体切换
 ```
 
 ## 当前不执行
@@ -57,4 +58,5 @@ Token Contribution + Session 家族/按天/按 Chunk Rollup
 - 不删除、置空或批量更新生产 `content_payload`；
 - 不为了变快而默认增加日期条件；
 - 不把 Token Analytics、Digest、MCP 或报告生成一起重写；
+- 内测开发期不建设用户灰度、百分比 rollout、双读 Shadow 或读写模式配置；
 - 不在生产环境执行压测或破坏性迁移。

@@ -203,7 +203,7 @@ Snapshot 不再复制高基数 `session_usage_components`。summary、trends、r
 
 ## 10. Token API 语义
 
-避免继续使用含义不清的单一 `total_tokens`，Session 结果建议以附加字段过渡：
+避免继续使用含义不清的单一 `total_tokens`，Session 结果建议使用显式字段：
 
 ```text
 self_total_tokens
@@ -217,12 +217,13 @@ quality_status
 data_through_cursor
 ```
 
-过渡期：
+内测切换规则：
 
 - 旧 `total_tokens` 字段不静默改义；
-- 新旧字段影子对账后，前端显式切换到 family/range 字段；
+- 在 14.157 完成全量对账后，Token API、前端与 MCP ad-hoc 在同一内测版本切换到 family/range 字段，不设字段灰度期；
+- 旧 `total_tokens` 可在该协同版本保留原语义并标记废弃，或在确认所有消费者同步更新后删除，不允许同名改义；
 - 精确搜索 Subagent 时返回所属 root family，并标记命中的 member；
-- MCP ad-hoc `get_sessions` 的旧 Token 字段在完成相同对账前不删除。
+- MCP ad-hoc `get_sessions` 必须参与相同的对账和同版本回归，不得单独落后。
 
 ## 11. 成本口径
 
@@ -262,14 +263,14 @@ data_through_cursor
 
 - 新增 Contribution、family membership 和三套 Rollup；
 - 继续保留现有 Component、Daily Usage 和查询路径；
-- 历史回填与三维影子对账，不影响用户响应。
+- 在测试服执行历史回填、三维全量对账和重算验证，不把对账嵌入用户请求。
 
 ### R5B：Snapshot 与 API 切换
 
 - Snapshot 改为冻结 revision/family/Rollup 版本；
 - Token API 添加明确的 self/subagent/family/range 字段；
-- 前端和 MCP ad-hoc 路径分别灰度；
-- 统计、权限、成本与性能全部通过后切换。
+- 统计、权限、成本与性能全部通过后，Token API、前端和 MCP ad-hoc 在同一内测版本整体切换；
+- 不增加用户灰度、百分比 rollout 或 `legacy/shadow/rollups` 配置。
 
 ### R5C：兼容路径下线
 
