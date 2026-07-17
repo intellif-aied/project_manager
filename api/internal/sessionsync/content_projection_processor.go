@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"time"
+
+	"github.com/aidashboard/api/internal/reportsourcecatalog"
 )
 
 var (
@@ -176,6 +178,9 @@ func (p *ContentProjectionProcessor) processChunk(ctx context.Context, job Proce
 		UPDATE session_upload_chunks SET content_index_status = 'indexed' WHERE id = $1`, chunk.ID); err != nil {
 		return err
 	}
+	if _, err := reportsourcecatalog.ReconcileRevision(ctx, tx, revisionID, 20); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
@@ -307,6 +312,12 @@ func (p *ContentProjectionProcessor) processActivation(ctx context.Context, job 
 			UPDATE sessions SET content_status = 'available', updated_at = now() WHERE id = $1`, job.SessionID); err != nil {
 			return err
 		}
+	}
+	if _, err := reportsourcecatalog.ReconcileRevision(ctx, tx, job.TargetRevisionID.String, 100); err != nil {
+		return err
+	}
+	if err := reportsourcecatalog.ActivateRevision(ctx, tx, sourceID, job.TargetRevisionID.String); err != nil {
+		return err
 	}
 	return tx.Commit()
 }

@@ -13,6 +13,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/aidashboard/api/internal/reportsourcecatalog"
 	"github.com/aidashboard/api/internal/sessionsync"
 )
 
@@ -573,6 +574,9 @@ func (p *MeteringProcessor) finalizeClearIfReady(ctx context.Context, sessionID 
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE session_content_tombstones SET objects_deleted_at = now()
 		WHERE session_id = $1 AND restored_at IS NULL`, sessionID); err != nil {
+		return err
+	}
+	if err := reportsourcecatalog.MarkSessionCleared(ctx, tx, sessionID); err != nil {
 		return err
 	}
 	return tx.Commit()

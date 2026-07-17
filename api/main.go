@@ -12,6 +12,7 @@ import (
 	"github.com/aidashboard/api/handler"
 	"github.com/aidashboard/api/internal/pricing"
 	"github.com/aidashboard/api/internal/reportsource"
+	"github.com/aidashboard/api/internal/reportsourcecatalog"
 	"github.com/aidashboard/api/internal/sessiondigest"
 	"github.com/aidashboard/api/internal/sessiondigestv2"
 	"github.com/aidashboard/api/internal/sessionsync"
@@ -89,6 +90,12 @@ func main() {
 	defer stopScheduler()
 	handler.NewManagedAgentScheduleRunner(managedAgentH).Start(schedulerCtx)
 	service.NewManagedAgentRunStatusSyncer(database, managedAgentClient).Start(schedulerCtx)
+	reportSourceCatalogReconciler, err := reportsourcecatalog.NewReconciler(database)
+	if err != nil {
+		log.Fatalf("Failed to init report source catalog reconciler: %v", err)
+	}
+	reportSourceCatalogReconciler.Start(schedulerCtx)
+	log.Println("Report source catalog reconciler started")
 	// Session content and usage processing are core services. Leaving either worker
 	// stopped accepts uploads that can never appear in reports or Token analytics.
 	{

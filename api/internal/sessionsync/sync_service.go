@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/aidashboard/api/internal/reportsourcecatalog"
 )
 
 const ContentParserVersion = "session-content-v2"
@@ -816,6 +818,9 @@ func createContentSlice(
 		SET end_cursor = EXCLUDED.end_cursor
 		RETURNING id::text`, sessionID, sourceID, generationID, startCursor, endCursor).Scan(&sliceID)
 	if err != nil {
+		return "", false, err
+	}
+	if err := reportsourcecatalog.EnsureSlice(ctx, tx, sliceID); err != nil {
 		return "", false, err
 	}
 	return sliceID, true, nil

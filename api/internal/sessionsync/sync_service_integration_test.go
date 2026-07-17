@@ -79,7 +79,7 @@ func TestSyncServicePrepareAcceptFinalizeIntegration(t *testing.T) {
 		t.Fatalf("preparedAgain=%+v", preparedAgain)
 	}
 
-	var sourceCount, activeCount, stagingCount, chunkCount, jobCount, revisionCount, sliceCount int
+	var sourceCount, activeCount, stagingCount, chunkCount, jobCount, revisionCount, sliceCount, catalogCount int
 	err = database.QueryRow(`
 		SELECT
 			(SELECT COUNT(*) FROM session_sources src JOIN sessions s ON s.id = src.session_id WHERE s.user_id = $1),
@@ -88,13 +88,14 @@ func TestSyncServicePrepareAcceptFinalizeIntegration(t *testing.T) {
 			(SELECT COUNT(*) FROM session_upload_chunks c JOIN session_source_generations g ON g.id = c.generation_id JOIN session_sources src ON src.id = g.source_id JOIN sessions s ON s.id = src.session_id WHERE s.user_id = $1),
 			(SELECT COUNT(*) FROM session_processing_jobs j JOIN sessions s ON s.id = j.session_id WHERE s.user_id = $1),
 			(SELECT COUNT(*) FROM session_content_projection_revisions p JOIN session_source_generations g ON g.id = p.generation_id JOIN session_sources src ON src.id = g.source_id JOIN sessions s ON s.id = src.session_id WHERE s.user_id = $1),
-			(SELECT COUNT(*) FROM session_content_slices sl JOIN sessions s ON s.id = sl.session_id WHERE s.user_id = $1)`, userID,
-	).Scan(&sourceCount, &activeCount, &stagingCount, &chunkCount, &jobCount, &revisionCount, &sliceCount)
+			(SELECT COUNT(*) FROM session_content_slices sl JOIN sessions s ON s.id = sl.session_id WHERE s.user_id = $1),
+			(SELECT COUNT(*) FROM report_source_slice_catalog catalog WHERE catalog.user_id = $1)`, userID,
+	).Scan(&sourceCount, &activeCount, &stagingCount, &chunkCount, &jobCount, &revisionCount, &sliceCount, &catalogCount)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sourceCount != 1 || activeCount != 1 || stagingCount != 0 || chunkCount != 1 || jobCount != 4 || revisionCount != 1 || sliceCount != 1 {
-		t.Fatalf("sources=%d active=%d staging=%d chunks=%d jobs=%d revisions=%d slices=%d", sourceCount, activeCount, stagingCount, chunkCount, jobCount, revisionCount, sliceCount)
+	if sourceCount != 1 || activeCount != 1 || stagingCount != 0 || chunkCount != 1 || jobCount != 4 || revisionCount != 1 || sliceCount != 1 || catalogCount != 1 {
+		t.Fatalf("sources=%d active=%d staging=%d chunks=%d jobs=%d revisions=%d slices=%d catalog=%d", sourceCount, activeCount, stagingCount, chunkCount, jobCount, revisionCount, sliceCount, catalogCount)
 	}
 	var summary string
 	if err := database.QueryRow(`SELECT summary FROM sessions WHERE user_id = $1 AND session_ref = $2`, userID, request.SessionRef).Scan(&summary); err != nil {
@@ -170,6 +171,14 @@ func TestSyncServicePrepareAcceptFinalizeIntegration(t *testing.T) {
 	}
 	if index != len(wantRanges) {
 		t.Fatalf("slice count=%d want=%d", index, len(wantRanges))
+	}
+	if err := database.QueryRow(`
+		SELECT COUNT(*) FROM report_source_slice_catalog
+		WHERE user_id = $1 AND status = 'building'`, userID).Scan(&catalogCount); err != nil {
+		t.Fatal(err)
+	}
+	if catalogCount != 2 {
+		t.Fatalf("catalog count=%d want=2", catalogCount)
 	}
 
 	request.Sources[0].SourceKey = "different-source-key"

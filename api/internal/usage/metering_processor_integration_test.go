@@ -12,6 +12,7 @@ import (
 	"time"
 
 	appconfig "github.com/aidashboard/api/config"
+	"github.com/aidashboard/api/internal/reportsourcecatalog"
 	"github.com/aidashboard/api/internal/sessionsync"
 	appstorage "github.com/aidashboard/api/storage"
 	"github.com/minio/minio-go/v7"
@@ -97,7 +98,7 @@ func TestMeteringEnvelopeClearAndReplayIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var contentStatus, objectStatus, manifestStatus string
+	var contentStatus, objectStatus, manifestStatus, catalogStatus string
 	var sourceLines, envelopeRows, contentEvents int64
 	var leakedText bool
 	if err := database.QueryRow(`
@@ -109,22 +110,23 @@ func TestMeteringEnvelopeClearAndReplayIntegration(t *testing.T) {
 			EXISTS (
 				SELECT 1 FROM session_metering_envelopes e
 				WHERE e.generation_id = $2 AND e.raw_usage_json::text LIKE '%Test monotonic usage snapshots.%'
-			)
+			),
+			(SELECT status FROM report_source_slice_catalog WHERE session_id = s.id LIMIT 1)
 		FROM sessions s
 		JOIN session_upload_chunks c ON c.id = $3
 		JOIN session_metering_envelope_manifests m ON m.generation_id = $2
 		WHERE s.id = $1`, fixture.sessionID, fixture.generationID, fixture.jobs[0].ChunkID.String).Scan(
 		&contentStatus, &objectStatus, &manifestStatus, &sourceLines, &envelopeRows,
-		&contentEvents, &leakedText,
+		&contentEvents, &leakedText, &catalogStatus,
 	); err != nil {
 		t.Fatal(err)
 	}
 	if contentStatus != string(sessionsync.ContentCleared) || objectStatus != "deleted" ||
 		manifestStatus != "validated" || sourceLines != 5 || envelopeRows != 4 ||
-		contentEvents != 0 || leakedText || len(store.objects) != 0 {
-		t.Fatalf("content=%s object=%s manifest=%s lines=%d envelopes=%d events=%d leaked=%v objects=%d",
+		contentEvents != 0 || leakedText || len(store.objects) != 0 || catalogStatus != "cleared" {
+		t.Fatalf("content=%s object=%s manifest=%s lines=%d envelopes=%d events=%d leaked=%v objects=%d catalog=%s",
 			contentStatus, objectStatus, manifestStatus, sourceLines, envelopeRows,
-			contentEvents, leakedText, len(store.objects))
+			contentEvents, leakedText, len(store.objects), catalogStatus)
 	}
 	if got := activeMetricsRevision(t, database, fixture.sourceID); got != oldRevisionID {
 		t.Fatalf("content clear changed metrics revision: got=%s want=%s", got, oldRevisionID)
@@ -311,5 +313,19 @@ func insertReadableProjectionFixture(t *testing.T, database *sql.DB, fixture *db
 		revisionID, fixture.jobs[0].ChunkID.String, fixture.cursor,
 		time.Date(2026, 7, 10, 1, 0, 0, 0, time.UTC), sessionsync.HashBytes([]byte("secret content"))); err != nil {
 		t.Fatal(err)
+	}
+	var sliceID string
+	if err := database.QueryRow(`
+		INSERT INTO session_content_slices (
+			session_id, source_id, generation_id, start_cursor, end_cursor
+		) VALUES ($1, $2, $3, 0, $4) RETURNING id`,
+		fixture.sessionID, fixture.sourceID, fixture.generationID, fixture.cursor).Scan(&sliceID); err != nil {
+		t.Fatal(err)
+	}
+	if err := reportsourcecatalog.EnsureSlice(context.Background(), database, sliceID); err != nil {
+		t.Fatal(err)
+	}
+	if count, err := reportsourcecatalog.ReconcileRevision(context.Background(), database, revisionID, 1); err != nil || count != 1 {
+		t.Fatalf("reconcile catalog count=%d err=%v", count, err)
 	}
 }

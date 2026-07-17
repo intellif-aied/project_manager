@@ -9,6 +9,8 @@ import (
 	"io"
 	"testing"
 	"time"
+
+	"github.com/aidashboard/api/internal/reportsourcecatalog"
 )
 
 type memoryContentStore map[string][]byte
@@ -64,6 +66,24 @@ func TestContentProjectionProcessorOrdersAndActivatesIntegration(t *testing.T) {
 	}
 	if contentStatus != string(ContentAvailable) {
 		t.Fatalf("content_status=%s want=%s", contentStatus, ContentAvailable)
+	}
+	var catalogStatus, catalogSummary string
+	var catalogEvents int64
+	var catalogStart, catalogEnd time.Time
+	if err := database.QueryRow(`
+		SELECT status, event_count, activity_start_at, activity_end_at, summary
+		FROM report_source_slice_catalog
+		WHERE content_projection_revision_id = $1`, fixture.revisionID).Scan(
+		&catalogStatus, &catalogEvents, &catalogStart, &catalogEnd, &catalogSummary,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if catalogStatus != "ready" || catalogEvents != 2 ||
+		!catalogStart.Equal(time.Date(2026, 7, 14, 1, 0, 0, 0, time.UTC)) ||
+		!catalogEnd.Equal(time.Date(2026, 7, 14, 1, 1, 0, 0, time.UTC)) ||
+		catalogSummary != "before\uFFFDafter" {
+		t.Fatalf("catalog status=%s events=%d range=%s..%s summary=%q",
+			catalogStatus, catalogEvents, catalogStart, catalogEnd, catalogSummary)
 	}
 	var summary, message, literal string
 	if err := database.QueryRow(`
@@ -175,6 +195,17 @@ func createProjectionFixture(t *testing.T, database *sql.DB, userID int64, sessi
 		cursor = end
 	}
 	fixture.endCursor = cursor
+	var sliceID string
+	if err := database.QueryRow(`
+		INSERT INTO session_content_slices (
+			session_id, source_id, generation_id, start_cursor, end_cursor
+		) VALUES ($1, $2, $3, 0, $4)
+		RETURNING id`, fixture.sessionID, sourceID, generationID, cursor).Scan(&sliceID); err != nil {
+		t.Fatal(err)
+	}
+	if err := reportsourcecatalog.EnsureSlice(context.Background(), database, sliceID); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := database.Exec(`
 		UPDATE session_source_generations
 		SET expected_cursor = $1, prefix_checkpoint_hash = $2,
