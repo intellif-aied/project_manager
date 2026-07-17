@@ -128,6 +128,127 @@ name: herdr`,
 	}
 }
 
+func TestExtractorRecoversTextFromTruncatedMultimodalPayload(t *testing.T) {
+	extractor := NewExtractor()
+	extractor.Consume(testEvent(1, "event_msg.user_message", map[string]any{
+		"payload": map[string]any{
+			"message": `[{"text":"这个代码错误在哪\n","type":"input_text"},{"type":"input_image","image_url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUg`,
+		},
+	}))
+	extractor.Consume(testEvent(2, "event_msg.task_complete", map[string]any{
+		"payload": map[string]any{"last_agent_message": "问题是循环边界多执行了一次。"},
+	}))
+	digest, _, _, _, _, encoded := extractor.Result(DefaultItemBytes)
+	if len(digest.WorkUnits) != 1 ||
+		digest.WorkUnits[0].Goal.Text != "这个代码错误在哪" {
+		t.Fatalf("multimodal text was not recovered: %+v", digest.WorkUnits)
+	}
+	if strings.Contains(string(encoded), "data:image") ||
+		strings.Contains(string(encoded), "base64") {
+		t.Fatalf("image payload leaked into digest: %s", encoded)
+	}
+}
+
+func TestExtractorDropsTurnAbortedWrapper(t *testing.T) {
+	extractor := NewExtractor()
+	extractor.Consume(testEvent(1, "event_msg.user_message", map[string]any{
+		"payload": map[string]any{"message": "<turn_aborted>previous turn stopped</turn_aborted>"},
+	}))
+	extractor.Consume(testEvent(2, "event_msg.user_message", map[string]any{
+		"payload": map[string]any{"message": "继续分析真实问题"},
+	}))
+	digest, _, _, _, _, _ := extractor.Result(DefaultItemBytes)
+	if len(digest.WorkUnits) != 1 || digest.WorkUnits[0].Goal.Text != "继续分析真实问题" {
+		t.Fatalf("turn wrapper became work: %+v", digest.WorkUnits)
+	}
+}
+
+func TestExtractorDropsImageTransportWrapper(t *testing.T) {
+	extractor := NewExtractor()
+	extractor.Consume(testEvent(1, "event_msg.user_message", map[string]any{
+		"payload": map[string]any{
+			"message": `<image name=[Image #1] path="/tmp/image.png">`,
+		},
+	}))
+	extractor.Consume(testEvent(2, "event_msg.user_message", map[string]any{
+		"payload": map[string]any{"message": "</image>"},
+	}))
+	extractor.Consume(testEvent(3, "event_msg.user_message", map[string]any{
+		"payload": map[string]any{"message": "分析这张图里的错误"},
+	}))
+	digest, _, _, _, _, _ := extractor.Result(DefaultItemBytes)
+	if len(digest.WorkUnits) != 1 || digest.WorkUnits[0].Goal.Text != "分析这张图里的错误" {
+		t.Fatalf("image transport wrapper became work: %+v", digest.WorkUnits)
+	}
+}
+
+func TestExtractorKeepsFinalAnswerWithoutToolEvidence(t *testing.T) {
+	extractor := NewExtractor()
+	extractor.Consume(testEvent(1, "event_msg.user_message", map[string]any{
+		"payload": map[string]any{"message": "你可以访问当前 git remote 吗"},
+	}))
+	extractor.Consume(testEvent(2, "event_msg.task_complete", map[string]any{
+		"payload": map[string]any{
+			"last_agent_message": "可以，已完成只读远端检查，当前 remote 可访问。",
+		},
+	}))
+	digest, _, _, _, _, _ := extractor.Result(DefaultItemBytes)
+	if len(digest.WorkUnits) != 1 || len(digest.WorkUnits[0].ResultStatements) != 1 ||
+		digest.WorkUnits[0].ResultStatements[0].Source != "agent_claim" {
+		t.Fatalf("unsupported final answer was not retained as a result: %+v", digest.WorkUnits)
+	}
+	if len(digest.DailySummaries) != 1 || len(digest.DailySummaries[0].Highlights) != 1 {
+		t.Fatalf("final answer did not reach report-day view: %+v", digest.DailySummaries)
+	}
+}
+
+func TestExtractorAttachesCompletionConfirmationToPreviousUnit(t *testing.T) {
+	extractor := NewExtractor()
+	extractor.Consume(testEvent(1, "event_msg.user_message", map[string]any{
+		"payload": map[string]any{"message": "完成硬件管理方案"},
+	}))
+	extractor.Consume(testEvent(2, "event_msg.task_complete", map[string]any{
+		"payload": map[string]any{"last_agent_message": "硬件管理方案已完成。"},
+	}))
+	extractor.Consume(testEvent(3, "event_msg.user_message", map[string]any{
+		"payload": map[string]any{"message": "Agree"},
+	}))
+	digest, _, _, _, _, encoded := extractor.Result(DefaultItemBytes)
+	if len(digest.WorkUnits) != 1 || digest.WorkUnits[0].Status != "completed" {
+		t.Fatalf("confirmation did not complete previous unit: %+v", digest.WorkUnits)
+	}
+	if strings.Contains(string(encoded), "已完成：Agree") {
+		t.Fatalf("confirmation became a fake result: %s", encoded)
+	}
+}
+
+func TestResolveUnitPreservesDeliveredAnalysisWhenValidationFails(t *testing.T) {
+	extractor := NewExtractor()
+	extractor.Consume(testEvent(1, "event_msg.user_message", map[string]any{
+		"payload": map[string]any{"message": "只读审计当前产品实现差距"},
+	}))
+	extractor.Consume(testEvent(2, "response_item.function_call", map[string]any{
+		"payload": map[string]any{
+			"call_id": "test-failed", "arguments": `{"cmd":"go test ./..."}`,
+		},
+	}))
+	extractor.Consume(testEvent(3, "response_item.function_call_output", map[string]any{
+		"payload": map[string]any{
+			"call_id": "test-failed", "output": "process exited with code 1",
+		},
+	}))
+	extractor.Consume(testEvent(4, "event_msg.task_complete", map[string]any{
+		"payload": map[string]any{
+			"last_agent_message": "审计已完成：产品化主体部分完成，仍有关键模块未落地。",
+		},
+	}))
+	digest, _, _, _, _, _ := extractor.Result(DefaultItemBytes)
+	unit := digest.WorkUnits[0]
+	if unit.Status != "partial" || len(unit.ResultStatements) != 1 || len(unit.Unresolved) != 1 {
+		t.Fatalf("delivered analysis was overwritten by validation failure: %+v", unit)
+	}
+}
+
 func TestExtractorExcludesApprovalAssessmentTranscript(t *testing.T) {
 	extractor := NewExtractor()
 	extractor.Consume(testEvent(1, "response_item.message", map[string]any{

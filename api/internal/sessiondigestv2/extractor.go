@@ -172,9 +172,13 @@ func (e *Extractor) consumeGoal(event Event, raw string) bool {
 		return false
 	}
 	for _, text := range contentTexts(raw) {
-		normalized, truncated := normalizeText(text, 768)
+		normalized, truncated := normalizeText(text, 2048)
 		if normalized == "" || isNoiseGoal(normalized) {
 			continue
+		}
+		if isUserCompletionConfirmation(normalized) && e.currentUnit >= 0 {
+			e.fieldWasTruncated = e.fieldWasTruncated || truncated
+			return e.addUserCompletionConfirmation(event, normalized)
 		}
 		key := canonicalKey(normalized)
 		if key == e.lastGoalKey && duplicateGoalEvent(event, e.lastGoalCursor, e.lastGoalTime) {
@@ -215,6 +219,35 @@ func (e *Extractor) consumeGoal(event Event, raw string) bool {
 		return true
 	}
 	return false
+}
+
+func isUserCompletionConfirmation(value string) bool {
+	value = strings.ToLower(strings.Trim(strings.TrimSpace(value), "。！？!? "))
+	switch value {
+	case "ok", "agree", "agreed", "同意", "确认", "验收通过", "测试通过":
+		return true
+	default:
+		return false
+	}
+}
+
+func (e *Extractor) addUserCompletionConfirmation(event Event, value string) bool {
+	index := e.currentUnit
+	if index < 0 || index >= len(e.units) {
+		return false
+	}
+	e.touchUnit(index, event)
+	ref := stableRef("user_confirmation", event, canonicalKey(value))
+	for _, evidence := range e.units[index].unit.Evidence {
+		if evidence.Ref == ref {
+			return false
+		}
+	}
+	e.units[index].unit.Evidence = append(e.units[index].unit.Evidence, Evidence{
+		Ref: ref, Kind: "user_confirmation", Status: "confirmed",
+		Summary: "用户确认完成",
+	})
+	return true
 }
 
 func duplicateGoalEvent(event Event, lastCursor int64, lastTime time.Time) bool {
@@ -286,7 +319,7 @@ func (e *Extractor) touchUnit(index int, event Event) {
 }
 
 func (e *Extractor) addAgentClaim(event Event, raw string) bool {
-	text, truncated := normalizeText(raw, 768)
+	text, truncated := normalizeText(raw, 4096)
 	if text == "" || isNoiseGoal(text) || isNoiseAgentClaim(text) {
 		return false
 	}
@@ -311,7 +344,7 @@ func (e *Extractor) addAgentClaim(event Event, raw string) bool {
 }
 
 func (e *Extractor) rememberAgentText(event Event, raw string) {
-	text, truncated := normalizeText(raw, 768)
+	text, truncated := normalizeText(raw, 4096)
 	if text == "" || isNoiseAgentClaim(text) || e.currentUnit < 0 {
 		return
 	}
@@ -522,6 +555,13 @@ func resolveUnit(unit *WorkUnit) {
 	hasPassed := false
 	hasFailed := false
 	hasUnknownValidation := false
+	hasConfirmation := false
+	for _, evidence := range unit.Evidence {
+		if evidence.Kind == "user_confirmation" && evidence.Status == "confirmed" {
+			hasConfirmation = true
+			break
+		}
+	}
 	for _, validation := range unit.Validations {
 		switch validation.LastStatus {
 		case "passed":
@@ -533,13 +573,13 @@ func resolveUnit(unit *WorkUnit) {
 		}
 	}
 	switch {
-	case hasFailed && hasChanges:
+	case hasFailed && (hasChanges || len(unit.AgentClaims) > 0 || hasConfirmation):
 		unit.Status = "partial"
 	case hasFailed:
 		unit.Status = "failed"
-	case hasChanges && hasIncompleteAgentClaim(unit.AgentClaims):
+	case hasIncompleteAgentClaim(unit.AgentClaims):
 		unit.Status = "partial"
-	case hasChanges || hasPassed:
+	case hasChanges || hasPassed || hasConfirmation:
 		unit.Status = "completed"
 	case hasUnknownValidation:
 		unit.Status = "unknown"
@@ -551,7 +591,7 @@ func resolveUnit(unit *WorkUnit) {
 	switch {
 	case hasPassed:
 		unit.EvidenceGrade = "A"
-	case hasChanges:
+	case hasChanges || hasConfirmation:
 		unit.EvidenceGrade = "B"
 	case len(unit.AgentClaims) > 0:
 		unit.EvidenceGrade = "C"
@@ -612,7 +652,8 @@ func buildResultStatements(unit *WorkUnit, seen map[string]struct{}) {
 		}
 		refs := make([]string, 0, min(len(unit.Evidence), 8))
 		for _, evidence := range unit.Evidence {
-			if evidence.Status == "changed" || evidence.Status == "passed" {
+			if evidence.Status == "changed" || evidence.Status == "passed" ||
+				evidence.Status == "confirmed" {
 				refs = append(refs, evidence.Ref)
 				if len(refs) == 8 {
 					break
@@ -629,6 +670,20 @@ func buildResultStatements(unit *WorkUnit, seen map[string]struct{}) {
 	if len(unit.ResultStatements) == 0 {
 		addGoalBackedResult(unit, seen)
 	}
+	if len(unit.ResultStatements) == 0 {
+		addAgentClaimResult(unit, seen)
+	}
+}
+
+func addAgentClaimResult(unit *WorkUnit, seen map[string]struct{}) {
+	for claimIndex := len(unit.AgentClaims) - 1; claimIndex >= 0; claimIndex-- {
+		text := resultFocusedClaim(unit.AgentClaims[claimIndex].Text)
+		if text == "" {
+			continue
+		}
+		addResultStatementWithSource(unit, seen, text, nil, "agent_claim")
+		return
+	}
 }
 
 func addGoalBackedResult(unit *WorkUnit, seen map[string]struct{}) {
@@ -644,7 +699,8 @@ func addGoalBackedResult(unit *WorkUnit, seen map[string]struct{}) {
 	}
 	refs := make([]string, 0, min(len(unit.Evidence), 8))
 	for _, evidence := range unit.Evidence {
-		if evidence.Status != "changed" && evidence.Status != "passed" {
+		if evidence.Status != "changed" && evidence.Status != "passed" &&
+			evidence.Status != "confirmed" {
 			continue
 		}
 		refs = append(refs, evidence.Ref)

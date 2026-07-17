@@ -1,9 +1,9 @@
 # 第三阶段：Digest 规模化真实 Session 验证
 
-> 状态：方案已建立，待选择样本并执行
+> 状态：四轮验证与 Digest 语义契约加固均已完成；Agent Skill 问题转入下一轮清单
 > 建立日期：2026-07-17
 > 环境：14.159 本机真实 Session、14.157 开发测试环境
-> 当前基线：`session-digest/v2.8.0`、测试环境当前 Report Skill、固定默认 Agent 与模型
+> 评测基线：`session-digest/v2.8.0`；本阶段候选：`session-digest/v2.9.0`（本文不声明生产版本）
 > 上位约束：[报告 Agent 优化总纲](../总纲.md)
 
 ## 1. 阶段目标
@@ -70,10 +70,10 @@ Report Skill、Agent Prompt 和模型具有语义归并与写作自由度，同�
 
 ```text
 14.159 本机真实 Session
-  -> 本机 Aida CLI 正常扫描和选择
+  -> 独立分支源码构建的临时 Aida 测试二进制正常扫描和选择
   -> prepare/chunk/finalize 完整上传到 14.157
   -> readiness 到 ready
-  -> 用户在 14.157 页面手动选择 Session
+  -> 用户在 14.157 页面手动选择 Session，或明确授权后调用同一业务 API 模拟选择
   -> 创建不可变 report source selection
   -> MCP get_sessions 读取 Digest
   -> 默认 Report Agent 生成
@@ -82,14 +82,18 @@ Report Skill、Agent Prompt 和模型具有语义归并与写作自由度，同�
 
 禁止：
 
+- 调用 14.159 本机已安装的 Aida 客户端进行测试上传；
+- 读取或修改用户的 `~/.aida.yaml`、Session 索引及上传状态；
 - 直接写数据库或 MinIO；
-- 通过测试脚本替用户选择报告来源；
+- 未经用户明确授权，通过测试脚本替用户选择报告来源；
 - 只上传人为截取的增量 chunk 冒充完整 Session；
 - 修改 Session 原文以迎合当前规则；
 - 在同一轮中同时修改 Digest、Skill 和 Agent Prompt；
 - 用 Agent `completed` 替代日报真实回写成功。
 
 为避免重复上传造成样本混淆，执行前可清理测试账号中本轮同 Session 的历史测试副本，但必须只删除明确属于本轮测试账号和样本清单的记录，并记录清理范围。
+
+测试上传必须使用从本阶段独立 worktree 当前提交构建的专用二进制，放在临时路径，并同时使用隔离 `HOME`、显式测试服 URL、测试账号 Token 和关闭自动更新。专用二进制的版本、SHA-256、源码提交和构建时间必须进入测试记录；即使版本号与本机安装版相同，也不得互换使用。
 
 ## 5. 层 A：Digest 内在质量验证
 
@@ -233,7 +237,7 @@ Digest 评测期间不修改 Skill 或 Agent Prompt。若发现 Skill 问题，�
 
 第三阶段完成必须同时满足：
 
-1. 10 个样本均完成正常上传、ready、人工选择、Digest 读取和日报回写；
+1. 10 个样本均完成正常上传、ready、人工选择或授权接口模拟、Digest 读取和日报回写；
 2. 层 A 关键事实召回率、状态、主体和日期准确率达到目标；
 3. 所有遗漏和失真均有原始证据与归因；
 4. 层 B 的问题不被错误归因给 Digest；
@@ -253,3 +257,28 @@ Digest 评测期间不修改 Skill 或 Agent Prompt。若发现 Skill 问题，�
 - 若需要开发，再补充独立开发与回归记录。
 
 记录格式见 [样本与结果记录模板](样本与结果记录模板.md)。
+
+第一轮固定样本见 [第一轮基线样本清单](第一轮基线样本清单.md)。
+
+第一轮质量结论见 [第一轮 Digest 内在质量基线](第一轮Digest内在质量基线.md)。
+
+第二轮修复与离线结果见 [第二轮最小规则修复与离线回放](第二轮最小规则修复与离线回放.md)。
+
+第三轮真实链路结果与跨样本归因见 [第三轮真实链路与 Agent 验收](第三轮真实链路与Agent验收.md)。
+
+10 次真实 Agent run 的完整日报正文见 [第三轮 Agent 日报原文](第三轮Agent日报原文.md)。
+
+第四轮 Digest 单独加固范围与停止条件见 [第四轮 Digest 单独加固与收口](第四轮Digest单独加固与收口.md)。
+
+Agent Skill 和最终日报表达问题见 [下一轮 Agent Skill 与日报表达问题清单](下一轮-Agent-Skill与日报表达问题清单.md)，本轮不修改 Agent 侧。
+
+## 12. 当前结论
+
+- `session-digest/v2.9.0` 的 Layer A 内在质量和 Layer B 真实链路均完成 10 样本验证；
+- 第四轮 10/10 完整 Digest、10/10 报告期 Digest 与改动前整体等价，coverage 全部完整；
+- 超过 1 MiB 的合成回归证明提醒阈值不会触发语义裁剪或结果丢失；
+- 已移除未使用的语义排序、版本覆盖和 Report-facing 改写路径，coverage 不完整时固定 fail-open 保留；
+- 10/10 Agent run succeeded，10/10 真实调用 `write_report_result`；
+- 未发现需要为本轮样本继续引入 Top-K 或更激进语义裁剪的证据；
+- 剩余共性问题主要是默认 Skill/模型对内部证据、最终状态、数字统计和环境术语的写作处理，不应直接归因给 Digest；
+- 本阶段未执行生产发布。

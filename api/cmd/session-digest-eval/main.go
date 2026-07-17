@@ -1,13 +1,15 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
-
-	"encoding/json"
 
 	"github.com/aidashboard/api/internal/biztime"
 	"github.com/aidashboard/api/internal/sessiondigestv2"
@@ -15,27 +17,35 @@ import (
 )
 
 type evaluation struct {
-	File                 string                  `json:"file"`
-	RawBytes             int64                   `json:"raw_bytes"`
-	EventCount           int                     `json:"event_count"`
-	MalformedEventCount  int64                   `json:"malformed_event_count"`
-	SourceEventCount     int64                   `json:"source_event_count"`
-	IncludedEventCount   int64                   `json:"included_event_count"`
-	OmittedEventCount    int64                   `json:"omitted_event_count"`
-	DigestBytes          int                     `json:"digest_bytes"`
-	Truncated            bool                    `json:"truncated"`
-	WorkUnitCount        int                     `json:"work_unit_count"`
-	DailySummaryCount    int                     `json:"daily_summary_count"`
-	PeriodDayCount       int                     `json:"period_day_count"`
-	PeriodHighlightCount int                     `json:"period_highlight_count"`
-	ResultStatementCount int                     `json:"result_statement_count"`
-	VerifiedResultCount  int                     `json:"verified_result_count"`
-	ChangeCount          int                     `json:"change_count"`
-	ValidationCount      int                     `json:"validation_count"`
-	UnresolvedCount      int                     `json:"unresolved_count"`
-	SuspiciousGoalCount  int                     `json:"suspicious_goal_count"`
-	ResultFocused        bool                    `json:"result_focused"`
-	Digest               *sessiondigestv2.Digest `json:"digest,omitempty"`
+	File                    string                  `json:"file"`
+	RawSHA256               string                  `json:"raw_sha256"`
+	RawBytes                int64                   `json:"raw_bytes"`
+	EventCount              int                     `json:"event_count"`
+	MalformedEventCount     int64                   `json:"malformed_event_count"`
+	SourceEventCount        int64                   `json:"source_event_count"`
+	IncludedEventCount      int64                   `json:"included_event_count"`
+	OmittedEventCount       int64                   `json:"omitted_event_count"`
+	DigestBytes             int                     `json:"digest_bytes"`
+	DigestTargetBytes       int                     `json:"digest_target_bytes"`
+	DigestOverTarget        bool                    `json:"digest_over_target"`
+	DigestToRawBasisPoints  int64                   `json:"digest_to_raw_basis_points"`
+	Truncated               bool                    `json:"truncated"`
+	WorkUnitCount           int                     `json:"work_unit_count"`
+	DailySummaryCount       int                     `json:"daily_summary_count"`
+	PeriodDayCount          int                     `json:"period_day_count"`
+	PeriodHighlightCount    int                     `json:"period_highlight_count"`
+	ResultStatementCount    int                     `json:"result_statement_count"`
+	VerifiedResultCount     int                     `json:"verified_result_count"`
+	ChangeCount             int                     `json:"change_count"`
+	ValidationCount         int                     `json:"validation_count"`
+	UnresolvedCount         int                     `json:"unresolved_count"`
+	SuspiciousGoalCount     int                     `json:"suspicious_goal_count"`
+	OutcomeSourceCount      int                     `json:"outcome_source_count"`
+	OutcomeRepresentedCount int                     `json:"outcome_represented_count"`
+	OutcomeCoverageComplete bool                    `json:"outcome_coverage_complete"`
+	OutcomeTextCompacted    bool                    `json:"outcome_text_compacted"`
+	ResultFocused           bool                    `json:"result_focused"`
+	Digest                  *sessiondigestv2.Digest `json:"digest,omitempty"`
 }
 
 func main() {
@@ -92,7 +102,8 @@ func evaluate(
 		return evaluation{}, err
 	}
 	fallback := info.ModTime().UTC()
-	parsed, err := sessionsync.ParseContentChunk(file, 0, &fallback)
+	rawHasher := sha256.New()
+	parsed, err := sessionsync.ParseContentChunk(io.TeeReader(file, rawHasher), 0, &fallback)
 	if err != nil {
 		return evaluation{}, err
 	}
@@ -118,23 +129,30 @@ func evaluate(
 			periodStart,
 			periodEnd,
 			biztime.Location(),
-			sessiondigestv2.DefaultPeriodItemBytes,
+			maxBytes,
 		)
 	}
 	result := evaluation{
-		File:                path,
-		RawBytes:            info.Size(),
-		EventCount:          len(parsed.Events),
-		MalformedEventCount: parsed.MalformedEventCount,
-		SourceEventCount:    sourceEvents,
-		IncludedEventCount:  includedEvents,
-		OmittedEventCount:   omittedEvents,
-		DigestBytes:         len(encoded),
-		Truncated:           truncated,
-		WorkUnitCount:       len(digest.WorkUnits),
-		DailySummaryCount:   len(digest.DailySummaries),
-		VerifiedResultCount: digest.SessionSummary.VerifiedResultCount,
-		UnresolvedCount:     digest.SessionSummary.UnresolvedCount,
+		File:                    path,
+		RawSHA256:               hex.EncodeToString(rawHasher.Sum(nil)),
+		RawBytes:                info.Size(),
+		EventCount:              len(parsed.Events),
+		MalformedEventCount:     parsed.MalformedEventCount,
+		SourceEventCount:        sourceEvents,
+		IncludedEventCount:      includedEvents,
+		OmittedEventCount:       omittedEvents,
+		DigestBytes:             len(encoded),
+		DigestTargetBytes:       maxBytes,
+		DigestOverTarget:        len(encoded) > maxBytes,
+		Truncated:               truncated,
+		WorkUnitCount:           len(digest.WorkUnits),
+		DailySummaryCount:       len(digest.DailySummaries),
+		VerifiedResultCount:     digest.SessionSummary.VerifiedResultCount,
+		UnresolvedCount:         digest.SessionSummary.UnresolvedCount,
+		OutcomeCoverageComplete: true,
+	}
+	if result.RawBytes > 0 {
+		result.DigestToRawBasisPoints = int64(result.DigestBytes) * 10_000 / result.RawBytes
 	}
 	for _, unit := range digest.WorkUnits {
 		result.ResultStatementCount += len(unit.ResultStatements)
@@ -155,6 +173,20 @@ func evaluate(
 					result.SuspiciousGoalCount++
 				}
 			}
+		}
+	}
+	days := digest.DailySummaries
+	if digest.ReportPeriodSummary != nil {
+		days = digest.ReportPeriodSummary.Days
+	}
+	for _, day := range days {
+		result.OutcomeSourceCount += day.OutcomeCoverage.SourceCount
+		result.OutcomeRepresentedCount += day.OutcomeCoverage.RepresentedCount
+		result.OutcomeTextCompacted = result.OutcomeTextCompacted || day.OutcomeCoverage.TextCompacted
+		if day.HighlightsTruncated || !day.OutcomeCoverage.Complete ||
+			day.OutcomeCoverage.SourceCount != day.OutcomeCoverage.RepresentedCount ||
+			day.OutcomeCoverage.RepresentedCount != len(day.Highlights) {
+			result.OutcomeCoverageComplete = false
 		}
 	}
 	result.ResultFocused = result.ResultStatementCount > 0 ||

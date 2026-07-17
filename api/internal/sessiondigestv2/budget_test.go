@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-func TestBudgetPrioritizesResultsAndRecordsAggregation(t *testing.T) {
+func TestBudgetWithoutCompleteCoverageNeverRanksOrDropsWorkUnits(t *testing.T) {
 	digest := EmptyDigest()
 	for index := 0; index < 40; index++ {
 		unit := WorkUnit{
@@ -52,37 +52,38 @@ func TestBudgetPrioritizesResultsAndRecordsAggregation(t *testing.T) {
 	recalculateSummary(&digest)
 
 	compacted, encoded, truncated := EnforceItemBudget(digest, 6<<10)
-	if !truncated || len(encoded) > 6<<10 || !json.Valid(encoded) {
-		t.Fatalf("budget not enforced: truncated=%v bytes=%d", truncated, len(encoded))
+	if !truncated || len(encoded) <= 6<<10 || !json.Valid(encoded) {
+		t.Fatalf("complete payload must exceed warning target: truncated=%v bytes=%d", truncated, len(encoded))
 	}
-	foundCritical := false
-	for _, unit := range compacted.WorkUnits {
-		if unit.Goal.Text == "关键实现" {
-			foundCritical = true
+	if len(compacted.WorkUnits) != len(digest.WorkUnits) ||
+		compacted.Coverage.AggregatedWorkUnitCount != 0 ||
+		len(compacted.DiscussionAggregates) != 0 {
+		t.Fatalf("budget ranked or dropped work units: coverage=%#v units=%d",
+			compacted.Coverage, len(compacted.WorkUnits))
+	}
+	for index := range digest.WorkUnits {
+		if compacted.WorkUnits[index].Goal.Text != digest.WorkUnits[index].Goal.Text {
+			t.Fatalf("work unit %d was rewritten", index)
 		}
-	}
-	if !foundCritical {
-		t.Fatalf("critical failed result was discarded: %#v", compacted.WorkUnits)
-	}
-	if compacted.Coverage.AggregatedWorkUnitCount == 0 || len(compacted.DiscussionAggregates) == 0 {
-		t.Fatalf("removed work units were not represented: %#v", compacted.Coverage)
 	}
 }
 
-func TestBudgetHardLimitTrimsPathologicalEvidenceRefs(t *testing.T) {
+func TestBudgetDropsPathologicalEvidenceOnlyAfterCompleteDailyCoverage(t *testing.T) {
 	digest := EmptyDigest()
 	refs := make([]string, 0, 5000)
 	for index := 0; index < cap(refs); index++ {
 		refs = append(refs, "ev-file-"+strings.Repeat("a", 40)+strconvItoa(index))
 	}
 	digest.WorkUnits = []WorkUnit{{
-		WorkUnitRef:    "wu-pathological",
-		Sequence:       1,
-		PeriodRelation: "unknown",
-		Goal:           Goal{Text: "验证极端引用数量仍受硬预算保护", Source: "user_message"},
-		Category:       "implementation",
-		Status:         "completed",
-		EvidenceGrade:  "A",
+		WorkUnitRef:     "wu-pathological",
+		Sequence:        1,
+		ActivityStartAt: "2026-07-16T01:00:00Z",
+		ActivityEndAt:   "2026-07-16T02:00:00Z",
+		PeriodRelation:  "unknown",
+		Goal:            Goal{Text: "验证极端引用数量仍受硬预算保护", Source: "user_message"},
+		Category:        "implementation",
+		Status:          "completed",
+		EvidenceGrade:   "A",
 		ResultStatements: []ResultStatement{{
 			Text:         strings.Repeat("结果说明", 200),
 			Source:       "derived_evidence",
@@ -101,19 +102,27 @@ func TestBudgetHardLimitTrimsPathologicalEvidenceRefs(t *testing.T) {
 		DetailedWorkUnitCount: 1,
 		Representation:        "result_focused",
 	}
+	digest.DailySummaries = BuildDailySummaries(
+		digest.WorkUnits,
+		time.FixedZone("Asia/Shanghai", 8*60*60),
+		0,
+	)
 	recalculateSummary(&digest)
 
 	compacted, encoded, truncated := EnforceItemBudget(digest, 4<<10)
-	if !truncated || len(encoded) > 4<<10 || !json.Valid(encoded) {
-		t.Fatalf("hard budget not enforced: truncated=%v bytes=%d", truncated, len(encoded))
+	if !truncated || !json.Valid(encoded) {
+		t.Fatalf("budget compaction failed: truncated=%v bytes=%d", truncated, len(encoded))
 	}
-	if len(compacted.WorkUnits) == 1 &&
-		len(compacted.WorkUnits[0].ResultStatements) == 1 &&
-		len(compacted.WorkUnits[0].ResultStatements[0].EvidenceRefs) > 8 {
-		t.Fatalf(
-			"pathological evidence refs were not bounded: %d",
-			len(compacted.WorkUnits[0].ResultStatements[0].EvidenceRefs),
-		)
+	if len(compacted.WorkUnits) != 0 || len(compacted.DailySummaries) != 1 ||
+		len(compacted.DailySummaries[0].Highlights) != 1 ||
+		!compacted.DailySummaries[0].OutcomeCoverage.Complete {
+		t.Fatalf("complete daily outcome was not retained: work_units=%d days=%d",
+			len(compacted.WorkUnits), len(compacted.DailySummaries))
+	}
+	got := compacted.DailySummaries[0].Highlights[0]
+	if got.Goal != digest.WorkUnits[0].Goal.Text ||
+		got.ResultStatements[0].Text != digest.WorkUnits[0].ResultStatements[0].Text {
+		t.Fatalf("semantic result changed while dropping duplicate evidence: %#v", got)
 	}
 }
 
@@ -152,6 +161,85 @@ func TestBudgetNeverDropsCompleteDailyOutcomes(t *testing.T) {
 	if !coverage.Complete || coverage.SourceCount != len(digest.WorkUnits) ||
 		coverage.RepresentedCount != len(digest.WorkUnits) {
 		t.Fatalf("budget compaction broke outcome coverage: %#v", coverage)
+	}
+}
+
+func TestBudgetTargetDoesNotShortenReportFacingResults(t *testing.T) {
+	location := time.FixedZone("Asia/Shanghai", 8*60*60)
+	fullText := "完整结果：" + strings.Repeat("保留有意义的结果上下文。", 90)
+	digest := EmptyDigest()
+	digest.WorkUnits = []WorkUnit{{
+		WorkUnitRef: "wu-full-result", Sequence: 1,
+		ActivityStartAt: "2026-07-16T01:00:00Z",
+		ActivityEndAt:   "2026-07-16T02:00:00Z",
+		Goal:            Goal{Text: "保留完整结果", Source: "user_message"},
+		Category:        "discussion", Status: "unknown", EvidenceGrade: "C",
+		ResultStatements: []ResultStatement{{
+			Text: fullText, Source: "agent_claim",
+		}},
+	}}
+	digest.DailySummaries = BuildDailySummaries(digest.WorkUnits, location, 0)
+	digest.Coverage = Coverage{
+		SourceWorkUnitCount: 1, DetailedWorkUnitCount: 1,
+		Representation: "result_focused",
+	}
+
+	compacted, encoded, truncated := EnforceItemBudget(digest, 4<<10)
+	if !truncated || len(encoded) <= 4<<10 {
+		t.Fatalf("expected complete content to exceed warning target: bytes=%d", len(encoded))
+	}
+	got := compacted.DailySummaries[0].Highlights[0].ResultStatements[0].Text
+	if got != fullText {
+		t.Fatalf("report-facing result was shortened: got=%d want=%d", len(got), len(fullText))
+	}
+}
+
+func TestDefaultOneMiBTargetKeepsEveryOversizedDailyOutcome(t *testing.T) {
+	location := time.FixedZone("Asia/Shanghai", 8*60*60)
+	const count = 340
+	fullText := "完整成果：" + strings.Repeat("保留有意义的结果上下文。", 80)
+	digest := EmptyDigest()
+	for index := 0; index < count; index++ {
+		digest.WorkUnits = append(digest.WorkUnits, WorkUnit{
+			WorkUnitRef: "wu-over-target-" + strconvItoa(index), Sequence: index + 1,
+			ActivityStartAt: "2026-07-16T01:00:00Z",
+			ActivityEndAt:   "2026-07-16T02:00:00Z",
+			Goal: Goal{
+				Text:   "成果目标 " + strconvItoa(index),
+				Source: "user_message",
+			},
+			Category: "implementation", Status: "completed", EvidenceGrade: "B",
+			ResultStatements: []ResultStatement{{
+				Text: fullText + strconvItoa(index), Source: "agent_claim",
+			}},
+		})
+	}
+	digest.DailySummaries = BuildDailySummaries(digest.WorkUnits, location, 0)
+	digest.Coverage = Coverage{
+		SourceWorkUnitCount: count, DetailedWorkUnitCount: count,
+		Representation: "result_focused",
+	}
+
+	compacted, encoded, truncated := EnforceItemBudget(digest, DefaultItemBytes)
+	if !truncated || len(encoded) <= DefaultItemBytes {
+		t.Fatalf("expected semantic payload above 1 MiB: truncated=%v bytes=%d", truncated, len(encoded))
+	}
+	if len(compacted.WorkUnits) != 0 || len(compacted.DailySummaries) != 1 ||
+		len(compacted.DailySummaries[0].Highlights) != count {
+		t.Fatalf("outcomes were dropped above target: work_units=%d highlights=%d",
+			len(compacted.WorkUnits), len(compacted.DailySummaries[0].Highlights))
+	}
+	day := compacted.DailySummaries[0]
+	if !day.OutcomeCoverage.Complete || day.OutcomeCoverage.SourceCount != count ||
+		day.OutcomeCoverage.RepresentedCount != count || day.HighlightsTruncated {
+		t.Fatalf("coverage broke above target: %#v", day.OutcomeCoverage)
+	}
+	for index, highlight := range day.Highlights {
+		want := fullText + strconvItoa(index)
+		if len(highlight.ResultStatements) != 1 ||
+			highlight.ResultStatements[0].Text != want {
+			t.Fatalf("outcome %d was shortened", index)
+		}
 	}
 }
 
