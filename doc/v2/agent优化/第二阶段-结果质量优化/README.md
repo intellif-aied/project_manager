@@ -1,7 +1,7 @@
 # Session Digest 第二阶段：结果质量优化
 
-> 当前状态：v2.8 低损耗成果投影正在开发与 14.157 验收；v2.7.9 为上一版历史基线
-> Report Skill：`100866/aida-report@1.0.19`
+> 当前状态：v2.8 低损耗成果投影已通过 14.157 自动化与真实 Agent 链路验收；生产发布另行决策
+> Report Skill：`100866/aida-report@1.0.23`
 > 日期：2026-07-17
 > 环境边界：仅开发测试环境，未操作生产
 
@@ -34,21 +34,19 @@
 
 1. Digest Builder 不调用 LLM、不执行 Session 中的命令，也不让 Report Agent 重读原始 Session。
 2. 选择级 `report_period_summary` 是 Report Agent 的唯一成果输入；每个 item 下不再重复嵌套摘要，避免模型绕过归并结果。
-3. 摘要只保留面向用户的最终成果，过滤文件、路径、命令、测试状态、主机、账号、资产标识、文档数量和发布检查过程。
+3. Digest 完整保留报告期成果，只均匀压缩文本和证据；文件、路径、命令、测试状态、主机、账号、资产标识等过程噪音由 Agent 改写，正文质量门禁负责退回重写。
 4. 跨 Session 只做来源引用级精确去重，不再按主题或版本替用户删除成果。
-5. Report Skill 负责语义归并和表达，服务端门禁负责完整性与安全校验，不限制成果条目数。
+5. Report Skill 负责语义归并和表达，服务端门禁负责完整性与安全校验；digest_v2 个人日报的顶层成果数不得少于冻结 Digest 的 canonical highlight 数量。
 
 ## 2. 当前实施状态
 
-- Digest 版本：`session-digest/v2.7.9`；
-- Report Skill：`100866/aida-report@1.0.19`；
-- 已固定回放 5 个真实长 Session，共 270,086,678 bytes、117,114 个事件；
-- 已完成 3 个真实 Session 的 Aida 上传、来源选择、Digest 冻结、真实 Agent 生成和 MCP 写回；
-- 最终选择覆盖 3/3 个来源，82,262 个来源事件压缩为 6,131 个纳入事件；
-- 最终冻结给 Agent 的选择载荷为 6,670 bytes；
-- 选择级成果为 5 条，item 嵌套成果摘要为 0；
-- 最终生成的日报完整保留 5 条已完成成果，未出现文件、测试、主机、路径或空待跟进章节；
-- 全量 Go 测试、vet、关键包 race 测试和 diff 检查均通过；
+- Digest 版本：`session-digest/v2.8.0`；
+- Report Skill：`100866/aida-report@1.0.23`；
+- 已使用固定长 Session `019f668c-2eb5-7c92-b08f-358ee84af865` 完成 Aida 完整上传、来源选择、Digest 冻结、真实 Agent 生成和 MCP 写回；
+- 完整基线为 33,632,878 bytes、14,607 个事件，Digest 为 64,381 bytes，报告期冻结载荷为 13,559 bytes；
+- 报告期识别 18 个 canonical highlights，`source_count=18`、`represented_count=18`、`complete=true`、`highlights_truncated=false`；
+- 最终日报保留 18 个顶层成果，没有 Top-K、空日报、无依据待跟进、内部 UUID、路径、主机或报告生成时间尾注；
+- 全量 Go 测试、vet、关键包 race 测试和 diff 检查均通过；真实 Agent 运行结果为 `succeeded` 且日报已回写；
 - 未新增数据库迁移，未修改生产。
 
 v2.7.9 的最终历史验收详见
@@ -71,8 +69,8 @@ v2.8 当前状态与最终验收以 [v2.8-低损耗Digest](v2.8-低损耗Digest/
 | [10-RTK借鉴与稳定性影响评审.md](10-RTK借鉴与稳定性影响评审.md) | RTK 取舍、模块影响、Token/上传边界 |
 | [11-实施结果与验证记录.md](11-实施结果与验证记录.md) | 早期实现和离线回放记录 |
 | [12-v2.4真实流程验收.md](12-v2.4真实流程验收.md) | v2.4 单 Session 真实流程历史验收 |
-| [13-v2.5-v2.7.9三轮真实日报质量优化.md](13-v2.5-v2.7.9三轮真实日报质量优化.md) | 当前三轮优化、稳定化、最终正文和三轮 Review |
-| [v2.8-低损耗Digest/](v2.8-低损耗Digest/README.md) | 当前低损耗方案、开发、测试和 Review 基准 |
+| [13-v2.5-v2.7.9三轮真实日报质量优化.md](13-v2.5-v2.7.9三轮真实日报质量优化.md) | v2.5～v2.7.9 历史优化、最终正文和 Review 记录 |
+| [v2.8-低损耗Digest/](v2.8-低损耗Digest/README.md) | 当前低损耗方案、开发、测试、Review 与真实链路验收基准 |
 
 ## 4. 不变边界
 
