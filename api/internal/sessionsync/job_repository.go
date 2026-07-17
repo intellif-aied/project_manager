@@ -85,7 +85,12 @@ func (r *PostgresJobRepository) ClaimTypes(
 
 	rows, err := tx.QueryContext(ctx, `
 		WITH candidates AS MATERIALIZED (
-			SELECT id, created_at
+			SELECT id, created_at,
+				CASE
+					WHEN status = 'retry_wait' THEN COALESCE(next_retry_at, created_at)
+					WHEN status = 'leased' THEN COALESCE(lease_until, created_at)
+					ELSE created_at
+				END AS ready_at
 			FROM session_processing_jobs
 			WHERE attempts < max_attempts
 			  AND job_type = ANY($5)
@@ -94,7 +99,7 @@ func (r *PostgresJobRepository) ClaimTypes(
 				OR (status = 'retry_wait' AND COALESCE(next_retry_at, created_at) <= $1)
 				OR (status = 'leased' AND lease_until <= $1)
 			  )
-			ORDER BY created_at, id
+			ORDER BY ready_at, created_at, id
 			FOR UPDATE SKIP LOCKED
 			LIMIT $2
 		), updated AS (
@@ -115,7 +120,7 @@ func (r *PostgresJobRepository) ClaimTypes(
 			updated.max_attempts, updated.lease_owner, updated.lease_until
 		FROM updated
 		JOIN candidates ON candidates.id = updated.id
-		ORDER BY candidates.created_at, candidates.id`,
+		ORDER BY candidates.ready_at, candidates.created_at, candidates.id`,
 		now, limit, owner, now.Add(leaseTTL), pq.Array(jobTypes))
 	if err != nil {
 		return nil, err

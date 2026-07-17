@@ -139,6 +139,14 @@ func (p *Processor) processChunk(ctx context.Context, job sessionsync.Processing
 		return tx.Commit()
 	}
 	if checkpoint.ParsedCursor != chunk.StartCursor {
+		if checkpoint.ParsedCursor < chunk.StartCursor {
+			if err := enqueueUsagePrefixRebuildJobs(ctx, tx, revision.ID, chunk, checkpoint.ParsedCursor); err != nil {
+				return err
+			}
+			if err := tx.Commit(); err != nil {
+				return err
+			}
+		}
 		return fmt.Errorf("%w: parsed cursor=%d chunk start=%d", ErrUsageOutOfOrder, checkpoint.ParsedCursor, chunk.StartCursor)
 	}
 	var parsed ParseResult
@@ -212,6 +220,31 @@ func (p *Processor) processChunk(ctx context.Context, job sessionsync.Processing
 		return err
 	}
 	return tx.Commit()
+}
+
+func enqueueUsagePrefixRebuildJobs(
+	ctx context.Context,
+	tx *sql.Tx,
+	revisionID string,
+	chunk usageChunk,
+	parsedCursor int64,
+) error {
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO session_processing_jobs (
+			job_type, session_id, generation_id, chunk_id,
+			target_metrics_revision_id, payload, created_at
+		)
+		SELECT $1, $2, ch.generation_id, ch.id, $3,
+			jsonb_build_object('reason', 'parser_revision_prefix_rebuild'), ch.accepted_at
+		FROM session_upload_chunks ch
+		WHERE ch.generation_id = $4
+			AND ch.start_cursor >= $5
+			AND ch.end_cursor <= $6
+		ORDER BY ch.start_cursor, ch.id
+		ON CONFLICT DO NOTHING`,
+		sessionsync.JobParseUsageChunk, chunk.SessionID, revisionID,
+		chunk.GenerationID, parsedCursor, chunk.StartCursor)
+	return err
 }
 
 func (p *Processor) loadChunk(ctx context.Context, job sessionsync.ProcessingJob) (usageChunk, error) {

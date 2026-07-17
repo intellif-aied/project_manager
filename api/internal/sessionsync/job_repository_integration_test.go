@@ -163,3 +163,54 @@ func TestPostgresJobRepositoryReturnsClaimsInDeterministicOrder(t *testing.T) {
 		}
 	}
 }
+
+func TestPostgresJobRepositoryRetryDoesNotStarvePendingJobs(t *testing.T) {
+	database := openSyncIntegrationDatabase(t)
+	userID := int64(990033)
+	cleanupSyncIntegrationUser(t, database, userID)
+	if _, err := database.Exec(`INSERT INTO users (id, username) VALUES ($1, 'v2-job-retry-fairness-test')`, userID); err != nil {
+		t.Fatal(err)
+	}
+	defer cleanupSyncIntegrationUser(t, database, userID)
+
+	var sessionID string
+	if err := database.QueryRow(`
+		INSERT INTO sessions (session_ref, user_id, agent_type, started_at)
+		VALUES ('job-retry-fairness', $1, 'codex', now()) RETURNING id`, userID).Scan(&sessionID); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 7, 14, 15, 0, 0, 0, time.UTC)
+	var retryJobID, pendingJobID string
+	if err := database.QueryRow(`
+		INSERT INTO session_processing_jobs (job_type, session_id, content_epoch, created_at)
+		VALUES ('purge_session', $1, 0, $2) RETURNING id`, sessionID, base).Scan(&retryJobID); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRow(`
+		INSERT INTO session_processing_jobs (job_type, session_id, content_epoch, created_at)
+		VALUES ('purge_session', $1, 0, $2) RETURNING id`, sessionID, base.Add(time.Second)).Scan(&pendingJobID); err != nil {
+		t.Fatal(err)
+	}
+
+	repository, _ := NewPostgresJobRepository(database)
+	claimed, err := repository.ClaimTypes(context.Background(), "worker-a", base.Add(10*time.Second), time.Minute, 1, []string{"purge_session"})
+	if err != nil || len(claimed) != 1 || claimed[0].ID != retryJobID {
+		t.Fatalf("initial claim=%+v err=%v", claimed, err)
+	}
+	if ok, err := repository.Fail(context.Background(), retryJobID, "worker-a", base.Add(10*time.Second), time.Minute, true, "dependency pending"); err != nil || !ok {
+		t.Fatalf("retry update ok=%v err=%v", ok, err)
+	}
+
+	claimed, err = repository.ClaimTypes(context.Background(), "worker-b", base.Add(80*time.Second), time.Minute, 1, []string{"purge_session"})
+	if err != nil || len(claimed) != 1 || claimed[0].ID != pendingJobID {
+		t.Fatalf("pending claim=%+v err=%v", claimed, err)
+	}
+	if ok, err := repository.Complete(context.Background(), pendingJobID, "worker-b", base.Add(81*time.Second)); err != nil || !ok {
+		t.Fatalf("pending completion ok=%v err=%v", ok, err)
+	}
+
+	claimed, err = repository.ClaimTypes(context.Background(), "worker-c", base.Add(82*time.Second), time.Minute, 1, []string{"purge_session"})
+	if err != nil || len(claimed) != 1 || claimed[0].ID != retryJobID || claimed[0].Attempts != 1 {
+		t.Fatalf("retry claim=%+v err=%v", claimed, err)
+	}
+}

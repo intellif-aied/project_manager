@@ -101,6 +101,56 @@ func TestProcessorCodexCumulativeAcrossChunksIntegration(t *testing.T) {
 	assertDailyUsage(t, database, fixture.sessionID, 2, 220, "estimated", 2)
 }
 
+func TestProcessorNewNormalizerQueuesPrefixRebuildIntegration(t *testing.T) {
+	database := openUsageIntegrationDatabase(t)
+	fixture := newUsageFixture(t, database, 990034, "usage-prefix-rebuild", "claude-code")
+	defer fixture.cleanup(t)
+	content := readUsageFixture(t, "claude_monotonic.jsonl")
+	lines := completeLines(content)
+	fixture.appendChunk(t, bytes.Join(lines[:3], nil))
+
+	fiveMinuteProcessor, _ := NewProcessor(database, fixture.store, "5m")
+	if err := fiveMinuteProcessor.Process(context.Background(), fixture.jobs[0]); err != nil {
+		t.Fatal(err)
+	}
+	oldRevisionID := activeMetricsRevision(t, database, fixture.sourceID)
+
+	fixture.appendChunk(t, bytes.Join(lines[3:], nil))
+	oneHourProcessor, _ := NewProcessor(database, fixture.store, "1h")
+	if err := oneHourProcessor.Process(context.Background(), fixture.jobs[1]); !errors.Is(err, ErrUsageOutOfOrder) {
+		t.Fatalf("first append under new normalizer error=%v", err)
+	}
+
+	var newRevisionID, prefixChunkID string
+	if err := database.QueryRow(`
+		SELECT r.id, j.chunk_id
+		FROM session_metrics_revisions r
+		JOIN session_processing_jobs j ON j.target_metrics_revision_id = r.id
+		WHERE r.generation_id = $1
+			AND r.parser_version = $2
+			AND r.normalizer_version = $3
+			AND j.job_type = 'parse_usage_chunk'`,
+		fixture.generationID, ParserVersion, oneHourProcessor.normalizerVersion,
+	).Scan(&newRevisionID, &prefixChunkID); err != nil {
+		t.Fatal(err)
+	}
+	if newRevisionID == oldRevisionID || prefixChunkID != fixture.jobs[0].ChunkID.String {
+		t.Fatalf("old revision=%s new revision=%s prefix chunk=%s", oldRevisionID, newRevisionID, prefixChunkID)
+	}
+
+	prefixJob := fixture.jobs[0]
+	prefixJob.TargetMetricsRevisionID = sql.NullString{String: newRevisionID, Valid: true}
+	if err := oneHourProcessor.Process(context.Background(), prefixJob); err != nil {
+		t.Fatalf("process prefix rebuild: %v", err)
+	}
+	if err := oneHourProcessor.Process(context.Background(), fixture.jobs[1]); err != nil {
+		t.Fatalf("process appended chunk: %v", err)
+	}
+	if got := activeMetricsRevision(t, database, fixture.sourceID); got != newRevisionID {
+		t.Fatalf("active revision=%s want=%s", got, newRevisionID)
+	}
+}
+
 func TestProcessorCodexLongContextBillingBoundaryIntegration(t *testing.T) {
 	database := openUsageIntegrationDatabase(t)
 	fixture := newUsageFixture(t, database, 990033, "usage-codex-long-context", "codex")
