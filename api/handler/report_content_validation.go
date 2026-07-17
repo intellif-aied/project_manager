@@ -37,6 +37,9 @@ var (
 	reportOperationalValidationPattern    = regexp.MustCompile(`(?i)(?:\bE2E\b|Top\s*[0-9]+[^\n。；]{0,24}回放|健康检查|启动日志|回放通过|(?:验证|测试|检查|回放|构建)[^\n。；]{0,16}(?:通过|正常|成功)|\b(?:worker|reconciler)\b)`)
 	reportURLPattern                      = regexp.MustCompile(`(?i)https?://`)
 	reportTechnicalArtifactPattern        = regexp.MustCompile("(?i)(?:`[^`\\n]*(?:/|\\.(?:go|md|sql|ts|tsx|js|json|ya?ml|sh|ps1))[^`\\n]*`|(?:^|[\\s（(])/(?:[^\\s/]+/)+[^\\s`，。；)）]+)")
+	reportRelativeTechnicalPathPattern    = regexp.MustCompile("(?i)(?:^|[\\s（(])(?:api|db|doc|web|tmp|scripts?|internal|handler|service)/(?:[^\\s/]+/)*[^\\s`，。；)）]+")
+	reportImplementationSizePattern       = regexp.MustCompile(`(?i)(?:[0-9][0-9,]*\s*(?:份|个)[^\n，。；]{0,8}(?:文档|文件)|[0-9][0-9,]*\s*行(?:代码|文档)?)`)
+	reportProcessOnlyOutcomePattern       = regexp.MustCompile(`(?im)^(?:[0-9]+[.)、]|[-*+])\s*[^\n]*(?:完成(?:了)?(?:真实)?(?:全流程)?(?:测试|验证|回放)(?:[，。；]|$)|确认[^\n]{0,28}(?:无冲突|可以开始)|完成代码提交)`)
 	reportTopLevelOutcomePattern          = regexp.MustCompile(`(?m)^(?:[0-9]+[.)、]|[-*+])\s+`)
 )
 
@@ -94,6 +97,19 @@ func reportContentValidationIssues(content, reportType, date, weekStart, weekEnd
 	}
 	if reportTechnicalArtifactPattern.MatchString(content) {
 		add("报告正文包含代码路径、文件名或脚本名；请改写为用户可理解的交付结果")
+	}
+	if reportRelativeTechnicalPathPattern.MatchString(content) {
+		add("报告正文包含相对代码或文档路径；请使用能力或产出名称表达")
+	}
+	if reportImplementationSizePattern.MatchString(content) {
+		add("报告正文不得展示文档、文件或行数等实现规模；请保留交付能力而非工程计数")
+	}
+	if reportProcessOnlyOutcomePattern.MatchString(content) {
+		add("报告正文包含单独的测试/验证完成、开发前检查或代码提交；请将它合并到所证明的最终产品成果，不得直接丢弃其对应的成果")
+	}
+	if isPersonalReportType(reportType) &&
+		(reportVersionedAssetPattern.MatchString(content) || reportNamedDigestVersionPattern.MatchString(content)) {
+		add("个人报告不得展示内部 Skill 或 Digest 版本号；同一主线请以最新已完成结果概括当前能力")
 	}
 	if asset := conflictingVersionedAsset(content); asset != "" {
 		add(fmt.Sprintf("报告正文同时包含 %s 的多个版本；请只保留最新有效版本", asset))

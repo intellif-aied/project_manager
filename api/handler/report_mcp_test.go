@@ -645,6 +645,12 @@ func TestReportContentValidationRejectsWrongWeekdayAndInternalIDs(t *testing.T) 
 		{name: "raw URL", content: "# 日报\n- 调研 https://github.com/rtk-ai/rtk", want: 1},
 		{name: "technical file", content: "# 日报\n- 合并 `018_report_digest.sql` 并更新 `15点.md`", want: 1},
 		{name: "technical path", content: "# 日报\n- 更新 /doc/v2/agent优化/第二阶段/ 方案", want: 1},
+		{name: "relative technical path", content: "# 日报\n- 更新 doc/v2/agent优化/ 方案", want: 1},
+		{name: "document count", content: "# 日报\n- 完成 10 份方案文档", want: 1},
+		{name: "document lines", content: "# 日报\n- 方案共 2,411 行文档", want: 1},
+		{name: "standalone full flow test", content: "# 日报\n- 完成真实全流程测试", want: 1},
+		{name: "preflight is not outcome", content: "# 日报\n- 确认开发任务与其他开发无冲突，可以开始", want: 1},
+		{name: "code commit is not outcome", content: "# 日报\n- 完成代码提交，修复日报时区", want: 1},
 		{
 			name:       "personal report may retain all material outcomes",
 			reportType: reportTypePersonalDaily,
@@ -660,6 +666,8 @@ func TestReportContentValidationRejectsWrongWeekdayAndInternalIDs(t *testing.T) 
 		{name: "conflicting asset versions", content: "# 日报\n- aida-report@1.0.6\n- aida-report@1.0.11", want: 1},
 		{name: "conflicting digest versions", content: "# 日报\n- Digest v2.2\n- Session Digest v2.3", want: 1},
 		{name: "single current asset version", content: "# 日报\n- 已发布 aida-report@1.0.11", want: 0},
+		{name: "personal single asset version", reportType: reportTypePersonalDaily, content: "# 日报\n- 已发布 aida-report@1.0.11", want: 1},
+		{name: "personal digest version", reportType: reportTypePersonalDaily, content: "# 日报\n- 完成 Session Digest v2.1 开发", want: 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

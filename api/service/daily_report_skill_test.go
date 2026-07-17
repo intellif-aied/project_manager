@@ -60,6 +60,8 @@ func TestReportSkillMarkdownUsesDeterministicDisplayContext(t *testing.T) {
 		"the latest completed highlight controls the user-facing current state",
 		"never let an earlier version replace a later completed outcome",
 		"Never rewrite a test/staging/target environment as production",
+		"A historical/intermediate partial highlight is not automatically a follow-up",
+		"a later highlight completes the same initiative",
 	}
 	for _, expected := range required {
 		if !strings.Contains(markdown, expected) {
