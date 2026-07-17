@@ -216,56 +216,6 @@ func isReportRelevantWorkUnit(unit WorkUnit) bool {
 	return unit.Goal.Source == "user_message" && !isLowInformationGoal(unit.Goal.Text)
 }
 
-func dailyWorkUnitPriority(unit WorkUnit) int {
-	score := workUnitPriority(unit)
-	switch unit.Category {
-	case "implementation", "deployment":
-		score += 35
-	case "verification":
-		score -= 15
-	case "investigation":
-		score += 10
-	case "document", "decision":
-		score += 10
-	case "discussion", "administrative":
-		score -= 60
-	}
-	switch unit.Status {
-	case "completed":
-		score += 20
-	case "partial":
-		score -= 10
-	}
-	for _, result := range unit.ResultStatements {
-		if result.Source == "agent_claim_with_evidence" &&
-			resultFocusedClaim(result.Text) != "" {
-			score += 12
-			break
-		}
-	}
-	if hasDeliveredOutcomeClaim(unit) {
-		score += 45
-	}
-	return score
-}
-
-func hasDeliveredOutcomeClaim(unit WorkUnit) bool {
-	for _, result := range unit.ResultStatements {
-		text := strings.ToLower(reportFacingClaim(unit, result.Text))
-		if text == "" {
-			continue
-		}
-		if containsAny(
-			text,
-			"开发", "修复", "发布", "上线", "部署", "实现",
-			"恢复", "支持", "启用", "接入", "交付", "改造", "优化",
-		) {
-			return true
-		}
-	}
-	return false
-}
-
 func makeDailyHighlight(unit WorkUnit, aggressive bool) DailyHighlight {
 	resultBytes := 4096
 	evidenceRefLimit := 8
@@ -417,24 +367,5 @@ func ReportPeriodOutcomeCoverageComplete(summary *ReportPeriodSummary) bool {
 			return false
 		}
 	}
-	return true
-}
-
-func trimDailyHighlights(summaries []DailySummary) bool {
-	selectedDay := -1
-	selectedLength := 0
-	for index := range summaries {
-		if len(summaries[index].Highlights) > selectedLength &&
-			len(summaries[index].Highlights) > 1 {
-			selectedDay = index
-			selectedLength = len(summaries[index].Highlights)
-		}
-	}
-	if selectedDay < 0 {
-		return false
-	}
-	day := &summaries[selectedDay]
-	day.Highlights = day.Highlights[:len(day.Highlights)-1]
-	day.HighlightsTruncated = true
 	return true
 }

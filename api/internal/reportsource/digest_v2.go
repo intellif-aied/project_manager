@@ -127,8 +127,8 @@ func (s *Service) freezeSelectionV2ForRun(
 		)
 		// The selection-level report_period_summary is the only report-facing
 		// outcome list. Keep item digests as provenance/coverage metadata so an
-		// Agent cannot bypass selection-level ranking by re-reading every
-		// source's nested highlights.
+		// Agent consumes one complete chronological list instead of duplicate
+		// per-session highlights.
 		digest.ReportPeriodSummary = nil
 		item := DigestV2ContentItem{
 			SourceItemRef: row.SelectionItemID,

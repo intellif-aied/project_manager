@@ -104,229 +104,6 @@ func TestResultFocusedClaimDropsNextQuestionTail(t *testing.T) {
 	}
 }
 
-func TestReportFacingClaimRemovesEngineeringProcess(t *testing.T) {
-	unit := WorkUnit{
-		Category: "deployment",
-		Goal:     Goal{Text: "发布 Aida CLI"},
-	}
-	got := reportFacingClaim(unit, `相关 CLI 代码已单独提交：
-`+"```text\n9fc940c feat: release aida cli 0.1.11\n```"+`
-发布说明已写入 /home/intellif/dev/project_manager/doc/release.md。
-已验证：
-- go test -count=1 ./...
-- go vet ./...
-- 全部 SHA256 校验
-- 版本为 0.1.11
-- 客户端自动升级已生效。`)
-	if got != "Aida CLI 0.1.11 已完成发布，客户端自动升级已生效。" {
-		t.Fatalf("unexpected report-facing release: %q", got)
-	}
-	for _, forbidden := range []string{
-		"go test", "go vet", "SHA256", "release.md", "9fc940c",
-	} {
-		if strings.Contains(got, forbidden) {
-			t.Fatalf("report-facing claim leaked %q: %q", forbidden, got)
-		}
-	}
-}
-
-func TestReportFacingClaimKeepsCapabilitiesWithoutInternalFields(t *testing.T) {
-	unit := WorkUnit{
-		Category: "implementation",
-		Goal:     Goal{Text: "恢复 Session 列表目录列"},
-	}
-	got := reportFacingClaim(unit, `已恢复目录列，显示规则：
-- 优先显示 Session 的 Cwd 工作目录。
-- 没有 Cwd 时显示 ProjectDir。
-- 长路径中间省略，保留首尾便于区分。
-时间确实是最后活动时间：
-- 优先取 EndedAt；
-- 没有则取 StartedAt。
-测试包已升至 0.1.7。`)
-	for _, expected := range []string{
-		"已恢复目录列", "长路径中间省略", "最后活动时间",
-	} {
-		if !strings.Contains(got, expected) {
-			t.Fatalf("report-facing claim missing %q: %q", expected, got)
-		}
-	}
-	for _, forbidden := range []string{
-		"Cwd", "ProjectDir", "EndedAt", "StartedAt", "测试包", "0.1.7",
-	} {
-		if strings.Contains(got, forbidden) {
-			t.Fatalf("report-facing claim leaked %q: %q", forbidden, got)
-		}
-	}
-}
-
-func TestReportFacingClaimDropsDocumentInventory(t *testing.T) {
-	unit := WorkUnit{
-		Category: "document",
-		Goal:     Goal{Text: "整理方案文档"},
-	}
-	got := reportFacingClaim(unit, `已统一整理到：
-[README.md](/home/intellif/dev/project_manager/doc/v2/README.md)
-- 产品需求.md
-- 开发方案.md
-- 测试与验收方案.md`)
-	if got != "" {
-		t.Fatalf("document inventory must not become a daily outcome: %q", got)
-	}
-}
-
-func TestReportFacingClaimDropsDocumentCountInventory(t *testing.T) {
-	unit := WorkUnit{
-		Category: "implementation",
-		Goal:     Goal{Text: "开始吧。"},
-	}
-	got := reportFacingClaim(unit,
-		"方案文档已完成并同步到：Session Digest 第二阶段结果质量优化，"+
-			"本次共新增 10 份文档、约 2,411 行。")
-	if got != "" {
-		t.Fatalf("document counts must not become a daily outcome: %q", got)
-	}
-}
-
-func TestReportFacingClaimDropsInternalArchitectureInventory(t *testing.T) {
-	unit := WorkUnit{
-		Category: "implementation",
-		Goal:     Goal{Text: "完成 Aida Report 发布"},
-	}
-	got := reportFacingClaim(unit,
-		"Digest v2 的 Work Unit、结果证据链和完成状态模型；"+
-			"Digest、MCP、Report Skill、数据库兼容及开发方案；"+
-			"全量 Session manifest、全量结构回放、分层 A/B、人工 Gold 和 holdout。")
-	if got != "" {
-		t.Fatalf("internal architecture inventory must not become an outcome: %q", got)
-	}
-}
-
-func TestReportFacingClaimSummarizesFullFrontendRelease(t *testing.T) {
-	unit := WorkUnit{
-		Category: "implementation",
-		Goal:     Goal{Text: "确保前端完整发布"},
-	}
-	got := reportFacingClaim(unit,
-		"确认，这次发布的是完整最新前端代码，不是只复制修复文件。")
-	if got != "最新前端代码已完整发布。" {
-		t.Fatalf("unexpected frontend release projection: %q", got)
-	}
-}
-
-func TestReportFacingClaimDropsReleaseOrchestrationProcess(t *testing.T) {
-	unit := WorkUnit{
-		Category: "deployment",
-		Goal:     Goal{Text: "尽快上线"},
-	}
-	got := reportFacingClaim(unit,
-		"以当前最新完整代码发布，不再筛 commit；API、Web、CLI、Skill、"+
-			"Digest、时区、上传及 fork 修复统一发布。")
-	if got != "" {
-		t.Fatalf("release orchestration must not become an outcome: %q", got)
-	}
-}
-
-func TestReportFacingClaimDropsRolloutChecklist(t *testing.T) {
-	unit := WorkUnit{
-		Category: "deployment",
-		Goal:     Goal{Text: "尽快上线"},
-	}
-	got := reportFacingClaim(unit,
-		"明确禁止 canary、shadow 和账号灰度；完整上线顺序、配置、"+
-			"冒烟及回退步骤；排除 doc/v1/db-backups/。")
-	if got != "" {
-		t.Fatalf("rollout checklist must not become an outcome: %q", got)
-	}
-}
-
-func TestReportFacingClaimDropsIncompleteDeploymentTail(t *testing.T) {
-	unit := WorkUnit{
-		Category: "deployment",
-		Status:   "partial",
-		Goal:     Goal{Text: "尽快上线"},
-	}
-	got := reportFacingClaim(unit, "当前唯一待处理项：把尚未上线的 026。")
-	if got != "" {
-		t.Fatalf("incomplete deployment tail must not become an outcome: %q", got)
-	}
-}
-
-func TestReportFacingClaimSummarizesClipboardCompatibilityDefect(t *testing.T) {
-	unit := WorkUnit{
-		Category: "implementation",
-		Status:   "partial",
-		Goal:     Goal{Text: "修复复制按钮"},
-	}
-	got := reportFacingClaim(unit,
-		"这是兼容分支实现缺陷，不是单纯的浏览器权限问题；HTTP/IP 环境没有 "+
-			"Clipboard API，只能使用兼容复制；原实现未检查 execCommand(\"copy\") "+
-			"结果，失败时仍提示“已复制”。")
-	want := "HTTP/IP 环境下复制按钮仍可能误报成功，需补充兼容复制处理。"
-	if got != want {
-		t.Fatalf("unexpected clipboard defect projection: got=%q want=%q", got, want)
-	}
-}
-
-func TestReportFacingGoalUsesOutcomeForVagueContinuation(t *testing.T) {
-	unit := WorkUnit{
-		Category: "deployment",
-		Goal:     Goal{Text: "开始吧。"},
-	}
-	results := []ResultStatement{{Text: "Aida Report 1.0.10 已完成发布。"}}
-	got := reportFacingGoal(unit, results)
-	if got != "Aida Report 1.0.10 已完成发布" {
-		t.Fatalf("vague goal was not replaced by the outcome: %q", got)
-	}
-}
-
-func TestReportFacingClaimSplitsInlineBullets(t *testing.T) {
-	unit := WorkUnit{
-		Category: "implementation",
-		Goal:     Goal{Text: "改进 Session 选择交互"},
-	}
-	got := reportFacingClaim(unit,
-		"已完成： - 仅替换真实 TTY 下的 aida upload。"+
-			" - 支持搜索、多选、筛选结果全选、取消。"+
-			" - go test ./... 通过。")
-	if !strings.Contains(got, "支持搜索、多选、筛选结果全选、取消") {
-		t.Fatalf("material inline bullet missing: %q", got)
-	}
-	for _, forbidden := range []string{"TTY", "aida upload", "go test"} {
-		if strings.Contains(got, forbidden) {
-			t.Fatalf("inline process detail leaked %q: %q", forbidden, got)
-		}
-	}
-}
-
-func TestReportFacingClaimDoesNotTurnRuntimeVersionIntoRelease(t *testing.T) {
-	unit := WorkUnit{
-		Category: "implementation",
-		Goal:     Goal{Text: "真实运行六类默认 Agent"},
-	}
-	got := reportFacingClaim(unit,
-		"生产六类默认 Agent 已真实执行，运行时使用 10086/aida-report@1.0.3。")
-	if strings.Contains(got, "已完成发布") {
-		t.Fatalf("runtime dependency was misreported as release: %q", got)
-	}
-	if got != "生产六类默认 Agent 已真实执行。" {
-		t.Fatalf("unexpected runtime-version projection: %q", got)
-	}
-}
-
-func TestReportFacingClaimDoesNotRenameUnrelatedCLI(t *testing.T) {
-	unit := WorkUnit{
-		Category: "deployment",
-		Goal:     Goal{Text: "发布内部运维 CLI"},
-	}
-	got := reportFacingClaim(unit, "内部运维 CLI 2.3.4 已完成发布。")
-	if strings.Contains(got, "Aida CLI") {
-		t.Fatalf("unrelated CLI was renamed as Aida CLI: %q", got)
-	}
-	if got != "内部运维 CLI 2.3.4 已完成发布。" {
-		t.Fatalf("unexpected unrelated CLI projection: %q", got)
-	}
-}
-
 func TestResolveUnitMarksOngoingImplementationPartial(t *testing.T) {
 	unit := WorkUnit{
 		Category:      "implementation",
@@ -342,84 +119,6 @@ func TestResolveUnitMarksOngoingImplementationPartial(t *testing.T) {
 	resolveUnit(&unit)
 	if unit.Status != "partial" {
 		t.Fatalf("ongoing implementation status=%q want=partial", unit.Status)
-	}
-}
-
-func TestDeliveredOutcomeOutranksProcessOnlyInvestigation(t *testing.T) {
-	delivered := WorkUnit{
-		Category:      "verification",
-		Status:        "completed",
-		EvidenceGrade: "A",
-		Goal:          Goal{Text: "走完整真实流程"},
-		ResultStatements: []ResultStatement{{
-			Text:   "已完成 Session Digest 开发和部署。",
-			Source: "agent_claim_with_evidence",
-		}},
-	}
-	investigation := WorkUnit{
-		Category:      "investigation",
-		Status:        "completed",
-		EvidenceGrade: "A",
-		Goal:          Goal{Text: "调研可借鉴方案"},
-		ResultStatements: []ResultStatement{{
-			Text:   "确认该方案可以借鉴。",
-			Source: "agent_claim_with_evidence",
-		}},
-	}
-	if dailyWorkUnitPriority(delivered) <= dailyWorkUnitPriority(investigation) {
-		t.Fatalf(
-			"delivered outcome priority=%d investigation=%d",
-			dailyWorkUnitPriority(delivered),
-			dailyWorkUnitPriority(investigation),
-		)
-	}
-}
-
-func TestReportFacingWorkUnitDropsProcessOnlyVerification(t *testing.T) {
-	processOnly := WorkUnit{
-		Category: "verification",
-		Goal:     Goal{Text: "完成全流程测试"},
-		ResultStatements: []ResultStatement{{
-			Text: "已完成个人、小组、部门日报和周报的全流程测试。",
-		}},
-	}
-	if hasReportFacingWorkUnit(processOnly) {
-		t.Fatalf("process-only verification became a report outcome: %#v", processOnly)
-	}
-
-	delivered := WorkUnit{
-		Category: "verification",
-		Goal:     Goal{Text: "走完整真实流程"},
-		ResultStatements: []ResultStatement{{
-			Text: "已完成 Session Digest 开发和测试环境部署。",
-		}},
-	}
-	if !hasReportFacingWorkUnit(delivered) {
-		t.Fatalf("delivered result was hidden by verification category: %#v", delivered)
-	}
-}
-
-func TestReportFacingClaimRemovesBuildProofTail(t *testing.T) {
-	unit := WorkUnit{
-		Category: "deployment",
-		Goal:     Goal{Text: "发布最新前端"},
-	}
-	got := reportFacingClaim(unit,
-		"本次发布使用完整最新前端代码，构建基线已包含远端最新提交。")
-	if got != "最新前端代码已完整发布。" {
-		t.Fatalf("unexpected build-proof projection: %q", got)
-	}
-}
-
-func TestReportFacingClaimRemovesStandaloneBuildProofSegment(t *testing.T) {
-	unit := WorkUnit{
-		Category: "deployment",
-		Goal:     Goal{Text: "发布最新前端"},
-	}
-	got := reportFacingClaim(unit,
-		"本次发布使用完整最新前端代码；构建基线已包含远端最新提交。")
-	if got != "最新前端代码已完整发布。" {
-		t.Fatalf("unexpected standalone build-proof projection: %q", got)
 	}
 }
 
@@ -517,59 +216,43 @@ func TestDailySummaryKeepsMeaningfulPendingUserGoal(t *testing.T) {
 	}
 }
 
-func TestDailyCandidatesCollapseOlderSkillVersionAndSameDigestTopic(t *testing.T) {
+func TestDailySummaryPreservesSameTopicVersionHistory(t *testing.T) {
+	location := time.FixedZone("Asia/Shanghai", 8*60*60)
 	units := []WorkUnit{
 		{
-			Sequence: 1,
-			Goal:     Goal{Text: "发布 aida-report@1.0.6 并启用 Session Digest"},
-			Category: "deployment",
+			WorkUnitRef: "older", Sequence: 1,
+			ActivityEndAt: "2026-07-16T01:00:00Z",
+			Goal:          Goal{Text: "发布 aida-report@1.0.6 并启用 Session Digest", Source: "user_message"},
+			Category:      "deployment", Status: "completed", EvidenceGrade: "B",
 			ResultStatements: []ResultStatement{{
 				Text: "已发布 aida-report@1.0.6", Source: "agent_claim_with_evidence",
 			}},
 		},
 		{
-			Sequence: 2,
-			Goal:     Goal{Text: "完成 Session Digest v2.2 和 aida-report@1.0.11 发布"},
-			Category: "deployment",
+			WorkUnitRef: "newer", Sequence: 2,
+			ActivityEndAt: "2026-07-16T02:00:00Z",
+			Goal:          Goal{Text: "完成 Session Digest v2.2 和 aida-report@1.0.11 发布", Source: "user_message"},
+			Category:      "deployment", Status: "completed", EvidenceGrade: "B",
 			ResultStatements: []ResultStatement{{
-				Text:   "已发布 aida-report@1.0.11，Session Digest v2.2 已验证",
-				Source: "agent_claim_with_evidence",
+				Text: "已发布 aida-report@1.0.11，Session Digest v2.2 已验证", Source: "agent_claim_with_evidence",
 			}},
 		},
 	}
-	got := consolidateDailyCandidates(units)
-	if len(got) != 1 || got[0].Sequence != 2 {
-		t.Fatalf("older final state was not superseded: %#v", got)
+
+	days := BuildDailySummaries(units, location, 0)
+	if len(days) != 1 || len(days[0].Highlights) != 2 {
+		t.Fatalf("version history was consolidated: %#v", days)
+	}
+	if days[0].Highlights[0].WorkUnitRef != "older" ||
+		days[0].Highlights[1].WorkUnitRef != "newer" ||
+		!days[0].OutcomeCoverage.Complete ||
+		days[0].OutcomeCoverage.SourceCount != 2 ||
+		days[0].OutcomeCoverage.RepresentedCount != 2 {
+		t.Fatalf("version history order or coverage changed: %#v", days[0])
 	}
 }
 
-func TestSkillVersionDoesNotHideDifferentPrimaryOutcome(t *testing.T) {
-	units := []WorkUnit{
-		{
-			Sequence: 1,
-			Goal:     Goal{Text: "修复日报上海时区契约"},
-			Category: "implementation",
-			ResultStatements: []ResultStatement{{
-				Text:   "时区问题已修复，并使用 aida-report@1.0.7 和 Session Digest 验证",
-				Source: "agent_claim_with_evidence",
-			}},
-		},
-		{
-			Sequence: 2,
-			Goal:     Goal{Text: "发布 aida-report@1.0.11"},
-			Category: "deployment",
-			ResultStatements: []ResultStatement{{
-				Text: "aida-report@1.0.11 已发布", Source: "agent_claim_with_evidence",
-			}},
-		},
-	}
-	got := consolidateDailyCandidates(units)
-	if len(got) != 2 {
-		t.Fatalf("different primary outcome was hidden by asset version: %#v", got)
-	}
-}
-
-func TestMergeReportPeriodSummariesKeepsLatestCrossSliceFinalState(t *testing.T) {
+func TestMergeReportPeriodSummariesPreservesEveryCrossSliceOutcome(t *testing.T) {
 	older := &ReportPeriodSummary{
 		StartDate: "2026-07-16",
 		EndDate:   "2026-07-16",
@@ -709,66 +392,5 @@ func TestMergeReportPeriodSummarySourcesPreservesSessionCoverage(t *testing.T) {
 	}
 	if !refs["bravo-a"] || !refs["charlie-a"] {
 		t.Fatalf("selected sessions lost all representation: %#v", got.Days[0].Highlights)
-	}
-}
-
-func TestConsolidateDailyCandidatesKeepsLatestAidaCLIState(t *testing.T) {
-	units := []WorkUnit{
-		{
-			Sequence: 1,
-			Goal:     Goal{Text: "支持 Aida CLI 自动升级"},
-			Category: "deployment",
-			ResultStatements: []ResultStatement{{
-				Text:   "Aida CLI 0.1.6 已支持自动升级，无需再次运行 install.sh。",
-				Source: "agent_claim_with_evidence",
-			}},
-		},
-		{
-			Sequence: 2,
-			Goal:     Goal{Text: "发布 Aida CLI 最新版本"},
-			Category: "deployment",
-			ResultStatements: []ResultStatement{{
-				Text:   "Aida CLI 0.1.11 已完成发布。",
-				Source: "agent_claim_with_evidence",
-			}},
-		},
-	}
-	got := consolidateDailyCandidates(units)
-	if len(got) != 1 || got[0].Sequence != 2 ||
-		len(got[0].ResultStatements) != 2 {
-		t.Fatalf("latest release must absorb earlier capability: %#v", got)
-	}
-	highlight := makeDailyHighlight(got[0], false)
-	if len(highlight.ResultStatements) != 2 ||
-		highlight.ResultStatements[0].Text != "Aida CLI 0.1.11 已完成发布。" ||
-		!strings.Contains(highlight.ResultStatements[1].Text, "自动升级") {
-		t.Fatalf("version history was not preserved for Agent synthesis: %#v", highlight)
-	}
-}
-
-func TestConsolidateDailyCandidatesMergesSubAgentListRefinements(t *testing.T) {
-	units := []WorkUnit{
-		{
-			Sequence: 1,
-			Goal:     Goal{Text: "优化 Session 列表"},
-			Category: "implementation",
-			ResultStatements: []ResultStatement{{
-				Text:   "按 ParentSessionRef 将真实子 Agent Session 归并到根 Session。",
-				Source: "agent_claim_with_evidence",
-			}},
-		},
-		{
-			Sequence: 2,
-			Goal:     Goal{Text: "子 Agent 显示名称不清晰"},
-			Category: "implementation",
-			ResultStatements: []ResultStatement{{
-				Text:   "子 Agent 数量统一显示为 sub-agent。",
-				Source: "agent_claim_with_evidence",
-			}},
-		},
-	}
-	got := consolidateDailyCandidates(units)
-	if len(got) != 1 || len(got[0].ResultStatements) != 2 {
-		t.Fatalf("sub-agent refinements were not merged: %#v", got)
 	}
 }

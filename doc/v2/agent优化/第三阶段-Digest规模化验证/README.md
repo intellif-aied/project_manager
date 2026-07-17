@@ -1,9 +1,9 @@
 # 第三阶段：Digest 规模化真实 Session 验证
 
-> 状态：第一轮基线、第二轮 `v2.9.0` 离线回放和第三轮 10 样本真实 Agent 链路均已完成；等待人工审阅与发布决策
+> 状态：四轮验证与 Digest 语义契约加固均已完成；Agent Skill 问题转入下一轮清单
 > 建立日期：2026-07-17
 > 环境：14.159 本机真实 Session、14.157 开发测试环境
-> 当前基线：`session-digest/v2.8.0`；第二轮候选：`session-digest/v2.9.0`
+> 评测基线：`session-digest/v2.8.0`；本阶段候选：`session-digest/v2.9.0`（本文不声明生产版本）
 > 上位约束：[报告 Agent 优化总纲](../总纲.md)
 
 ## 1. 阶段目标
@@ -268,9 +268,16 @@ Digest 评测期间不修改 Skill 或 Agent Prompt。若发现 Skill 问题，�
 
 10 次真实 Agent run 的完整日报正文见 [第三轮 Agent 日报原文](第三轮Agent日报原文.md)。
 
+第四轮 Digest 单独加固范围与停止条件见 [第四轮 Digest 单独加固与收口](第四轮Digest单独加固与收口.md)。
+
+Agent Skill 和最终日报表达问题见 [下一轮 Agent Skill 与日报表达问题清单](下一轮-Agent-Skill与日报表达问题清单.md)，本轮不修改 Agent 侧。
+
 ## 12. 当前结论
 
 - `session-digest/v2.9.0` 的 Layer A 内在质量和 Layer B 真实链路均完成 10 样本验证；
+- 第四轮 10/10 完整 Digest、10/10 报告期 Digest 与改动前整体等价，coverage 全部完整；
+- 超过 1 MiB 的合成回归证明提醒阈值不会触发语义裁剪或结果丢失；
+- 已移除未使用的语义排序、版本覆盖和 Report-facing 改写路径，coverage 不完整时固定 fail-open 保留；
 - 10/10 Agent run succeeded，10/10 真实调用 `write_report_result`；
 - 未发现需要为本轮样本继续引入 Top-K 或更激进语义裁剪的证据；
 - 剩余共性问题主要是默认 Skill/模型对内部证据、最终状态、数字统计和环境术语的写作处理，不应直接归因给 Digest；
