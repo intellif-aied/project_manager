@@ -11,13 +11,11 @@ import (
 )
 
 const (
-	Version                   = "session-digest/v2.7.9"
-	RedactionVersion          = "report-redaction/v1"
-	JobType                   = sessionsync.JobBuildContentSliceDigestV2
-	DefaultItemBytes          = 64 << 10
-	DefaultPeriodItemBytes    = 16 << 10
-	DefaultDailyHighlightMax  = 6
-	DefaultReportHighlightMax = 5
+	Version                = "session-digest/v2.8.0"
+	RedactionVersion       = "report-redaction/v1"
+	JobType                = sessionsync.JobBuildContentSliceDigestV2
+	DefaultItemBytes       = 64 << 10
+	DefaultPeriodItemBytes = 16 << 10
 )
 
 var (
@@ -126,6 +124,16 @@ type DailyHighlight struct {
 	Unresolved       []Unresolved      `json:"unresolved"`
 }
 
+// OutcomeCoverage makes result preservation explicit. Text and evidence may be
+// compacted to fit a bounded Digest, but a complete report view must retain one
+// entry for every distinct result-bearing Work Unit.
+type OutcomeCoverage struct {
+	SourceCount      int  `json:"source_count"`
+	RepresentedCount int  `json:"represented_count"`
+	Complete         bool `json:"complete"`
+	TextCompacted    bool `json:"text_compacted"`
+}
+
 type DailySummary struct {
 	Date                string           `json:"date"`
 	WorkUnitCount       int              `json:"work_unit_count,omitzero"`
@@ -138,6 +146,7 @@ type DailySummary struct {
 	StatusCounts        StatusCounts     `json:"status_counts,omitzero"`
 	Highlights          []DailyHighlight `json:"highlights"`
 	HighlightsTruncated bool             `json:"highlights_truncated"`
+	OutcomeCoverage     OutcomeCoverage  `json:"outcome_coverage"`
 }
 
 type ReportPeriodSummary struct {

@@ -646,10 +646,10 @@ func TestReportContentValidationRejectsWrongWeekdayAndInternalIDs(t *testing.T) 
 		{name: "technical file", content: "# 日报\n- 合并 `018_report_digest.sql` 并更新 `15点.md`", want: 1},
 		{name: "technical path", content: "# 日报\n- 更新 /doc/v2/agent优化/第二阶段/ 方案", want: 1},
 		{
-			name:       "too many personal outcomes",
+			name:       "personal report may retain all material outcomes",
 			reportType: reportTypePersonalDaily,
 			content:    "# 日报\n1. 结果一\n2. 结果二\n3. 结果三\n4. 结果四\n5. 结果五\n6. 结果六\n7. 结果七",
-			want:       1,
+			want:       0,
 		},
 		{
 			name:       "organization report may list more owners",

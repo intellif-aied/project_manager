@@ -117,6 +117,44 @@ func TestBudgetHardLimitTrimsPathologicalEvidenceRefs(t *testing.T) {
 	}
 }
 
+func TestBudgetNeverDropsCompleteDailyOutcomes(t *testing.T) {
+	location := time.FixedZone("Asia/Shanghai", 8*60*60)
+	digest := EmptyDigest()
+	for index := 0; index < 24; index++ {
+		digest.WorkUnits = append(digest.WorkUnits, WorkUnit{
+			WorkUnitRef:     "wu-complete-" + strconvItoa(index),
+			Sequence:        index + 1,
+			ActivityStartAt: "2026-07-16T01:00:00Z",
+			ActivityEndAt:   "2026-07-16T02:00:00Z",
+			Goal:            Goal{Text: "成果目标 " + strconvItoa(index)},
+			Category:        "implementation",
+			Status:          "completed",
+			EvidenceGrade:   "A",
+			ResultStatements: []ResultStatement{{
+				Text:   "独立成果 " + strconvItoa(index) + "：" + strings.Repeat("用户可见能力", 80),
+				Source: "agent_claim_with_evidence",
+			}},
+		})
+	}
+	digest.DailySummaries = BuildDailySummaries(digest.WorkUnits, location, 5)
+	digest.Coverage = Coverage{
+		SourceWorkUnitCount:   len(digest.WorkUnits),
+		DetailedWorkUnitCount: len(digest.WorkUnits),
+		Representation:        "result_focused",
+	}
+
+	compacted, _, truncated := EnforceItemBudget(digest, 4<<10)
+	if !truncated || len(compacted.DailySummaries) != 1 ||
+		len(compacted.DailySummaries[0].Highlights) != len(digest.WorkUnits) {
+		t.Fatalf("byte compaction discarded outcomes: %#v", compacted.DailySummaries)
+	}
+	coverage := compacted.DailySummaries[0].OutcomeCoverage
+	if !coverage.Complete || coverage.SourceCount != len(digest.WorkUnits) ||
+		coverage.RepresentedCount != len(digest.WorkUnits) {
+		t.Fatalf("budget compaction broke outcome coverage: %#v", coverage)
+	}
+}
+
 func TestAnnotatePeriodRelations(t *testing.T) {
 	digest := EmptyDigest()
 	digest.WorkUnits = []WorkUnit{

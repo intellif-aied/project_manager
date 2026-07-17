@@ -113,11 +113,8 @@ func MergeReportPeriodSummaries(
 func MergeReportPeriodSummarySources(
 	sources []ReportPeriodSummarySource,
 	startDate, endDate string,
-	highlightLimit int,
+	_ int,
 ) *ReportPeriodSummary {
-	if highlightLimit <= 0 {
-		highlightLimit = DefaultDailyHighlightMax
-	}
 	merged := &ReportPeriodSummary{
 		StartDate: startDate,
 		EndDate:   endDate,
@@ -129,7 +126,8 @@ func MergeReportPeriodSummarySources(
 	}
 	type dayCandidates struct {
 		highlights []sourcedHighlight
-		truncated  bool
+		complete   bool
+		compacted  bool
 	}
 	byDate := map[string]*dayCandidates{}
 	for index, source := range sources {
@@ -148,7 +146,7 @@ func MergeReportPeriodSummarySources(
 			}
 			candidates := byDate[day.Date]
 			if candidates == nil {
-				candidates = &dayCandidates{}
+				candidates = &dayCandidates{complete: true}
 				byDate[day.Date] = candidates
 			}
 			for _, highlight := range day.Highlights {
@@ -157,7 +155,15 @@ func MergeReportPeriodSummarySources(
 					sourceRef: sourceRef,
 				})
 			}
-			candidates.truncated = candidates.truncated || day.HighlightsTruncated
+			dayComplete := !day.HighlightsTruncated
+			if day.OutcomeCoverage.SourceCount != 0 ||
+				day.OutcomeCoverage.RepresentedCount != 0 {
+				dayComplete = dayComplete && day.OutcomeCoverage.Complete &&
+					day.OutcomeCoverage.SourceCount == day.OutcomeCoverage.RepresentedCount &&
+					day.OutcomeCoverage.RepresentedCount == len(day.Highlights)
+			}
+			candidates.complete = candidates.complete && dayComplete
+			candidates.compacted = candidates.compacted || day.OutcomeCoverage.TextCompacted
 		}
 	}
 	dates := make([]string, 0, len(byDate))
@@ -171,145 +177,54 @@ func MergeReportPeriodSummarySources(
 			left, leftOK := parseTimestamp(candidates.highlights[i].highlight.ActivityEndAt)
 			right, rightOK := parseTimestamp(candidates.highlights[j].highlight.ActivityEndAt)
 			if leftOK && rightOK && !left.Equal(right) {
-				return left.After(right)
+				return left.Before(right)
 			}
 			if leftOK != rightOK {
 				return leftOK
 			}
-			return candidates.highlights[i].highlight.Sequence >
+			return candidates.highlights[i].highlight.Sequence <
 				candidates.highlights[j].highlight.Sequence
 		})
-
-		unitsBySource := map[string][]WorkUnit{}
-		sourceOrder := make([]string, 0)
-		knownSources := map[string]struct{}{}
 		seen := map[string]struct{}{}
-		for index, candidate := range candidates.highlights {
+		highlights := make([]DailyHighlight, 0, len(candidates.highlights))
+		for _, candidate := range candidates.highlights {
 			highlight := candidate.highlight
 			key := highlight.WorkUnitRef
 			if key == "" {
-				key = highlight.Goal + "\x00" + highlight.ActivityEndAt
+				key = canonicalKey(highlight.Goal + "\x00" +
+					highlight.ActivityEndAt + "\x00" + joinedResultText(highlight.ResultStatements))
 			}
 			key = candidate.sourceRef + "\x00" + key
 			if _, exists := seen[key]; exists {
 				continue
 			}
 			seen[key] = struct{}{}
-			if _, exists := knownSources[candidate.sourceRef]; !exists {
-				knownSources[candidate.sourceRef] = struct{}{}
-				sourceOrder = append(sourceOrder, candidate.sourceRef)
-			}
-			unitsBySource[candidate.sourceRef] = append(
-				unitsBySource[candidate.sourceRef],
-				WorkUnit{
-					WorkUnitRef:      highlight.WorkUnitRef,
-					Sequence:         len(candidates.highlights) - index,
-					ActivityEndAt:    highlight.ActivityEndAt,
-					PeriodRelation:   "overlap",
-					Goal:             Goal{Text: highlight.Goal, Source: "selection_period_summary"},
-					Category:         highlight.Category,
-					Status:           highlight.Status,
-					EvidenceGrade:    highlight.EvidenceGrade,
-					ResultStatements: append([]ResultStatement(nil), highlight.ResultStatements...),
-					Unresolved:       append([]Unresolved(nil), highlight.Unresolved...),
-				},
-			)
-		}
-
-		type sourcedWorkUnit struct {
-			unit       WorkUnit
-			sourceRefs map[string]struct{}
-		}
-		sourcedUnits := make([]sourcedWorkUnit, 0, len(candidates.highlights))
-		for _, sourceRef := range sourceOrder {
-			for _, unit := range consolidateDailyCandidates(unitsBySource[sourceRef]) {
-				sourcedUnits = append(sourcedUnits, sourcedWorkUnit{
-					unit:       unit,
-					sourceRefs: map[string]struct{}{sourceRef: {}},
-				})
-			}
-		}
-		sort.SliceStable(sourcedUnits, func(i, j int) bool {
-			return sourcedUnits[i].unit.Sequence > sourcedUnits[j].unit.Sequence
-		})
-		consolidated := make([]sourcedWorkUnit, 0, len(sourcedUnits))
-		for _, candidate := range sourcedUnits {
-			superseded := false
-			for index := range consolidated {
-				if !workUnitSupersedes(consolidated[index].unit, candidate.unit) {
-					continue
-				}
-				consolidated[index].unit = mergeSupersedingWorkUnit(
-					consolidated[index].unit, candidate.unit,
-				)
-				for sourceRef := range candidate.sourceRefs {
-					consolidated[index].sourceRefs[sourceRef] = struct{}{}
-				}
-				superseded = true
-				break
-			}
-			if !superseded {
-				consolidated = append(consolidated, candidate)
-			}
-		}
-		sort.SliceStable(consolidated, func(i, j int) bool {
-			left := dailyWorkUnitPriority(consolidated[i].unit)
-			right := dailyWorkUnitPriority(consolidated[j].unit)
-			if left != right {
-				return left > right
-			}
-			return consolidated[i].unit.Sequence > consolidated[j].unit.Sequence
-		})
-
-		limit := min(len(consolidated), highlightLimit)
-		selected := make([]sourcedWorkUnit, 0, limit)
-		selectedIndexes := map[int]struct{}{}
-		representedSources := map[string]struct{}{}
-		for index, candidate := range consolidated {
-			if len(selected) == limit {
-				break
-			}
-			representsNewSource := false
-			for sourceRef := range candidate.sourceRefs {
-				if _, exists := representedSources[sourceRef]; !exists {
-					representsNewSource = true
-					break
-				}
-			}
-			if !representsNewSource {
-				continue
-			}
-			selected = append(selected, candidate)
-			selectedIndexes[index] = struct{}{}
-			for sourceRef := range candidate.sourceRefs {
-				representedSources[sourceRef] = struct{}{}
-			}
-		}
-		for index, candidate := range consolidated {
-			if len(selected) == limit {
-				break
-			}
-			if _, exists := selectedIndexes[index]; exists {
-				continue
-			}
-			selected = append(selected, candidate)
+			highlights = append(highlights, highlight)
 		}
 
 		day := DailySummary{
-			Date:                date,
-			Highlights:          make([]DailyHighlight, 0, limit),
-			HighlightsTruncated: candidates.truncated || len(consolidated) > limit,
+			Date:       date,
+			Highlights: highlights,
+			OutcomeCoverage: OutcomeCoverage{
+				SourceCount:      len(highlights),
+				RepresentedCount: len(highlights),
+				Complete:         candidates.complete,
+				TextCompacted:    candidates.compacted,
+			},
 		}
-		for _, candidate := range selected {
-			day.Highlights = append(
-				day.Highlights,
-				makeDailyHighlight(candidate.unit, false),
-			)
-		}
+		day.HighlightsTruncated = !day.OutcomeCoverage.Complete
 		merged.Days = append(merged.Days, day)
 	}
 	clearReportPeriodMetrics(merged)
 	return merged
+}
+
+func joinedResultText(values []ResultStatement) string {
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		parts = append(parts, value.Text)
+	}
+	return strings.Join(parts, "\x00")
 }
 
 func workUnitSupersedes(newer, older WorkUnit) bool {

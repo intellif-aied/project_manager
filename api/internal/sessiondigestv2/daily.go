@@ -16,13 +16,10 @@ type dailySummaryBuilder struct {
 func BuildDailySummaries(
 	units []WorkUnit,
 	location *time.Location,
-	highlightLimit int,
+	_ int,
 ) []DailySummary {
 	if location == nil {
 		location = defaultBusinessLocation
-	}
-	if highlightLimit <= 0 {
-		highlightLimit = DefaultDailyHighlightMax
 	}
 	builders := map[string]*dailySummaryBuilder{}
 	for _, unit := range units {
@@ -41,7 +38,7 @@ func BuildDailySummaries(
 			builders[date] = builder
 		}
 		accumulateDailyCounts(&builder.summary, unit)
-		if isResultBearingWorkUnit(unit) && hasReportFacingWorkUnit(unit) {
+		if isResultBearingWorkUnit(unit) {
 			builder.candidates = append(builder.candidates, unit)
 		}
 	}
@@ -54,23 +51,21 @@ func BuildDailySummaries(
 	result := make([]DailySummary, 0, len(dates))
 	for _, date := range dates {
 		builder := builders[date]
-		builder.candidates = consolidateDailyCandidates(builder.candidates)
 		sort.SliceStable(builder.candidates, func(i, j int) bool {
-			left := dailyWorkUnitPriority(builder.candidates[i])
-			right := dailyWorkUnitPriority(builder.candidates[j])
-			if left != right {
-				return left > right
-			}
-			return builder.candidates[i].Sequence > builder.candidates[j].Sequence
+			return builder.candidates[i].Sequence < builder.candidates[j].Sequence
 		})
-		limit := min(len(builder.candidates), highlightLimit)
-		for _, unit := range builder.candidates[:limit] {
+		for _, unit := range builder.candidates {
 			builder.summary.Highlights = append(
 				builder.summary.Highlights,
 				makeDailyHighlight(unit, false),
 			)
 		}
-		builder.summary.HighlightsTruncated = len(builder.candidates) > limit
+		builder.summary.OutcomeCoverage = OutcomeCoverage{
+			SourceCount:      len(builder.candidates),
+			RepresentedCount: len(builder.summary.Highlights),
+			Complete:         len(builder.candidates) == len(builder.summary.Highlights),
+		}
+		builder.summary.HighlightsTruncated = !builder.summary.OutcomeCoverage.Complete
 		result = append(result, builder.summary)
 	}
 	return result
@@ -265,38 +260,28 @@ func hasDeliveredOutcomeClaim(unit WorkUnit) bool {
 }
 
 func makeDailyHighlight(unit WorkUnit, aggressive bool) DailyHighlight {
-	resultLimit := 2
-	resultBytes := 360
-	evidenceRefLimit := 4
-	unresolvedLimit := 3
-	goalBytes := 240
+	resultBytes := 1024
+	evidenceRefLimit := 8
+	unresolvedBytes := 512
+	goalBytes := 512
 	if aggressive {
-		resultLimit = 1
-		resultBytes = 240
+		resultBytes = 384
 		evidenceRefLimit = 2
-		unresolvedLimit = 2
-		goalBytes = 160
+		unresolvedBytes = 192
+		goalBytes = 192
 	}
-	results := make([]ResultStatement, 0, resultLimit)
-	resultIndexes := map[string]int{}
+	results := make([]ResultStatement, 0, len(unit.ResultStatements))
+	seenResults := map[string]struct{}{}
 	for _, statement := range unit.ResultStatements {
-		text := reportFacingClaim(unit, statement.Text)
+		text := resultFocusedClaim(statement.Text)
 		if text == "" {
 			continue
 		}
-		key := reportFacingResultKey(text)
-		if index, exists := resultIndexes[key]; exists {
-			if len(text) > len(results[index].Text) {
-				results[index] = ResultStatement{
-					Text: text, Source: statement.Source,
-					EvidenceRefs: append([]string(nil), statement.EvidenceRefs...),
-				}
-			}
+		key := canonicalKey(text)
+		if _, exists := seenResults[key]; exists {
 			continue
 		}
-		if len(results) == resultLimit {
-			continue
-		}
+		seenResults[key] = struct{}{}
 		text, _ = truncateUTF8Bytes(text, resultBytes)
 		refs := append([]string(nil), statement.EvidenceRefs...)
 		if len(refs) > evidenceRefLimit {
@@ -305,9 +290,16 @@ func makeDailyHighlight(unit WorkUnit, aggressive bool) DailyHighlight {
 		results = append(results, ResultStatement{
 			Text: text, Source: statement.Source, EvidenceRefs: refs,
 		})
-		resultIndexes[key] = len(results) - 1
 	}
-	goal, _ := truncateUTF8Bytes(reportFacingGoal(unit, results), goalBytes)
+	goal, _ := truncateUTF8Bytes(strings.TrimSpace(unit.Goal.Text), goalBytes)
+	unresolved := make([]Unresolved, 0, len(unit.Unresolved))
+	for _, item := range unit.Unresolved {
+		item.Text, _ = truncateUTF8Bytes(strings.TrimSpace(item.Text), unresolvedBytes)
+		if item.Text == "" {
+			continue
+		}
+		unresolved = append(unresolved, item)
+	}
 	return DailyHighlight{
 		WorkUnitRef:      unit.WorkUnitRef,
 		Sequence:         unit.Sequence,
@@ -317,7 +309,7 @@ func makeDailyHighlight(unit WorkUnit, aggressive bool) DailyHighlight {
 		EvidenceGrade:    unit.EvidenceGrade,
 		Goal:             goal,
 		ResultStatements: results,
-		Unresolved:       reportFacingUnresolved(unit.Unresolved, unresolvedLimit),
+		Unresolved:       unresolved,
 	}
 }
 
@@ -359,41 +351,40 @@ func resultFocusedClaim(value string) string {
 }
 
 func compactDailySummaries(summaries []DailySummary, aggressive bool) {
-	limit := DefaultDailyHighlightMax
-	if aggressive {
-		limit = 3
-	}
 	for dayIndex := range summaries {
 		day := &summaries[dayIndex]
-		if len(day.Highlights) > limit {
-			day.Highlights = append([]DailyHighlight(nil), day.Highlights[:limit]...)
-			day.HighlightsTruncated = true
-		}
 		for highlightIndex := range day.Highlights {
 			highlight := &day.Highlights[highlightIndex]
-			goalBytes := 240
-			resultLimit := 2
-			resultBytes := 360
+			goalBytes := 384
+			resultBytes := 768
 			evidenceRefLimit := 4
-			unresolvedLimit := 3
+			unresolvedBytes := 384
 			if aggressive {
 				goalBytes = 160
-				resultLimit = 1
-				resultBytes = 240
+				resultBytes = 256
 				evidenceRefLimit = 2
-				unresolvedLimit = 2
+				unresolvedBytes = 160
 			}
 			highlight.Goal, _ = truncateUTF8Bytes(highlight.Goal, goalBytes)
-			highlight.ResultStatements = compactResults(
+			highlight.ResultStatements = compactResultsPreservingCount(
 				highlight.ResultStatements,
-				resultLimit,
 				resultBytes,
 				evidenceRefLimit,
 			)
-			highlight.Unresolved = firstUnresolved(
-				highlight.Unresolved, unresolvedLimit,
-			)
+			for index := range highlight.Unresolved {
+				highlight.Unresolved[index].Text, _ = truncateUTF8Bytes(
+					highlight.Unresolved[index].Text, unresolvedBytes,
+				)
+				if aggressive {
+					highlight.Unresolved[index].EvidenceRef = ""
+				}
+			}
 		}
+		day.OutcomeCoverage.RepresentedCount = len(day.Highlights)
+		day.OutcomeCoverage.Complete =
+			day.OutcomeCoverage.SourceCount == len(day.Highlights) &&
+				!day.HighlightsTruncated
+		day.OutcomeCoverage.TextCompacted = true
 	}
 }
 
@@ -402,6 +393,24 @@ func compactReportPeriodSummary(summary *ReportPeriodSummary, aggressive bool) {
 		return
 	}
 	compactDailySummaries(summary.Days, aggressive)
+}
+
+func CompactReportPeriodSummary(summary *ReportPeriodSummary, aggressive bool) {
+	compactReportPeriodSummary(summary, aggressive)
+}
+
+func ReportPeriodOutcomeCoverageComplete(summary *ReportPeriodSummary) bool {
+	if summary == nil {
+		return false
+	}
+	for _, day := range summary.Days {
+		if day.HighlightsTruncated || !day.OutcomeCoverage.Complete ||
+			day.OutcomeCoverage.SourceCount != day.OutcomeCoverage.RepresentedCount ||
+			day.OutcomeCoverage.RepresentedCount != len(day.Highlights) {
+			return false
+		}
+	}
+	return true
 }
 
 func trimDailyHighlights(summaries []DailySummary) bool {

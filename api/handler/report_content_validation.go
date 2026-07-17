@@ -95,10 +95,6 @@ func reportContentValidationIssues(content, reportType, date, weekStart, weekEnd
 	if reportTechnicalArtifactPattern.MatchString(content) {
 		add("报告正文包含代码路径、文件名或脚本名；请改写为用户可理解的交付结果")
 	}
-	if isPersonalReportType(reportType) &&
-		len(reportTopLevelOutcomePattern.FindAllStringIndex(content, -1)) > 6 {
-		add("个人报告最多保留 6 项重要成果；请合并同主题、旧版本和阶段性步骤")
-	}
 	if asset := conflictingVersionedAsset(content); asset != "" {
 		add(fmt.Sprintf("报告正文同时包含 %s 的多个版本；请只保留最新有效版本", asset))
 	}

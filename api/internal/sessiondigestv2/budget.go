@@ -26,20 +26,6 @@ func EnforceItemBudget(input Digest, maxBytes int) (Digest, []byte, bool) {
 		return digest, encoded, truncated
 	}
 
-	for len(digest.WorkUnits) > 1 && len(encoded) > maxBytes {
-		removeIndex := lowestPriorityIndex(digest.WorkUnits)
-		removed := digest.WorkUnits[removeIndex]
-		digest.WorkUnits = append(digest.WorkUnits[:removeIndex], digest.WorkUnits[removeIndex+1:]...)
-		addAggregate(&digest, removed)
-		digest.Coverage.DetailedWorkUnitCount = len(digest.WorkUnits)
-		digest.Coverage.AggregatedWorkUnitCount++
-		digest.Coverage.Truncated = true
-		encoded, _ = json.Marshal(digest)
-	}
-	if len(encoded) <= maxBytes {
-		return digest, encoded, truncated
-	}
-
 	compactAllWorkUnits(&digest, true)
 	compactDailySummaries(digest.DailySummaries, true)
 	compactReportPeriodSummary(digest.ReportPeriodSummary, true)
@@ -53,65 +39,40 @@ func EnforceItemBudget(input Digest, maxBytes int) (Digest, []byte, bool) {
 		return digest, encoded, truncated
 	}
 
-	for len(digest.WorkUnits) > 1 && len(encoded) > maxBytes {
-		removeIndex := lowestPriorityIndex(digest.WorkUnits)
-		removed := digest.WorkUnits[removeIndex]
-		digest.WorkUnits = append(digest.WorkUnits[:removeIndex], digest.WorkUnits[removeIndex+1:]...)
-		addAggregate(&digest, removed)
-		digest.Coverage.DetailedWorkUnitCount = len(digest.WorkUnits)
-		digest.Coverage.AggregatedWorkUnitCount++
-		encoded, _ = json.Marshal(digest)
+	stripWorkUnitEvidenceDetails(&digest)
+	if !completeOutcomeCoverage(digest) {
+		retainResultBearingWorkUnits(&digest)
 	}
-	if len(encoded) > maxBytes && len(digest.WorkUnits) == 1 {
-		unit := &digest.WorkUnits[0]
-		unit.Goal.Text, _ = truncateUTF8Bytes(unit.Goal.Text, 128)
-		unit.ResultStatements = compactResults(unit.ResultStatements, 1, 192, 2)
-		unit.AgentClaims = nil
-		unit.Evidence = firstEvidence(unit.Evidence, 2)
-		unit.Changes = firstChanges(unit.Changes, 2)
-		unit.Validations = firstValidations(unit.Validations, 2)
-		unit.Unresolved = firstUnresolved(unit.Unresolved, 1)
-		encoded, _ = json.Marshal(digest)
+	encoded, _ = json.Marshal(digest)
+	if len(encoded) <= maxBytes {
+		return digest, encoded, truncated
 	}
-	for len(encoded) > maxBytes {
-		trimmed := trimDailyHighlights(digest.DailySummaries)
-		if digest.ReportPeriodSummary != nil {
-			trimmed = trimDailyHighlights(digest.ReportPeriodSummary.Days) || trimmed
-		}
-		if !trimmed {
-			break
-		}
-		digest.Coverage.Truncated = true
-		encoded, _ = json.Marshal(digest)
-	}
-	if len(encoded) > maxBytes {
+
+	if completeOutcomeCoverage(digest) {
 		digest.WorkUnits = []WorkUnit{}
 		digest.DiscussionAggregates = []DiscussionAggregate{{
-			Topic:         "详细工作单元超过单项摘要预算，已保留会话级结果计数",
+			Topic:         "详细证据已压缩，所有结果工作单元保留在 daily_summaries",
 			WorkUnitCount: digest.Coverage.SourceWorkUnitCount,
 		}}
-		if digest.ReportPeriodSummary != nil {
-			for index := range digest.ReportPeriodSummary.Days {
-				digest.ReportPeriodSummary.Days[index].Highlights = []DailyHighlight{}
-				digest.ReportPeriodSummary.Days[index].HighlightsTruncated = true
-			}
-		} else {
-			for index := range digest.DailySummaries {
-				digest.DailySummaries[index].Highlights = []DailyHighlight{}
-				digest.DailySummaries[index].HighlightsTruncated = true
-			}
-		}
 		digest.Coverage.DetailedWorkUnitCount = 0
 		digest.Coverage.AggregatedWorkUnitCount = digest.Coverage.SourceWorkUnitCount
 		digest.Coverage.Truncated = true
 		encoded, _ = json.Marshal(digest)
 	}
+	if len(encoded) <= maxBytes {
+		return digest, encoded, truncated
+	}
+
+	compactDailySummariesMinimal(digest.DailySummaries)
+	if digest.ReportPeriodSummary != nil {
+		compactDailySummariesMinimal(digest.ReportPeriodSummary.Days)
+	}
+	encoded, _ = json.Marshal(digest)
+	// A byte budget is not permission to discard complete result entries. If a
+	// pathological result set still exceeds the target, return the complete
+	// compact representation and let the selection hard limit fail explicitly.
 	if len(encoded) > maxBytes {
-		digest.DailySummaries = []DailySummary{}
-		if digest.ReportPeriodSummary != nil {
-			digest.ReportPeriodSummary.Days = []DailySummary{}
-		}
-		encoded, _ = json.Marshal(digest)
+		digest.Coverage.Truncated = true
 	}
 	return digest, encoded, truncated
 }
@@ -121,13 +82,7 @@ func CompactDigest(input Digest) Digest {
 	compactAllWorkUnits(&digest, true)
 	compactDailySummaries(digest.DailySummaries, true)
 	compactReportPeriodSummary(digest.ReportPeriodSummary, true)
-	for len(digest.WorkUnits) > 3 {
-		removeIndex := lowestPriorityIndex(digest.WorkUnits)
-		removed := digest.WorkUnits[removeIndex]
-		digest.WorkUnits = append(digest.WorkUnits[:removeIndex], digest.WorkUnits[removeIndex+1:]...)
-		addAggregate(&digest, removed)
-		digest.Coverage.AggregatedWorkUnitCount++
-	}
+	stripWorkUnitEvidenceDetails(&digest)
 	digest.Coverage.DetailedWorkUnitCount = len(digest.WorkUnits)
 	digest.Coverage.Truncated = true
 	return digest
@@ -153,26 +108,22 @@ func compactAllWorkUnits(digest *Digest, aggressive bool) {
 	for index := range digest.WorkUnits {
 		unit := &digest.WorkUnits[index]
 		goalLimit := 384
-		resultLimit := 4
 		evidenceLimit := 8
 		changeLimit := 8
 		validationLimit := 6
-		unresolvedLimit := 4
 		if aggressive {
 			goalLimit = 192
-			resultLimit = 2
 			evidenceLimit = 4
 			changeLimit = 4
 			validationLimit = 3
-			unresolvedLimit = 2
 		}
 		unit.Goal.Text, _ = truncateUTF8Bytes(unit.Goal.Text, goalLimit)
 		resultRefLimit := 8
 		if aggressive {
 			resultRefLimit = 4
 		}
-		unit.ResultStatements = compactResults(
-			unit.ResultStatements, resultLimit, 320, resultRefLimit,
+		unit.ResultStatements = compactResultsPreservingCount(
+			unit.ResultStatements, 320, resultRefLimit,
 		)
 		if len(unit.AgentClaims) > 1 {
 			unit.AgentClaims = append([]AgentClaim(nil), unit.AgentClaims[len(unit.AgentClaims)-1])
@@ -183,9 +134,107 @@ func compactAllWorkUnits(digest *Digest, aggressive bool) {
 		unit.Evidence = firstEvidence(unit.Evidence, evidenceLimit)
 		unit.Changes = firstChanges(unit.Changes, changeLimit)
 		unit.Validations = prioritizeValidations(unit.Validations, validationLimit)
-		unit.Unresolved = firstUnresolved(unit.Unresolved, unresolvedLimit)
+		if len(unit.Unresolved) > 0 {
+			unresolvedBytes := 320
+			if aggressive {
+				unresolvedBytes = 160
+			}
+			for unresolvedIndex := range unit.Unresolved {
+				unit.Unresolved[unresolvedIndex].Text, _ = truncateUTF8Bytes(
+					unit.Unresolved[unresolvedIndex].Text, unresolvedBytes,
+				)
+			}
+		}
 	}
 	digest.Coverage.Truncated = true
+}
+
+func stripWorkUnitEvidenceDetails(digest *Digest) {
+	for index := range digest.WorkUnits {
+		unit := &digest.WorkUnits[index]
+		unit.AgentClaims = []AgentClaim{}
+		unit.Evidence = []Evidence{}
+		unit.Changes = []Change{}
+		unit.Validations = []Validation{}
+		for resultIndex := range unit.ResultStatements {
+			unit.ResultStatements[resultIndex].EvidenceRefs = []string{}
+		}
+		for unresolvedIndex := range unit.Unresolved {
+			unit.Unresolved[unresolvedIndex].EvidenceRef = ""
+		}
+	}
+	digest.Coverage.Truncated = true
+}
+
+func retainResultBearingWorkUnits(digest *Digest) {
+	kept := make([]WorkUnit, 0, len(digest.WorkUnits))
+	removed := 0
+	for _, unit := range digest.WorkUnits {
+		if isResultBearingWorkUnit(unit) {
+			kept = append(kept, unit)
+			continue
+		}
+		removed++
+	}
+	digest.WorkUnits = kept
+	digest.Coverage.DetailedWorkUnitCount = len(kept)
+	digest.Coverage.AggregatedWorkUnitCount += removed
+	if removed > 0 {
+		digest.DiscussionAggregates = []DiscussionAggregate{{
+			Topic:         "无结果的重复讨论已按低损耗规则归约",
+			WorkUnitCount: removed,
+		}}
+	}
+}
+
+func completeOutcomeCoverage(digest Digest) bool {
+	resultUnits := 0
+	for _, unit := range digest.WorkUnits {
+		if isResultBearingWorkUnit(unit) {
+			resultUnits++
+		}
+	}
+	days := digest.DailySummaries
+	if digest.ReportPeriodSummary != nil {
+		days = digest.ReportPeriodSummary.Days
+	}
+	represented := 0
+	for _, day := range days {
+		if day.HighlightsTruncated || !day.OutcomeCoverage.Complete ||
+			day.OutcomeCoverage.SourceCount != day.OutcomeCoverage.RepresentedCount ||
+			day.OutcomeCoverage.RepresentedCount != len(day.Highlights) {
+			return false
+		}
+		represented += day.OutcomeCoverage.RepresentedCount
+	}
+	if digest.ReportPeriodSummary != nil {
+		return ReportPeriodOutcomeCoverageComplete(digest.ReportPeriodSummary)
+	}
+	return represented == resultUnits
+}
+
+func compactDailySummariesMinimal(summaries []DailySummary) {
+	for dayIndex := range summaries {
+		day := &summaries[dayIndex]
+		for highlightIndex := range day.Highlights {
+			highlight := &day.Highlights[highlightIndex]
+			highlight.Goal, _ = truncateUTF8Bytes(highlight.Goal, 96)
+			highlight.ResultStatements = compactResultsPreservingCount(
+				highlight.ResultStatements, 160, 0,
+			)
+			for index := range highlight.Unresolved {
+				highlight.Unresolved[index].Text, _ = truncateUTF8Bytes(
+					highlight.Unresolved[index].Text, 96,
+				)
+				highlight.Unresolved[index].EvidenceRef = ""
+			}
+		}
+		day.OutcomeCoverage.RepresentedCount = len(day.Highlights)
+		day.OutcomeCoverage.Complete =
+			day.OutcomeCoverage.SourceCount == len(day.Highlights) &&
+				!day.HighlightsTruncated
+		day.OutcomeCoverage.TextCompacted = true
+	}
 }
 
 func lowestPriorityIndex(units []WorkUnit) int {
@@ -263,6 +312,23 @@ func compactResults(
 	evidenceRefLimit int,
 ) []ResultStatement {
 	values = firstResults(values, limit)
+	result := append([]ResultStatement(nil), values...)
+	for index := range result {
+		result[index].Text, _ = truncateUTF8Bytes(result[index].Text, textBytes)
+		if len(result[index].EvidenceRefs) > evidenceRefLimit {
+			result[index].EvidenceRefs = append(
+				[]string(nil), result[index].EvidenceRefs[:evidenceRefLimit]...,
+			)
+		}
+	}
+	return result
+}
+
+func compactResultsPreservingCount(
+	values []ResultStatement,
+	textBytes int,
+	evidenceRefLimit int,
+) []ResultStatement {
 	result := append([]ResultStatement(nil), values...)
 	for index := range result {
 		result[index].Text, _ = truncateUTF8Bytes(result[index].Text, textBytes)

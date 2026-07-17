@@ -1,6 +1,7 @@
 package sessiondigestv2
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -44,7 +45,7 @@ func TestDailySummariesPreserveLaterPeriodBeforeRevisionCompaction(t *testing.T)
 		digest.WorkUnits = append(digest.WorkUnits, unit)
 	}
 	digest.DailySummaries = BuildDailySummaries(
-		digest.WorkUnits, location, DefaultDailyHighlightMax,
+		digest.WorkUnits, location, 0,
 	)
 	digest.Coverage = Coverage{
 		SourceWorkUnitCount:   len(digest.WorkUnits),
@@ -54,19 +55,25 @@ func TestDailySummariesPreserveLaterPeriodBeforeRevisionCompaction(t *testing.T)
 	recalculateSummary(&digest)
 
 	revision, encoded, truncated := EnforceItemBudget(digest, 20<<10)
-	if !truncated || len(encoded) > 20<<10 {
-		t.Fatalf("revision budget not enforced: truncated=%v bytes=%d", truncated, len(encoded))
+	if !truncated || !json.Valid(encoded) {
+		t.Fatalf("revision compaction failed: truncated=%v bytes=%d", truncated, len(encoded))
 	}
 	if len(revision.DailySummaries) != 2 {
 		t.Fatalf("daily summaries were lost: %#v", revision.DailySummaries)
+	}
+	for _, day := range revision.DailySummaries {
+		if !day.OutcomeCoverage.Complete || day.HighlightsTruncated ||
+			day.OutcomeCoverage.SourceCount != 40 || len(day.Highlights) != 40 {
+			t.Fatalf("daily result coverage was reduced: %#v", day.OutcomeCoverage)
+		}
 	}
 
 	period := time.Date(2026, 7, 16, 0, 0, 0, 0, location)
 	selected, selectedJSON, _ := PrepareForPeriod(
 		revision, period, period, location, DefaultPeriodItemBytes,
 	)
-	if len(selectedJSON) > DefaultPeriodItemBytes {
-		t.Fatalf("period payload exceeds budget: %d", len(selectedJSON))
+	if !json.Valid(selectedJSON) {
+		t.Fatalf("period payload is invalid: %d", len(selectedJSON))
 	}
 	if selected.ReportPeriodSummary == nil ||
 		len(selected.ReportPeriodSummary.Days) != 1 ||
@@ -74,8 +81,9 @@ func TestDailySummariesPreserveLaterPeriodBeforeRevisionCompaction(t *testing.T)
 		t.Fatalf("wrong period summary: %#v", selected.ReportPeriodSummary)
 	}
 	highlights := selected.ReportPeriodSummary.Days[0].Highlights
-	if len(highlights) == 0 || highlights[0].Sequence < 73 {
-		t.Fatalf("later report-period results were not prioritized: %#v", highlights)
+	if len(highlights) != 40 || highlights[0].Sequence != 41 ||
+		!selected.ReportPeriodSummary.Days[0].OutcomeCoverage.Complete {
+		t.Fatalf("report-period results were not preserved: %#v", highlights)
 	}
 	for _, day := range selected.ReportPeriodSummary.Days {
 		if day.Date == "2026-07-15" {
@@ -452,6 +460,47 @@ func TestDailySummaryHidesEngineeringEvidenceFromReportView(t *testing.T) {
 	}
 }
 
+func TestDailySummaryPreservesEveryResultAndDoesNotRewriteArtifactMentions(t *testing.T) {
+	location := time.FixedZone("Asia/Shanghai", 8*60*60)
+	const count = 12
+	units := make([]WorkUnit, 0, count)
+	for index := 0; index < count; index++ {
+		text := "成果 " + strconvItoa(index) + " 已完成"
+		if index == 7 {
+			text = "已完成 Session Digest v2.1 的方案、开发与测试环境部署，并同步发布 aida-report@1.0.10。"
+		}
+		units = append(units, WorkUnit{
+			WorkUnitRef:     "wu-low-loss-" + strconvItoa(index),
+			Sequence:        index + 1,
+			ActivityStartAt: "2026-07-16T01:00:00Z",
+			ActivityEndAt:   "2026-07-16T02:00:00Z",
+			Goal:            Goal{Text: "完成工作 " + strconvItoa(index)},
+			Category:        "implementation",
+			Status:          "completed",
+			EvidenceGrade:   "A",
+			ResultStatements: []ResultStatement{{
+				Text: text, Source: "agent_claim_with_evidence",
+			}},
+		})
+	}
+
+	days := BuildDailySummaries(units, location, 5)
+	if len(days) != 1 || len(days[0].Highlights) != count {
+		t.Fatalf("result-bearing Work Units were capped: %#v", days)
+	}
+	coverage := days[0].OutcomeCoverage
+	if !coverage.Complete || coverage.SourceCount != count ||
+		coverage.RepresentedCount != count || days[0].HighlightsTruncated {
+		t.Fatalf("incomplete outcome coverage: %#v", coverage)
+	}
+	got := days[0].Highlights[7].ResultStatements[0].Text
+	if !strings.Contains(got, "Session Digest v2.1") ||
+		!strings.Contains(got, "方案、开发与测试环境部署") ||
+		!strings.Contains(got, "aida-report@1.0.10") {
+		t.Fatalf("server rewrote a material lifecycle outcome: %q", got)
+	}
+}
+
 func TestDailyCandidatesCollapseOlderSkillVersionAndSameDigestTopic(t *testing.T) {
 	units := []WorkUnit{
 		{
@@ -589,9 +638,10 @@ func TestMergeReportPeriodSummariesKeepsLatestCrossSliceFinalState(t *testing.T)
 	for _, highlight := range got.Days[0].Highlights {
 		refs[highlight.WorkUnitRef] = true
 	}
-	if refs["old-digest"] || refs["old-rtk"] ||
-		!refs["new-digest"] || !refs["new-rtk"] {
-		t.Fatalf("cross-slice final state was not consolidated: %#v", got.Days[0].Highlights)
+	if !refs["old-digest"] || !refs["old-rtk"] ||
+		!refs["new-digest"] || !refs["new-rtk"] ||
+		!got.Days[0].OutcomeCoverage.Complete {
+		t.Fatalf("cross-slice outcomes were not preserved: %#v", got.Days[0].Highlights)
 	}
 }
 
@@ -633,7 +683,8 @@ func TestMergeReportPeriodSummarySourcesPreservesSessionCoverage(t *testing.T) {
 		"2026-07-16",
 		6,
 	)
-	if got == nil || len(got.Days) != 1 || len(got.Days[0].Highlights) != 6 {
+	if got == nil || len(got.Days) != 1 || len(got.Days[0].Highlights) != 8 ||
+		!got.Days[0].OutcomeCoverage.Complete {
 		t.Fatalf("unexpected merged period: %#v", got)
 	}
 	refs := map[string]bool{}
@@ -672,10 +723,10 @@ func TestConsolidateDailyCandidatesKeepsLatestAidaCLIState(t *testing.T) {
 		t.Fatalf("latest release must absorb earlier capability: %#v", got)
 	}
 	highlight := makeDailyHighlight(got[0], false)
-	if len(highlight.ResultStatements) != 1 ||
-		highlight.ResultStatements[0].Text !=
-			"Aida CLI 0.1.11 已完成发布，客户端自动升级已生效。" {
-		t.Fatalf("older version leaked into report highlight: %#v", highlight)
+	if len(highlight.ResultStatements) != 2 ||
+		highlight.ResultStatements[0].Text != "Aida CLI 0.1.11 已完成发布。" ||
+		!strings.Contains(highlight.ResultStatements[1].Text, "自动升级") {
+		t.Fatalf("version history was not preserved for Agent synthesis: %#v", highlight)
 	}
 }
 

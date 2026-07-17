@@ -98,7 +98,7 @@ func TestDigestV2SelectionFreezeReadAndWriteGuardIntegration(t *testing.T) {
 		})
 		digest.DailySummaries = sessiondigestv2.BuildDailySummaries(
 			digest.WorkUnits, time.FixedZone("Asia/Shanghai", 8*60*60),
-			sessiondigestv2.DefaultDailyHighlightMax,
+			0,
 		)
 		digest.Coverage = sessiondigestv2.Coverage{
 			SourceEventCount: 2, IncludedEventCount: 1, OmittedEventCount: 1,
@@ -174,7 +174,10 @@ func TestDigestV2SelectionFreezeReadAndWriteGuardIntegration(t *testing.T) {
 	}
 	if payload.ReportPeriod == nil ||
 		len(payload.ReportPeriod.Days) != 1 ||
-		len(payload.ReportPeriod.Days[0].Highlights) != 1 {
+		len(payload.ReportPeriod.Days[0].Highlights) != 2 ||
+		!payload.ReportPeriod.Days[0].OutcomeCoverage.Complete ||
+		payload.ReportPeriod.Days[0].OutcomeCoverage.SourceCount != 2 ||
+		payload.ReportPeriod.Days[0].OutcomeCoverage.RepresentedCount != 2 {
 		t.Fatalf("selection-level report summary was not preserved: %+v", payload.ReportPeriod)
 	}
 	visible := string(page.FrozenPayload)

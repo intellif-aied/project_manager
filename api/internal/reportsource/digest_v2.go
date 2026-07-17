@@ -191,8 +191,11 @@ func (s *Service) freezeSelectionV2ForRun(
 		periodSummaries,
 		selection.Period.Start,
 		selection.Period.End,
-		sessiondigestv2.DefaultReportHighlightMax,
+		0,
 	)
+	if !sessiondigestv2.ReportPeriodOutcomeCoverageComplete(page.ReportPeriod) {
+		return ErrDigestCorrupt
+	}
 	payload, compaction, err := assembleDigestV2Payload(
 		page, s.config.DigestTargetBytes, s.config.DigestHardLimit,
 	)
@@ -238,6 +241,7 @@ func assembleDigestV2Payload(
 	}
 	if len(payload) > targetBytes {
 		page.Budget.Compaction = "compact"
+		sessiondigestv2.CompactReportPeriodSummary(page.ReportPeriod, false)
 		for index := range page.Items {
 			page.Items[index].Digest = sessiondigestv2.CompactDigest(page.Items[index].Digest)
 			page.Items[index].Coverage.Representation = "compact"
@@ -246,6 +250,14 @@ func assembleDigestV2Payload(
 				page.Coverage.TruncatedItemCount++
 			}
 		}
+		payload, err = marshalStableV2ActualBytes(&page)
+		if err != nil {
+			return nil, "", err
+		}
+	}
+	if len(payload) > hardLimit {
+		page.Budget.Compaction = "compact_minimal"
+		sessiondigestv2.CompactReportPeriodSummary(page.ReportPeriod, true)
 		payload, err = marshalStableV2ActualBytes(&page)
 		if err != nil {
 			return nil, "", err
@@ -340,6 +352,7 @@ func (s *Service) readFrozenDigestV2Selection(
 		page.Coverage.SourceItemCount != page.Coverage.RepresentedItemCount ||
 		page.Coverage.RepresentedItemCount != len(page.Items) ||
 		page.ReportPeriod == nil ||
+		!sessiondigestv2.ReportPeriodOutcomeCoverageComplete(page.ReportPeriod) ||
 		page.Budget.ActualBytes != len(payload) ||
 		page.Budget.TargetBytes != targetBytes ||
 		page.Budget.HardLimitBytes != hardLimitBytes {
@@ -412,7 +425,8 @@ func (s *Service) validateFrozenDigestV2SelectionTx(
 	if err := json.Unmarshal(payload, &page); err != nil ||
 		page.ContentMode != ReadModeDigestV2 ||
 		page.DigestVersion != sessiondigestv2.Version ||
-		page.ReportPeriod == nil {
+		page.ReportPeriod == nil ||
+		!sessiondigestv2.ReportPeriodOutcomeCoverageComplete(page.ReportPeriod) {
 		return ErrDigestCorrupt
 	}
 	var sourceItems, validDigestItems int

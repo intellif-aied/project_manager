@@ -139,7 +139,7 @@ func (e *Extractor) Result(itemMaxBytes int) (Digest, int64, int64, int64, bool,
 	digest := EmptyDigest()
 	digest.WorkUnits = units
 	digest.DailySummaries = BuildDailySummaries(
-		units, defaultBusinessLocation, DefaultDailyHighlightMax,
+		units, defaultBusinessLocation, 0,
 	)
 	digest.Coverage = Coverage{
 		SourceEventCount:        e.sourceEventCount,
