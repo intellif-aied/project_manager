@@ -75,6 +75,19 @@ type FinalizeResponse struct {
 	SliceCreated   bool          `json:"slice_created"`
 }
 
+type GenerationStatusResponse struct {
+	GenerationID            string        `json:"generation_id"`
+	SessionRef              string        `json:"session_ref"`
+	GenerationStatus        string        `json:"generation_status"`
+	ContentStatus           ContentStatus `json:"content_status"`
+	ContentProjectionStatus string        `json:"content_projection_status"`
+	ExpectedCursor          int64         `json:"expected_cursor"`
+	ContentIndexedCursor    int64         `json:"content_indexed_cursor"`
+	ReadyForReports         bool          `json:"ready_for_reports"`
+	ErrorCode               string        `json:"error_code,omitempty"`
+	ErrorMessage            string        `json:"error_message,omitempty"`
+}
+
 type AbortResponse struct {
 	GenerationID  string        `json:"generation_id"`
 	Status        string        `json:"status"`
@@ -590,6 +603,68 @@ func (s *SyncService) Finalize(ctx context.Context, userID, generationID string,
 		ContentStatus: contentStatus, ExpectedCursor: expectedCursor,
 		SliceKey: sliceKey, SliceCreated: sliceCreated,
 	})
+}
+
+func (s *SyncService) GenerationStatus(ctx context.Context, userID, generationID string) (GenerationStatusResponse, error) {
+	if strings.TrimSpace(userID) == "" || strings.TrimSpace(generationID) == "" {
+		return GenerationStatusResponse{}, ErrInvalidSyncRequest
+	}
+	var response GenerationStatusResponse
+	var activeGeneration bool
+	err := s.db.QueryRowContext(ctx, `
+		SELECT g.id, sess.session_ref, g.status, sess.content_status, g.expected_cursor,
+			(src.active_generation_id = g.id),
+			COALESCE(projection.status, 'pending'),
+			COALESCE(projection.content_indexed_cursor, 0),
+			COALESCE((
+				SELECT last_error
+				FROM session_processing_jobs
+				WHERE generation_id = g.id AND status = 'dead'
+					AND job_type IN ('index_content_chunk', 'rebuild_content_revision')
+				ORDER BY created_at DESC
+				LIMIT 1
+			), '')
+		FROM session_source_generations g
+		JOIN session_sources src ON src.id = g.source_id
+		JOIN sessions sess ON sess.id = src.session_id
+		LEFT JOIN LATERAL (
+			SELECT status, content_indexed_cursor
+			FROM session_content_projection_revisions
+			WHERE generation_id = g.id
+			ORDER BY CASE status
+				WHEN 'active' THEN 0
+				WHEN 'validated' THEN 1
+				WHEN 'building' THEN 2
+				WHEN 'failed' THEN 3
+				ELSE 4
+			END, created_at DESC
+			LIMIT 1
+		) projection ON true
+		WHERE g.id = $1 AND sess.user_id = $2`,
+		generationID, userID,
+	).Scan(
+		&response.GenerationID, &response.SessionRef, &response.GenerationStatus,
+		&response.ContentStatus, &response.ExpectedCursor, &activeGeneration,
+		&response.ContentProjectionStatus, &response.ContentIndexedCursor, &response.ErrorMessage,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return GenerationStatusResponse{}, ErrGenerationNotFound
+	}
+	if err != nil {
+		return GenerationStatusResponse{}, err
+	}
+	response.ReadyForReports = activeGeneration &&
+		response.GenerationStatus == "active" &&
+		response.ContentStatus == ContentAvailable &&
+		response.ContentProjectionStatus == "active" &&
+		response.ContentIndexedCursor >= response.ExpectedCursor
+	if !response.ReadyForReports &&
+		(response.ContentProjectionStatus == "failed" || response.ErrorMessage != "") {
+		response.ErrorCode = "CONTENT_PROJECTION_FAILED"
+	} else if !response.ReadyForReports && response.ContentStatus == ContentUploadFailed {
+		response.ErrorCode = "SESSION_CONTENT_UPLOAD_FAILED"
+	}
+	return response, nil
 }
 
 func (s *SyncService) Abort(ctx context.Context, userID, generationID string) (AbortResponse, error) {

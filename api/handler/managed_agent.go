@@ -898,7 +898,7 @@ func (h *ManagedAgentHandler) ensureUserReportMCPEntry(ctx context.Context, clie
 			continue
 		}
 		if strings.TrimSpace(expectedURL) != "" && strings.TrimSpace(entry.URL) != "" && strings.TrimSpace(entry.URL) != expectedURL {
-			return false, model.ManagedMCPEntry{}, count, fmt.Errorf("Aida Report MCP %s@%s points to %s, expected %s; bump MANAGED_AGENT_REPORT_MCP_VERSION for this deployment or fix the platform registry", h.defaults.ReportMCPSlug, h.defaults.ReportMCPVersion, entry.URL, expectedURL)
+			return false, model.ManagedMCPEntry{}, count, fmt.Errorf("Aida Report MCP %s@%s points to %s, expected %s; publish a new MCP asset version in code or fix the platform registry", h.defaults.ReportMCPSlug, h.defaults.ReportMCPVersion, entry.URL, expectedURL)
 		}
 		count++
 		if first.EntryID == "" {

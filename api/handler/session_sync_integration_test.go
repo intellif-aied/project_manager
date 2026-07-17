@@ -162,6 +162,16 @@ func TestSessionSyncHTTPEndToEndIntegration(t *testing.T) {
 			t.Fatalf("process %s: %v", job.Type, err)
 		}
 	}
+	statusRequest := requestWithUser(httptest.NewRequest(http.MethodGet, "/api/v1/session-syncs/"+generationID+"/status", nil), user)
+	statusRecorder := httptest.NewRecorder()
+	statusRouter := chi.NewRouter()
+	statusRouter.Get("/api/v1/session-syncs/{generationId}/status", h.Status)
+	statusRouter.ServeHTTP(statusRecorder, statusRequest)
+	if statusRecorder.Code != http.StatusOK ||
+		!bytes.Contains(statusRecorder.Body.Bytes(), []byte(`"ready_for_reports":true`)) ||
+		!bytes.Contains(statusRecorder.Body.Bytes(), []byte(`"content_status":"available"`)) {
+		t.Fatalf("status code=%d body=%s", statusRecorder.Code, statusRecorder.Body.String())
+	}
 	if err := processor.Process(context.Background(), contentJobs[0]); err != nil {
 		t.Fatalf("idempotent content replay: %v", err)
 	}

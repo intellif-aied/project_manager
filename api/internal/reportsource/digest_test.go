@@ -49,6 +49,22 @@ func TestReportSourceConfigReadModeRouting(t *testing.T) {
 	}
 }
 
+func TestProductConfigUsesCurrentDigestV2ForAllUsers(t *testing.T) {
+	config, err := ProductConfig().Normalized()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.SessionReadMode != ReadModeDigestV2 ||
+		config.DigestVersion != sessiondigestv2.Version ||
+		config.RedactionVersion != sessiondigestv2.RedactionVersion ||
+		config.DigestTargetBytes != defaultDigestTargetBytes ||
+		config.DigestHardLimit != defaultDigestHardLimitBytes ||
+		config.RequiredReadMode("42") != ReadModeDigestV2 ||
+		len(config.DigestCanaryUserIDs) != 0 {
+		t.Fatalf("unexpected product report-source policy: %#v", config)
+	}
+}
+
 func TestReportSourceConfigRejectsUnsafeValues(t *testing.T) {
 	tests := []Config{
 		{SessionReadMode: "automatic", DigestVersion: sessiondigest.Version, RedactionVersion: sessiondigest.RedactionVersion, DigestTargetBytes: 1024, DigestHardLimit: 2048},

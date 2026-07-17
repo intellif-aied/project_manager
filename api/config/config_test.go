@@ -10,51 +10,20 @@ func TestCacheVariantDefaultsToUnspecified(t *testing.T) {
 	}
 }
 
-func TestReportDigestConfigurationDefaults(t *testing.T) {
-	for _, key := range []string{
-		"MANAGED_AGENT_REPORT_SESSION_READ_MODE",
-		"MANAGED_AGENT_REPORT_DIGEST_VERSION",
-		"MANAGED_AGENT_REPORT_REDACTION_VERSION",
-		"MANAGED_AGENT_REPORT_DIGEST_TARGET_BYTES",
-		"MANAGED_AGENT_REPORT_DIGEST_HARD_LIMIT_BYTES",
-		"MANAGED_AGENT_REPORT_DIGEST_ROLLOUT_PERCENT",
-		"MANAGED_AGENT_REPORT_DIGEST_CANARY_USER_IDS",
-		"SESSION_DIGEST_V2_BUILD_ENABLED",
-		"SESSION_DIGEST_V2_RECONCILE_BATCH",
-		"SESSION_DIGEST_V2_WORKER_BATCH",
-	} {
-		t.Setenv(key, "")
-	}
+func TestReportEnvironmentBindings(t *testing.T) {
+	t.Setenv("MANAGED_AGENT_DEFAULT_ENGINE", "codex")
+	t.Setenv("MANAGED_AGENT_DEFAULT_MODEL_ID", "model-1")
+	t.Setenv("MANAGED_AGENT_REPORT_SKILL_OWNER", "10086")
+	t.Setenv("MANAGED_AGENT_REPORT_SKILL_VERSION", "1.2.3")
+	t.Setenv("MANAGED_AGENT_REPORT_MCP_URL", "https://aida.example.com/api/v1/mcp/reports")
+	t.Setenv("AIDA_PUBLIC_BASE_URL", "https://aida.example.com")
 	loaded := Load()
-	if loaded.ManagedAgentReportSessionReadMode != "full" ||
-		loaded.ManagedAgentReportDigestVersion != "session-digest/v1" ||
-		loaded.ManagedAgentReportRedactionVersion != "report-redaction/v1" ||
-		loaded.ManagedAgentReportDigestTargetBytes != 65536 ||
-		loaded.ManagedAgentReportDigestHardLimit != 131072 ||
-		loaded.ManagedAgentReportDigestRolloutPct != 100 ||
-		len(loaded.ManagedAgentReportDigestCanaryUsers) != 0 ||
-		loaded.SessionDigestV2BuildEnabled ||
-		loaded.SessionDigestV2ReconcileBatch != 1 ||
-		loaded.SessionDigestV2WorkerBatch != 1 {
-		t.Fatalf("unexpected report digest defaults: %+v", loaded)
-	}
-}
-
-func TestInvalidReportDigestIntegerIsNotSilentlyDefaulted(t *testing.T) {
-	t.Setenv("MANAGED_AGENT_REPORT_DIGEST_TARGET_BYTES", "not-an-int")
-	if got := Load().ManagedAgentReportDigestTargetBytes; got != -1 {
-		t.Fatalf("invalid integer must reach startup validation, got %d", got)
-	}
-}
-
-func TestSessionDigestV2Configuration(t *testing.T) {
-	t.Setenv("SESSION_DIGEST_V2_BUILD_ENABLED", "true")
-	t.Setenv("SESSION_DIGEST_V2_RECONCILE_BATCH", "2")
-	t.Setenv("SESSION_DIGEST_V2_WORKER_BATCH", "1")
-	loaded := Load()
-	if !loaded.SessionDigestV2BuildEnabled ||
-		loaded.SessionDigestV2ReconcileBatch != 2 ||
-		loaded.SessionDigestV2WorkerBatch != 1 {
-		t.Fatalf("unexpected digest v2 config: %+v", loaded)
+	if loaded.ManagedAgentDefaultEngine != "codex" ||
+		loaded.ManagedAgentDefaultModelID != "model-1" ||
+		loaded.ManagedAgentReportSkillOwner != "10086" ||
+		loaded.ManagedAgentReportSkillVersion != "1.2.3" ||
+		loaded.ManagedAgentReportMCPURL != "https://aida.example.com/api/v1/mcp/reports" ||
+		loaded.AIDAPublicBaseURL != "https://aida.example.com" {
+		t.Fatalf("unexpected report environment bindings: %+v", loaded)
 	}
 }

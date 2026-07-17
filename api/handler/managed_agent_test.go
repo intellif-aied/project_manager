@@ -1459,7 +1459,7 @@ func TestEnsureReportMCPEntryRejectsExistingDifferentURL(t *testing.T) {
 
 	h := NewManagedAgentHandlerWithDefaults(nil, service.NewManagedAgentClient(platform.URL, "platform-token"), testManagedAgentDefaults())
 	err := h.ensureReportMCPEntry(httptest.NewRequest(http.MethodPost, "/", nil), h.client)
-	if err == nil || !strings.Contains(err.Error(), "bump MANAGED_AGENT_REPORT_MCP_VERSION") {
+	if err == nil || !strings.Contains(err.Error(), "publish a new MCP asset version in code") {
 		t.Fatalf("expected explicit mcp version error, got %v", err)
 	}
 }

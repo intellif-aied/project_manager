@@ -64,15 +64,7 @@ func main() {
 		log.Fatalf("Failed to init session sync handler: %v", err)
 	}
 	reportH := handler.NewReportHandler(database)
-	reportSourceConfig, err := (reportsource.Config{
-		SessionReadMode:     cfg.ManagedAgentReportSessionReadMode,
-		DigestVersion:       cfg.ManagedAgentReportDigestVersion,
-		RedactionVersion:    cfg.ManagedAgentReportRedactionVersion,
-		DigestTargetBytes:   cfg.ManagedAgentReportDigestTargetBytes,
-		DigestHardLimit:     cfg.ManagedAgentReportDigestHardLimit,
-		DigestRolloutPct:    cfg.ManagedAgentReportDigestRolloutPct,
-		DigestCanaryUserIDs: cfg.ManagedAgentReportDigestCanaryUsers,
-	}).Normalized()
+	reportSourceConfig, err := reportsource.ProductConfig().Normalized()
 	if err != nil {
 		log.Fatalf("Invalid report source digest configuration: %v", err)
 	}
@@ -82,28 +74,13 @@ func main() {
 	}
 	reportSourceH := handler.NewReportSourceHandler(reportSourceService)
 	managedAgentH := handler.NewManagedAgentHandlerWithDefaults(database, managedAgentClient, handler.ManagedAgentDefaults{
-		Engine:                         cfg.ManagedAgentDefaultEngine,
-		ModelID:                        cfg.ManagedAgentDefaultModelID,
-		ReportSkillOwner:               cfg.ManagedAgentReportSkillOwner,
-		ReportSkillSlug:                cfg.ManagedAgentReportSkillSlug,
-		ReportSkillVersion:             cfg.ManagedAgentReportSkillVersion,
-		ReportSkillName:                cfg.ManagedAgentReportSkillName,
-		ReportSkillDescription:         cfg.ManagedAgentReportSkillDescription,
-		ReportSkillMarkdown:            cfg.ManagedAgentReportSkillMarkdown,
-		ReportMCPSlug:                  cfg.ManagedAgentReportMCPSlug,
-		ReportMCPVersion:               cfg.ManagedAgentReportMCPVersion,
-		ReportMCPName:                  cfg.ManagedAgentReportMCPName,
-		ReportMCPDescription:           cfg.ManagedAgentReportMCPDescription,
-		ReportMCPURL:                   cfg.ManagedAgentReportMCPURL,
-		ReportMCPCredentialSlot:        cfg.ManagedAgentReportCredentialSlot,
-		ReportAgentName:                cfg.ManagedAgentReportAgentName,
-		ReportAgentDescription:         cfg.ManagedAgentReportAgentDescription,
-		ReportAgentInstructions:        cfg.ManagedAgentReportAgentInstructions,
-		ReportAgentStartPromptTemplate: cfg.ManagedAgentReportAgentStartPrompt,
-		ReportAssetRepair:              cfg.ManagedAgentReportAssetRepair,
-		ReportAssetRepairConfigured:    true,
-		AIDAPublicBaseURL:              cfg.AIDAPublicBaseURL,
-		AIHubSecret:                    cfg.AIHubSecret,
+		Engine:             cfg.ManagedAgentDefaultEngine,
+		ModelID:            cfg.ManagedAgentDefaultModelID,
+		ReportSkillOwner:   cfg.ManagedAgentReportSkillOwner,
+		ReportSkillVersion: cfg.ManagedAgentReportSkillVersion,
+		ReportMCPURL:       cfg.ManagedAgentReportMCPURL,
+		AIDAPublicBaseURL:  cfg.AIDAPublicBaseURL,
+		AIHubSecret:        cfg.AIHubSecret,
 	})
 	managedAgentH.ConfigureReportSourceSelection(reportSourceService)
 	dailyReportMCPH := handler.NewReportMCPHandler(database)
@@ -189,41 +166,33 @@ func main() {
 		digestWorker.Start(schedulerCtx)
 		log.Printf("Session digest services started in %s mode", reportSourceConfig.SessionReadMode)
 	}
-	if reportSourceConfig.SessionReadMode == reportsource.ReadModeDigestV2 &&
-		!cfg.SessionDigestV2BuildEnabled {
-		log.Fatal("SESSION_DIGEST_V2_BUILD_ENABLED must be true when report source mode is digest_v2")
+	digestV2Config := sessiondigestv2.DefaultConfig()
+	reconciler, err := sessiondigestv2.NewReconciler(database, digestV2Config)
+	if err != nil {
+		log.Fatalf("Failed to init session digest v2 reconciler: %v", err)
 	}
-	if cfg.SessionDigestV2BuildEnabled {
-		digestV2Config := sessiondigestv2.DefaultConfig()
-		digestV2Config.ReconcileBatch = cfg.SessionDigestV2ReconcileBatch
-		digestV2Config.WorkerBatch = cfg.SessionDigestV2WorkerBatch
-		reconciler, err := sessiondigestv2.NewReconciler(database, digestV2Config)
-		if err != nil {
-			log.Fatalf("Failed to init session digest v2 reconciler: %v", err)
-		}
-		jobRepository, err := sessionsync.NewPostgresJobRepository(database)
-		if err != nil {
-			log.Fatalf("Failed to init session digest v2 job repository: %v", err)
-		}
-		digestProcessor, err := sessiondigestv2.NewProcessor(database, digestV2Config)
-		if err != nil {
-			log.Fatalf("Failed to init session digest v2 processor: %v", err)
-		}
-		hostname, _ := os.Hostname()
-		digestWorker, err := sessiondigestv2.NewWorker(
-			jobRepository, digestProcessor, "api:"+hostname+":digest-v2", digestV2Config,
-		)
-		if err != nil {
-			log.Fatalf("Failed to init session digest v2 worker: %v", err)
-		}
-		reconciler.Start(schedulerCtx)
-		digestWorker.Start(schedulerCtx)
-		log.Printf(
-			"Session digest v2 services started (reconcile_batch=%d worker_batch=%d read_mode=%s)",
-			digestV2Config.ReconcileBatch, digestV2Config.WorkerBatch,
-			reportSourceConfig.SessionReadMode,
-		)
+	jobRepository, err := sessionsync.NewPostgresJobRepository(database)
+	if err != nil {
+		log.Fatalf("Failed to init session digest v2 job repository: %v", err)
 	}
+	digestProcessor, err := sessiondigestv2.NewProcessor(database, digestV2Config)
+	if err != nil {
+		log.Fatalf("Failed to init session digest v2 processor: %v", err)
+	}
+	hostname, _ := os.Hostname()
+	digestWorker, err := sessiondigestv2.NewWorker(
+		jobRepository, digestProcessor, "api:"+hostname+":digest-v2", digestV2Config,
+	)
+	if err != nil {
+		log.Fatalf("Failed to init session digest v2 worker: %v", err)
+	}
+	reconciler.Start(schedulerCtx)
+	digestWorker.Start(schedulerCtx)
+	log.Printf(
+		"Session digest v2 services started (reconcile_batch=%d worker_batch=%d read_mode=%s)",
+		digestV2Config.ReconcileBatch, digestV2Config.WorkerBatch,
+		reportSourceConfig.SessionReadMode,
+	)
 	docH := handler.NewDocumentHandler(database)
 	tokenH := handler.NewTokenHandler(database)
 	pricingService := pricing.NewService(database)
@@ -248,6 +217,7 @@ func main() {
 	r.Post("/api/v1/auth/register", authH.Register)
 	r.With(handler.CLIAuthMiddleware(database, cfg.AIHubSecret, aihubClient)).Post("/api/v1/session-syncs/prepare", sessionSyncH.Prepare)
 	r.With(handler.CLIAuthMiddleware(database, cfg.AIHubSecret, aihubClient)).Post("/api/v1/session-chunks/batch", sessionSyncH.UploadChunks)
+	r.With(handler.CLIAuthMiddleware(database, cfg.AIHubSecret, aihubClient)).Get("/api/v1/session-syncs/{generationId}/status", sessionSyncH.Status)
 	r.With(handler.CLIAuthMiddleware(database, cfg.AIHubSecret, aihubClient)).Post("/api/v1/session-syncs/{generationId}/finalize", sessionSyncH.Finalize)
 	r.With(handler.CLIAuthMiddleware(database, cfg.AIHubSecret, aihubClient)).Post("/api/v1/session-syncs/{generationId}/abort", sessionSyncH.Abort)
 	r.With(handler.CLIAuthMiddleware(database, cfg.AIHubSecret, aihubClient)).Post("/api/v1/sessions/batch", handler.LegacySessionBatchUploadDisabled)

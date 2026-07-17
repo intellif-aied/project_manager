@@ -57,6 +57,21 @@ func DefaultConfig() Config {
 	}
 }
 
+// ProductConfig is the report-source policy shipped by the API image. It is
+// intentionally code-owned: changing the Digest algorithm or its capacity
+// limits requires review, tests, and an immutable API release instead of an
+// environment-only production change.
+func ProductConfig() Config {
+	return Config{
+		SessionReadMode:   ReadModeDigestV2,
+		DigestVersion:     sessiondigestv2.Version,
+		RedactionVersion:  sessiondigestv2.RedactionVersion,
+		DigestTargetBytes: defaultDigestTargetBytes,
+		DigestHardLimit:   defaultDigestHardLimitBytes,
+		DigestRolloutPct:  100,
+	}
+}
+
 func (c Config) Normalized() (Config, error) {
 	defaults := DefaultConfig()
 	c.SessionReadMode = strings.ToLower(strings.TrimSpace(c.SessionReadMode))

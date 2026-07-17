@@ -59,24 +59,18 @@ AIDA_CLAUDE_CACHE_WRITE_VARIANT=5m
 
 MANAGED_AGENT_URL=<Managed Agent Platform 地址>
 MANAGED_AGENT_TOKEN=<生产管理 Token>
+MANAGED_AGENT_DEFAULT_ENGINE=claude-code
+MANAGED_AGENT_DEFAULT_MODEL_ID=<生产默认模型>
 MANAGED_AGENT_REPORT_SKILL_OWNER=10086
-MANAGED_AGENT_REPORT_SKILL_SLUG=aida-report
 MANAGED_AGENT_REPORT_SKILL_VERSION=<当前生产不可变版本>
-MANAGED_AGENT_REPORT_MCP_SLUG=aida-report-mcp
-MANAGED_AGENT_REPORT_MCP_VERSION=<当前兼容版本>
 MANAGED_AGENT_REPORT_MCP_URL=<公网或内网 MCP 地址>
-MANAGED_AGENT_REPORT_ASSET_REPAIR=true
-
-MANAGED_AGENT_REPORT_SESSION_READ_MODE=digest_v1
-MANAGED_AGENT_REPORT_DIGEST_VERSION=session-digest/v1
-MANAGED_AGENT_REPORT_REDACTION_VERSION=report-redaction/v1
-MANAGED_AGENT_REPORT_DIGEST_TARGET_BYTES=65536
-MANAGED_AGENT_REPORT_DIGEST_HARD_LIMIT_BYTES=131072
-MANAGED_AGENT_REPORT_DIGEST_ROLLOUT_PERCENT=100
-MANAGED_AGENT_REPORT_DIGEST_CANARY_USER_IDS=
 ```
 
 密码、JWT 和服务 Token 只能保存在服务器 `.env` 或密钥系统，不写入仓库、文档和日志。普通升级不得改变数据库、MinIO 或 JWT 凭证。
+
+Report Skill/MCP 的 slug、MCP 协议版本、凭据槽、默认 Agent 文案、资产修复策略，以及 Digest 的读取模式、算法版本、脱敏版本、容量预算、Worker 开关和批量均由 API 镜像固化，不写入 `.env`。这些值属于代码兼容性契约；需要调整时通过代码评审、测试和新 API 镜像发布，不能在生产临时拼装一套运行组合。
+
+生产 Compose 会从 `PUBLIC_BASE_URL` 派生 API 内部使用的 Aida 公网地址，不需要再维护第二个同义配置项。
 
 ## 4. 首次部署
 
@@ -146,14 +140,14 @@ API-only 或 Web-only 发布只能重建指定服务；不得因修改共享 `IM
 
 ### 7.2 MCP 发布
 
-MCP 版本必须在 public registry 中唯一，URL、认证头、凭据槽和工具集合必须与 API 配置一致。变更 MCP URL 或协议时提升 MCP 版本，不修改已发布版本。
+MCP 版本必须在 public registry 中唯一，URL、认证头、凭据槽和工具集合必须与 API 镜像契约一致。变更 MCP URL 或协议时，在代码中提升 MCP 版本并发布新 API 镜像，不修改已发布版本，也不通过 `.env` 覆盖协议版本。
 
 ### 7.3 Digest 规则
 
-- `digest_v1` 是生产标准读取模式；
-- rollout 为全量，canary 为空，不使用 shadow；
+- `digest_v2` 是新报告的固定读取模式，不提供 rollout、canary、shadow 或回退到 `full` 的环境开关；
+- Digest 算法版本、脱敏版本、容量预算和 Worker 参数随 API 镜像发布，测试与生产使用同一套代码策略；
 - Digest 未 ready 时不得让新报告进入不可恢复的半完成状态；
-- Digest 异常时可将新 run 临时切回 `full`，修复后再恢复 `digest_v1`。
+- Digest 异常时停止新报告并回滚上一 API 镜像或 forward fix，禁止通过修改 `.env` 绕过容量保护。
 
 ## 8. Aida CLI 发布
 
@@ -187,7 +181,7 @@ make release-prod-dir \
 
 - Web 可恢复上一镜像；
 - API 优先 forward fix，不能反向删除已执行迁移；
-- Digest 异常只影响新 run，可临时切换读取模式；
+- Digest 异常时恢复上一不可变 API 镜像，不临时改写读取模式或算法参数；
 - Skill 保留历史版本，不覆盖、不删除；
 - CLI 版本发现文件只能阻止后续升级，不能让已升级客户端自动降级。
 

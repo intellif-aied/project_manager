@@ -1,11 +1,11 @@
 # AIDA-BUG-20260716-005：Aida 客户端 Done 与服务端 Session 可用状态不一致
 
 > 优先级：P0  
-> 状态：待修复，已完成 14.159 客户端与生产接口取证  
+> 状态：修复中；已实现 readiness 与客户端状态语义，待 14.157 真实验收
 > 发现时间：2026-07-16  
 > 发现环境：客户端 `192.168.14.159`，生产 `113.100.143.91:9180`  
 > 影响范围：Aida Session 上传、Token 投影、日报来源选择  
-> 当前原则：本文件只记录问题和修复要求，尚未修改代码。
+> 当前原则：先修复 Done/readiness 主问题；checkpoint 身份隔离仍作为后续兼容性修复，不在本次 P0 客户端补丁中扩大。
 
 ## 1. 问题结论
 
@@ -132,3 +132,19 @@ Session 内容 projection ready
 ## 7. 关闭条件
 
 只有客户端成功提示与服务端 `available/ready` 一致，处理中和失败状态可见，Token/Session/Report Source 三条链路状态一致，并完成账号切换和异常重试回归后，才能关闭本 P0。
+
+## 8. 当前实现进度
+
+已实现：
+
+1. API 增加 generation readiness 只读接口；
+2. 客户端 finalize 后轮询服务端权威状态；
+3. 只有 `ready_for_reports=true` 才计入 READY/Done；
+4. projection 延迟、失败和 pending tail 分别展示 PROCESSING、FAILED、CURRENT；
+5. legacy 接口只显示已接受/处理中，不再误报 ready。
+
+待完成：
+
+1. 14.157 真实 Session 上传和报告来源验收；
+2. 账号、服务端维度的 checkpoint 身份隔离；
+3. Token Analytics、普通 Session、Report Source 三条链路一致性回归。

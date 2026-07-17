@@ -235,6 +235,24 @@ func (h *SessionSyncHandler) Finalize(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
+func (h *SessionSyncHandler) Status(w http.ResponseWriter, r *http.Request) {
+	u, ok := h.authorize(w, r)
+	if !ok {
+		return
+	}
+	generationID := chi.URLParam(r, "generationId")
+	if !isValidUUID(generationID) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_GENERATION", "error": "invalid generation id"})
+		return
+	}
+	response, err := h.service.GenerationStatus(r.Context(), u.ID, generationID)
+	if err != nil {
+		writeSessionSyncError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
 func (h *SessionSyncHandler) Abort(w http.ResponseWriter, r *http.Request) {
 	u, ok := h.authorize(w, r)
 	if !ok {
