@@ -118,6 +118,8 @@ func TestBuildReportRunMessageIncludesSystemParams(t *testing.T) {
 		"不能写成今日工作",
 		"Asia/Shanghai",
 		"累计 Token",
+		"不得用旧版本覆盖新结果",
+		"未明确时省略环境",
 	)
 	if strings.Contains(message, "mcp_url=") {
 		t.Fatalf("message should not expose mcp_url: %q", message)
@@ -201,6 +203,8 @@ func TestDefaultReportAgentInstructionsSeparateRosterFromActivity(t *testing.T) 
 		"禁止再次逐项汇总",
 		"Asia/Shanghai",
 		"累计 Token",
+		"必须以最后完成的 highlight",
+		"不得写成生产",
 	)
 }
 

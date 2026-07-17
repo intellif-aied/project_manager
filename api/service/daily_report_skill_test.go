@@ -57,6 +57,9 @@ func TestReportSkillMarkdownUsesDeterministicDisplayContext(t *testing.T) {
 		"Title-only numbered items are invalid",
 		"Do not retain an item whose only result is tests passed",
 		"Never output a standalone outcome such as “全流程测试完成”",
+		"the latest completed highlight controls the user-facing current state",
+		"never let an earlier version replace a later completed outcome",
+		"Never rewrite a test/staging/target environment as production",
 	}
 	for _, expected := range required {
 		if !strings.Contains(markdown, expected) {
