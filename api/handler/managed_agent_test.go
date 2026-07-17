@@ -93,6 +93,10 @@ func TestBuildReportRunMessageIncludesSystemParams(t *testing.T) {
 	}, "请重点关注风险", reportMCPCredentialSlot)
 
 	requireContainsAll(t, message,
+		"/aida-report",
+		"必须实际调用 Skill 工具",
+		"文本本身不代表 Skill 已加载",
+		"加载完成前不得调用报告 MCP",
 		"report_type=personal_daily",
 		`period={"date":"2026-07-01"}`,
 		`calendar_context={"type":"daily","day":{"date":"2026-07-01","weekday":"周三"}}`,
@@ -110,6 +114,9 @@ func TestBuildReportRunMessageIncludesSystemParams(t *testing.T) {
 		"最终动作：必须调用 write_report_result 回写",
 		"最终动作：必须调用 write_report_result 回写",
 	)
+	if !strings.HasPrefix(message, "/aida-report\n") {
+		t.Fatalf("run message must invoke the bound report skill first: %q", message)
+	}
 	if strings.Contains(message, "mcp_url=") {
 		t.Fatalf("message should not expose mcp_url: %q", message)
 	}
@@ -180,6 +187,9 @@ func TestDefaultReportAgentInstructionsContainProtocolOnly(t *testing.T) {
 		defaultReportAgentMarker,
 		defaultReportAgentTypesPrefix,
 		"报告内容、结构和写作风格由当前绑定的 Skill 决定",
+		"每次报告运行必须先实际调用 Skill 工具加载 aida-report",
+		"输入文本中出现 /aida-report 不代表已经加载",
+		"不在 Prompt 中增加报告内容规则",
 		"run_id、report_type、period、calendar_context、target",
 		"report_source_selection_id",
 		"coverage.complete=true",
