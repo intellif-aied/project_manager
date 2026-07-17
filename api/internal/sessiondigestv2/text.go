@@ -3,10 +3,15 @@ package sessiondigestv2
 import (
 	"encoding/json"
 	"path"
+	"regexp"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/aidashboard/api/internal/sessiondigest"
+)
+
+var serializedTextFieldPattern = regexp.MustCompile(
+	`"(?:text|input_text|output_text)"\s*:\s*"((?:\\.|[^"\\])*)"`,
 )
 
 func decodeObject(raw json.RawMessage) map[string]any {
@@ -42,10 +47,22 @@ func contentTexts(value any) []string {
 	if text := stringValue(value); text != "" {
 		trimmed := strings.TrimSpace(text)
 		var decoded any
-		if (strings.HasPrefix(trimmed, "[") || strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, `"`)) &&
-			json.Unmarshal([]byte(trimmed), &decoded) == nil {
-			if nested := contentTexts(decoded); len(nested) > 0 {
-				return nested
+		structured := strings.HasPrefix(trimmed, "[") ||
+			strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, `"`)
+		if structured {
+			if json.Unmarshal([]byte(trimmed), &decoded) == nil {
+				if nested := contentTexts(decoded); len(nested) > 0 {
+					return nested
+				}
+			}
+			// The safe projection bounds one field, so serialized multimodal
+			// content may be cut before the closing JSON delimiter. Recover only
+			// text fields and never retain image/base64 payloads as user goals.
+			if recovered := recoverSerializedTextFields(trimmed); len(recovered) > 0 {
+				return recovered
+			}
+			if containsSerializedBinaryPayload(trimmed) {
+				return nil
 			}
 		}
 		return []string{text}
@@ -62,6 +79,40 @@ func contentTexts(value any) []string {
 		texts = append(texts, contentTexts(item)...)
 	}
 	return texts
+}
+
+func recoverSerializedTextFields(value string) []string {
+	matches := serializedTextFieldPattern.FindAllStringSubmatch(value, -1)
+	result := make([]string, 0, len(matches))
+	seen := map[string]struct{}{}
+	for _, match := range matches {
+		if len(match) != 2 {
+			continue
+		}
+		var decoded string
+		if json.Unmarshal([]byte(`"`+match[1]+`"`), &decoded) != nil {
+			continue
+		}
+		decoded = strings.TrimSpace(decoded)
+		if decoded == "" {
+			continue
+		}
+		key := canonicalKey(decoded)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, decoded)
+	}
+	return result
+}
+
+func containsSerializedBinaryPayload(value string) bool {
+	lower := strings.ToLower(value)
+	return strings.Contains(lower, `"input_image"`) ||
+		strings.Contains(lower, `"image_url"`) ||
+		strings.Contains(lower, "data:image/") ||
+		strings.Contains(lower, ";base64,")
 }
 
 func messageTexts(message map[string]any) []string {
@@ -152,6 +203,9 @@ func isNoiseGoal(value string) bool {
 		"<plugins_instructions>",
 		"<collaboration_mode>",
 		"<multi_agent_mode>",
+		"<turn_aborted>",
+		"<image name=",
+		"</image>",
 		"# agents.md instructions",
 		"# repository guidelines",
 		"## available skills",
@@ -168,7 +222,9 @@ func isNoiseGoal(value string) bool {
 		}
 	}
 	if strings.Contains(lower, "filesystem sandboxing defines which files") ||
-		strings.Contains(lower, "valid channels: analysis") {
+		strings.Contains(lower, "valid channels: analysis") ||
+		(strings.Contains(lower, "# agents.md instructions for") &&
+			strings.Contains(lower, "<instructions>")) {
 		return true
 	}
 	// Some clients persist an injected skill block as a truncated serialized

@@ -11,11 +11,12 @@ import (
 )
 
 const (
-	Version                = "session-digest/v2.8.0"
+	Version                = "session-digest/v2.9.0"
 	RedactionVersion       = "report-redaction/v1"
 	JobType                = sessionsync.JobBuildContentSliceDigestV2
-	DefaultItemBytes       = 64 << 10
-	DefaultPeriodItemBytes = 16 << 10
+	DefaultItemBytes       = 1 << 20
+	DefaultPeriodItemBytes = 1 << 20
+	minimumItemBytes       = 16 << 10
 )
 
 var (
@@ -277,7 +278,7 @@ func (c Config) Normalized() (Config, error) {
 	if c.DigestVersion != Version || c.RedactionVersion != RedactionVersion {
 		return Config{}, errors.New("unsupported session digest v2 or redaction version")
 	}
-	if c.ItemMaxBytes < DefaultPeriodItemBytes || c.ItemMaxBytes > 256<<10 ||
+	if c.ItemMaxBytes < minimumItemBytes || c.ItemMaxBytes > DefaultItemBytes ||
 		c.ReconcileBatch < 1 || c.ReconcileBatch > 25 || c.WorkerBatch != 1 {
 		return Config{}, errors.New("invalid session digest v2 limits")
 	}

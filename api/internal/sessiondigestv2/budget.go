@@ -16,64 +16,29 @@ func EnforceItemBudget(input Digest, maxBytes int) (Digest, []byte, bool) {
 	}
 
 	truncated := true
-	compactAllWorkUnits(&digest, false)
-	compactDailySummaries(digest.DailySummaries, false)
-	compactReportPeriodSummary(digest.ReportPeriodSummary, false)
-	encoded, _ = json.Marshal(digest)
-	if len(encoded) <= maxBytes {
-		digest.Coverage.Truncated = true
-		encoded, _ = json.Marshal(digest)
-		return digest, encoded, truncated
-	}
-
-	compactAllWorkUnits(&digest, true)
-	compactDailySummaries(digest.DailySummaries, true)
-	compactReportPeriodSummary(digest.ReportPeriodSummary, true)
-	for index := range digest.DiscussionAggregates {
-		digest.DiscussionAggregates[index].Topic, _ = truncateUTF8Bytes(
-			digest.DiscussionAggregates[index].Topic, 96,
-		)
-	}
-	encoded, _ = json.Marshal(digest)
-	if len(encoded) <= maxBytes {
-		return digest, encoded, truncated
-	}
-
-	stripWorkUnitEvidenceDetails(&digest)
-	if !completeOutcomeCoverage(digest) {
-		retainResultBearingWorkUnits(&digest)
-	}
-	encoded, _ = json.Marshal(digest)
-	if len(encoded) <= maxBytes {
-		return digest, encoded, truncated
-	}
-
+	// The item budget is a cost-warning target, not permission to shorten or
+	// rank report-facing facts. First remove duplicated engineering details.
+	// Every report-relevant user goal and final answer is already represented
+	// in the daily view before detailed Work Units may be removed.
 	if completeOutcomeCoverage(digest) {
 		digest.WorkUnits = []WorkUnit{}
 		digest.DiscussionAggregates = []DiscussionAggregate{{
-			Topic:         "详细证据已压缩，所有结果工作单元保留在 daily_summaries",
+			Topic:         "详细证据已压缩，所有报告相关工作单元保留在 daily_summaries",
 			WorkUnitCount: digest.Coverage.SourceWorkUnitCount,
 		}}
 		digest.Coverage.DetailedWorkUnitCount = 0
 		digest.Coverage.AggregatedWorkUnitCount = digest.Coverage.SourceWorkUnitCount
 		digest.Coverage.Truncated = true
-		encoded, _ = json.Marshal(digest)
-	}
-	if len(encoded) <= maxBytes {
-		return digest, encoded, truncated
-	}
-
-	compactDailySummariesMinimal(digest.DailySummaries)
-	if digest.ReportPeriodSummary != nil {
-		compactDailySummariesMinimal(digest.ReportPeriodSummary.Days)
+	} else {
+		compactAllWorkUnits(&digest, true)
+		stripWorkUnitEvidenceDetails(&digest)
+		retainResultBearingWorkUnits(&digest)
 	}
 	encoded, _ = json.Marshal(digest)
-	// A byte budget is not permission to discard complete result entries. If a
-	// pathological result set still exceeds the target, return the complete
-	// compact representation and let the selection hard limit fail explicitly.
-	if len(encoded) > maxBytes {
-		digest.Coverage.Truncated = true
-	}
+	// If meaningful content itself is larger than the target, return it intact.
+	// The exact frozen selection size drives the 1 MiB UI confirmation and the
+	// separate selection envelope remains the infrastructure hard limit.
+	digest.Coverage.Truncated = true
 	return digest, encoded, truncated
 }
 
@@ -190,7 +155,7 @@ func retainResultBearingWorkUnits(digest *Digest) {
 func completeOutcomeCoverage(digest Digest) bool {
 	resultUnits := 0
 	for _, unit := range digest.WorkUnits {
-		if isResultBearingWorkUnit(unit) {
+		if isReportRelevantWorkUnit(unit) {
 			resultUnits++
 		}
 	}

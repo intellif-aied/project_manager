@@ -501,6 +501,22 @@ func TestDailySummaryPreservesEveryResultAndDoesNotRewriteArtifactMentions(t *te
 	}
 }
 
+func TestDailySummaryKeepsMeaningfulPendingUserGoal(t *testing.T) {
+	location := time.FixedZone("Asia/Shanghai", 8*60*60)
+	units := []WorkUnit{{
+		WorkUnitRef: "wu-pending", Sequence: 1,
+		ActivityStartAt: "2026-07-16T01:00:00Z",
+		ActivityEndAt:   "2026-07-16T01:01:00Z",
+		Goal:            Goal{Text: "继续定位尚未解决的上传故障", Source: "user_message"},
+		Category:        "investigation", Status: "pending", EvidenceGrade: "D",
+	}}
+	days := BuildDailySummaries(units, location, 0)
+	if len(days) != 1 || len(days[0].Highlights) != 1 ||
+		days[0].Highlights[0].Goal != units[0].Goal.Text {
+		t.Fatalf("pending user work was omitted: %+v", days)
+	}
+}
+
 func TestDailyCandidatesCollapseOlderSkillVersionAndSameDigestTopic(t *testing.T) {
 	units := []WorkUnit{
 		{

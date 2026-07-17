@@ -155,6 +155,36 @@ func TestBudgetNeverDropsCompleteDailyOutcomes(t *testing.T) {
 	}
 }
 
+func TestBudgetTargetDoesNotShortenReportFacingResults(t *testing.T) {
+	location := time.FixedZone("Asia/Shanghai", 8*60*60)
+	fullText := "完整结果：" + strings.Repeat("保留有意义的结果上下文。", 90)
+	digest := EmptyDigest()
+	digest.WorkUnits = []WorkUnit{{
+		WorkUnitRef: "wu-full-result", Sequence: 1,
+		ActivityStartAt: "2026-07-16T01:00:00Z",
+		ActivityEndAt:   "2026-07-16T02:00:00Z",
+		Goal:            Goal{Text: "保留完整结果", Source: "user_message"},
+		Category:        "discussion", Status: "unknown", EvidenceGrade: "C",
+		ResultStatements: []ResultStatement{{
+			Text: fullText, Source: "agent_claim",
+		}},
+	}}
+	digest.DailySummaries = BuildDailySummaries(digest.WorkUnits, location, 0)
+	digest.Coverage = Coverage{
+		SourceWorkUnitCount: 1, DetailedWorkUnitCount: 1,
+		Representation: "result_focused",
+	}
+
+	compacted, encoded, truncated := EnforceItemBudget(digest, 4<<10)
+	if !truncated || len(encoded) <= 4<<10 {
+		t.Fatalf("expected complete content to exceed warning target: bytes=%d", len(encoded))
+	}
+	got := compacted.DailySummaries[0].Highlights[0].ResultStatements[0].Text
+	if got != fullText {
+		t.Fatalf("report-facing result was shortened: got=%d want=%d", len(got), len(fullText))
+	}
+}
+
 func TestAnnotatePeriodRelations(t *testing.T) {
 	digest := EmptyDigest()
 	digest.WorkUnits = []WorkUnit{

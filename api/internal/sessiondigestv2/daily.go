@@ -38,7 +38,7 @@ func BuildDailySummaries(
 			builders[date] = builder
 		}
 		accumulateDailyCounts(&builder.summary, unit)
-		if isResultBearingWorkUnit(unit) {
+		if isReportRelevantWorkUnit(unit) {
 			builder.candidates = append(builder.candidates, unit)
 		}
 	}
@@ -209,6 +209,13 @@ func isResultBearingWorkUnit(unit WorkUnit) bool {
 		unit.Status == "blocked"
 }
 
+func isReportRelevantWorkUnit(unit WorkUnit) bool {
+	if isResultBearingWorkUnit(unit) {
+		return true
+	}
+	return unit.Goal.Source == "user_message" && !isLowInformationGoal(unit.Goal.Text)
+}
+
 func dailyWorkUnitPriority(unit WorkUnit) int {
 	score := workUnitPriority(unit)
 	switch unit.Category {
@@ -260,10 +267,10 @@ func hasDeliveredOutcomeClaim(unit WorkUnit) bool {
 }
 
 func makeDailyHighlight(unit WorkUnit, aggressive bool) DailyHighlight {
-	resultBytes := 1024
+	resultBytes := 4096
 	evidenceRefLimit := 8
 	unresolvedBytes := 512
-	goalBytes := 512
+	goalBytes := 2048
 	if aggressive {
 		resultBytes = 384
 		evidenceRefLimit = 2
