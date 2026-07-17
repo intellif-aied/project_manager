@@ -98,12 +98,14 @@ export const HELP_ARTICLES: HelpArticle[] = [
       },
       {
         title: "4. 选择并上传 Session",
-        steps: ["执行 aida sessions，检查项目、日期和摘要。", "执行 aida upload，交互选择一到两条安全的 Session。", "确认上传结果；首次使用不建议直接上传全部记录。"],
-        codeBlocks: [
-          { label: "查看本地 Session", code: "aida sessions" },
-          { label: "交互选择并上传", code: "aida upload" }
+        steps: [
+          "执行 aida upload 进入全屏选择器，在选择器中检查项目、时间和摘要。",
+          "使用方向键或 j/k 移动，按 Space 勾选一到两条安全的 Session。",
+          "记录较多时按 / 输入项目、Session ID 或摘要关键词进行搜索；确认范围后按 Enter 开始上传。",
+          "确认目标 Session 显示 READY；如果显示 PROCESSING，请等待服务端处理完成，不要重复启动上传。"
         ],
-        screenshots: [{ alt: "aida upload 交互选择 Session", caption: "真实 aida upload 交互界面。输入编号选择记录，确认已选数量后使用 d 开始上传；截图使用专用安全测试 Session。", src: "/help-center/screenshots/v1/quickstart/04-aida-cli-upload.png" }]
+        codeBlocks: [{ label: "选择并上传", code: "aida upload" }],
+        screenshots: [{ alt: "aida upload 全屏选择 Session", caption: "当前 AIDA 全屏选择界面。使用方向键移动、Space 勾选、/ 搜索，确认范围后按 Enter 上传；截图使用专用安全测试 Session。", src: "/help-center/screenshots/v2/quickstart/04-aida-cli-upload.png" }]
       },
       {
         title: "5. 从工作台进入日报",
@@ -143,7 +145,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
       {
         title: "依次检查",
         steps: [
-          "确认 aida upload 已经成功完成，而不是只执行了 aida sessions。",
+          "确认已在 aida upload 选择器中勾选目标 Session 并按 Enter，且结果显示 READY；仅打开选择器不会上传。",
           "确认日报弹窗顶部选择的是要生成的日报日期；这不是 Session 筛选条件。",
           "手动选择 Session 时，再在抽屉内使用开始日期和结束日期筛选候选记录。",
           "未手动选择 Session 时，重新执行 AI 生成，让系统按日报日期重新冻结来源快照。",
@@ -164,15 +166,16 @@ export const HELP_ARTICLES: HelpArticle[] = [
     summary: "处理找不到 aida 命令、身份不一致、本地没有 Session 和上传失败。",
     route: "/sessions",
     roles: ALL_BUSINESS_ROLES,
-    keywords: ["找不到命令", "login 失败", "upload 失败", "status", "空列表"],
+    keywords: ["找不到命令", "login 失败", "upload 失败", "status", "选择器为空"],
     sections: [
       {
         title: "快速排查",
         bullets: [
-          "找不到 aida：重新执行安装，关闭终端后再打开，并用 aida --version 检查。",
+          "找不到 aida：重新执行安装，关闭终端后再打开，并用 aida version 检查。",
           "身份不正确：重新执行 aida login，并用 aida status 核对账号。",
-          "Session 列表为空：确认本机已使用 Claude Code 或 Codex 产生工作记录，必要时使用 --all 查看更早记录。",
-          "上传失败：先减少选择数量重试，并确认网络可以访问当前 AIDA 平台。"
+          "上传选择器为空：确认本机已使用 Claude Code 或 Codex 产生工作记录，然后重新执行 aida upload。",
+          "上传结果为 PROCESSING：服务端仍在处理，先等待再到 Session 页面确认，不要连续重复上传。",
+          "上传结果为 FAILED 或 BLOCKED：保留终端错误码和发生时间，再减少选择数量重试或联系平台负责人。"
         ]
       },
       {
@@ -185,10 +188,10 @@ export const HELP_ARTICLES: HelpArticle[] = [
     id: "client-install",
     module: "client",
     title: "安装或更新 AIDA 客户端",
-    summary: "根据 Windows、macOS 或 Linux 选择安装命令；重复执行同一命令即可更新。",
+    summary: "根据 Windows、macOS 或 Linux 安装客户端，并使用自动检查或 aida update 保持最新版本。",
     route: "/sessions",
     roles: ALL_BUSINESS_ROLES,
-    keywords: ["安装", "更新", "Windows", "PowerShell", "macOS", "Linux", "找不到命令"],
+    keywords: ["安装", "更新", "自动更新", "aida update", "Windows", "PowerShell", "macOS", "Linux", "找不到命令"],
     sections: [
       {
         title: "Windows PowerShell",
@@ -209,6 +212,12 @@ export const HELP_ARTICLES: HelpArticle[] = [
             code: "curl -fsSL http://113.100.143.91:9180/statics-live/aida/install.sh | bash"
           }
         ]
+      },
+      {
+        title: "更新客户端",
+        paragraphs: ["执行 login、upload 或 status 时，AIDA 会先检查最新版本；发现新版后会校验并安装，再继续当前命令。也可以随时手动检查更新。"],
+        codeBlocks: [{ label: "立即检查并更新", code: "aida update" }],
+        note: "如果自动更新或 aida update 失败，请重新执行当前系统的安装命令，再用 aida version 核对版本。"
       },
       {
         title: "确认安装结果",
@@ -258,7 +267,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
     summary: "完成安装和登录后，把本地 Claude Code 或 Codex 工作记录同步到 AIDA。",
     route: "/sessions",
     roles: ALL_BUSINESS_ROLES,
-    keywords: ["AIDA", "客户端", "CLI", "Session", "上传", "安装", "Claude Code", "Codex"],
+    keywords: ["AIDA", "客户端", "CLI", "Session", "上传", "全屏选择", "搜索", "READY", "PROCESSING", "安装", "Claude Code", "Codex"],
     sections: [
       {
         title: "开始前确认",
@@ -271,31 +280,33 @@ export const HELP_ARTICLES: HelpArticle[] = [
       {
         title: "选择并上传",
         steps: [
-          "执行 aida sessions，确认待上传记录的项目、时间和摘要。",
-          "执行 aida upload 进入交互选择。",
-          "检查待上传范围，确认后上传需要的 Session。"
+          "执行 aida upload 进入全屏选择器，并在其中确认待上传记录的项目、时间和摘要。",
+          "使用方向键或 j/k 移动，按 Space 勾选；需要缩小范围时按 / 搜索。",
+          "检查顶部已选择数量，确认后按 Enter 上传。"
         ],
-        codeBlocks: [
-          { label: "检查本地 Session", code: "aida sessions" },
-          { label: "交互选择并上传", code: "aida upload" }
-        ],
+        codeBlocks: [{ label: "交互选择并上传", code: "aida upload" }],
         note: "首次使用建议交互选择，不建议直接使用 --all；这样可以先排除无关项目或包含敏感上下文的 Session。"
       },
       {
-        title: "交互选择命令",
+        title: "全屏选择器操作",
         bullets: [
-          "输入单个编号切换该条记录的选中状态；也可以输入 1,3,5 一次切换多条。再次输入同一编号会取消选择。",
-          "使用 n 进入下一页、p 返回上一页；翻页不会清空已经选择的记录。",
-          "使用 g <页码> 直接跳转，字母和页码之间必须有空格，例如 g 3（不要输入 g3）；使用 s <每页条数> 调整分页，同样需要空格，例如 s 20，只支持 10、20、50、100。",
-          "使用 all 或 a 选择全部本地可发现 Session，不是只选择当前页；执行前必须确认没有无关或敏感记录。",
-          "页面顶部持续显示已选择数量。确认范围后输入 d 或 done 开始上传；输入 q 或 quit 取消且不上传。"
+          "使用 ↑/↓ 或 j/k 移动光标，按 Space 勾选或取消当前 Session；页面顶部持续显示已选择数量。",
+          "按 / 进入搜索，输入项目路径、Session ID、摘要或最新消息关键词；按 Enter 结束输入并保留筛选结果，按 Esc 退出搜索输入。",
+          "按 a 选择或取消当前搜索结果中的全部 Session；未搜索时等于选择全部本地可发现 Session，执行前必须确认没有无关或敏感记录。",
+          "确认范围后按 Enter 开始上传；按 q 或 Ctrl+C 取消且不上传。"
         ],
-        screenshots: [{ alt: "aida upload 分页与选择命令", caption: "默认每页 10 条；编号选择支持跨页保留，all 表示全部本地可发现 Session。", src: "/help-center/screenshots/v1/quickstart/04-aida-cli-upload.png" }]
+        screenshots: [{ alt: "aida upload 全屏选择器", caption: "当前选择器会显示项目、摘要、Session ID 和最新消息；方向键移动，Space 选择，/ 搜索，a 全选当前结果，Enter 上传。", src: "/help-center/screenshots/v2/quickstart/04-aida-cli-upload.png" }]
       },
       {
-        title: "上传成功后",
+        title: "怎么看上传结果",
         paragraphs: [
           "前往 Session 页面确认记录已出现。首次成功上传会形成一个可选切片；同一 Session 有新增内容后再次上传，会只上传新增内容并形成新的独立切片。没有新增内容时客户端会跳过，上传失败或重复操作不会产生可选的重复切片。一次上传即使包含跨天内容，也仍形成一个完整切片。"
+        ],
+        bullets: [
+          "READY：服务端已经处理完成，可以用于日报或周报。",
+          "PROCESSING：上传已接收，服务端仍在处理；先等待，不要连续重复上传。",
+          "CURRENT：本地 Session 仍在追加，本次已上传当前完整快照；后续有新内容时再次执行 upload。",
+          "FAILED 或 BLOCKED：本次未达到可用状态，保留错误码和发生时间后重试或联系平台负责人。"
         ]
       }
     ]
@@ -347,34 +358,31 @@ export const HELP_ARTICLES: HelpArticle[] = [
     id: "client-upload-troubleshooting",
     module: "client",
     title: "选择、上传与问题排查",
-    summary: "掌握按项目筛选、批量上传和常见失败的处理方式。",
+    summary: "掌握交互搜索、批量上传和常见失败的处理方式。",
     route: "/sessions",
     roles: ALL_BUSINESS_ROLES,
-    keywords: ["upload", "sessions", "project", "all", "失败", "超时", "空列表"],
+    keywords: ["upload", "Session", "搜索", "all", "失败", "超时", "选择器为空"],
     sections: [
       {
         title: "常用命令",
         codeBlocks: [
-          { label: "查看最近 Session", code: "aida sessions" },
-          { label: "按项目筛选", code: "aida sessions --project <项目目录关键词>" },
-          { label: "上传指定序号", code: "aida upload 1 3 5" },
+          { label: "交互选择并上传", code: "aida upload" },
           { label: "上传全部本地可发现 Session", code: "aida upload --all" }
         ]
       },
       {
         title: "交互模式与直接模式",
         bullets: [
-          "直接执行 aida upload 会进入分页交互选择，适合首次上传和需要核对范围的场景。",
-          "aida upload 1 3 5 会直接处理指定编号，不再进入交互确认。",
+          "直接执行 aida upload 会进入全屏交互选择，支持键盘移动、勾选和搜索，适合首次上传和需要核对范围的场景。",
           "aida upload --all 会直接处理全部本地可发现 Session，不是最近一页；无变化的 Session 会跳过，但仍应先检查上传范围。"
         ]
       },
       {
-        title: "列表为空",
+        title: "选择器为空",
         bullets: [
           "确认本机确实运行过 Claude Code 或 Codex，并产生了 Session。",
-          "不带 --all 时默认只显示最近活动记录；需要查更早记录可执行 aida sessions --all。",
-          "如果使用项目筛选，先去掉 --project 排除关键词不匹配。"
+          "aida upload 会直接扫描全部本地可发现 Session，不需要先执行单独的列表命令。",
+          "如果刚开始使用 Claude Code 或 Codex，请先完成一段真实工作并退出当前会话，再重新执行 aida upload。"
         ]
       },
       {
