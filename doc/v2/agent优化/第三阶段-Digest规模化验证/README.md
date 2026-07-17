@@ -1,6 +1,6 @@
 # 第三阶段：Digest 规模化真实 Session 验证
 
-> 状态：第一轮基线与第二轮 `v2.9.0` 离线回放完成；隔离上传和 14.157 Digest 构建已通过，等待用户手动选择后执行 Agent 层验收
+> 状态：第一轮基线、第二轮 `v2.9.0` 离线回放和第三轮 10 样本真实 Agent 链路均已完成；等待人工审阅与发布决策
 > 建立日期：2026-07-17
 > 环境：14.159 本机真实 Session、14.157 开发测试环境
 > 当前基线：`session-digest/v2.8.0`；第二轮候选：`session-digest/v2.9.0`
@@ -73,7 +73,7 @@ Report Skill、Agent Prompt 和模型具有语义归并与写作自由度，同�
   -> 独立分支源码构建的临时 Aida 测试二进制正常扫描和选择
   -> prepare/chunk/finalize 完整上传到 14.157
   -> readiness 到 ready
-  -> 用户在 14.157 页面手动选择 Session
+  -> 用户在 14.157 页面手动选择 Session，或明确授权后调用同一业务 API 模拟选择
   -> 创建不可变 report source selection
   -> MCP get_sessions 读取 Digest
   -> 默认 Report Agent 生成
@@ -85,7 +85,7 @@ Report Skill、Agent Prompt 和模型具有语义归并与写作自由度，同�
 - 调用 14.159 本机已安装的 Aida 客户端进行测试上传；
 - 读取或修改用户的 `~/.aida.yaml`、Session 索引及上传状态；
 - 直接写数据库或 MinIO；
-- 通过测试脚本替用户选择报告来源；
+- 未经用户明确授权，通过测试脚本替用户选择报告来源；
 - 只上传人为截取的增量 chunk 冒充完整 Session；
 - 修改 Session 原文以迎合当前规则；
 - 在同一轮中同时修改 Digest、Skill 和 Agent Prompt；
@@ -237,7 +237,7 @@ Digest 评测期间不修改 Skill 或 Agent Prompt。若发现 Skill 问题，�
 
 第三阶段完成必须同时满足：
 
-1. 10 个样本均完成正常上传、ready、人工选择、Digest 读取和日报回写；
+1. 10 个样本均完成正常上传、ready、人工选择或授权接口模拟、Digest 读取和日报回写；
 2. 层 A 关键事实召回率、状态、主体和日期准确率达到目标；
 3. 所有遗漏和失真均有原始证据与归因；
 4. 层 B 的问题不被错误归因给 Digest；
@@ -264,4 +264,14 @@ Digest 评测期间不修改 Skill 或 Agent Prompt。若发现 Skill 问题，�
 
 第二轮修复与离线结果见 [第二轮最小规则修复与离线回放](第二轮最小规则修复与离线回放.md)。
 
-第三轮真实链路状态与手工选择清单见 [第三轮真实链路与Agent验收](第三轮真实链路与Agent验收.md)。
+第三轮真实链路结果与跨样本归因见 [第三轮真实链路与 Agent 验收](第三轮真实链路与Agent验收.md)。
+
+10 次真实 Agent run 的完整日报正文见 [第三轮 Agent 日报原文](第三轮Agent日报原文.md)。
+
+## 12. 当前结论
+
+- `session-digest/v2.9.0` 的 Layer A 内在质量和 Layer B 真实链路均完成 10 样本验证；
+- 10/10 Agent run succeeded，10/10 真实调用 `write_report_result`；
+- 未发现需要为本轮样本继续引入 Top-K 或更激进语义裁剪的证据；
+- 剩余共性问题主要是默认 Skill/模型对内部证据、最终状态、数字统计和环境术语的写作处理，不应直接归因给 Digest；
+- 本阶段未执行生产发布。
