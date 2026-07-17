@@ -322,12 +322,6 @@ function compactCredentialOverrides(overrides: Record<string, string>) {
   );
 }
 
-function formatTokens(value: number) {
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
-  return String(value);
-}
-
 function formatDateTime(iso?: string) {
   return formatBusinessMonthDayTime(iso);
 }
@@ -555,7 +549,7 @@ function SessionSliceSelector({
               title: "真实 Session ID",
               key: "session",
               className: "ai-assets-session-modal__cell ai-assets-session-modal__cell--session",
-              width: "36%",
+              width: "40%",
               render: (_: unknown, session) => (
                 <span className="ai-assets-session-id">{session.session_ref}</span>
               )
@@ -564,7 +558,7 @@ function SessionSliceSelector({
               title: "摘要",
               dataIndex: "summary",
               className: "ai-assets-session-modal__cell ai-assets-session-modal__cell--summary",
-              width: "30%",
+              width: "34%",
               render: (summary?: string) =>
                 summary ? (
                   <span className="ai-assets-session-summary" title={summary}>
@@ -578,16 +572,8 @@ function SessionSliceSelector({
               title: "活动时间",
               key: "activity",
               className: "ai-assets-session-modal__cell ai-assets-session-modal__cell--activity",
-              width: "22%",
+              width: "26%",
               render: (_: unknown, session) => formatActivityRange(session)
-            },
-            {
-              title: "Total",
-              dataIndex: "total_tokens",
-              className: "ai-assets-session-modal__cell ai-assets-session-modal__cell--tokens",
-              align: "right" as const,
-              width: "12%",
-              render: (value: number) => formatTokens(value)
             }
           ]}
           locale={{ emptyText: <Empty description="当前查询范围暂无 Session 切片" /> }}

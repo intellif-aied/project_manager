@@ -663,7 +663,6 @@ export interface ReportSourceCandidate {
   content_status: "available";
   content_index_status: "ready";
   available_through_at: string;
-  total_tokens: number;
 }
 
 export interface ReportSourceCandidatePage {

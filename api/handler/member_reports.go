@@ -19,7 +19,7 @@ func (h *ReportHandler) resolveMemberScope(w http.ResponseWriter, r *http.Reques
 		return memberScope{}, false
 	}
 	switch u.Role {
-	case "team_leader":
+	case "team_leader", "employee":
 		if u.TeamID == nil {
 			writeJSON(w, 403, map[string]string{"error": "access denied"})
 			return memberScope{}, false
@@ -134,7 +134,7 @@ func (h *ReportHandler) canAccessMemberUser(ctx context.Context, viewer *model.U
 	}
 	var ok bool
 	switch viewer.Role {
-	case "team_leader":
+	case "team_leader", "employee":
 		if viewer.TeamID != nil {
 			_ = h.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM users WHERE id=$1 AND team_id=$2)`, targetID, *viewer.TeamID).Scan(&ok)
 		}

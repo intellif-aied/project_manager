@@ -74,7 +74,7 @@ interface TokenAnalyticsDrilldownState {
 
 function defaultRange(): DateRange {
   const end = dayjs();
-  return [end.subtract(6, "day"), end];
+  return [end.subtract(2, "day"), end];
 }
 
 function formatTokenValue(raw: string | undefined) {

@@ -117,7 +117,6 @@ type Candidate struct {
 	ContentStatus      string    `json:"content_status"`
 	ContentIndexStatus string    `json:"content_index_status"`
 	AvailableThroughAt time.Time `json:"available_through_at"`
-	TotalTokens        int64     `json:"total_tokens"`
 }
 
 type CandidateQuery struct {
@@ -208,8 +207,7 @@ func (s *Service) ListCandidates(ctx context.Context, userID string, query Candi
 				MIN(e.occurred_at) AS activity_start_at,
 				MAX(e.occurred_at) AS activity_end_at,
 				COALESCE(s.cwd, '') AS cwd, COALESCE(s.models, '{}') AS models,
-				s.content_status, MAX(e.occurred_at) AS available_through_at,
-				sl.generation_id, sl.start_cursor, sl.end_cursor
+				s.content_status, MAX(e.occurred_at) AS available_through_at
 			FROM session_content_slices sl
 			JOIN sessions s ON s.id = sl.session_id
 			JOIN session_sources src ON src.id = sl.source_id AND src.session_id = s.id
@@ -240,15 +238,6 @@ func (s *Service) ListCandidates(ctx context.Context, userID string, query Candi
 		)
 		SELECT p.slice_key, p.session_ref, p.agent_type, p.summary, p.last_activity_at, p.activity_start_at,
 			p.activity_end_at, p.cwd, p.models, p.content_status, p.available_through_at,
-			p.generation_id, p.start_cursor, p.end_cursor,
-			COALESCE((
-				SELECT SUM(uc.normalized_total_tokens)
-				FROM session_usage_components uc
-				JOIN session_upload_chunks ch ON ch.id = uc.chunk_id
-				WHERE uc.valid_to IS NULL AND ch.generation_id = p.generation_id
-					AND ch.start_cursor >= p.start_cursor
-					AND ch.end_cursor <= p.end_cursor
-			), 0) AS total_tokens,
 			t.total_count
 		FROM paged p CROSS JOIN totals t
 		ORDER BY p.last_activity_at DESC, p.session_ref ASC`, userID, search, from, to, query.PageSize, (query.Page-1)*query.PageSize)
@@ -260,13 +249,10 @@ func (s *Service) ListCandidates(ctx context.Context, userID string, query Candi
 	for rows.Next() {
 		var item Candidate
 		var models pq.StringArray
-		var generationID string
-		var startCursor, endCursor int64
 		var totalCount int
 		if err := rows.Scan(&item.SliceKey, &item.SessionRef, &item.AgentType, &item.Summary, &item.LastActivityAt,
 			&item.ActivityStartAt, &item.ActivityEndAt, &item.CWD, &models,
-			&item.ContentStatus, &item.AvailableThroughAt, &generationID, &startCursor,
-			&endCursor, &item.TotalTokens, &totalCount); err != nil {
+			&item.ContentStatus, &item.AvailableThroughAt, &totalCount); err != nil {
 			return CandidatePage{}, err
 		}
 		if totalCount > total {

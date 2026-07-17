@@ -210,7 +210,12 @@ export function ReportsPage() {
             { label: "小组成员日报", value: "member" },
             { label: "小组汇总日报", value: "team" }
           ]
-        : [{ label: "我的日报记录", value: "personal" }];
+        : user?.role === "employee"
+          ? [
+              { label: "我的日报记录", value: "personal" },
+              { label: "小组成员日报", value: "member" }
+            ]
+          : [{ label: "我的日报记录", value: "personal" }];
 
   const queryTab = searchParams.get("tab");
   const queryTabIsValid = isDailyTab(queryTab);
@@ -364,6 +369,7 @@ function MemberDailyTable({
   departmentId?: string;
   requireDepartmentId?: boolean;
 }) {
+  const { user } = useAuth();
   const reportsQuery = useQuery({
     queryKey: ["reports", "daily", "member-list", date, departmentId],
     queryFn: () => fetchMemberDailyReports(date, departmentId),
@@ -373,7 +379,8 @@ function MemberDailyTable({
   return (
     <MemberReportBrowser items={reportsQuery.data ?? []} loading={reportsQuery.isLoading}
       error={reportsQuery.isError ? errorMessage(reportsQuery.error) : undefined} showNextDayPlan
-      queryKey={`daily:${date}`} fetchDetail={fetchMemberDailyReport} displayMode="content-list" />
+      queryKey={`daily:${date}`} fetchDetail={fetchMemberDailyReport} displayMode="content-list"
+      contentListTitle={user?.role === "director" || user?.role === "admin" ? "部门成员日报" : "小组成员日报"} />
   );
 }
 

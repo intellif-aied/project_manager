@@ -826,7 +826,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
     id: "daily-overview",
     module: "daily",
     title: "认识日报页面",
-    summary: "个人记录对所有角色开放；成员和汇总视图按管理范围出现。",
+    summary: "个人记录对所有角色开放；成员视图按组织范围开放，汇总视图仍由对应负责人维护。",
     route: "/reports/daily?tab=personal",
     roles: ALL_BUSINESS_ROLES,
     keywords: ["日报", "我的日报", "成员日报", "小组日报", "部门日报"],
@@ -835,11 +835,15 @@ export const HELP_ARTICLES: HelpArticle[] = [
         title: "所有角色",
         bullets: ["查看、筛选、展开和编辑个人日报记录。", "选择任意日期补写日报。", "使用 AI 生成个人日报，并可选择 session。"],
         screenshots: [
-          { alt: "工程师个人日报", caption: "工程师只显示个人日报记录。", roles: ["employee"], src: "/help-center/screenshots/v1/emp/03-daily-personal.png" },
           { alt: "团队负责人个人日报", caption: "团队负责人可在个人、小组成员和小组汇总之间切换。", roles: ["team_leader"], src: "/help-center/screenshots/v1/tl/03-daily-personal.png" },
           { alt: "产品经理个人日报", caption: "产品经理使用个人日报记录与编辑流程。", roles: ["pm"], src: "/help-center/screenshots/v1/pm/03-daily-personal.png" },
           { alt: "部门总监个人日报", caption: "部门总监可在个人、部门成员和部门汇总之间切换。", roles: ["director"], src: "/help-center/screenshots/v1/dir/04-daily-personal.png" }
         ]
+      },
+      {
+        title: "小组成员",
+        roles: ["employee"],
+        bullets: ["查看本人所属小组的成员日报。", "成员日报为只读视图，不开放小组汇总日报。"]
       },
       {
         title: "团队负责人",
@@ -956,9 +960,9 @@ export const HELP_ARTICLES: HelpArticle[] = [
     id: "daily-member-reports",
     module: "daily",
     title: "浏览成员日报",
-    summary: "在晨会或管理检查中按日期快速阅读成员日报，无需逐条打开详情页。",
+    summary: "按日期快速阅读同组或部门成员日报，无需逐条打开详情页。",
     route: "/reports/daily?tab=member",
-    roles: ["team_leader", "director"],
+    roles: ["employee", "team_leader", "director"],
     keywords: ["成员日报", "小组成员", "部门成员", "晨会", "复制", "Markdown"],
     sections: [
       {
@@ -971,8 +975,8 @@ export const HELP_ARTICLES: HelpArticle[] = [
       },
       {
         title: "数据范围",
-        roles: ["team_leader"],
-        note: "团队负责人看到本人所属小组成员的日报。"
+        roles: ["employee", "team_leader"],
+        note: "普通成员和团队负责人只能看到本人所属小组成员的日报。"
       },
       {
         title: "数据范围",
@@ -1017,7 +1021,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
     id: "weekly-overview",
     module: "weekly",
     title: "认识周报页面",
-    summary: "按周管理个人报告；团队负责人和总监还能管理对应范围的成员与汇总周报。",
+    summary: "按周管理个人报告；小组成员可查看同组周报，负责人还能维护对应范围的汇总周报。",
     route: "/reports/weekly",
     roles: ALL_BUSINESS_ROLES,
     keywords: ["周报", "我的周报", "成员周报", "小组周报", "部门周报"],
@@ -1025,12 +1029,12 @@ export const HELP_ARTICLES: HelpArticle[] = [
       {
         title: "角色范围",
         bullets: [
-          "工程师和产品经理：个人周报记录。",
+          "工程师：个人周报记录和同组成员周报。",
+          "产品经理：个人周报记录。",
           "团队负责人：个人、小组成员、小组汇总周报。",
           "部门总监：个人、部门成员、部门汇总周报。"
         ],
         screenshots: [
-          { alt: "工程师个人周报", caption: "工程师只显示个人周报记录。", roles: ["employee"], src: "/help-center/screenshots/v1/emp/04-weekly-personal.png" },
           { alt: "团队负责人个人周报", caption: "团队负责人可进入小组成员与小组汇总周报。", roles: ["team_leader"], src: "/help-center/screenshots/v1/tl/06-weekly-personal.png" },
           { alt: "产品经理个人周报", caption: "产品经理使用个人周报记录与编辑流程。", roles: ["pm"], src: "/help-center/screenshots/v1/pm/04-weekly-personal.png" },
           { alt: "部门总监个人周报", caption: "部门总监可进入部门成员与部门汇总周报。", roles: ["director"], src: "/help-center/screenshots/v1/dir/08-weekly-personal.png" }
@@ -1113,7 +1117,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
     title: "浏览成员周报",
     summary: "按周查看成员报告，在周会中快速展开重点内容并复制全文。",
     route: "/reports/weekly",
-    roles: ["team_leader", "director"],
+    roles: ["employee", "team_leader", "director"],
     keywords: ["成员周报", "小组成员", "部门成员", "周会", "复制"],
     sections: [
       {
@@ -1123,6 +1127,11 @@ export const HELP_ARTICLES: HelpArticle[] = [
           { alt: "小组成员周报", caption: "团队负责人看到本组成员周报。", roles: ["team_leader"], src: "/help-center/screenshots/v1/tl/07-weekly-members.png" },
           { alt: "部门成员周报", caption: "部门总监看到全部部门成员周报。", roles: ["director"], src: "/help-center/screenshots/v1/dir/09-weekly-members.png" }
         ]
+      },
+      {
+        title: "数据范围",
+        roles: ["employee", "team_leader"],
+        note: "普通成员和团队负责人只能看到本人所属小组成员的周报。"
       }
     ]
   },

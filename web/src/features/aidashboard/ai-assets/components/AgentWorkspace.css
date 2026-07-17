@@ -736,7 +736,7 @@
     grid-template-areas:
       "select session session"
       ". summary summary"
-      ". activity tokens";
+      ". activity activity";
     gap: 8px 10px;
     width: 100%;
     padding: 11px;
@@ -773,14 +773,8 @@
     grid-area: activity;
   }
 
-  .ai-assets-session-modal__cell--tokens {
-    grid-area: tokens;
-    text-align: left !important;
-  }
-
   .ai-assets-session-modal__cell--summary::before,
-  .ai-assets-session-modal__cell--activity::before,
-  .ai-assets-session-modal__cell--tokens::before {
+  .ai-assets-session-modal__cell--activity::before {
     display: block;
     margin-bottom: 2px;
     color: #8794a8;
@@ -795,10 +789,6 @@
 
   .ai-assets-session-modal__cell--activity::before {
     content: "活动时间";
-  }
-
-  .ai-assets-session-modal__cell--tokens::before {
-    content: "Token";
   }
 
   .ai-assets-session-modal .ai-assets-session-id,

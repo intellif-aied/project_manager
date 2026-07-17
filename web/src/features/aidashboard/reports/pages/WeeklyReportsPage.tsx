@@ -829,7 +829,12 @@ export function WeeklyReportsPage() {
             { label: "小组成员周报", value: "member" },
             { label: "小组汇总周报", value: "team" }
           ]
-        : [{ label: "我的周报记录", value: "mine" }];
+        : user.role === "employee"
+          ? [
+              { label: "我的周报记录", value: "mine" },
+              { label: "小组成员周报", value: "member" }
+            ]
+          : [{ label: "我的周报记录", value: "mine" }];
   const activeTab = tabOptions.some((item) => item.value === roleTab) ? roleTab : "mine";
   const currentWeekStart = weekStartOf(dayjs());
   const openLabel =
@@ -1330,7 +1335,7 @@ function MemberWeeklyTable({
       fetchDetail={fetchMemberWeeklyReport}
       displayMode="content-list"
       reportLabel="周报"
-      contentListTitle={user?.role === "team_leader" ? "小组成员周报" : "部门成员周报"}
+      contentListTitle={user?.role === "director" || user?.role === "admin" ? "部门成员周报" : "小组成员周报"}
       emptyPeriodLabel="本周"
     />
   );
