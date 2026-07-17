@@ -62,6 +62,8 @@ func TestReportSkillMarkdownUsesDeterministicDisplayContext(t *testing.T) {
 		"Never rewrite a test/staging/target environment as production",
 		"A historical/intermediate partial highlight is not automatically a follow-up",
 		"a later highlight completes the same initiative",
+		"must be at least outcome_coverage.source_count",
+		"Rewrite proof-only highlights into the user-facing capability they establish instead of deleting them",
 	}
 	for _, expected := range required {
 		if !strings.Contains(markdown, expected) {

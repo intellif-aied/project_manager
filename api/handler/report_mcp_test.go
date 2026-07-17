@@ -784,6 +784,96 @@ func TestReportPersonalSourceActivityIssuesAllowsFactualContentWithoutQuery(t *t
 	}
 }
 
+func TestReportPersonalDigestOutcomeCoverageIssuesRejectsDroppedHighlights(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mock.ExpectQuery("COUNT\\(DISTINCT highlight").
+		WithArgs("selection-1", "2026-07-16").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(18))
+
+	issues, err := reportPersonalDigestOutcomeCoverageIssues(
+		context.Background(), db,
+		map[string]any{
+			"report_source_selection_id": "selection-1",
+			"report_source_read_mode":    "digest_v2",
+		},
+		reportTypePersonalDaily,
+		"2026-07-16",
+		"## 今日完成\n- 成果一\n- 成果二",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 1 || !strings.Contains(issues[0], "18 个成果 highlight") {
+		t.Fatalf("issues = %#v", issues)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReportPersonalDigestOutcomeCoverageIssuesAcceptsOneItemPerHighlight(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mock.ExpectQuery("COUNT\\(DISTINCT highlight").
+		WithArgs("selection-1", "2026-07-16").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(3))
+
+	issues, err := reportPersonalDigestOutcomeCoverageIssues(
+		context.Background(), db,
+		map[string]any{
+			"report_source_selection_id": "selection-1",
+			"report_source_read_mode":    "digest_v2",
+		},
+		reportTypePersonalDaily,
+		"2026-07-16",
+		"## 今日完成\n1. 成果一\n2. 成果二\n3. 成果三",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 0 {
+		t.Fatalf("issues = %#v", issues)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReportPersonalDigestOutcomeCoverageIssuesSkipsNonDigestV2(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	issues, err := reportPersonalDigestOutcomeCoverageIssues(
+		context.Background(), db,
+		map[string]any{
+			"report_source_selection_id": "selection-1",
+			"report_source_read_mode":    "digest_v1",
+		},
+		reportTypePersonalDaily,
+		"2026-07-16",
+		"## 今日完成\n- 成果一",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 0 {
+		t.Fatalf("issues = %#v", issues)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestReportMCPWriteReportResultRejectsInvalidContentBeforeWrite(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

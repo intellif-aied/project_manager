@@ -289,6 +289,55 @@ func reportPersonalSourceActivityIssues(ctx context.Context, db *sql.DB, inputRe
 	return []string{"本次 Session 来源快照包含工作记录，正文不能声称无活动或无记录；请依据完整快照事实重新生成"}, nil
 }
 
+func reportPersonalDigestOutcomeCoverageIssues(
+	ctx context.Context,
+	db *sql.DB,
+	inputRef map[string]any,
+	reportType string,
+	date string,
+	content string,
+) ([]string, error) {
+	if reportType != reportTypePersonalDaily ||
+		strings.TrimSpace(stringFromAny(inputRef["report_source_read_mode"])) != "digest_v2" {
+		return nil, nil
+	}
+	selectionID := strings.TrimSpace(stringFromAny(inputRef["report_source_selection_id"]))
+	if selectionID == "" || strings.TrimSpace(date) == "" {
+		return nil, nil
+	}
+	var expected int
+	err := db.QueryRowContext(ctx, `
+		SELECT COUNT(DISTINCT highlight->>'work_unit_ref')
+		FROM report_source_selection_items item
+		JOIN session_slice_digest_revisions digest ON digest.id = item.digest_revision_id
+		CROSS JOIN LATERAL jsonb_array_elements(
+			COALESCE(digest.digest_json->'daily_summaries', '[]'::jsonb)
+		) day
+		CROSS JOIN LATERAL jsonb_array_elements(
+			COALESCE(day->'highlights', '[]'::jsonb)
+		) highlight
+		WHERE item.selection_id = $1
+			AND digest.status = 'ready'
+			AND day->>'date' = $2
+			AND NULLIF(btrim(highlight->>'work_unit_ref'), '') IS NOT NULL`,
+		selectionID, date,
+	).Scan(&expected)
+	if err != nil {
+		return nil, err
+	}
+	if expected == 0 {
+		return nil, nil
+	}
+	actual := len(reportTopLevelOutcomePattern.FindAllStringIndex(content, -1))
+	if actual >= expected {
+		return nil, nil
+	}
+	return []string{fmt.Sprintf(
+		"来源 Digest 完整保留了 %d 个成果 highlight，正文只有 %d 个顶层成果条目；请为每个 highlight 保留一条用户化成果表达，将路径、测试和实现证据改写为它所支撑的能力，不得通过删除条目来规避校验",
+		expected, actual,
+	)}, nil
+}
+
 func reportValidationPeriodBounds(date, weekStart, weekEnd string) (time.Time, time.Time) {
 	if date != "" {
 		value, _ := time.Parse("2006-01-02", date)
