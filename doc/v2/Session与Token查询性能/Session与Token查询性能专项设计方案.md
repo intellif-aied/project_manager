@@ -1,204 +1,195 @@
 # Session 与 Token 查询性能专项设计方案
 
-> 方案类型：V2 产品与架构设计
-> 状态：评审中，暂不进入代码实施
-> 发现时间：2026-07-16
-> 适用范围：Report Source、Token Analytics、Session 上传后的内容与 usage 处理
-> 核心原则：保持现有产品语义，通过两套读模型逐步消除查询时的全量计算
+> 方案类型：V2 架构与开发方案；状态：开发前 Review 已通过，可进入 R1，尚未授权开发；适用范围：Report Source、Session 内容存储、Token Analytics。
+> 核心原则：原始内容只保留一份，在线查询只读取面向业务的读模型。
 
-## 1. 问题定性
+## 1. 要解决的三个问题
 
-当前性能问题不是一个分页参数或一条 SQL 的孤立 Bug。
+### 1.1 Report Source 分页是假分页
 
-现有系统已经完成“数据写入和异步处理”的主体能力，但读取侧仍有大量工作发生在用户请求时：
+接口虽然接收 `page`、`page_size`，但候选集合、活动时间、摘要和总数可能先从事件明细计算，最后才分页。事件越多，第一页也越慢。
 
-- Report Source 为了返回少量候选项，仍可能扫描并聚合大量内容事件和 usage 数据；
-- Token Analytics 为保证多个图表数据一致，会先物化查询快照，再对快照执行多种聚合；
-- Dashboard 上多个请求并发时，重查询会共同争用数据库连接、CPU、内存和 I/O；
-- 最终分页只限制返回行数，不能自动限制分页之前的候选计算量。
+### 1.2 原始内容重复存储
 
-已单独处理的 Report Source P0 性能修复属于必要的止血，但不能替代本专项的产品与架构设计。
+MinIO 已保存原始 JSONL，PostgreSQL `session_content_events.content_payload` 又保存清洗后的完整事件 JSON。PostgreSQL 应承担在线关系查询，不应继续作为第二份原始对象仓库。
 
-## 2. 核心结论
+### 1.3 Token Analytics 聚合成本继续增长
 
-### 2.1 一个写入事实源，两类读取问题
+Token 页面需要同一查询快照保证 summary、trends、rankings、sessions 一致，但快照不应反复复制和聚合高基数明细。它需要独立的 Usage 分析事实，不能复用 Report Source 切片目录。
 
-Session 内容和 Token usage 来自同一次上传，但产品使用方式不同：
+## 2. 目标架构
 
 ```text
-Aida 增量上传
-    │
-    ├── 内容事实与处理状态 ──> 报告来源切片读模型 ──> 来源冻结 ──> Digest / 报告
-    │
-    └── usage / 成本事实 ───> Token 分析读模型 ───> 查询快照 ──> 图表与 Session 分析
+                       共享身份与版本契约
+        session / upload chunk / slice / generation / revision
+                                   │
+Aida 增量上传 ──> MinIO 原始 JSONL（唯一字节级事实源）
+                                   │
+                    ┌──────────────┴──────────────┐
+                    │                             │
+             内容投影/元数据索引             Usage 规范化
+                    │                             │
+       ┌────────────┴────────────┐                │
+       │                         │                │
+Report Source 切片目录     MinIO 内容读取器    Token 分析事实
+       │                         │                │
+候选筛选/排序/分页        Digest/冻结内容       轻量查询快照
 ```
 
-因此，目标不是建立一张“万能 Session 表”，而是：
+权威边界：
 
-1. 统一上传批次、Session、切片、游标、版本和处理状态的身份关系；
-2. Report Source 维护切片粒度的候选读模型；
-3. Token Analytics 维护分析粒度的 usage 读模型；
-4. 两套模型通过同一身份和 usage 来源进行对账，不互相替代。
+- MinIO：原始 JSONL、分块对象和字节级恢复；
+- PostgreSQL：切片身份、游标、哈希、时间、摘要、状态、Usage 与计费事实；
+- Report Source 目录：只回答“哪些切片可选”；
+- Token 分析事实：只回答“指定范围使用了多少 Token、成本是多少”；
+- Digest：读取冻结切片内容，不参与候选列表分页。
 
-### 2.2 产品形态保持不变
+## 3. Report Source 目标方案
 
-第一阶段及后续兼容演进中，默认保持：
+新增切片目录读模型，建议命名 `report_source_slice_catalog`。一行代表一个成功上传并可追踪的切片。
 
-- 一次成功的增量上传形成一个切片，本地 Session 不需要结束；
-- Report Source 仍只展示可选择的已就绪切片；
-- 默认不强制日期筛选，用户日期范围仍按活动时间与切片相交判断；
-- 选择后冻结具体切片，后续新增内容不会自动进入已发起的报告；
-- Token Analytics 仍按活动日期和现有筛选条件回答 usage、Token 与成本问题；
-- Token Analytics 的查询快照语义保留，页面各模块继续使用同一快照；
-- Report API、Digest、MCP、Skill 和 Aida 上传协议在最小演进阶段不改变。
+建议字段：
 
-### 2.3 Token 数字不要求逐行相等
-
-报告来源中的切片 Token，是帮助用户识别一次上传切片规模的数字；Token Analytics 中的 Session Token，是在选定活动日期、模型、组织等过滤条件下对 usage 事实的聚合。
-
-两者可能因以下原因不同：
-
-- 一个上传切片跨越多个业务自然日；
-- Token Analytics 只选择了部分日期或模型；
-- 一个 Session 在同一日期内包含多个上传切片；
-- 两个页面采用的截止时间不同。
-
-正确目标是建立明确的对账规则，而不是要求两个页面的任意一行数字恒等。
-
-## 3. 当前产品边界
-
-### 3.1 Report Source
-
-Report Source 是“报告来源选择器”，不是 Session 运维列表：
-
-- 展示日期、Session/切片摘要和 Token；
-- 只返回当前用户有权使用且内容已就绪的切片；
-- 打开选择器时才加载候选项；
-- 支持分页、关键词和用户主动设置的活动日期范围；
-- 选择结果在报告生成时冻结。
-
-处理中、失败和清理中的上传不应混入可选择列表。若需要解释空列表，优先复用现有空状态区域提供简短说明或入口，而不是新增状态列并改变选择器形态。
-
-### 3.2 Token Analytics
-
-Token Analytics 是 usage 和成本分析页面：
-
-- summary、trends、rankings、sessions 使用同一查询范围；
-- Session 列表在当前筛选范围内按 Session 聚合；
-- 活动日期是 usage 发生日期，不是上传日期；
-- Token 数据存在不代表对应内容已经完成投影或可用于报告；
-- 当前前端已经复用 summary 返回的 `query_snapshot_token`。
-
-因此，本专项需要优化的是快照构建和快照内聚合成本，而不是重复实现前端 token 复用。
-
-### 3.3 报告生成
-
-报告生成继续遵守：
-
-- 显式选择时冻结所选切片；
-- 未显式选择时由服务端按报告周期选择并冻结相交切片；
-- 报告读取冻结版本对应的 Digest 或内容；
-- 不因列表读模型优化而改变报告内容完整性和版本一致性。
-
-## 4. 状态边界
-
-系统中至少存在以下相互关联但不等价的完成状态：
-
-| 状态 | 表达的事实 | 能否直接推导其他状态 |
-| --- | --- | --- |
-| 上传接收完成 | 服务端已接收并确认本次上传数据 | 不能推导内容、usage、Digest 已就绪 |
-| 内容投影就绪 | 本次切片内容可稳定读取 | 不能推导 Token Analytics 快照已构建 |
-| usage 统计就绪 | usage 事实已可用于统计 | 不能推导内容可用于报告 |
-| Digest 就绪 | 冻结内容对应的 Digest 可读取 | 不代表已被某份报告选择 |
-| 报告来源冻结 | 某份报告已确定具体来源版本 | 不代表后续 Session 不再产生新切片 |
-
-产品上不能再用一个没有限定含义的 `Done` 覆盖上述全部状态。
-
-本专项只负责明确这些边界及其读取关系；“客户端显示 Done、服务端实际未完成”的 P0 一致性问题仍应作为独立 Bug 修复和验收，避免把协议修复混入性能架构升级。
-
-## 5. 目标架构
-
-### 5.1 共享层：身份与生命周期契约
-
-共享层只统一事实，不统一查询模型，至少需要稳定表达：
-
-- 用户、组织和 Session 身份；
-- 一次上传批次及其切片边界；
-- 增量游标、generation/revision 和幂等关系；
-- 活动时间与接收时间；
-- 内容投影、usage 处理、Digest 和清理状态；
-- 数据版本与最后更新时间。
-
-具体落在现有表、事件还是新增结构中，需要在开发方案阶段结合数据量和查询计划决定。
-
-### 5.2 报告来源切片读模型
-
-目标粒度是“一次成功上传形成的可报告切片”。
-
-它只保存现有选择器和冻结来源所需的稳定结果，例如：
-
-- 切片及 Session 身份；
-- 活动时间范围；
-- 当前摘要；
-- 切片 Token 提示值；
-- 内容是否可读取及对应版本；
-- 冻结报告时需要的版本引用。
-
-该模型由上传后的异步处理维护。候选接口只执行权限、筛选、排序、分页和计数，不在请求现场扫描全部内容事件或 usage 明细。
-
-### 5.3 Token 分析读模型
-
-目标是形成可按活动日期、Session、模型、用户和组织稳定聚合的 usage 事实。
-
-当前查询快照仍有必要：它保证 summary、trends、rankings 和 sessions 看到同一时间点、同一权限范围的数据。优化方向应是降低快照构建与聚合成本，而不是直接删除快照。
-
-分析事实的精确粒度暂不锁定。候选方向是：
-
-```text
-Session × 业务自然日 × 模型 × 计费/usage 维度
-```
-
-最终粒度必须能保留现有筛选、价格快照、组织权限和历史对账语义。
-
-## 6. 最小破坏演进
-
-演进遵守“内部替换、契约不动、可双读、可回滚”：
-
-1. 先冻结产品语义和对账口径；
-2. 建立当前接口的耗时、扫描量、快照行数和并发基线；
-3. 优化现有查询内部实现，不改变请求参数和返回结构；
-4. 以附加方式构建新读模型，并与旧结果影子对账；
-5. 只在覆盖率、正确率和性能均达标后灰度切换读取；
-6. 保留旧查询回退能力，稳定后再考虑清理旧路径。
-
-第一轮不新增页面、菜单、选择器字段，不强制日期，不改变 MCP/Skill 工具契约，也不要求用户重新上传历史 Session。
-
-## 7. 与现有模块的影响
-
-| 模块 | 最小演进影响 |
+| 类别 | 字段 |
 | --- | --- |
-| Aida 客户端 | 上传协议不变；Done/readiness 语义由独立 Bug 处理 |
-| 上传与 projection | 后续可能附加维护读模型，但不把重计算放回同步上传请求 |
-| Report Source API | 参数、返回字段、日期语义和分页语义保持兼容 |
-| Report Source 前端 | 页面结构和列保持不变，最多调整现有空状态说明 |
-| Token Analytics API | 端点和 snapshot token 契约保持不变，优化内部数据源 |
-| Token Analytics 前端 | 保留现有快照复用和页面形态 |
-| Digest / 报告生成 | 继续读取冻结切片和版本，不读取 Token Analytics 快照 |
-| MCP / Skill | 默认无协议变化，继续消费报告领域的冻结内容 |
-| 数据库 | 后续仅允许附加式、可回填、可双读的演进，暂不确定迁移 |
+| 主键与归属 | `slice_id`、`user_id`、`session_id`、`session_ref`、`agent_type` |
+| 来源版本 | `source_id`、`generation_id`、`content_projection_revision_id`、`content_epoch` |
+| 内容边界 | `start_cursor`、`end_cursor`、`event_count` |
+| 列表字段 | `activity_start_at`、`activity_end_at`、`last_activity_at`、`summary`、`cwd`、`models` |
+| 可用性 | `status`、`ready_at`、`created_at`、`updated_at` |
 
-## 8. 当前建议
+目录不保存 `total_tokens`，也不读取 Usage 计算 Token。
 
-- 把 Report Source 的 P0 修复作为线上止血独立观察；
-- 本专项暂不直接开工新表或大规模重写；
-- 先完成读模型粒度、状态口径、对账规则和 SLO 的评审；
-- Report Source 长期方向采用切片读模型；
-- Token Analytics 保留一致性快照，并优先评估“稳定分析事实 + 轻量快照”；
-- 任何统计口径变化必须与纯性能优化拆开发布。
+基础索引：
 
-## 9. 配套文档
+```sql
+(user_id, status, activity_end_at DESC, session_ref, slice_id)
+(user_id, status, activity_start_at, activity_end_at)
+```
 
-- [现状产品形态与核心边界](./01-现状产品形态与核心边界.md)
-- [目标架构与最小破坏演进](./02-目标架构与最小破坏演进.md)
-- [关键决策与待评审问题](./03-关键决策与待评审问题.md)
-- [Review 记录](./04-Review记录.md)
+关键词搜索先在目录规模内执行。只有实际数据证明模糊搜索仍超标时，才增加 trigram 索引；禁止为搜索回退到事件表。
+
+候选接口只允许：
+
+- 用户/权限过滤；
+- 显式活动日期相交过滤；
+- 关键词过滤；
+- 排序、精确总数和分页。
+
+候选接口禁止：
+
+- 扫描 `session_content_events`；
+- 扫描 Usage/Token 明细；
+- 现场生成摘要或 Digest；
+- 推进 projection、Digest 或修复任务状态。
+
+## 4. 日期与分页契约
+
+请求中的日期分成两类：
+
+| 参数 | 含义 | 是否过滤候选 |
+| --- | --- | --- |
+| `period_start`、`period_end` | 当前日报/周报周期上下文 | 否 |
+| `activity_from`、`activity_to` | 用户显式选择的活动日期范围 | 是 |
+
+无论是否传显式活动日期，SQL 都只查询切片目录。日期可以改变结果数量，但不能把查询路径切回事件表。
+
+分页验收的准确表述是：
+
+> 返回第 1 页、第 N 页或总数的成本，可以随候选切片数量增长，但不得随原始事件数量、JSONL 字节数或是否传报告周期日期增长。
+
+## 5. 内容存储目标方案
+
+### 5.1 新增轻量事件索引
+
+建议新增 `session_content_event_index`，只保留：
+
+- revision/chunk 与游标范围；
+- `occurred_at`、`event_type`；
+- 有长度上限的 `summary`、`excerpt`；
+- `content_sha256`；
+- MinIO object key、对象哈希/版本等恢复引用。
+
+不保存完整 `content_payload`。
+
+### 5.2 建立统一内容读取器
+
+Digest、冻结来源读取和 Session 内容详情不得继续自行查询 JSONB。统一通过 Content Event Reader：
+
+1. 根据 slice/revision/cursor 找到相关上传分块；
+2. 从 MinIO 流式读取对应 JSONL；
+3. 按游标截取事件并校验哈希；
+4. 产出与当前消费者兼容的事件结构；
+5. 对对象缺失、哈希错误、游标断裂返回明确错误，禁止静默降级为空内容。
+
+### 5.3 为什么新增索引表而不是批量置空
+
+对现有 7GB 表直接置空 `content_payload`：
+
+- 会产生大规模 WAL、锁竞争和磁盘临时峰值；
+- 普通 UPDATE 后也不会立即归还磁盘；
+- 会同时破坏当前 Digest 读取；
+- 回滚困难。
+
+安全路径是新增轻量表、双写/回填、切换消费者、完成观察期后再整体下线旧载荷表。
+
+## 6. Token Analytics 目标方案
+
+Token Analytics 保留 `query_snapshot_token`，但不能继续把“逻辑事件最终值”直接当作 Chunk 增量。目标以不可变 `session_usage_contributions` 为唯一可加总事实：
+
+```text
+Observation 推进产生的 Token Delta
+  -> 归属 member Session + root Session family + Chunk + activity_date
+  -> Session 家族总量 Rollup
+  -> Session 家族按天 Rollup
+  -> 新增 Chunk Rollup
+```
+
+顶层 Session 家族总量包含自身及全部层级 Subagent。复制到 Subagent 的父历史只建立累计基线，不生成新的 Contribution。三种维度必须在同一 active revision set 与 family relation version 下满足：
+
+```text
+Session 家族总量
+  = self + all subagents
+  = 所有业务日之和
+  = 所有新增 Chunk 之和
+  = 所有 active Contribution 之和
+```
+
+现有 `session_usage_components` 保留逻辑事件当前最终值，不能直接承担 Chunk Delta；现有 `session_daily_usage` 在迁移期继续兼容，目标改为从 Contribution 重建。Token 和成本事实仍在上传后的异步 Usage/Metering 流程固定，查询不重新解析 JSONL 或重新计价。
+
+轻量快照只冻结：
+
+- active revision set、family relation version 和数据高水位；
+- 权限范围；
+- 查询条件；
+- 成本版本及 Rollup 版本引用。
+
+summary、trends、rankings、sessions 继续读取同一快照。默认 Session 列表按 root Session 展示一行，成员/Subagent 仅下钻展示并标记已包含在家族总量中，避免页面重复求和。详细定义见 [Token 三维统计与对账模型](./07-Token三维统计与对账模型.md)。
+
+## 7. 发布拆分
+
+| 发布单元 | 内容 | 明确不包含 |
+| --- | --- | --- |
+| R1 | Report Source 切片目录、回填、影子对账、灰度读取 | MinIO 读取切换、历史清理、Token 重构 |
+| R2 | 轻量事件索引、统一 MinIO 内容读取器、消费者影子校验 | 停写旧载荷、删除历史数据 |
+| R3 | 新写入不再保存 PostgreSQL 完整载荷 | 历史载荷删除 |
+| R4 | 观察期后下线旧载荷表并回收空间 | Token Analytics |
+| R5A | Usage Contribution、Session family、三维 Rollup 影子建设 | Token API 切换 |
+| R5B | 轻量 Snapshot、Token API/前端/MCP ad-hoc 分别灰度 | 旧路径删除 |
+| R5C | 兼容 Snapshot/字段/表的独立下线评审 | Report Source/内容存储改造 |
+
+每个发布单元都必须有独立开关和旧路径回退能力。
+
+## 8. 成功标准
+
+- Report Source p95 不超过 300ms、p99 不超过 800ms；
+- 无日期与显式活动日期请求使用相同的目录查询路径；
+- 执行计划不出现内容事件或 Usage 明细表；
+- 新写入不再增加 PostgreSQL 完整 JSON 载荷；
+- Digest、冻结来源、Session 内容读取与当前结果一致；
+- Digest、MCP 和其他接口逐项通过 [接口回归矩阵](./06-Digest与接口影响回归矩阵.md)；
+- Token 家族总量、逐日和新增 Chunk 三维精确对账，Subagent 父历史不重复；
+- Token 页面各模块保持同一快照，统计、成本、权限和质量状态一致；
+- 任一新路径异常时，可以通过配置开关回旧读路径，不需要回滚数据迁移。
+
+详细步骤与测试见 [开发、迁移与测试验收](./05-开发迁移与测试验收.md)。
