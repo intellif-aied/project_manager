@@ -48,6 +48,7 @@ func groupSessionSelections(sessions []*SessionInfo, showAll bool, now time.Time
 		})
 		root.SelectionActiveAt = latestSessionActivity(members)
 		root.SelectionIssue = groupIssues[rootRef]
+		aggregateSelectionSummaries(root, members)
 		if showAll || now.Sub(root.SelectionActiveAt) <= defaultSessionActivityWindow {
 			result = append(result, root)
 		}
@@ -57,6 +58,58 @@ func groupSessionSelections(sessions []*SessionInfo, showAll bool, now time.Time
 		return sessionSelectionLastActiveAt(result[i]).After(sessionSelectionLastActiveAt(result[j]))
 	})
 	return result
+}
+
+func aggregateSelectionSummaries(root *SessionInfo, members []*SessionInfo) {
+	if root == nil {
+		return
+	}
+	if root.SelectionMissingRoot {
+		var earliest *SessionInfo
+		for _, member := range members {
+			if member == nil || strings.TrimSpace(member.Summary) == "" {
+				continue
+			}
+			if earliest == nil || summaryCandidateTime(member, false).Before(summaryCandidateTime(earliest, false)) {
+				earliest = member
+			}
+		}
+		if earliest != nil {
+			root.Summary = earliest.Summary
+			root.SummaryAt = earliest.SummaryAt
+			root.SummaryStatus = earliest.SummaryStatus
+			root.SummarySource = earliest.SummarySource
+		}
+	}
+	if strings.TrimSpace(firstNonEmpty(root.RecentSummary, root.Summary)) != "" && !root.SelectionMissingRoot {
+		return
+	}
+	var latest *SessionInfo
+	for _, member := range members {
+		if member == nil || strings.TrimSpace(firstNonEmpty(member.RecentSummary, member.Summary)) == "" {
+			continue
+		}
+		if latest == nil || summaryCandidateTime(member, true).After(summaryCandidateTime(latest, true)) {
+			latest = member
+		}
+	}
+	if latest != nil {
+		root.RecentSummary = firstNonEmpty(latest.RecentSummary, latest.Summary)
+		root.RecentSummaryAt = summaryCandidateTime(latest, true)
+	}
+}
+
+func summaryCandidateTime(session *SessionInfo, recent bool) time.Time {
+	if session == nil {
+		return time.Time{}
+	}
+	if recent && !session.RecentSummaryAt.IsZero() {
+		return session.RecentSummaryAt
+	}
+	if !recent && !session.SummaryAt.IsZero() {
+		return session.SummaryAt
+	}
+	return session.LastActiveAt()
 }
 
 func resolveCodexSelectionRoot(session *SessionInfo, sessions map[string]*SessionInfo) (string, string) {
@@ -156,7 +209,7 @@ func sessionSelectionSearchText(session *SessionInfo) string {
 		return ""
 	}
 	values := []string{
-		session.SessionRef, session.AgentType, session.Summary,
+		session.SessionRef, session.AgentType, session.Summary, session.RecentSummary,
 		session.ProjectDir, session.Cwd, session.Model, session.ForkAgentPath,
 	}
 	for _, child := range session.SelectionChildren {
@@ -164,7 +217,7 @@ func sessionSelectionSearchText(session *SessionInfo) string {
 			continue
 		}
 		values = append(values,
-			child.SessionRef, child.Summary, child.ProjectDir, child.Cwd,
+			child.SessionRef, child.Summary, child.RecentSummary, child.ProjectDir, child.Cwd,
 			child.Model, child.ForkAgentPath,
 		)
 	}

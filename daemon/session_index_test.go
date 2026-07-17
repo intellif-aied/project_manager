@@ -13,7 +13,7 @@ func TestLoadSessionIndexInvalidatesOlderVersions(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(indexPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(indexPath, []byte(`{"version":1,"entries":{"stale":{}}}`), 0o600); err != nil {
+	if err := os.WriteFile(indexPath, []byte(`{"version":3,"entries":{"stale":{}}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

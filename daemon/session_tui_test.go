@@ -39,22 +39,37 @@ func TestSessionPickerSelectAllAppliesToSearchResults(t *testing.T) {
 	}
 }
 
-func TestSessionPickerShowsWorkingDirectoryAndLastActivity(t *testing.T) {
+func TestSessionPickerShowsTwoLineSummaryAndFullSessionID(t *testing.T) {
 	session := &SessionInfo{
-		SessionRef: "session-directory",
-		AgentType:  "codex",
-		Cwd:        "/home/user/projects/aida-console",
-		Summary:    "修复上传交互",
-		EndedAt:    time.Date(2026, 7, 16, 13, 45, 0, 0, time.Local),
+		SessionRef:    "c5030a93-271a-44d4-9afe-125d9b32a850",
+		AgentType:     "codex",
+		Cwd:           "/home/user/projects/aida-console",
+		Summary:       "修复上传交互",
+		RecentSummary: "重新上传并复查统计",
+		EndedAt:       time.Date(2026, 7, 16, 13, 45, 0, 0, time.Local),
 	}
 	model := newSessionPickerModel([]*SessionInfo{session})
 	model.width = 120
 
 	view := model.View()
-	if !strings.Contains(view, "/home/user/pr../aida-console") ||
-		!strings.Contains(view, "07-16 13:45:00") ||
-		!strings.Contains(view, "修复上传交互") {
+	if !strings.Contains(view, "07-16 13:45:00") ||
+		!strings.Contains(view, "/home/user/pro") || !strings.Contains(view, "aida-console") ||
+		!strings.Contains(view, "修复上传交互") ||
+		!strings.Contains(view, "codex   c5030a93-271a-44d4-9afe-125d9b32a850  最新消息：重新上传并复查统计") {
 		t.Fatalf("view=%q", view)
+	}
+	lines := strings.Split(view, "\n")
+	var summaryColumn, latestColumn int
+	for _, line := range lines {
+		if index := strings.Index(line, "修复上传交互"); index >= 0 {
+			summaryColumn = displayWidth(line[:index])
+		}
+		if index := strings.Index(line, "重新上传并复查统计"); index >= 0 {
+			latestColumn = displayWidth(line[:index])
+		}
+	}
+	if summaryColumn == 0 || summaryColumn != latestColumn {
+		t.Fatalf("summary columns differ: first=%d latest=%d view=%q", summaryColumn, latestColumn, view)
 	}
 }
 
@@ -73,7 +88,7 @@ func TestSessionPickerSearchesChildAgentPath(t *testing.T) {
 	}
 }
 
-func TestSessionPickerUsesSubAgentLabel(t *testing.T) {
+func TestSessionPickerHidesSubAgentLabel(t *testing.T) {
 	root := testGroupedSession("root", "", 1)
 	root.SelectionChildren = []*SessionInfo{
 		testGroupedSession("child-1", "root", 2),
@@ -83,7 +98,7 @@ func TestSessionPickerUsesSubAgentLabel(t *testing.T) {
 	model.width = 120
 
 	view := model.View()
-	if !strings.Contains(view, "sub-agent(2)") || strings.Contains(view, "子会话") {
+	if strings.Contains(view, "sub-agent") || strings.Contains(view, "子会话") {
 		t.Fatalf("view=%q", view)
 	}
 }

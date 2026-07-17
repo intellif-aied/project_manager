@@ -69,6 +69,9 @@ type SessionInfo struct {
 	Model                string
 	Models               []string // distinct models seen, in insertion order
 	Summary              string
+	RecentSummary        string
+	SummaryAt            time.Time
+	RecentSummaryAt      time.Time
 	SummaryStatus        string
 	SummarySource        string
 	ToolCalls            map[string]int
@@ -924,8 +927,8 @@ func parseJSONL(path string) *SessionInfo {
 	buf := make([]byte, 0, 1024*1024)
 	scanner.Buffer(buf, 10*1024*1024)
 
-	firstUserMsg := true
 	var lastTS time.Time
+	summaryCollector := sessionSummaryCollector{}
 	activitySlices := map[string]*ActivitySlice{}
 
 	for scanner.Scan() {
@@ -945,8 +948,10 @@ func parseJSONL(path string) *SessionInfo {
 		}
 
 		var currentSlice *ActivitySlice
+		var eventAt time.Time
 		if event.Timestamp != "" {
 			if t, err := time.Parse(time.RFC3339, event.Timestamp); err == nil {
+				eventAt = t
 				lastTS = t
 				if s.StartedAt.IsZero() {
 					s.StartedAt = t
@@ -967,31 +972,12 @@ func parseJSONL(path string) *SessionInfo {
 			if currentSlice != nil {
 				currentSlice.MessageCount++
 			}
-			if firstUserMsg && s.Summary == "" {
-				var msg UserMsg
-				if json.Unmarshal(event.Message, &msg) == nil {
-					for _, c := range msg.Content {
-						if c.Type == "text" && c.Text != "" {
-							appendSliceText(currentSlice, c.Text)
-							s.Summary = c.Text
-							s.SummaryStatus = "ok"
-							s.SummarySource = "user.message"
-							if len(s.Summary) > 200 {
-								s.Summary = s.Summary[:197] + "..."
-							}
-							break
-						}
-					}
-				}
-				firstUserMsg = false
-			} else {
-				var msg UserMsg
-				if json.Unmarshal(event.Message, &msg) == nil {
-					for _, c := range msg.Content {
-						if c.Type == "text" && c.Text != "" {
-							appendSliceText(currentSlice, c.Text)
-							break
-						}
+			var msg UserMsg
+			if json.Unmarshal(event.Message, &msg) == nil {
+				for _, c := range msg.Content {
+					if c.Type == "text" && c.Text != "" {
+						appendSliceText(currentSlice, c.Text)
+						summaryCollector.Add(c.Text, eventAt, "user.message")
 					}
 				}
 			}
@@ -1031,6 +1017,7 @@ func parseJSONL(path string) *SessionInfo {
 					}
 					if c.Type == "text" && c.Text != "" {
 						appendSliceText(currentSlice, c.Text)
+						summaryCollector.AddReply(c.Text, eventAt, "assistant.message")
 					}
 				}
 			}
@@ -1041,6 +1028,7 @@ func parseJSONL(path string) *SessionInfo {
 	if !lastTS.IsZero() {
 		s.EndedAt = lastTS
 	}
+	summaryCollector.Apply(s)
 	finalizeActivitySlices(s, activitySlices)
 	if s.Summary == "" {
 		if scanner.Err() != nil {

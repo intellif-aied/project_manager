@@ -127,7 +127,7 @@ func parseCodexJSONL(path string) *SessionInfo {
 	var sawRootMeta bool
 	var forkBaselineReady bool
 	var forkBaselineMissing bool
-	var firstSummary string
+	summaryCollector := sessionSummaryCollector{}
 	activitySlices := map[string]*ActivitySlice{}
 
 	for scanner.Scan() {
@@ -223,12 +223,16 @@ func parseCodexJSONL(path string) *SessionInfo {
 						}
 					}
 				case "user_message":
-					if firstSummary == "" && ev.Message != "" {
-						firstSummary = ev.Message
-					}
 					if currentSlice != nil && ev.Message != "" {
 						currentSlice.MessageCount++
 						appendSliceText(currentSlice, ev.Message)
+					}
+					if ev.Message != "" {
+						summaryCollector.Add(ev.Message, ts, "event_msg.user_message")
+					}
+				case "agent_message":
+					if ev.Message != "" {
+						summaryCollector.AddReply(ev.Message, ts, "event_msg.agent_message")
 					}
 				}
 			}
@@ -299,13 +303,10 @@ func parseCodexJSONL(path string) *SessionInfo {
 		}
 	}
 
-	if firstSummary != "" {
-		s.Summary = truncate(firstSummary, 200)
-		s.SummaryStatus = "ok"
-		s.SummarySource = "event_msg.user_message"
-	} else if scanner.Err() != nil {
+	summaryCollector.Apply(s)
+	if s.Summary == "" && scanner.Err() != nil {
 		s.SummaryStatus = "parse_error"
-	} else {
+	} else if s.Summary == "" {
 		s.SummaryStatus = "empty"
 	}
 	finalizeActivitySlices(s, activitySlices)

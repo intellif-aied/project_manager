@@ -104,6 +104,34 @@ func TestSessionSelectionProjectFilterIncludesChildDirectory(t *testing.T) {
 	}
 }
 
+func TestGroupSessionSelectionsKeepsRootRequirementAheadOfChildInternals(t *testing.T) {
+	root := testGroupedSession("root", "", 1)
+	root.RecentSummary = "root latest"
+	root.RecentSummaryAt = testGroupTime(2)
+	child := testGroupedSession("child", "root", 3)
+	child.RecentSummary = "child latest"
+	child.RecentSummaryAt = testGroupTime(4)
+
+	groups := groupSessionSelections([]*SessionInfo{root, child}, true, time.Now())
+	if len(groups) != 1 || groups[0].Summary != "root" || groups[0].RecentSummary != "root latest" {
+		t.Fatalf("groups=%+v", groups)
+	}
+}
+
+func TestGroupSessionSelectionsUsesChildSummaryWhenRootIsMissing(t *testing.T) {
+	first := testGroupedSession("child-1", "missing", 1)
+	first.RecentSummary = "first child request"
+	first.RecentSummaryAt = testGroupTime(2)
+	latest := testGroupedSession("child-2", "missing", 3)
+	latest.RecentSummary = "latest child request"
+	latest.RecentSummaryAt = testGroupTime(4)
+
+	groups := groupSessionSelections([]*SessionInfo{first, latest}, true, time.Now())
+	if len(groups) != 1 || groups[0].Summary != "child-1" || groups[0].RecentSummary != "latest child request" {
+		t.Fatalf("groups=%+v", groups)
+	}
+}
+
 func testGroupedSession(ref, parent string, minute int) *SessionInfo {
 	return &SessionInfo{
 		SessionRef: ref, ParentSessionRef: parent, AgentType: "codex",

@@ -51,10 +51,6 @@ func writeSessionPage(output io.Writer, title string, page sessionListPage, sele
 		fmt.Fprintf(output, "，已选择 %d 条", len(selected))
 	}
 	fmt.Fprintln(output)
-	narrow := sessionTerminalWidth() < 120
-	if !narrow {
-		writeSessionListHeader(output)
-	}
 	for index, session := range page.Items {
 		globalIndex := page.Offset + index + 1
 		marker := "   "
@@ -64,14 +60,7 @@ func writeSessionPage(output io.Writer, title string, page sessionListPage, sele
 				marker = "[x]"
 			}
 		}
-		if narrow {
-			writeNarrowSessionRow(output, marker, globalIndex, session)
-		} else {
-			fmt.Fprintf(output, "%s%s\n", marker, formatSessionListRow(globalIndex, session))
-		}
-		if !narrow && sessionSelectionChildCount(session) > 0 {
-			fmt.Fprintf(output, "        %-38s %d sub-agent(s)\n", "", sessionSelectionChildCount(session))
-		}
+		writeSessionSummaryRow(output, marker, globalIndex, session)
 	}
 }
 
@@ -82,21 +71,25 @@ func sessionTerminalWidth() int {
 	return 160
 }
 
-func writeNarrowSessionRow(output io.Writer, marker string, index int, session *SessionInfo) {
+func writeSessionSummaryRow(output io.Writer, marker string, index int, session *SessionInfo) {
 	activeAt := "-"
 	if value := sessionSelectionLastActiveAt(session); !value.IsZero() {
 		activeAt = value.Format("01-02 15:04")
 	}
-	duration := "-"
-	if value := session.Duration(); value > 0 {
-		duration = fmt.Sprintf("%dm", int(value.Minutes()))
-	}
-	agent := firstNonEmpty(session.AgentType, "claude")
-	fmt.Fprintf(output, "%s %-4d %-6s %-11s %s\n", marker, index, truncate(agent, 6), activeAt, firstNonEmpty(session.SessionRef, "-"))
-	fmt.Fprintf(output, "    %s\n", truncate(compactSessionText(firstNonEmpty(session.Summary, "暂无摘要")), max(20, sessionTerminalWidth()-6)))
-	fmt.Fprintf(output, "    %s · %s · %s · %s Token · %d sub-agent\n",
-		truncateMiddle(sessionProjectDisplay(session), 20), truncateMiddle(firstNonEmpty(session.Model, "-"), 14),
-		duration, session.FormatTokens(), sessionSelectionChildCount(session))
+	width := max(20, sessionTerminalWidth())
+	pathWidth := max(16, min(36, width/4))
+	firstPrefix := fmt.Sprintf("%s %-4d %-11s %-*s  ", marker, index, activeAt,
+		pathWidth, truncateMiddle(sessionPathDisplay(session), pathWidth))
+	lastPrefix := fmt.Sprintf("    %-7s %s  最新消息：",
+		truncate(firstNonEmpty(session.AgentType, "claude"), 7), firstNonEmpty(session.SessionRef, "-"))
+	contentColumn := max(displayWidth(firstPrefix), displayWidth(lastPrefix))
+	firstPrefix = padToDisplayWidth(firstPrefix, contentColumn)
+	lastPrefix = padToDisplayWidth(lastPrefix, contentColumn)
+	contentWidth := max(8, width-contentColumn)
+	fmt.Fprintf(output, "%s%s\n", firstPrefix,
+		truncateToDisplayWidth(compactSessionText(firstNonEmpty(session.Summary, "暂无摘要")), contentWidth))
+	fmt.Fprintf(output, "%s%s\n", lastPrefix,
+		truncateToDisplayWidth(firstNonEmpty(displayRecentSummary(session), "暂无消息"), contentWidth))
 }
 
 type sessionJSONItem struct {
@@ -105,6 +98,7 @@ type sessionJSONItem struct {
 	AgentType         string   `json:"agent_type"`
 	LastActivityAt    string   `json:"last_activity_at,omitempty"`
 	Summary           string   `json:"summary"`
+	RecentSummary     string   `json:"recent_summary,omitempty"`
 	SummaryStatus     string   `json:"summary_status"`
 	SummarySource     string   `json:"summary_source,omitempty"`
 	Project           string   `json:"project"`
@@ -140,7 +134,8 @@ func writeSessionsJSON(output io.Writer, sessions []*SessionInfo, pageNumber, pa
 		items = append(items, sessionJSONItem{
 			Index: page.Offset + offset + 1, SessionRef: session.SessionRef,
 			AgentType: firstNonEmpty(session.AgentType, "claude_code"), LastActivityAt: lastActivity,
-			Summary: firstNonEmpty(session.Summary, "暂无摘要"), SummaryStatus: status, SummarySource: session.SummarySource,
+			Summary: firstNonEmpty(session.Summary, "暂无摘要"), RecentSummary: displayRecentSummary(session),
+			SummaryStatus: status, SummarySource: session.SummarySource,
 			Project: sessionProjectDisplay(session), CWD: session.Cwd, Model: session.Model, Models: session.Models,
 			DurationSecs: int64(session.Duration().Seconds()), LocalTokens: session.TotalTok,
 			SubagentCount: sessionSelectionChildCount(session), MemberSessionRefs: sessionSelectionMemberRefs(session),

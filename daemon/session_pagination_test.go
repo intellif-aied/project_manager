@@ -102,22 +102,28 @@ func TestSessionPaginationRejectsUnsupportedPageSize(t *testing.T) {
 	}
 }
 
-func TestNarrowSessionListKeepsSummaryAndDetailFields(t *testing.T) {
+func TestNarrowSessionListKeepsSummaryRecentSummaryAndSessionID(t *testing.T) {
 	t.Setenv("COLUMNS", "80")
 	session := fakeSessionList(1)[0]
 	session.ProjectDir = "project-manager"
 	session.Model = "gpt-test"
 	session.TotalTok = 1234
 	session.SubFiles = []string{"subagent.jsonl"}
+	session.RecentSummary = "latest requirement"
 	page, err := paginateSessions([]*SessionInfo{session}, 1, 20)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
 	writeSessionPage(&output, "Session 列表", page, nil)
-	for _, expected := range []string{"session-001", "summary 1", "project-manager", "gpt-test", "1.2K Token", "1 sub-agent"} {
+	for _, expected := range []string{"session-001", "summary 1", "project-manager", "codex", "最新消息：", "latest requirement"} {
 		if !strings.Contains(output.String(), expected) {
 			t.Fatalf("narrow output missing %q:\n%s", expected, output.String())
+		}
+	}
+	for _, hidden := range []string{"gpt-test", "Token", "sub-agent"} {
+		if strings.Contains(output.String(), hidden) {
+			t.Fatalf("narrow output should hide %q:\n%s", hidden, output.String())
 		}
 	}
 }
@@ -126,6 +132,7 @@ func TestSessionsJSONIncludesSummaryDiagnosticsAndPagination(t *testing.T) {
 	sessions := fakeSessionList(2)
 	sessions[0].SummaryStatus = "ok"
 	sessions[0].SummarySource = "event_msg.user_message"
+	sessions[0].RecentSummary = "latest requirement"
 	sessions[1].Summary = ""
 	var output bytes.Buffer
 	if err := writeSessionsJSON(&output, sessions, 1, 20); err != nil {
@@ -133,6 +140,7 @@ func TestSessionsJSONIncludesSummaryDiagnosticsAndPagination(t *testing.T) {
 	}
 	for _, expected := range []string{
 		`"summary_status":"ok"`, `"summary_source":"event_msg.user_message"`,
+		`"recent_summary":"latest requirement"`,
 		`"summary_status":"empty"`, `"summary":"暂无摘要"`, `"total":2`,
 	} {
 		if !strings.Contains(output.String(), expected) {

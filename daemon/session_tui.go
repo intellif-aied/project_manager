@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/mattn/go-runewidth"
 )
 
 type sessionPickerModel struct {
@@ -124,7 +125,7 @@ func (m *sessionPickerModel) View() string {
 	} else {
 		builder.WriteString("搜索: / 输入关键词\n")
 	}
-	builder.WriteString(strings.Repeat("-", max(20, min(m.width, 120))) + "\n")
+	builder.WriteString(strings.Repeat("-", sessionPickerLineWidth(m.width)) + "\n")
 
 	if len(m.filtered) == 0 {
 		builder.WriteString("没有匹配的 Session。\n")
@@ -145,22 +146,41 @@ func (m *sessionPickerModel) View() string {
 			if value := sessionSelectionLastActiveAt(session); !value.IsZero() {
 				activeAt = value.Format("01-02 15:04:05")
 			}
-			childLabel := "-"
-			if count := sessionSelectionChildCount(session); count > 0 {
-				childLabel = fmt.Sprintf("sub-agent(%d)", count)
-			}
-			pathWidth := max(14, min(28, m.width/4))
-			summaryWidth := max(12, min(70, m.width-pathWidth-56))
-			fmt.Fprintf(&builder, "%s %s %-7s %-14s %-13s %-*s %s\n",
-				cursor, check, truncate(firstNonEmpty(session.AgentType, "claude"), 7), activeAt,
-				childLabel,
-				pathWidth, truncateMiddle(sessionPathDisplay(session), pathWidth),
-				truncate(compactSessionText(firstNonEmpty(session.Summary, "暂无摘要")), summaryWidth))
+			lineWidth := sessionPickerLineWidth(m.width)
+			pathWidth := max(16, min(36, lineWidth/4))
+			firstPrefix := fmt.Sprintf("%s %s %s  %-*s  ", cursor, check, activeAt,
+				pathWidth, truncateMiddle(sessionPathDisplay(session), pathWidth))
+			lastPrefix := fmt.Sprintf("      %-7s %s  最新消息：",
+				truncate(firstNonEmpty(session.AgentType, "claude"), 7), firstNonEmpty(session.SessionRef, "-"))
+			contentColumn := max(displayWidth(firstPrefix), displayWidth(lastPrefix))
+			firstPrefix = padToDisplayWidth(firstPrefix, contentColumn)
+			lastPrefix = padToDisplayWidth(lastPrefix, contentColumn)
+			contentWidth := max(8, lineWidth-contentColumn)
+			fmt.Fprintf(&builder, "%s%s\n", firstPrefix,
+				truncateToDisplayWidth(compactSessionText(firstNonEmpty(session.Summary, "暂无摘要")), contentWidth))
+			fmt.Fprintf(&builder, "%s%s\n", lastPrefix,
+				truncateToDisplayWidth(firstNonEmpty(displayRecentSummary(session), "暂无消息"), contentWidth))
 		}
 	}
-	builder.WriteString(strings.Repeat("-", max(20, min(m.width, 120))) + "\n")
+	builder.WriteString(strings.Repeat("-", sessionPickerLineWidth(m.width)) + "\n")
 	builder.WriteString("↑↓/j k 移动  Space 选择  / 搜索  a 全选结果  Enter 上传  q 取消\n")
 	return builder.String()
+}
+
+func sessionPickerLineWidth(width int) int {
+	return max(20, min(width, 168))
+}
+
+func padToDisplayWidth(value string, width int) string {
+	return value + strings.Repeat(" ", max(0, width-displayWidth(value)))
+}
+
+func truncateToDisplayWidth(value string, width int) string {
+	return runewidth.Truncate(value, width, "...")
+}
+
+func displayWidth(value string) int {
+	return runewidth.StringWidth(value)
 }
 
 func sessionPathDisplay(session *SessionInfo) string {
@@ -194,7 +214,7 @@ func (m *sessionPickerModel) move(delta int) {
 }
 
 func (m *sessionPickerModel) visibleRows() int {
-	return max(5, m.height-7)
+	return max(2, (m.height-7)/2)
 }
 
 func (m *sessionPickerModel) visibleRange() (int, int) {

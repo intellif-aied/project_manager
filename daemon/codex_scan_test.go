@@ -70,6 +70,27 @@ func TestParseCodexJSONLCounterResetFallsBackToLastActivity(t *testing.T) {
 	}
 }
 
+func TestParseCodexJSONLCleansInjectedMessagesAndKeepsLatestRequirement(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rollout-summary.jsonl")
+	lines := []string{
+		`{"timestamp":"2026-07-16T01:00:00Z","type":"session_meta","payload":{"id":"summary-session","cwd":"/tmp/project"}}`,
+		`{"timestamp":"2026-07-16T01:01:00Z","type":"event_msg","payload":{"type":"user_message","message":"<environment_context><cwd>/tmp/project</cwd></environment_context>"}}`,
+		`{"timestamp":"2026-07-16T01:02:00Z","type":"event_msg","payload":{"type":"user_message","message":"修复 Session 摘要。不要影响 Token。"}}`,
+		`{"timestamp":"2026-07-16T01:03:00Z","type":"event_msg","payload":{"type":"user_message","message":"可以"}}`,
+		`{"timestamp":"2026-07-16T01:04:00Z","type":"event_msg","payload":{"type":"user_message","message":"重新上传并复查"}}`,
+		`{"timestamp":"2026-07-16T01:05:00Z","type":"event_msg","payload":{"type":"agent_message","message":"已经完成复查。","phase":"final_answer"}}`,
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	session := parseCodexJSONL(path)
+	if session.Summary != "修复 Session 摘要。不要影响 Token。" || session.RecentSummary != "已经完成复查。" {
+		t.Fatalf("summaries=%q / %q", session.Summary, session.RecentSummary)
+	}
+}
+
 func tokenCountLine(timestamp string, total int64) string {
 	return fmt.Sprintf(`{"timestamp":%q,"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":%d,"cached_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0,"total_tokens":%d}}}}`, timestamp, total, total)
 }

@@ -71,6 +71,9 @@ func TestGoldenClaudeFixtureParserBaseline(t *testing.T) {
 	if session.SummaryStatus != "ok" || session.SummarySource != "user.message" {
 		t.Fatalf("unexpected Claude summary diagnostics: status=%q source=%q", session.SummaryStatus, session.SummarySource)
 	}
+	if session.RecentSummary != "Continue from the accepted prefix." {
+		t.Fatalf("unexpected Claude recent summary: %q", session.RecentSummary)
+	}
 	if session.TotalTok != 240 || session.InputTok != 150 || session.OutputTok != 32 || session.CacheCreateTok != 8 || session.CacheReadTok != 50 {
 		t.Fatalf("unexpected Claude usage baseline: %+v", session)
 	}
@@ -90,6 +93,9 @@ func TestGoldenCodexFixtureParserBaseline(t *testing.T) {
 	}
 	if session.SummaryStatus != "ok" || session.SummarySource != "event_msg.user_message" {
 		t.Fatalf("unexpected Codex summary diagnostics: status=%q source=%q", session.SummaryStatus, session.SummarySource)
+	}
+	if session.RecentSummary != session.Summary {
+		t.Fatalf("unexpected Codex recent summary: %q", session.RecentSummary)
 	}
 	if session.TotalTok != 220 || session.InputTok != 180 || session.OutputTok != 40 || session.CacheReadTok != 50 {
 		t.Fatalf("unexpected Codex usage baseline: %+v", session)

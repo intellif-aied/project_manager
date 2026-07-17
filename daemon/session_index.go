@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-const sessionIndexVersion = 2
+const sessionIndexVersion = 4
 
 type sessionIndex struct {
 	Version int                          `json:"version"`
