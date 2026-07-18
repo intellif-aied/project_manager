@@ -65,8 +65,11 @@ func TestAttachedFullReadsNullPayloadIndexThroughContentReader(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := database.QueryRow(`
-		INSERT INTO session_source_generations (source_id, status, expected_cursor)
-		VALUES ($1, 'active', $2) RETURNING id::text`, sourceID, len(content),
+		INSERT INTO session_source_generations (
+			source_id, status, expected_cursor, prefix_checkpoint_hash,
+			prefix_checkpoint_state, prefix_checkpoint_state_format
+		) VALUES ($1, 'active', $2, $3, '\x01'::bytea, 'sha256-state-v1')
+		RETURNING id::text`, sourceID, len(content), sessionsync.HashBytes(content),
 	).Scan(&generationID); err != nil {
 		t.Fatal(err)
 	}
