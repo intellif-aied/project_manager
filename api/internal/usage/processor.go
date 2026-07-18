@@ -876,32 +876,73 @@ func (p *Processor) activateIfReady(ctx context.Context, tx *sql.Tx, revisionID,
 			return err
 		}
 	}
-	var crossSourceClaims int64
+	var claimUserID int64
 	if err := tx.QueryRowContext(ctx, `
-		SELECT COUNT(*)
+		SELECT s.user_id
+		FROM session_sources src
+		JOIN sessions s ON s.id = src.session_id
+		WHERE src.id = $1`, sourceID).Scan(&claimUserID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
+		fmt.Sprintf("usage-claims:%d", claimUserID)); err != nil {
+		return err
+	}
+	var crossSourceClaims, mismatchedCrossSourceClaims int64
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*), COUNT(*) FILTER (
+			WHERE candidate_observation.raw_usage_hash IS DISTINCT FROM claimed_observation.raw_usage_hash
+		)
 		FROM session_logical_usage_events e
 		JOIN session_metrics_revisions r ON r.id = e.revision_id
 		JOIN session_sources src ON src.id = r.source_id
 		JOIN sessions s ON s.id = src.session_id
+		JOIN session_usage_observations candidate_observation
+			ON candidate_observation.id = e.current_observation_id
 		JOIN session_usage_event_claims c
 			ON c.user_id = s.user_id AND c.provider = e.provider
 			AND c.provider_event_fingerprint = e.provider_event_fingerprint
-		WHERE e.revision_id = $1 AND c.active_source_id <> $2`, revisionID, sourceID).Scan(&crossSourceClaims); err != nil {
+		JOIN session_logical_usage_events claimed_event
+			ON claimed_event.id = c.active_logical_usage_event_id
+		JOIN session_usage_observations claimed_observation
+			ON claimed_observation.id = claimed_event.current_observation_id
+		WHERE e.revision_id = $1 AND c.active_source_id <> $2`, revisionID, sourceID).Scan(
+		&crossSourceClaims, &mismatchedCrossSourceClaims); err != nil {
 		return err
 	}
-	if crossSourceClaims > 0 {
+	if mismatchedCrossSourceClaims > 0 {
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE session_metrics_revisions
 			SET status = 'failed', quality_status = 'conflict', conflict_usage_event_count = conflict_usage_event_count + $2,
-				calculation_reason = 'provider event is already claimed by another source'
-			WHERE id = $1`, revisionID, crossSourceClaims); err != nil {
+				calculation_reason = 'provider event differs from the event claimed by another source'
+			WHERE id = $1`, revisionID, mismatchedCrossSourceClaims); err != nil {
 			return err
 		}
 		_, err := tx.ExecContext(ctx, `
 			UPDATE session_source_metrics_states
-			SET status = 'error', last_error = 'provider event claim conflict', updated_at = now()
+			SET status = 'error', last_error = 'provider event claim content conflict', updated_at = now()
 			WHERE source_id = $1`, sourceID)
 		return err
+	}
+	if crossSourceClaims > 0 {
+		if err := suppressClaimedUsageEvents(ctx, tx, revisionID, sourceID, claimUserID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE session_metrics_revisions
+			SET duplicate_usage_event_count = duplicate_usage_event_count + $2,
+				calculation_reason = format('suppressed %s usage events already claimed by another source', $2),
+				reconciliation_json = reconciliation_json || jsonb_build_object(
+					'cross_source_suppressed_events', $2::bigint,
+					'active_components', (
+						SELECT COUNT(*) FROM session_usage_components
+						WHERE revision_id = $1 AND valid_to IS NULL
+					)
+				)
+			WHERE id = $1`, revisionID, crossSourceClaims); err != nil {
+			return err
+		}
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO session_usage_event_claims (
@@ -976,6 +1017,42 @@ func (p *Processor) activateIfReady(ctx context.Context, tx *sql.Tx, revisionID,
 			status = 'ready', active_usage_parsed_cursor = $3,
 			source_high_water_cursor = $3, last_error = NULL, updated_at = now()
 		WHERE source_id = $1`, sourceID, revisionID, highWater, generationID)
+	return err
+}
+
+func suppressClaimedUsageEvents(
+	ctx context.Context,
+	tx *sql.Tx,
+	revisionID, sourceID string,
+	userID int64,
+) error {
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM session_usage_contributions contribution
+		WHERE contribution.revision_id = $1
+			AND EXISTS (
+				SELECT 1
+				FROM session_logical_usage_events event
+				JOIN session_usage_event_claims claim
+					ON claim.user_id = $2 AND claim.provider = event.provider
+					AND claim.provider_event_fingerprint = event.provider_event_fingerprint
+				WHERE event.id = contribution.logical_usage_event_id
+					AND event.revision_id = $1 AND claim.active_source_id <> $3
+			)`, revisionID, userID, sourceID); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `
+		UPDATE session_usage_components component
+		SET valid_to = now()
+		WHERE component.revision_id = $1 AND component.valid_to IS NULL
+			AND EXISTS (
+				SELECT 1
+				FROM session_logical_usage_events event
+				JOIN session_usage_event_claims claim
+					ON claim.user_id = $2 AND claim.provider = event.provider
+					AND claim.provider_event_fingerprint = event.provider_event_fingerprint
+				WHERE event.id = component.logical_usage_event_id
+					AND event.revision_id = $1 AND claim.active_source_id <> $3
+			)`, revisionID, userID, sourceID)
 	return err
 }
 
