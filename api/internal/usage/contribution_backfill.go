@@ -36,23 +36,19 @@ type ContributionBackfillReport struct {
 
 type ContributionRepairReport struct {
 	SourceID             string `json:"source_id"`
+	ArchivedRevisionID   string `json:"archived_revision_id"`
 	RevisionID           string `json:"revision_id"`
 	DeletedJobs          int64  `json:"deleted_jobs"`
 	DeletedClaims        int64  `json:"deleted_claims"`
-	DeletedComponents    int64  `json:"deleted_components"`
-	DeletedContributions int64  `json:"deleted_contributions"`
-	DeletedLogicalEvents int64  `json:"deleted_logical_events"`
-	DeletedObservations  int64  `json:"deleted_observations"`
-	DeletedCheckpoints   int64  `json:"deleted_checkpoints"`
-	DeletedDailyRows     int64  `json:"deleted_daily_rows"`
+	PreservedDerivedRows bool   `json:"preserved_derived_rows"`
 	EnqueuedJobs         int64  `json:"enqueued_jobs"`
 }
 
-// RepairFailedContributionRevision clears only the derived rows of one
-// quality-gated revision and queues the same source for a fresh parse. Raw
-// upload chunks remain untouched. It refuses to reset a revision referenced by
-// an active Rollup or Snapshot so an online aggregate can never be rewritten
-// underneath a reader.
+// RepairFailedContributionRevision archives one quality-gated revision and
+// queues a fresh revision for the same source. Raw upload chunks and the old
+// derived rows remain available for audit. It refuses to repair a revision
+// referenced by an active Rollup or Snapshot so an online aggregate can never
+// be rewritten underneath a reader.
 func RepairFailedContributionRevision(
 	ctx context.Context,
 	database *sql.DB,
@@ -69,7 +65,7 @@ func RepairFailedContributionRevision(
 	if _, err := tx.ExecContext(ctx, `SET LOCAL lock_timeout = '250ms'`); err != nil {
 		return ContributionRepairReport{}, err
 	}
-	if _, err := tx.ExecContext(ctx, `SET LOCAL statement_timeout = '10min'`); err != nil {
+	if _, err := tx.ExecContext(ctx, `SET LOCAL statement_timeout = '30s'`); err != nil {
 		return ContributionRepairReport{}, err
 	}
 
@@ -138,42 +134,16 @@ func RepairFailedContributionRevision(
 		`DELETE FROM session_usage_event_claims WHERE active_revision_id = $1`, report.RevisionID); err != nil {
 		return ContributionRepairReport{}, err
 	}
-	if report.DeletedComponents, err = deleteRows(
-		`DELETE FROM session_usage_components WHERE revision_id = $1`, report.RevisionID); err != nil {
-		return ContributionRepairReport{}, err
-	}
-	if report.DeletedContributions, err = deleteRows(
-		`DELETE FROM session_usage_contributions WHERE revision_id = $1`, report.RevisionID); err != nil {
-		return ContributionRepairReport{}, err
-	}
-	if report.DeletedLogicalEvents, err = deleteRows(
-		`DELETE FROM session_logical_usage_events WHERE revision_id = $1`, report.RevisionID); err != nil {
-		return ContributionRepairReport{}, err
-	}
-	if report.DeletedObservations, err = deleteRows(
-		`DELETE FROM session_usage_observations WHERE revision_id = $1`, report.RevisionID); err != nil {
-		return ContributionRepairReport{}, err
-	}
-	if report.DeletedCheckpoints, err = deleteRows(
-		`DELETE FROM session_parser_checkpoints WHERE revision_id = $1`, report.RevisionID); err != nil {
-		return ContributionRepairReport{}, err
-	}
-	if report.DeletedDailyRows, err = deleteRows(
-		`DELETE FROM session_daily_usage WHERE revision_id = $1`, report.RevisionID); err != nil {
-		return ContributionRepairReport{}, err
-	}
+	report.ArchivedRevisionID = report.RevisionID
+	report.PreservedDerivedRows = true
+	archivedNormalizerVersion := fmt.Sprintf(
+		"%s:superseded:%s", normalizerVersion, report.ArchivedRevisionID)
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE session_metrics_revisions
-		SET status = 'building', quality_status = 'exact',
-			build_start_cursor = 0, validated_through_cursor = 0,
-			source_high_water_cursor = $2, scanned_event_count = 0,
-			usage_observation_count = 0, usage_event_count = 0,
-			advanced_observation_count = 0, duplicate_usage_event_count = 0,
-			malformed_event_count = 0, unknown_usage_event_count = 0,
-			conflict_usage_event_count = 0, reconciliation_json = '{}'::jsonb,
-			calculation_reason = 'targeted repair after quality-gate review',
-			validated_at = NULL, activated_at = NULL, superseded_at = NULL
-		WHERE id = $1`, report.RevisionID, expectedCursor); err != nil {
+		SET status = 'superseded', superseded_at = now(),
+			normalizer_version = $2,
+			calculation_reason = 'quality-gated revision archived for targeted repair'
+		WHERE id = $1`, report.RevisionID, archivedNormalizerVersion); err != nil {
 		return ContributionRepairReport{}, err
 	}
 	if _, err := tx.ExecContext(ctx, `
@@ -182,6 +152,16 @@ func RepairFailedContributionRevision(
 			status = 'pending', active_usage_parsed_cursor = 0,
 			source_high_water_cursor = $3, last_error = NULL, updated_at = now()
 		WHERE source_id = $1`, sourceID, generationID, expectedCursor); err != nil {
+		return ContributionRepairReport{}, err
+	}
+	if err := tx.QueryRowContext(ctx, `
+		INSERT INTO session_metrics_revisions (
+			source_id, generation_id, parser_version, normalizer_version,
+			status, build_start_cursor, source_high_water_cursor, calculation_reason
+		) VALUES ($1, $2, $3, $4, 'building', 0, $5,
+			'targeted repair after quality-gate review')
+		RETURNING id`, sourceID, generationID, ParserVersion, normalizerVersion, expectedCursor).Scan(
+		&report.RevisionID); err != nil {
 		return ContributionRepairReport{}, err
 	}
 	base := time.Now().UTC()
