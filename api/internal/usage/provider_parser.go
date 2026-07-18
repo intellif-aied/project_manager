@@ -52,6 +52,8 @@ type TokenCounters struct {
 
 type ParseState struct {
 	PreviousCodexCounters *TokenCounters `json:"previous_codex_counters,omitempty"`
+	PreviousCodexModel    string         `json:"previous_codex_model,omitempty"`
+	CodexBaselineOnly     bool           `json:"codex_baseline_only,omitempty"`
 	ActiveModel           string         `json:"active_model,omitempty"`
 	CounterSegment        int64          `json:"counter_segment"`
 	RootMetadataSeen      bool           `json:"root_metadata_seen,omitempty"`
@@ -333,14 +335,37 @@ func parseCodexLine(
 		OutputTokens: *total.OutputTokens, ReasoningTokens: optionalInt64(total.ReasoningTokens),
 		TotalTokens: *total.TotalTokens,
 	}
+	var lastCounters TokenCounters
+	lastReady := false
 	if len(info.Last) > 0 {
 		var last codexTokenCounters
-		if json.Unmarshal(info.Last, &last) == nil && last.InputTokens != nil && *last.InputTokens >= 0 {
-			counters.RequestInputTokens = *last.InputTokens
+		if json.Unmarshal(info.Last, &last) == nil &&
+			last.InputTokens != nil && last.OutputTokens != nil && last.TotalTokens != nil &&
+			*last.InputTokens >= 0 && *last.OutputTokens >= 0 && *last.TotalTokens >= 0 {
+			lastCounters = TokenCounters{
+				InputTokens: *last.InputTokens, CachedInputTokens: optionalInt64(last.CachedInputTokens),
+				OutputTokens: *last.OutputTokens, ReasoningTokens: optionalInt64(last.ReasoningTokens),
+				TotalTokens: *last.TotalTokens,
+			}
+			if lastCounters.CachedInputTokens <= lastCounters.InputTokens &&
+				!countersHaveNegative(lastCounters) &&
+				lastCounters.TotalTokens == lastCounters.InputTokens+lastCounters.OutputTokens {
+				lastReady = true
+				counters.RequestInputTokens = *last.InputTokens
+			}
 		}
 	}
 	if countersHaveNegative(counters) || counters.CachedInputTokens > counters.InputTokens {
 		return UsageRecord{}, lineUnknownUsage
+	}
+	if counters.InputTokens == 0 && counters.OutputTokens == 0 && counters.TotalTokens > 0 && !lastReady {
+		// Codex emits a context-only initialization counter before it knows the
+		// model. It has no billable components; keep it as the cumulative
+		// baseline but do not turn it into a quality conflict or usage record.
+		state.PreviousCodexCounters = &counters
+		state.PreviousCodexModel = state.ActiveModel
+		state.CodexBaselineOnly = true
+		return UsageRecord{}, lineIgnored
 	}
 	if contextWindow := codexContextWindowTokens(state.ActiveModel); contextWindow > 0 &&
 		counters.TotalTokens-counters.InputTokens-counters.OutputTokens == contextWindow {
@@ -378,8 +403,21 @@ func parseCodexLine(
 	if state.PreviousCodexCounters != nil {
 		delta = subtractCounters(counters, *state.PreviousCodexCounters)
 		if countersHaveNegative(delta) {
-			quality = QualityConflict
-			reason = "cumulative token counters decreased without a verified reset boundary"
+			if state.CodexBaselineOnly {
+				delta = counters
+				quality = QualityEstimated
+				reason = "Codex initialization baseline reset; used the first billable counter"
+			} else if lastReady && (state.PreviousCodexModel == "" || state.PreviousCodexModel == state.ActiveModel) {
+				// A same-model counter reset can occur when Codex interleaves
+				// subagent streams. last_token_usage is the provider's per-request
+				// value and is safer than dropping the whole source.
+				delta = lastCounters
+				quality = QualityEstimated
+				reason = "Codex cumulative counter reset; used provider last_token_usage"
+			} else {
+				quality = QualityConflict
+				reason = "cumulative token counters decreased without a verified reset boundary"
+			}
 		}
 	}
 	if counters.TotalTokens != counters.InputTokens+counters.OutputTokens {
@@ -394,6 +432,8 @@ func parseCodexLine(
 		reason = "Codex fork inherited baseline was unavailable; the first observed cumulative counter was not billed"
 	}
 	state.PreviousCodexCounters = &counters
+	state.PreviousCodexModel = state.ActiveModel
+	state.CodexBaselineOnly = false
 	if delta.InputTokens == 0 && delta.CachedInputTokens == 0 && delta.OutputTokens == 0 && delta.TotalTokens == 0 {
 		return UsageRecord{}, lineIgnored
 	}
