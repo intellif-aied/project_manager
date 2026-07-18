@@ -15,6 +15,7 @@ import (
 
 	"github.com/aidashboard/api/config"
 	projectdb "github.com/aidashboard/api/db"
+	"github.com/aidashboard/api/internal/contentreader"
 	"github.com/aidashboard/api/internal/sessionsync"
 	"github.com/aidashboard/api/model"
 	"github.com/aidashboard/api/storage"
@@ -200,10 +201,30 @@ func TestSessionSyncHTTPEndToEndIntegration(t *testing.T) {
 
 	var sessionID string
 	if err := database.QueryRow(`
-		UPDATE sessions SET summary = 'must not remain readable', raw_log_url = $2
+		UPDATE sessions SET summary = 'must not remain readable', raw_log_url = NULL
 		WHERE user_id = $1 AND session_ref = 'http-e2e'
-		RETURNING id`, userID, objectKey).Scan(&sessionID); err != nil {
+		RETURNING id`, userID).Scan(&sessionID); err != nil {
 		t.Fatal(err)
+	}
+	sessionHandler := NewSessionHandler(database, store, nil)
+	contentReader, err := contentreader.New(database, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionHandler.ConfigureContentReader(contentReader)
+	readRouter := chi.NewRouter()
+	readRouter.Get("/api/v1/sessions/{id}", sessionHandler.Get)
+	readRouter.Get("/api/v1/sessions/{id}/log", sessionHandler.DownloadLog)
+	availableRecorder := httptest.NewRecorder()
+	readRouter.ServeHTTP(availableRecorder, requestWithUser(httptest.NewRequest(http.MethodGet, "/api/v1/sessions/"+sessionID, nil), user))
+	if availableRecorder.Code != http.StatusOK ||
+		!bytes.Contains(availableRecorder.Body.Bytes(), []byte(`"has_log_content":true`)) {
+		t.Fatalf("available get status=%d body=%s", availableRecorder.Code, availableRecorder.Body.String())
+	}
+	availableDownload := httptest.NewRecorder()
+	readRouter.ServeHTTP(availableDownload, requestWithUser(httptest.NewRequest(http.MethodGet, "/api/v1/sessions/"+sessionID+"/log", nil), user))
+	if availableDownload.Code != http.StatusOK || !bytes.Equal(availableDownload.Body.Bytes(), content) {
+		t.Fatalf("V2 download status=%d body=%s", availableDownload.Code, availableDownload.Body.String())
 	}
 	clearRouter := chi.NewRouter()
 	clearRouter.Post("/api/v1/sessions/{id}/clear-content", h.ClearContent)
@@ -217,10 +238,6 @@ func TestSessionSyncHTTPEndToEndIntegration(t *testing.T) {
 		t.Fatalf("clear status=%d body=%s", clearRecorder.Code, clearRecorder.Body.String())
 	}
 
-	sessionHandler := NewSessionHandler(database, store, nil)
-	readRouter := chi.NewRouter()
-	readRouter.Get("/api/v1/sessions/{id}", sessionHandler.Get)
-	readRouter.Get("/api/v1/sessions/{id}/log", sessionHandler.DownloadLog)
 	getRecorder := httptest.NewRecorder()
 	readRouter.ServeHTTP(getRecorder, requestWithUser(httptest.NewRequest(http.MethodGet, "/api/v1/sessions/"+sessionID, nil), user))
 	if getRecorder.Code != http.StatusOK || bytes.Contains(getRecorder.Body.Bytes(), []byte("must not remain readable")) ||

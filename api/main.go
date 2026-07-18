@@ -67,6 +67,7 @@ func main() {
 	reqH := handler.NewRequirementHandlerWithRecorder(database, aiClient, workItemEventRecorder)
 	taskH := handler.NewTaskHandlerWithRecorder(database, workItemEventRecorder)
 	sessionH := handler.NewSessionHandlerWithRecorder(database, minioStore, aiClient, workItemEventRecorder)
+	sessionH.ConfigureContentReader(sessionContentReader)
 	sessionSyncH, err := handler.NewSessionSyncHandler(database, minioStore)
 	if err != nil {
 		log.Fatalf("Failed to init session sync handler: %v", err)

@@ -414,7 +414,7 @@ export function ProductsPage() {
                 width: 140,
                 render: (_: unknown, s) => (
                   <Space>
-                    {s.raw_log_url ? (
+                    {s.has_log_content ? (
                       <Button size="small" onClick={() => handleDownload(s.id)}>
                         日志
                       </Button>
@@ -466,7 +466,7 @@ export function ProductsPage() {
                   />
                 </div>
                 <div className="products-page__mobile-actions">
-                  {session.raw_log_url ? <Button onClick={() => handleDownload(session.id)}>下载日志</Button> : <span />}
+                  {session.has_log_content ? <Button onClick={() => handleDownload(session.id)}>下载日志</Button> : <span />}
                   <Popconfirm title="撤回此 AI 工作记录？" okText="撤回" okButtonProps={{ danger: true }} cancelText="取消" onConfirm={() => void handleWithdraw(session.id)}>
                     <Button danger loading={pendingWithdrawId === session.id} disabled={pendingWithdrawId === session.id}>撤回</Button>
                   </Popconfirm>

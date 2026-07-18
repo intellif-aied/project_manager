@@ -168,6 +168,7 @@ func (r *Reader) Stream(
 			request.ValidationMode == ValidationIndexedRange,
 			fallback,
 			visit,
+			nil,
 		)
 		if err != nil {
 			return Result{}, err
@@ -198,6 +199,7 @@ func (r *Reader) Stream(
 				request.ValidationMode == ValidationIndexedRange,
 				fallback,
 				visit,
+				nil,
 			)
 			if err != nil {
 				return Result{}, err
@@ -205,6 +207,87 @@ func (r *Reader) Stream(
 			result.MalformedEventCount += scanResult.MalformedEventCount
 			result.ObjectCount++
 		}
+	}
+	if err := matcher.finish(); err != nil {
+		return Result{}, err
+	}
+	return result, nil
+}
+
+// WriteRaw validates and writes every V2 chunk in a complete projection revision.
+// It preserves the original JSONL bytes and never reads event payloads from PostgreSQL.
+func (r *Reader) WriteRaw(
+	ctx context.Context,
+	revisionID string,
+	output io.Writer,
+) (result Result, returnedErr error) {
+	revisionID = strings.TrimSpace(revisionID)
+	if revisionID == "" || output == nil {
+		return Result{}, ErrInvalidRequest
+	}
+	if err := ctx.Err(); err != nil {
+		return Result{}, err
+	}
+	target, err := r.repository.resolveTarget(ctx, revisionID)
+	if err != nil {
+		return Result{}, err
+	}
+	endCursor := target.ContentIndexedCursor
+	request := Request{RevisionID: revisionID, StartCursor: 0, EndCursor: endCursor}
+	if endCursor <= 0 || target.BuildStartCursor != 0 {
+		return Result{}, fmt.Errorf("%w: revision %s is not a complete V2 source", ErrRevisionUnavailable, revisionID)
+	}
+	if err := validateTarget(target, request); err != nil {
+		return Result{}, err
+	}
+	chunks, err := r.repository.listChunks(ctx, target.GenerationID, 0, endCursor)
+	if err != nil {
+		return Result{}, err
+	}
+	if len(chunks) == 0 {
+		return Result{}, fmt.Errorf("%w: revision %s has no V2 chunks", ErrObjectUnavailable, revisionID)
+	}
+	if err := validateChunkCoverage(chunks, 0, endCursor); err != nil {
+		return Result{}, err
+	}
+	expected, err := r.repository.expectedEvents(ctx, revisionID, 0, endCursor)
+	if err != nil {
+		return Result{}, err
+	}
+	defer func() {
+		if closeErr := expected.Close(); returnedErr == nil && closeErr != nil {
+			returnedErr = closeErr
+		}
+	}()
+	matcher := expectedMatcher{iterator: expected}
+	result = Result{StartCursor: 0, EndCursor: endCursor}
+	visit := func(event Event) error {
+		if err := matcher.match(event); err != nil {
+			return err
+		}
+		result.EventCount++
+		return nil
+	}
+	for _, chunk := range chunks {
+		fallback := nullableTime(chunk.EventStartAt)
+		scanResult, err := r.scanObject(
+			ctx,
+			chunk.ObjectKey,
+			chunk.StartCursor,
+			chunk.EndCursor,
+			chunk.ContentSHA256,
+			chunk.StartCursor,
+			chunk.EndCursor,
+			false,
+			fallback,
+			visit,
+			output,
+		)
+		if err != nil {
+			return Result{}, err
+		}
+		result.MalformedEventCount += scanResult.MalformedEventCount
+		result.ObjectCount++
 	}
 	if err := matcher.finish(); err != nil {
 		return Result{}, err
@@ -289,6 +372,7 @@ func (r *Reader) scanObject(
 	useIndexedRange bool,
 	fallbackTime *time.Time,
 	visit func(Event) error,
+	copyTo io.Writer,
 ) (sessionsync.ContentScanResult, error) {
 	object, err := r.store.Download(ctx, objectKey)
 	if err != nil {
@@ -319,6 +403,9 @@ func (r *Reader) scanObject(
 		}
 	}
 	hasher := sha256.New()
+	if copyTo != nil {
+		input = io.TeeReader(input, copyTo)
+	}
 	if verifySHA256 != "" {
 		input = io.TeeReader(input, hasher)
 	}

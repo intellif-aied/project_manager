@@ -276,6 +276,41 @@ func TestReaderIndexedRangeSeeksAndReadsOnlyRequestedBytes(t *testing.T) {
 	}
 }
 
+func TestReaderWritesRawV2ChunksWithNullPayloadIndex(t *testing.T) {
+	first := []byte("{\"type\":\"user\",\"timestamp\":\"2026-07-18T01:00:00Z\",\"payload\":{\"message\":\"first\"}}\n")
+	second := []byte("{\"type\":\"assistant\",\"timestamp\":\"2026-07-18T01:00:01Z\",\"payload\":{\"message\":\"second\"}}\n")
+	firstEvents := parseEvents(t, first, 0)
+	secondEvents := parseEvents(t, second, int64(len(first)))
+	end := int64(len(first) + len(second))
+	repository := &fakeRepository{
+		target: availableTarget(end),
+		chunks: []contentChunk{
+			{
+				ID: "chunk-1", StartCursor: 0, EndCursor: int64(len(first)),
+				ContentSHA256: sessionsync.HashBytes(first), ObjectKey: "first.jsonl", ObjectStatus: "available",
+			},
+			{
+				ID: "chunk-2", StartCursor: int64(len(first)), EndCursor: end,
+				ContentSHA256: sessionsync.HashBytes(second), ObjectKey: "second.jsonl", ObjectStatus: "available",
+			},
+		},
+		expected: append(expectedFrom(firstEvents), expectedFrom(secondEvents)...),
+	}
+	reader := mustReader(t, repository, memoryObjectStore{
+		"first.jsonl": first, "second.jsonl": second,
+	})
+	var output bytes.Buffer
+	result, err := reader.WriteRaw(context.Background(), "revision-1", &output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := append(append([]byte{}, first...), second...)
+	if !bytes.Equal(output.Bytes(), want) || result.EventCount != 2 || result.ObjectCount != 2 ||
+		result.StartCursor != 0 || result.EndCursor != end {
+		t.Fatalf("output=%q result=%+v", output.Bytes(), result)
+	}
+}
+
 func TestReaderRejectsUnknownValidationMode(t *testing.T) {
 	reader := mustReader(t, &fakeRepository{}, memoryObjectStore{})
 	_, err := reader.Stream(context.Background(), Request{
