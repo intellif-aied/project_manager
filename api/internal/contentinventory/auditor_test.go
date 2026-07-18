@@ -74,7 +74,7 @@ func TestAuditorPlanAndBoundedScan(t *testing.T) {
 	}
 	report, err := auditor.Run(context.Background(), Options{
 		Action: ActionScan, SnapshotThroughID: repository.through,
-		Limit: 3, PerRevisionTimeout: time.Second,
+		Limit: 3, MaxBytes: 100, PerRevisionTimeout: time.Second,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -82,7 +82,8 @@ func TestAuditorPlanAndBoundedScan(t *testing.T) {
 	if report.Complete || report.SelectedRevisions != 3 || report.SucceededRevisions != 2 ||
 		report.EmptyRevisions != 1 || report.FailedRevisions != 1 ||
 		report.ValidatedObjects != 2 || report.ValidatedEvents != 3 ||
-		report.ValidatedBytes != 20 || report.NextAfterRevisionID != "r3" {
+		report.ValidatedBytes != 20 || report.AttemptedBytes != 50 ||
+		report.NextAfterRevisionID != "r3" {
 		t.Fatalf("scan=%+v", report)
 	}
 	if len(reader.calls) != 2 || reader.calls[0] != "r1" || reader.calls[1] != "r3" {
@@ -98,11 +99,13 @@ func TestInventoryOptionsStayBounded(t *testing.T) {
 	}{
 		{name: "plan", options: Options{Action: ActionPlan}},
 		{name: "plan scan options", options: Options{Action: ActionPlan, Limit: 1}, wantErr: true},
-		{name: "scan no snapshot", options: Options{Action: ActionScan, Limit: 1, PerRevisionTimeout: time.Second}, wantErr: true},
-		{name: "scan unbounded", options: Options{Action: ActionScan, SnapshotThroughID: "id", Limit: MaximumRevisionsPerRun + 1, PerRevisionTimeout: time.Second}, wantErr: true},
-		{name: "scan bounded", options: Options{Action: ActionScan, SnapshotThroughID: "id", Limit: 1, PerRevisionTimeout: time.Second}},
-		{name: "single retry", options: Options{Action: ActionScan, OnlyRevisionID: "id", PerRevisionTimeout: time.Second}},
-		{name: "single retry mixed", options: Options{Action: ActionScan, OnlyRevisionID: "id", Limit: 1, PerRevisionTimeout: time.Second}, wantErr: true},
+		{name: "scan no snapshot", options: Options{Action: ActionScan, Limit: 1, MaxBytes: 1, PerRevisionTimeout: time.Second}, wantErr: true},
+		{name: "scan unbounded", options: Options{Action: ActionScan, SnapshotThroughID: "id", Limit: MaximumRevisionsPerRun + 1, MaxBytes: 1, PerRevisionTimeout: time.Second}, wantErr: true},
+		{name: "scan no byte budget", options: Options{Action: ActionScan, SnapshotThroughID: "id", Limit: 1, PerRevisionTimeout: time.Second}, wantErr: true},
+		{name: "scan byte budget too large", options: Options{Action: ActionScan, SnapshotThroughID: "id", Limit: 1, MaxBytes: MaximumBytesPerRun + 1, PerRevisionTimeout: time.Second}, wantErr: true},
+		{name: "scan bounded", options: Options{Action: ActionScan, SnapshotThroughID: "id", Limit: 1, MaxBytes: 1, PerRevisionTimeout: time.Second}},
+		{name: "single retry", options: Options{Action: ActionScan, OnlyRevisionID: "id", MaxBytes: 1, PerRevisionTimeout: time.Second}},
+		{name: "single retry mixed", options: Options{Action: ActionScan, OnlyRevisionID: "id", Limit: 1, MaxBytes: 1, PerRevisionTimeout: time.Second}, wantErr: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -111,5 +114,29 @@ func TestInventoryOptionsStayBounded(t *testing.T) {
 				t.Fatalf("validate error=%v wantErr=%v", err, test.wantErr)
 			}
 		})
+	}
+}
+
+func TestAuditorStopsBeforeByteBudgetAndKeepsCursor(t *testing.T) {
+	repository := &fakeRepository{
+		through: "snapshot",
+		items:   []candidate{{RevisionID: "too-large", StartCursor: 0, EndCursor: 101}},
+	}
+	reader := &fakeReader{results: map[string]contentreader.Result{}, errors: map[string]error{}}
+	auditor, err := newAuditor(repository, reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := auditor.Run(context.Background(), Options{
+		Action: ActionScan, SnapshotThroughID: "snapshot", Limit: 1,
+		MaxBytes: 100, PerRevisionTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Complete || !report.ByteBudgetExhausted ||
+		report.BudgetBlockedRevisionID != "too-large" || report.NextAfterRevisionID != "" ||
+		report.SelectedRevisions != 0 || report.AttemptedBytes != 0 || len(reader.calls) != 0 {
+		t.Fatalf("budget report=%+v calls=%v", report, reader.calls)
 	}
 }

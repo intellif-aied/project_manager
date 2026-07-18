@@ -23,6 +23,8 @@ func main() {
 	onlyRevision := flag.String("revision-id", "", "retry exactly one failed eligible revision")
 	limit := flag.Int("limit", 0,
 		fmt.Sprintf("revisions in this invocation (maximum %d)", contentinventory.MaximumRevisionsPerRun))
+	maxBytes := flag.Int64("max-bytes", 1<<30,
+		fmt.Sprintf("maximum indexed bytes in this invocation (hard maximum %d)", contentinventory.MaximumBytesPerRun))
 	perRevisionTimeout := flag.Duration("per-revision-timeout", 5*time.Minute, "timeout for one revision object validation")
 	timeout := flag.Duration("timeout", 30*time.Minute, "overall command timeout")
 	flag.Parse()
@@ -56,6 +58,7 @@ func main() {
 	}
 	if options.Action == contentinventory.ActionScan {
 		options.PerRevisionTimeout = *perRevisionTimeout
+		options.MaxBytes = *maxBytes
 	}
 	report, err := auditor.Run(ctx, options)
 	if err != nil {

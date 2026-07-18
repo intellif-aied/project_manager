@@ -75,25 +75,37 @@ func (a *Auditor) Run(ctx context.Context, options Options) (Report, error) {
 
 	report := Report{
 		Action: ActionScan, SnapshotThroughID: options.SnapshotThroughID,
-		AfterRevisionID: options.AfterRevisionID, SelectedRevisions: len(candidates),
+		AfterRevisionID: options.AfterRevisionID, MaxBytes: options.MaxBytes,
 		Complete: !hasMore,
 	}
 	for _, item := range candidates {
 		if err := ctx.Err(); err != nil {
 			return Report{}, err
 		}
-		report.NextAfterRevisionID = item.RevisionID
 		if item.StartCursor < 0 || item.EndCursor < item.StartCursor {
+			report.SelectedRevisions++
+			report.NextAfterRevisionID = item.RevisionID
 			report.addFailure(item.RevisionID, fmt.Errorf(
 				"invalid indexed range [%d,%d)", item.StartCursor, item.EndCursor,
 			))
 			continue
 		}
 		if item.EndCursor == item.StartCursor {
+			report.SelectedRevisions++
+			report.NextAfterRevisionID = item.RevisionID
 			report.EmptyRevisions++
 			report.SucceededRevisions++
 			continue
 		}
+		revisionBytes := item.EndCursor - item.StartCursor
+		if revisionBytes > options.MaxBytes-report.AttemptedBytes {
+			report.ByteBudgetExhausted = true
+			report.BudgetBlockedRevisionID = item.RevisionID
+			break
+		}
+		report.SelectedRevisions++
+		report.NextAfterRevisionID = item.RevisionID
+		report.AttemptedBytes += revisionBytes
 		revisionCtx, cancel := context.WithTimeout(ctx, options.PerRevisionTimeout)
 		result, err := a.reader.Stream(revisionCtx, contentreader.Request{
 			RevisionID:  item.RevisionID,
@@ -108,9 +120,9 @@ func (a *Auditor) Run(ctx context.Context, options Options) (Report, error) {
 		report.SucceededRevisions++
 		report.ValidatedObjects += int64(result.ObjectCount)
 		report.ValidatedEvents += result.EventCount
-		report.ValidatedBytes += item.EndCursor - item.StartCursor
+		report.ValidatedBytes += revisionBytes
 	}
-	report.Complete = !hasMore && report.FailedRevisions == 0
+	report.Complete = !hasMore && !report.ByteBudgetExhausted && report.FailedRevisions == 0
 	return report, nil
 }
 

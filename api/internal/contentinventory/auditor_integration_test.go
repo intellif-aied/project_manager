@@ -69,7 +69,7 @@ func TestAuditorPostgresReaderIntegration(t *testing.T) {
 	}
 	report, err := auditor.Run(ctx, Options{
 		Action: ActionScan, SnapshotThroughID: plan.SnapshotThroughID,
-		Limit: 1, PerRevisionTimeout: time.Second,
+		Limit: 1, MaxBytes: int64(len(content)) * 2, PerRevisionTimeout: time.Second,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -82,7 +82,8 @@ func TestAuditorPostgresReaderIntegration(t *testing.T) {
 
 	store["inventory/chunk.jsonl"] = []byte("corrupt\n")
 	retry, err := auditor.Run(ctx, Options{
-		Action: ActionScan, OnlyRevisionID: revisionID, PerRevisionTimeout: time.Second,
+		Action: ActionScan, OnlyRevisionID: revisionID,
+		MaxBytes: int64(len(content)) * 2, PerRevisionTimeout: time.Second,
 	})
 	if err != nil {
 		t.Fatal(err)
