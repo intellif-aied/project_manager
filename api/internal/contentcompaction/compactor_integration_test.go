@@ -122,8 +122,9 @@ func TestCompactorBoundedCopyMirrorCutoverRollbackAndFinalizeIntegration(t *test
 	mirroredInsert := fixture.insertSourceEvent(t, database, "mirrored-insert")
 	var deletedID string
 	if err := database.QueryRow(`
-		SELECT id::text FROM session_content_events WHERE id <> $1 ORDER BY id LIMIT 1`,
-		duringCopyInsert).Scan(&deletedID); err != nil {
+		SELECT id::text FROM session_content_events
+		WHERE id <> $1 AND id <> $2 AND id <> $3
+		ORDER BY id LIMIT 1`, duringCopyInsert, preMirrorMissing, mirroredInsert).Scan(&deletedID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := database.Exec(`DELETE FROM session_content_events WHERE id = $1`, deletedID); err != nil {
