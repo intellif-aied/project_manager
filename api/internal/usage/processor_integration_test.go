@@ -72,6 +72,10 @@ func TestProcessorClaudeFoldAndActivationIntegration(t *testing.T) {
 			status, quality, parsedCursor, observations, events, advances, duplicates)
 	}
 	assertDailyUsage(t, database, fixture.sessionID, 2, 250, "estimated", 1)
+	assertContributionLedger(t, database, fixture.sessionID, 3, 250, map[string]int64{
+		contributionInitial: 2, contributionAdvance: 1,
+	}, []int64{190, 60})
+	assertActiveFamilyRollup(t, database, fixture.sessionID, 250, 250, 0, 2)
 }
 
 func TestProcessorCodexCumulativeAcrossChunksIntegration(t *testing.T) {
@@ -80,7 +84,8 @@ func TestProcessorCodexCumulativeAcrossChunksIntegration(t *testing.T) {
 	defer fixture.cleanup(t)
 	content := readUsageFixture(t, "codex_cumulative.jsonl")
 	lines := completeLines(content)
-	fixture.appendChunk(t, bytes.Join(lines[:3], nil))
+	firstChunk := bytes.Join(lines[:3], nil)
+	fixture.appendChunk(t, firstChunk)
 	fixture.appendChunk(t, bytes.Join(lines[3:], nil))
 	processor, _ := NewProcessor(database, fixture.store, "")
 	for _, job := range fixture.jobs {
@@ -99,6 +104,307 @@ func TestProcessorCodexCumulativeAcrossChunksIntegration(t *testing.T) {
 		t.Fatalf("status=%s quality=%s events=%d", status, quality, events)
 	}
 	assertDailyUsage(t, database, fixture.sessionID, 2, 220, "estimated", 2)
+	assertContributionLedger(t, database, fixture.sessionID, 2, 220, map[string]int64{
+		contributionCheckpointDelta: 2,
+	}, []int64{120, 100})
+	assertActiveFamilyRollup(t, database, fixture.sessionID, 220, 220, 0, 2)
+	if _, err := database.Exec(`
+		INSERT INTO session_processing_jobs (job_type, session_id, content_epoch, payload)
+		SELECT 'purge_session', $1, 0, jsonb_build_object('test_job', sequence)
+		FROM generate_series(1, $2) sequence`, fixture.sessionID, contributionBackfillMaxOutstandingJobs); err != nil {
+		t.Fatal(err)
+	}
+	if busy, err := ContributionBackfillForegroundBusy(context.Background(), database); err != nil || !busy {
+		t.Fatalf("backfill queue pressure busy=%t err=%v", busy, err)
+	}
+}
+
+func TestProcessorLateParentMergesSessionFamilyRollupIntegration(t *testing.T) {
+	database := openUsageIntegrationDatabase(t)
+	const userID = int64(990035)
+	cleanupUsageUser(t, database, userID)
+	if _, err := database.Exec(`INSERT INTO users (id, username) VALUES ($1, $2)`, userID, "usage-family-late-parent"); err != nil {
+		t.Fatal(err)
+	}
+	defer cleanupUsageUser(t, database, userID)
+
+	child := newUsageFixtureForExistingUser(t, database, userID, "usage-family-child", "claude-code")
+	if _, err := database.Exec(`UPDATE sessions SET parent_session_ref = 'usage-family-root' WHERE id = $1`, child.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	content := readUsageFixture(t, "claude_monotonic.jsonl")
+	child.appendChunk(t, content)
+	childProcessor, _ := NewProcessor(database, child.store, "5m")
+	if err := childProcessor.Process(context.Background(), child.jobs[0]); err != nil {
+		t.Fatal(err)
+	}
+	var childFamilyQuality string
+	if err := database.QueryRow(`
+		SELECT family.quality_status
+		FROM session_family_versions family
+		JOIN session_family_memberships membership ON membership.family_version_id = family.id
+		WHERE membership.member_session_id = $1 AND membership.valid_to IS NULL
+			AND family.status = 'active'`, child.sessionID).Scan(&childFamilyQuality); err != nil {
+		t.Fatal(err)
+	}
+	if childFamilyQuality != "pending" {
+		t.Fatalf("child family quality before parent=%s want=pending", childFamilyQuality)
+	}
+
+	root := newUsageFixtureForExistingUser(t, database, userID, "usage-family-root", "claude-code")
+	root.appendChunk(t, bytes.ReplaceAll(content, []byte("msg-"), []byte("root-msg-")))
+	rootProcessor, _ := NewProcessor(database, root.store, "5m")
+	if err := rootProcessor.Process(context.Background(), root.jobs[0]); err != nil {
+		t.Fatal(err)
+	}
+
+	var memberCount, childDepth int64
+	var activeFamilyQuality string
+	if err := database.QueryRow(`
+		SELECT family.member_count, family.quality_status,
+			MAX(membership.depth) FILTER (WHERE membership.member_session_id = $2)
+		FROM session_family_versions family
+		JOIN session_family_memberships membership ON membership.family_version_id = family.id
+		WHERE family.root_session_id = $1 AND family.status = 'active'
+		GROUP BY family.member_count, family.quality_status`, root.sessionID, child.sessionID).Scan(
+		&memberCount, &activeFamilyQuality, &childDepth); err != nil {
+		t.Fatal(err)
+	}
+	if memberCount != 2 || childDepth != 1 || activeFamilyQuality != "exact" {
+		t.Fatalf("family members=%d childDepth=%d quality=%s", memberCount, childDepth, activeFamilyQuality)
+	}
+	assertActiveFamilyRollup(t, database, root.sessionID, 500, 250, 250, 2)
+
+	var activeChildRoot string
+	if err := database.QueryRow(`
+		SELECT membership.root_session_id::text
+		FROM session_family_memberships membership
+		JOIN session_family_versions family ON family.id = membership.family_version_id
+		WHERE membership.member_session_id = $1 AND membership.valid_to IS NULL
+			AND family.status = 'active'`, child.sessionID).Scan(&activeChildRoot); err != nil {
+		t.Fatal(err)
+	}
+	if activeChildRoot != root.sessionID {
+		t.Fatalf("child root=%s want=%s", activeChildRoot, root.sessionID)
+	}
+}
+
+func TestProcessorFamilyBackfillExcludesLegacyParserRevisionIntegration(t *testing.T) {
+	database := openUsageIntegrationDatabase(t)
+	const userID = int64(990037)
+	cleanupUsageUser(t, database, userID)
+	if _, err := database.Exec(`INSERT INTO users (id, username) VALUES ($1, $2)`, userID, "usage-family-mixed-parser"); err != nil {
+		t.Fatal(err)
+	}
+	defer cleanupUsageUser(t, database, userID)
+
+	content := readUsageFixture(t, "claude_monotonic.jsonl")
+	root := newUsageFixtureForExistingUser(t, database, userID, "usage-family-mixed-root", "claude-code")
+	root.appendChunk(t, content)
+	rootProcessor, _ := NewProcessor(database, root.store, "5m")
+	if err := rootProcessor.Process(context.Background(), root.jobs[0]); err != nil {
+		t.Fatal(err)
+	}
+	rootRevisionID := activeMetricsRevision(t, database, root.sourceID)
+	if _, err := database.Exec(`DELETE FROM session_usage_contributions WHERE revision_id = $1`, rootRevisionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`UPDATE session_metrics_revisions SET parser_version = 'usage-parser-v4' WHERE id = $1`, rootRevisionID); err != nil {
+		t.Fatal(err)
+	}
+
+	child := newUsageFixtureForExistingUser(t, database, userID, "usage-family-mixed-child", "claude-code")
+	if _, err := database.Exec(`UPDATE sessions SET parent_session_ref = 'usage-family-mixed-root' WHERE id = $1`, child.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	child.appendChunk(t, bytes.ReplaceAll(content, []byte("msg-"), []byte("child-msg-")))
+	childProcessor, _ := NewProcessor(database, child.store, "5m")
+	if err := childProcessor.Process(context.Background(), child.jobs[0]); err != nil {
+		t.Fatal(err)
+	}
+	assertActiveFamilyRollup(t, database, root.sessionID, 250, 0, 250, 2)
+}
+
+func TestContributionBackfillEnqueuesVersionedJobsInCursorOrderIntegration(t *testing.T) {
+	database := openUsageIntegrationDatabase(t)
+	fixture := newUsageFixture(t, database, 990036, "usage-contribution-backfill", "codex")
+	defer fixture.cleanup(t)
+	content := readUsageFixture(t, "codex_cumulative.jsonl")
+	lines := completeLines(content)
+	firstChunk := bytes.Join(lines[:3], nil)
+	fixture.appendChunk(t, firstChunk)
+	fixture.appendChunk(t, bytes.Join(lines[3:], nil))
+
+	var oldRevisionID string
+	if err := database.QueryRow(`
+		INSERT INTO session_metrics_revisions (
+			source_id, generation_id, parser_version, normalizer_version,
+			status, validated_through_cursor, source_high_water_cursor,
+			validated_at, activated_at
+		) VALUES ($1, $2, 'usage-parser-v4', 'token-normalizer-v1:claude-cache-write-5m',
+			'active', $3, $3, now(), now())
+		RETURNING id`, fixture.sourceID, fixture.generationID, fixture.cursor).Scan(&oldRevisionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`
+		INSERT INTO session_source_metrics_states (
+			source_id, active_revision_id, target_generation_id, status,
+			active_usage_parsed_cursor, source_high_water_cursor
+		) VALUES ($1, $2, $3, 'ready', $4, $4)`, fixture.sourceID,
+		oldRevisionID, fixture.generationID, fixture.cursor); err != nil {
+		t.Fatal(err)
+	}
+	normalizerVersion, _ := NormalizerRevision("5m")
+	before, err := InspectContributionBackfill(context.Background(), database, normalizerVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.EligibleSources < 1 || before.MissingRevisions < 1 {
+		t.Fatalf("before=%+v", before)
+	}
+	added, err := enqueueOneContributionBackfill(context.Background(), database, normalizerVersion, fixture.sourceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !added {
+		t.Fatal("target contribution backfill was not enqueued")
+	}
+	if again, err := enqueueOneContributionBackfill(context.Background(), database, normalizerVersion, fixture.sourceID); err != nil || again {
+		t.Fatalf("idempotent enqueue=%t err=%v", again, err)
+	}
+	var failedJobID string
+	if err := database.QueryRow(`
+		SELECT job.id::text
+		FROM session_processing_jobs job
+		JOIN session_upload_chunks chunk ON chunk.id = job.chunk_id
+		JOIN session_metrics_revisions revision ON revision.id = job.target_metrics_revision_id
+		WHERE revision.generation_id = $1 AND revision.parser_version = $2
+			AND job.job_type = 'parse_usage_chunk'
+		ORDER BY chunk.start_cursor DESC LIMIT 1`, fixture.generationID, ParserVersion).Scan(&failedJobID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`
+		UPDATE session_processing_jobs
+		SET status = 'dead', attempts = max_attempts, last_error = 'simulated old-code failure'
+		WHERE id = $1`, failedJobID); err != nil {
+		t.Fatal(err)
+	}
+	if recovered, err := enqueueOneContributionBackfill(context.Background(), database, normalizerVersion, fixture.sourceID); err != nil || !recovered {
+		t.Fatalf("recover dead backfill job=%t err=%v", recovered, err)
+	}
+	var recoveredStatus string
+	var recoveredAttempts int
+	var recoveredError sql.NullString
+	if err := database.QueryRow(`
+		SELECT status, attempts, last_error FROM session_processing_jobs WHERE id = $1`, failedJobID).Scan(
+		&recoveredStatus, &recoveredAttempts, &recoveredError); err != nil {
+		t.Fatal(err)
+	}
+	if recoveredStatus != "pending" || recoveredAttempts != 0 || recoveredError.Valid {
+		t.Fatalf("recovered job status=%s attempts=%d error=%v", recoveredStatus, recoveredAttempts, recoveredError)
+	}
+	if again, err := enqueueOneContributionBackfill(context.Background(), database, normalizerVersion, fixture.sourceID); err != nil || again {
+		t.Fatalf("post-recovery idempotent enqueue=%t err=%v", again, err)
+	}
+
+	rows, err := database.Query(`
+		SELECT job.job_type, COALESCE(chunk.start_cursor, -1)
+		FROM session_processing_jobs job
+		LEFT JOIN session_upload_chunks chunk ON chunk.id = job.chunk_id
+		JOIN session_metrics_revisions revision ON revision.id = job.target_metrics_revision_id
+		WHERE revision.generation_id = $1 AND revision.parser_version = $2
+		ORDER BY job.created_at, job.id`, fixture.generationID, ParserVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	types := []string{}
+	cursors := []int64{}
+	for rows.Next() {
+		var jobType string
+		var cursor int64
+		if err := rows.Scan(&jobType, &cursor); err != nil {
+			t.Fatal(err)
+		}
+		types = append(types, jobType)
+		cursors = append(cursors, cursor)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(types) != "[parse_usage_chunk parse_usage_chunk rebuild_metrics_revision]" ||
+		fmt.Sprint(cursors) != fmt.Sprintf("[0 %d -1]", len(firstChunk)) {
+		t.Fatalf("jobs types=%v cursors=%v", types, cursors)
+	}
+	var targetRevisionID string
+	if err := database.QueryRow(`
+		SELECT id::text FROM session_metrics_revisions
+		WHERE generation_id = $1 AND parser_version = $2 AND normalizer_version = $3`,
+		fixture.generationID, ParserVersion, normalizerVersion).Scan(&targetRevisionID); err != nil {
+		t.Fatal(err)
+	}
+	processor, _ := NewProcessor(database, fixture.store, "5m")
+	firstJob := fixture.jobs[0]
+	firstJob.TargetMetricsRevisionID = sql.NullString{String: targetRevisionID, Valid: true}
+	if err := processor.Process(context.Background(), firstJob); err != nil {
+		t.Fatal(err)
+	}
+	var visibleRevisionID, visibleStatus string
+	if err := database.QueryRow(`
+		SELECT active_revision_id::text, status
+		FROM session_source_metrics_states WHERE source_id = $1`, fixture.sourceID).Scan(
+		&visibleRevisionID, &visibleStatus); err != nil {
+		t.Fatal(err)
+	}
+	if visibleRevisionID != oldRevisionID || visibleStatus != "ready" {
+		t.Fatalf("partial rebuild exposed revision=%s status=%s want old=%s/ready",
+			visibleRevisionID, visibleStatus, oldRevisionID)
+	}
+	secondJob := fixture.jobs[1]
+	secondJob.TargetMetricsRevisionID = sql.NullString{String: targetRevisionID, Valid: true}
+	if err := processor.Process(context.Background(), secondJob); err != nil {
+		t.Fatal(err)
+	}
+	if got := activeMetricsRevision(t, database, fixture.sourceID); got != targetRevisionID {
+		t.Fatalf("active revision=%s want=%s", got, targetRevisionID)
+	}
+	assertContributionLedger(t, database, fixture.sessionID, 2, 220, map[string]int64{
+		contributionCheckpointDelta: 2,
+	}, []int64{120, 100})
+	assertActiveFamilyRollup(t, database, fixture.sessionID, 220, 220, 0, 2)
+}
+
+func TestContributionBackfillBuildsSourceWithoutLegacyMetricsStateIntegration(t *testing.T) {
+	database := openUsageIntegrationDatabase(t)
+	fixture := newUsageFixture(t, database, 990038, "usage-contribution-no-legacy-state", "claude-code")
+	defer fixture.cleanup(t)
+	content := readUsageFixture(t, "claude_monotonic.jsonl")
+	fixture.appendChunk(t, content)
+
+	normalizerVersion, _ := NormalizerRevision("5m")
+	added, err := enqueueOneContributionBackfill(context.Background(), database, normalizerVersion, fixture.sourceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !added {
+		t.Fatal("source without a legacy metrics state was not enqueued")
+	}
+	var targetRevisionID string
+	if err := database.QueryRow(`
+		SELECT id::text FROM session_metrics_revisions
+		WHERE generation_id = $1 AND parser_version = $2 AND normalizer_version = $3`,
+		fixture.generationID, ParserVersion, normalizerVersion).Scan(&targetRevisionID); err != nil {
+		t.Fatal(err)
+	}
+	job := fixture.jobs[0]
+	job.TargetMetricsRevisionID = sql.NullString{String: targetRevisionID, Valid: true}
+	processor, _ := NewProcessor(database, fixture.store, "5m")
+	if err := processor.Process(context.Background(), job); err != nil {
+		t.Fatal(err)
+	}
+	if got := activeMetricsRevision(t, database, fixture.sourceID); got != targetRevisionID {
+		t.Fatalf("active revision=%s want=%s", got, targetRevisionID)
+	}
 }
 
 func TestProcessorNewNormalizerQueuesPrefixRebuildIntegration(t *testing.T) {
@@ -759,6 +1065,143 @@ func assertDailyUsage(t *testing.T, database *sql.DB, sessionID string, wantRows
 	}
 	if rows != wantRows || total != wantTotal || qualities != wantQualityRows {
 		t.Fatalf("daily rows=%d total=%d quality rows=%d", rows, total, qualities)
+	}
+}
+
+func assertContributionLedger(
+	t *testing.T,
+	database *sql.DB,
+	sessionID string,
+	wantCount, wantTotal int64,
+	wantKinds map[string]int64,
+	wantChunkTotals []int64,
+) {
+	t.Helper()
+	var count, total, linkedObservations int64
+	if err := database.QueryRow(`
+		SELECT COUNT(*), COALESCE(SUM(total_tokens), 0),
+			(SELECT COUNT(*) FROM session_usage_observations observation
+			 JOIN session_metrics_revisions revision ON revision.id = observation.revision_id
+			 JOIN session_sources source ON source.id = revision.source_id
+			 WHERE source.session_id = $1 AND observation.logical_usage_event_id IS NOT NULL)
+		FROM session_usage_contributions
+		WHERE member_session_id = $1`, sessionID).Scan(&count, &total, &linkedObservations); err != nil {
+		t.Fatal(err)
+	}
+	if count != wantCount || total != wantTotal {
+		t.Fatalf("contributions count=%d total=%d want count=%d total=%d", count, total, wantCount, wantTotal)
+	}
+	if linkedObservations < wantCount {
+		t.Fatalf("linked observations=%d want at least %d", linkedObservations, wantCount)
+	}
+	rows, err := database.Query(`
+		SELECT contribution_kind, COUNT(*)
+		FROM session_usage_contributions
+		WHERE member_session_id = $1
+		GROUP BY contribution_kind`, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	gotKinds := map[string]int64{}
+	for rows.Next() {
+		var kind string
+		var kindCount int64
+		if err := rows.Scan(&kind, &kindCount); err != nil {
+			t.Fatal(err)
+		}
+		gotKinds[kind] = kindCount
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(gotKinds) != len(wantKinds) {
+		t.Fatalf("contribution kinds=%v want=%v", gotKinds, wantKinds)
+	}
+	for kind, want := range wantKinds {
+		if gotKinds[kind] != want {
+			t.Fatalf("contribution kind %s count=%d want=%d", kind, gotKinds[kind], want)
+		}
+	}
+	chunkRows, err := database.Query(`
+		SELECT COALESCE(SUM(contribution.total_tokens), 0)
+		FROM session_usage_contributions contribution
+		JOIN session_upload_chunks chunk ON chunk.id = contribution.chunk_id
+		WHERE contribution.member_session_id = $1
+		GROUP BY chunk.id, chunk.start_cursor
+		ORDER BY chunk.start_cursor`, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer chunkRows.Close()
+	index := 0
+	for chunkRows.Next() {
+		var got int64
+		if err := chunkRows.Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if index >= len(wantChunkTotals) || got != wantChunkTotals[index] {
+			t.Fatalf("chunk[%d] total=%d want=%v", index, got, wantChunkTotals)
+		}
+		index++
+	}
+	if err := chunkRows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if index != len(wantChunkTotals) {
+		t.Fatalf("chunk totals rows=%d want=%d", index, len(wantChunkTotals))
+	}
+}
+
+func assertActiveFamilyRollup(
+	t *testing.T,
+	database *sql.DB,
+	rootSessionID string,
+	wantFamily, wantSelf, wantSubagent, wantDailyRows int64,
+) {
+	t.Helper()
+	var rollupID, quality string
+	if err := database.QueryRow(`
+		SELECT id::text, quality_status
+		FROM session_family_rollup_versions
+		WHERE root_session_id = $1 AND status = 'active'`, rootSessionID).Scan(&rollupID, &quality); err != nil {
+		t.Fatal(err)
+	}
+	if quality != "estimated" && quality != "exact" {
+		t.Fatalf("active family rollup quality=%s", quality)
+	}
+	var family, self, subagent, daily, chunk, dailyRows int64
+	var versionContributions, totalContributions, dailyContributions, chunkContributions int64
+	var sourceCount, revisionRefCount, invalidActivityRanges int64
+	if err := database.QueryRow(`
+		SELECT
+			COALESCE((SELECT SUM(total_tokens) FROM session_family_token_totals WHERE rollup_version_id = $1), 0),
+			COALESCE((SELECT SUM(self_total_tokens) FROM session_family_token_totals WHERE rollup_version_id = $1), 0),
+			COALESCE((SELECT SUM(subagent_total_tokens) FROM session_family_token_totals WHERE rollup_version_id = $1), 0),
+			COALESCE((SELECT SUM(total_tokens) FROM session_family_daily_usage WHERE rollup_version_id = $1), 0),
+			COALESCE((SELECT SUM(total_tokens) FROM session_chunk_usage WHERE rollup_version_id = $1), 0),
+			(SELECT COUNT(DISTINCT activity_date) FROM session_family_daily_usage WHERE rollup_version_id = $1),
+			(SELECT contribution_count FROM session_family_rollup_versions WHERE id = $1),
+			COALESCE((SELECT SUM(contribution_count) FROM session_family_token_totals WHERE rollup_version_id = $1), 0),
+			COALESCE((SELECT SUM(contribution_count) FROM session_family_daily_usage WHERE rollup_version_id = $1), 0),
+			COALESCE((SELECT SUM(contribution_count) FROM session_chunk_usage WHERE rollup_version_id = $1), 0),
+			(SELECT source_count FROM session_family_rollup_versions WHERE id = $1),
+			(SELECT COUNT(*) FROM session_family_rollup_revision_refs WHERE rollup_version_id = $1),
+			(SELECT COUNT(*) FROM session_family_daily_usage
+			 WHERE rollup_version_id = $1 AND activity_end_at < activity_start_at)`,
+		rollupID).Scan(&family, &self, &subagent, &daily, &chunk, &dailyRows,
+		&versionContributions, &totalContributions, &dailyContributions, &chunkContributions,
+		&sourceCount, &revisionRefCount, &invalidActivityRanges); err != nil {
+		t.Fatal(err)
+	}
+	if family != wantFamily || self != wantSelf || subagent != wantSubagent ||
+		daily != wantFamily || chunk != wantFamily || dailyRows != wantDailyRows ||
+		versionContributions != totalContributions || versionContributions != dailyContributions ||
+		versionContributions != chunkContributions || sourceCount != revisionRefCount || invalidActivityRanges != 0 {
+		t.Fatalf("rollup family=%d self=%d subagent=%d daily=%d chunk=%d dailyRows=%d contributions=%d/%d/%d/%d sources=%d refs=%d invalidRanges=%d",
+			family, self, subagent, daily, chunk, dailyRows, versionContributions,
+			totalContributions, dailyContributions, chunkContributions, sourceCount,
+			revisionRefCount, invalidActivityRanges)
 	}
 }
 
