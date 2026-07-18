@@ -79,3 +79,4 @@ Token Contribution + Session 家族/按天/按 Chunk Rollup
 - 14.157 已生成 78,230 条 active Contribution，三维/成本对账失败为 0；8 个 revision 未通过 conflict/incomplete quality gate、3 个测试来源的 MinIO key 缺失、2 个替换 revision 回退了非稳定事实。确认该环境全部为测试数据后，不再修复这 13 个历史来源，R5B 已切换；该处置不得复制为生产迁移规则。
 - R5B 切换后，用户 303 的 `/tokens/sessions` 首次实测约 136ms、同 Snapshot 后续页约 14ms，三天 `/token-analytics/summary` 首次实测约 86ms；集成镜像重启后的冒烟请求分别约 31ms 和 14ms。以上是单次测试服证据，不冒充 p95/p99。
 - 集成镜像稳定后各串行请求 20 次：`/tokens/sessions` p50 约 19.5ms、p95 约 27.6ms、最大约 35.8ms；三天 Summary p50 约 14.7ms、p95 约 16.8ms、最大约 17.0ms。该短样本不含并发负载，不能替代生产容量测试。
+- 192.168.14.159 使用 Aida `0.1.15` 完成新上传回归：root `019f5eb3-0b81-79a0-a4e5-d0fbb526f940` 新增 9 个 Chunk，Usage 游标从 36,597,221 推进到 45,180,732 并由 pending 回到 ready；9 个内容索引、9 个 Usage、Digest v1/v2 任务全部完成。新增 933 条 Contribution、123,160,551 Token，family/daily/chunk 均为 412,854,348，self 377,828,027 + Subagent 35,026,321 与 family 精确相等；933 条新增成本全部绑定同一有效价格/汇率版本。两个稳定 Session 重复上传均为 `unchanged/chunks=0`，Contribution 和 Rollup 未变化。
