@@ -548,6 +548,14 @@ func (p *MeteringProcessor) finalizeClearIfReady(ctx context.Context, sessionID 
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `
+		UPDATE session_slice_digest_revisions digest
+		SET status = 'superseded', superseded_at = COALESCE(superseded_at, now())
+		WHERE digest.session_content_slice_id IN (
+			SELECT slice.id FROM session_content_slices slice WHERE slice.session_id = $1
+		) AND digest.status IN ('pending', 'building', 'ready', 'failed')`, sessionID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM session_content_events
 		WHERE content_projection_revision_id IN (
 			SELECT p.id FROM session_content_projection_revisions p
