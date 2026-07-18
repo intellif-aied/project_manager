@@ -1,5 +1,7 @@
 # 06：Digest 与接口影响回归矩阵
 
+> 发布门禁：本矩阵是内容存储迁移和 PG JSONB 清理的硬门禁。Digest、MCP full、Session 内容详情和恢复链路任一项未通过，禁止停止新增 `content_payload`，更禁止清理历史 Payload。Token 查询性能通过不能替代本矩阵。生产发布必须同时满足 [完整发布清单](./09-完整发布清单.md)。
+
 > 目标：明确内容存储和 Token 读模型调整后，哪些接口只是内部换数据源，哪些链路必须逐项回归。任何一项未通过，都不能清理 PostgreSQL 完整 Payload。
 
 ## 1. Digest 当前发生时机
