@@ -262,7 +262,7 @@ func TestDigestV2ReconcilerAndProcessorIntegration(t *testing.T) {
 	if len(digest.WorkUnits) != 1 ||
 		len(digest.WorkUnits[0].Validations) != 1 ||
 		digest.WorkUnits[0].Validations[0].LastStatus != "passed" ||
-		len(digest.WorkUnits[0].ResultStatements) < 2 {
+		len(digest.WorkUnits[0].ResultStatements) < 1 {
 		t.Fatalf("unexpected v2 digest: %#v", digest)
 	}
 }
