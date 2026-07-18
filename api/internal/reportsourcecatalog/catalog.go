@@ -9,6 +9,7 @@ import (
 const (
 	StatusBuilding   = "building"
 	StatusReady      = "ready"
+	StatusEmpty      = "empty"
 	StatusFailed     = "failed"
 	StatusSuperseded = "superseded"
 	StatusCleared    = "cleared"
@@ -121,7 +122,7 @@ func reconcile(
 				AND ($3::boolean OR existing.slice_id IS NOT NULL)
 				AND (
 					existing.slice_id IS NULL OR
-					(existing.status = 'building' AND (
+					(existing.status IN ('building', 'empty') AND (
 						existing.event_count = 0 OR
 						(
 							rev.status = 'active' AND
@@ -179,7 +180,7 @@ func reconcile(
 			event_count, activity_start_at, activity_end_at, activity_end_at,
 			summary, cwd, models,
 			CASE
-				WHEN event_count = 0 THEN 'failed'
+				WHEN event_count = 0 THEN 'empty'
 				WHEN should_be_ready THEN 'ready'
 				ELSE 'building'
 			END,

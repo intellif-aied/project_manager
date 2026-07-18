@@ -117,7 +117,7 @@ func TestBackfillBatchDiscoversHistoricalSliceAndIsIdempotentIntegration(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if after.Missing != 0 || after.Building != 0 || after.Ready != 1 || after.Failed != 0 {
+	if after.Missing != 0 || after.Building != 0 || after.Ready != 1 || after.Empty != 0 || after.Failed != 0 {
 		t.Fatalf("after=%+v", after)
 	}
 }
