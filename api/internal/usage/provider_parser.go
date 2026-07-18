@@ -17,6 +17,15 @@ const MaxUsageLineBytes = 500 << 20
 
 const CodexLongContextInputThreshold int64 = 272000
 
+// Codex token_count.total_tokens includes the model context window for these
+// two production models. The context window is provider metadata, not a
+// billable usage component, so it must be removed before cumulative deltas
+// are built. Unknown model/window combinations remain a quality conflict.
+const (
+	CodexGPT55ContextWindow           int64 = 258400
+	CodexGPT53CodexSparkContextWindow int64 = 950000
+)
+
 var (
 	ErrUsageLineTooLarge = errors.New("usage parser line exceeds limit")
 	ErrIncompleteLine    = errors.New("usage parser chunk ends with an incomplete JSONL line")
@@ -333,6 +342,12 @@ func parseCodexLine(
 	if countersHaveNegative(counters) || counters.CachedInputTokens > counters.InputTokens {
 		return UsageRecord{}, lineUnknownUsage
 	}
+	if contextWindow := codexContextWindowTokens(state.ActiveModel); contextWindow > 0 &&
+		counters.TotalTokens-counters.InputTokens-counters.OutputTokens == contextWindow {
+		// Keep the provider payload in raw_usage_json, but normalize the parsed
+		// cumulative counter so deltas and billing use actual usage components.
+		counters.TotalTokens = counters.InputTokens + counters.OutputTokens
+	}
 	occurredAt, err := time.Parse(time.RFC3339Nano, envelope.Timestamp)
 	if err != nil {
 		return UsageRecord{}, lineUnknownUsage
@@ -393,6 +408,17 @@ func parseCodexLine(
 		RawUsage: rawUsage, RawUsageHash: hashBytes(rawUsage), Counters: counters, Delta: delta,
 		Quality: quality, QualityReason: reason,
 	}, lineUsage
+}
+
+func codexContextWindowTokens(model string) int64 {
+	switch strings.ToLower(strings.TrimSpace(model)) {
+	case "gpt-5.5":
+		return CodexGPT55ContextWindow
+	case "gpt-5.3-codex-spark":
+		return CodexGPT53CodexSparkContextWindow
+	default:
+		return 0
+	}
 }
 
 func codexInterAgentTriggerTurn(payload json.RawMessage) bool {

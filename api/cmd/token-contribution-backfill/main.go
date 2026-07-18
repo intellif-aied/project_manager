@@ -22,6 +22,7 @@ func main() {
 	maxBatches := flag.Int("max-batches", 1, "maximum batches per invocation; zero means until no source remains")
 	pause := flag.Duration("pause", time.Second, "minimum delay between batches or pressure checks")
 	timeout := flag.Duration("timeout", 30*time.Minute, "overall command timeout")
+	repairSourceID := flag.String("repair-source-id", "", "reset one failed v5 source's derived rows and enqueue a targeted rebuild; requires --apply")
 	flag.Parse()
 	if *batchSize <= 0 || *maxBatches < 0 || *pause < 0 || *timeout <= 0 {
 		log.Fatal("invalid token contribution backfill options")
@@ -39,9 +40,26 @@ func main() {
 	defer database.Close()
 	database.SetMaxOpenConns(2)
 	database.SetMaxIdleConns(1)
-
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
+	if *repairSourceID != "" {
+		if !*apply {
+			encoded, _ := json.MarshalIndent(map[string]any{
+				"repair_source_id": *repairSourceID,
+				"apply_required":   true,
+			}, "", "  ")
+			fmt.Fprintln(os.Stdout, string(encoded))
+			return
+		}
+		report, err := usage.RepairFailedContributionRevision(ctx, database, normalizerVersion, *repairSourceID)
+		if err != nil {
+			log.Fatal(err)
+		}
+		encoded, _ := json.MarshalIndent(report, "", "  ")
+		fmt.Fprintln(os.Stdout, string(encoded))
+		return
+	}
+
 	startedAt := time.Now()
 	before, err := usage.InspectContributionBackfill(ctx, database, normalizerVersion)
 	if err != nil {

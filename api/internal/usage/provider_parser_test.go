@@ -3,6 +3,7 @@ package usage
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -77,6 +78,41 @@ func TestCodexCumulativeCountersProduceDisjointDeltas(t *testing.T) {
 	}
 	if firstUsage.TotalTokens+secondUsage.TotalTokens != 220 {
 		t.Fatalf("combined total=%d", firstUsage.TotalTokens+secondUsage.TotalTokens)
+	}
+}
+
+func TestCodexKnownContextWindowIsExcludedFromBillableTotal(t *testing.T) {
+	for _, test := range []struct {
+		model         string
+		contextWindow int64
+	}{
+		{model: "gpt-5.5", contextWindow: CodexGPT55ContextWindow},
+		{model: "gpt-5.3-codex-spark", contextWindow: CodexGPT53CodexSparkContextWindow},
+	} {
+		t.Run(test.model, func(t *testing.T) {
+			content := []byte(fmt.Sprintf(
+				`{"timestamp":"2026-07-10T00:00:00Z","type":"turn_context","payload":{"model":%q}}`+"\n"+
+					`{"timestamp":"2026-07-10T00:01:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":30,"total_tokens":%d}}}}`+"\n"+
+					`{"timestamp":"2026-07-10T00:02:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":140,"cached_input_tokens":25,"output_tokens":40,"total_tokens":%d}}}}`+"\n",
+				test.model, 100+30+test.contextWindow, 140+40+test.contextWindow,
+			))
+			parsed, err := ParseProviderChunk("codex", bytes.NewReader(content), 0, ParseState{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(parsed.Records) != 2 {
+				t.Fatalf("records=%d", len(parsed.Records))
+			}
+			if parsed.Records[0].Quality == QualityConflict || parsed.Records[1].Quality == QualityConflict {
+				t.Fatalf("unexpected conflict: %+v", parsed.Records)
+			}
+			if parsed.Records[0].Counters.TotalTokens != 130 || parsed.Records[1].Delta.TotalTokens != 50 {
+				t.Fatalf("records=%+v", parsed.Records)
+			}
+			if normalized, err := Normalize(parsed.Records[1]); err != nil || normalized.TotalTokens != 50 {
+				t.Fatalf("normalized=%+v err=%v", normalized, err)
+			}
+		})
 	}
 }
 

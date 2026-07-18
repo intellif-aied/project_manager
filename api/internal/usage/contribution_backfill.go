@@ -34,6 +34,191 @@ type ContributionBackfillReport struct {
 	Elapsed         string                     `json:"elapsed"`
 }
 
+type ContributionRepairReport struct {
+	SourceID             string `json:"source_id"`
+	RevisionID           string `json:"revision_id"`
+	DeletedJobs          int64  `json:"deleted_jobs"`
+	DeletedClaims        int64  `json:"deleted_claims"`
+	DeletedComponents    int64  `json:"deleted_components"`
+	DeletedContributions int64  `json:"deleted_contributions"`
+	DeletedLogicalEvents int64  `json:"deleted_logical_events"`
+	DeletedObservations  int64  `json:"deleted_observations"`
+	DeletedCheckpoints   int64  `json:"deleted_checkpoints"`
+	DeletedDailyRows     int64  `json:"deleted_daily_rows"`
+	EnqueuedJobs         int64  `json:"enqueued_jobs"`
+}
+
+// RepairFailedContributionRevision clears only the derived rows of one
+// quality-gated revision and queues the same source for a fresh parse. Raw
+// upload chunks remain untouched. It refuses to reset a revision referenced by
+// an active Rollup or Snapshot so an online aggregate can never be rewritten
+// underneath a reader.
+func RepairFailedContributionRevision(
+	ctx context.Context,
+	database *sql.DB,
+	normalizerVersion, sourceID string,
+) (ContributionRepairReport, error) {
+	if database == nil || normalizerVersion == "" || sourceID == "" {
+		return ContributionRepairReport{}, errors.New("database, normalizer version, and source id are required")
+	}
+	tx, err := database.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		return ContributionRepairReport{}, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SET LOCAL lock_timeout = '250ms'`); err != nil {
+		return ContributionRepairReport{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `SET LOCAL statement_timeout = '60s'`); err != nil {
+		return ContributionRepairReport{}, err
+	}
+
+	var report ContributionRepairReport
+	var activeRevision sql.NullString
+	var stateStatus, revisionStatus string
+	var generationID, sessionID string
+	var expectedCursor int64
+	err = tx.QueryRowContext(ctx, `
+		SELECT revision.id::text, revision.status, session.id::text,
+			generation.id::text, generation.expected_cursor,
+			state.active_revision_id::text, state.status
+		FROM session_metrics_revisions revision
+		JOIN session_sources source ON source.id = revision.source_id
+		JOIN sessions session ON session.id = source.session_id
+		JOIN session_source_generations generation ON generation.id = source.active_generation_id
+		JOIN session_source_metrics_states state ON state.source_id = source.id
+		WHERE source.id = $1 AND revision.parser_version = $2
+			AND revision.normalizer_version = $3 AND revision.status = 'failed'
+		FOR UPDATE OF revision, source, generation, state`,
+		sourceID, ParserVersion, normalizerVersion).Scan(
+		&report.RevisionID, &revisionStatus, &sessionID, &generationID,
+		&expectedCursor, &activeRevision, &stateStatus)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ContributionRepairReport{}, fmt.Errorf("failed revision not found for source %s", sourceID)
+	}
+	if err != nil {
+		return ContributionRepairReport{}, err
+	}
+	if revisionStatus != "failed" || stateStatus == "ready" || activeRevision.Valid {
+		return ContributionRepairReport{}, fmt.Errorf("source %s is not a reset-safe failed revision", sourceID)
+	}
+	var activeRollupRefs, snapshotRefs int64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM session_family_rollup_revision_refs WHERE revision_id = $1`,
+		report.RevisionID).Scan(&activeRollupRefs); err != nil {
+		return ContributionRepairReport{}, err
+	}
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM token_query_snapshot_rollups snapshot
+		JOIN session_family_rollup_revision_refs reference
+			ON reference.rollup_version_id = snapshot.rollup_version_id
+		WHERE reference.revision_id = $1`, report.RevisionID).Scan(&snapshotRefs); err != nil {
+		return ContributionRepairReport{}, err
+	}
+	if activeRollupRefs != 0 || snapshotRefs != 0 {
+		return ContributionRepairReport{}, fmt.Errorf(
+			"source %s revision is referenced by rollup=%d snapshot=%d",
+			sourceID, activeRollupRefs, snapshotRefs)
+	}
+	report.SourceID = sourceID
+
+	deleteRows := func(query string, args ...any) (int64, error) {
+		result, err := tx.ExecContext(ctx, query, args...)
+		if err != nil {
+			return 0, err
+		}
+		return result.RowsAffected()
+	}
+	if report.DeletedJobs, err = deleteRows(
+		`DELETE FROM session_processing_jobs WHERE target_metrics_revision_id = $1`, report.RevisionID); err != nil {
+		return ContributionRepairReport{}, err
+	}
+	if report.DeletedClaims, err = deleteRows(
+		`DELETE FROM session_usage_event_claims WHERE active_revision_id = $1`, report.RevisionID); err != nil {
+		return ContributionRepairReport{}, err
+	}
+	if report.DeletedComponents, err = deleteRows(
+		`DELETE FROM session_usage_components WHERE revision_id = $1`, report.RevisionID); err != nil {
+		return ContributionRepairReport{}, err
+	}
+	if report.DeletedContributions, err = deleteRows(
+		`DELETE FROM session_usage_contributions WHERE revision_id = $1`, report.RevisionID); err != nil {
+		return ContributionRepairReport{}, err
+	}
+	if report.DeletedLogicalEvents, err = deleteRows(
+		`DELETE FROM session_logical_usage_events WHERE revision_id = $1`, report.RevisionID); err != nil {
+		return ContributionRepairReport{}, err
+	}
+	if report.DeletedObservations, err = deleteRows(
+		`DELETE FROM session_usage_observations WHERE revision_id = $1`, report.RevisionID); err != nil {
+		return ContributionRepairReport{}, err
+	}
+	if report.DeletedCheckpoints, err = deleteRows(
+		`DELETE FROM session_parser_checkpoints WHERE revision_id = $1`, report.RevisionID); err != nil {
+		return ContributionRepairReport{}, err
+	}
+	if report.DeletedDailyRows, err = deleteRows(
+		`DELETE FROM session_daily_usage WHERE revision_id = $1`, report.RevisionID); err != nil {
+		return ContributionRepairReport{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE session_metrics_revisions
+		SET status = 'building', quality_status = 'exact',
+			build_start_cursor = 0, validated_through_cursor = 0,
+			source_high_water_cursor = $2, scanned_event_count = 0,
+			usage_observation_count = 0, usage_event_count = 0,
+			advanced_observation_count = 0, duplicate_usage_event_count = 0,
+			malformed_event_count = 0, unknown_usage_event_count = 0,
+			conflict_usage_event_count = 0, reconciliation_json = '{}'::jsonb,
+			calculation_reason = 'targeted repair after quality-gate review',
+			validated_at = NULL, activated_at = NULL, superseded_at = NULL
+		WHERE id = $1`, report.RevisionID, expectedCursor); err != nil {
+		return ContributionRepairReport{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE session_source_metrics_states
+		SET active_revision_id = NULL, target_generation_id = $2,
+			status = 'pending', active_usage_parsed_cursor = 0,
+			source_high_water_cursor = $3, last_error = NULL, updated_at = now()
+		WHERE source_id = $1`, sourceID, generationID, expectedCursor); err != nil {
+		return ContributionRepairReport{}, err
+	}
+	base := time.Now().UTC()
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO session_processing_jobs (
+			job_type, session_id, generation_id, chunk_id,
+			target_metrics_revision_id, payload, created_at
+		)
+		SELECT 'parse_usage_chunk', $1, chunk.generation_id, chunk.id, $2,
+			jsonb_build_object('reason', 'targeted_token_contribution_repair'),
+			$3::timestamptz + ROW_NUMBER() OVER (ORDER BY chunk.start_cursor, chunk.id) * interval '1 microsecond'
+		FROM session_upload_chunks chunk
+		WHERE chunk.generation_id = $4`, sessionID, report.RevisionID, base, generationID); err != nil {
+		return ContributionRepairReport{}, err
+	}
+	var chunkCount int64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM session_upload_chunks WHERE generation_id = $1`, generationID).Scan(&chunkCount); err != nil {
+		return ContributionRepairReport{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO session_processing_jobs (
+			job_type, session_id, generation_id, target_metrics_revision_id,
+			payload, created_at
+		) VALUES ('rebuild_metrics_revision', $1, $2, $3,
+			jsonb_build_object('reason', 'targeted_token_contribution_repair'),
+			$4::timestamptz + $5 * interval '1 microsecond')`,
+		sessionID, generationID, report.RevisionID, base, chunkCount+1); err != nil {
+		return ContributionRepairReport{}, err
+	}
+	report.EnqueuedJobs = chunkCount + 1
+	if err := tx.Commit(); err != nil {
+		return ContributionRepairReport{}, err
+	}
+	return report, nil
+}
+
 func InspectContributionBackfill(
 	ctx context.Context,
 	database *sql.DB,
