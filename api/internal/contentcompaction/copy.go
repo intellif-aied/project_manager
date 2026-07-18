@@ -111,7 +111,7 @@ func (c *Compactor) copyBatch(ctx context.Context, batchSize int) (int64, bool, 
 			(SELECT %s FROM batch source),
 			(SELECT %s FROM upserted target)`,
 		eventColumns, `"`+SourceTable+`"`, `"`+ShadowTable+`"`, eventColumns,
-		eventColumns, eventUpdateAssignments, eventColumns,
+		eventColumns, eventUpdateAssignments, qualifiedEventColumns(ShadowTable),
 		eventFingerprint("source"), eventFingerprint("target"))
 	var endCursor, sourceFingerprint, targetFingerprint string
 	var rowCount int64
@@ -275,7 +275,8 @@ func (c *Compactor) reconcileMissingBatch(
 			(SELECT %s FROM batch source),
 			(SELECT %s FROM upserted target)`,
 		qualifiedEventColumns("source"), `"`+SourceTable+`"`, `"`+ShadowTable+`"`,
-		`"`+ShadowTable+`"`, eventColumns, eventColumns, eventUpdateAssignments, eventColumns,
+		`"`+ShadowTable+`"`, eventColumns, eventColumns, eventUpdateAssignments,
+		qualifiedEventColumns(ShadowTable),
 		eventFingerprint("source"), eventFingerprint("target"))
 	var endCursor, sourceFingerprint, targetFingerprint string
 	var rows int64
@@ -334,7 +335,7 @@ func (c *Compactor) reconcileExtraBatch(
 			(SELECT %s FROM batch source),
 			(SELECT %s FROM deleted target)`,
 		qualifiedEventColumns("target"), `"`+ShadowTable+`"`, `"`+SourceTable+`"`,
-		`"`+ShadowTable+`"`, eventColumns,
+		`"`+ShadowTable+`"`, qualifiedEventColumns("target"),
 		eventFingerprint("source"), eventFingerprint("target"))
 	var endCursor, sourceFingerprint, targetFingerprint string
 	var rows int64
