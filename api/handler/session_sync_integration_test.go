@@ -178,19 +178,23 @@ func TestSessionSyncHTTPEndToEndIntegration(t *testing.T) {
 	}
 	var revisionStatus string
 	var indexedCursor int64
-	var eventCount, storedEventCount int
+	var eventCount, storedEventCount, nullPayloadCount int
 	if err := database.QueryRow(`
 		SELECT p.status, p.content_indexed_cursor, p.event_count,
-			(SELECT COUNT(*) FROM session_content_events e WHERE e.content_projection_revision_id = p.id)
+			(SELECT COUNT(*) FROM session_content_events e WHERE e.content_projection_revision_id = p.id),
+			(SELECT COUNT(*) FROM session_content_events e
+				WHERE e.content_projection_revision_id = p.id AND e.content_payload IS NULL)
 		FROM session_sources src
 		JOIN session_content_projection_revisions p ON p.id = src.active_content_projection_revision_id
 		WHERE src.active_generation_id = $1`, generationID).Scan(
-		&revisionStatus, &indexedCursor, &eventCount, &storedEventCount,
+		&revisionStatus, &indexedCursor, &eventCount, &storedEventCount, &nullPayloadCount,
 	); err != nil {
 		t.Fatal(err)
 	}
-	if revisionStatus != "active" || indexedCursor != int64(len(content)) || eventCount != 1 || storedEventCount != 1 {
-		t.Fatalf("status=%s cursor=%d eventCount=%d stored=%d", revisionStatus, indexedCursor, eventCount, storedEventCount)
+	if revisionStatus != "active" || indexedCursor != int64(len(content)) ||
+		eventCount != 1 || storedEventCount != 1 || nullPayloadCount != storedEventCount {
+		t.Fatalf("status=%s cursor=%d eventCount=%d stored=%d nullPayload=%d",
+			revisionStatus, indexedCursor, eventCount, storedEventCount, nullPayloadCount)
 	}
 
 	var objectKey string
