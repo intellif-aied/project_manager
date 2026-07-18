@@ -18,6 +18,7 @@ import (
 	"github.com/aidashboard/api/internal/sessiondigestv2"
 	"github.com/aidashboard/api/internal/sessionsync"
 	"github.com/aidashboard/api/internal/tokenanalytics"
+	"github.com/aidashboard/api/internal/tokenrollup"
 	"github.com/aidashboard/api/internal/usage"
 	"github.com/aidashboard/api/service"
 	"github.com/aidashboard/api/storage"
@@ -100,6 +101,12 @@ func main() {
 	}
 	reportSourceCatalogReconciler.Start(schedulerCtx)
 	log.Println("Report source catalog reconciler started")
+	tokenRollupReconciler, err := tokenrollup.NewReconciler(database)
+	if err != nil {
+		log.Fatalf("Failed to init token rollup reconciler: %v", err)
+	}
+	tokenRollupReconciler.Start(schedulerCtx)
+	log.Println("Token rollup reconciler started")
 	// Session content and usage processing are core services. Leaving either worker
 	// stopped accepts uploads that can never appear in reports or Token analytics.
 	{

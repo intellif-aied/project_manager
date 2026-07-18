@@ -47,7 +47,6 @@ import { formatDateTime } from "@/shared/utils/dateTime";
 import { businessDateKey } from "@/shared/utils/businessTime";
 
 import {
-  fetchAllSessionTokens,
   fetchDepartmentReportSources,
   fetchDepartmentReportTodayOrNull,
   fetchDashboardMyItems,
@@ -60,7 +59,9 @@ import {
   fetchTeamReportSources,
   fetchTeamReportTodayOrNull,
   fetchTodayReport,
-  fetchTokens,
+  fetchTokenAnalyticsRankings,
+  fetchTokenAnalyticsSummary,
+  fetchTokenAnalyticsTrends,
   updateDepartmentReport,
   updateReport as updateDailyReport,
   submitTeamReport,
@@ -77,10 +78,11 @@ import type {
   Session,
   TaskDependencyDTO,
   TeamReport,
-  TeamReportSources
+  TeamReportSources,
+  TokenAnalyticsFilters
 } from "../api/types";
 import {
-  aggregateDashboardTokenReport,
+  aggregateDashboardTokenAnalyticsReport,
   getDashboardTokenDateRange,
   type DashboardTokenRange,
   type DashboardTokenReport
@@ -1147,85 +1149,90 @@ export function DashboardPage() {
     ? (allVisibleReports.find((reportItem) => reportItem.id === activeReportId) ?? dailyReport)
     : dailyReport;
   const tokenDateRange = useMemo(() => getDashboardTokenDateRange(tokenRange), [tokenRange]);
-  const tokenScope =
-    dashboardRole === "team_leader" || dashboardRole === "director" ? "team" : "mine";
+  const tokenScope: TokenAnalyticsFilters["scope"] =
+    dashboardRole === "team_leader" || dashboardRole === "director" ? "management" : "mine";
   const shouldLoadMineTokens = dashboardRole === "team_leader" || dashboardRole === "director";
   const shouldLoadTeamTokenGroups = dashboardRole === "director";
-  const tokenSessionsQuery = useQuery({
+  const tokenAnalyticsFilters = useMemo(
+    () => ({ scope: tokenScope, from: tokenDateRange.from, to: tokenDateRange.to }),
+    [tokenDateRange.from, tokenDateRange.to, tokenScope]
+  );
+  const tokenAnalyticsQuery = useQuery({
     queryKey: [
       "dashboard",
       currentUserId,
-      "token-sessions",
+      "token-analytics",
       tokenDateRange.from,
       tokenDateRange.to,
       tokenScope
     ],
-    queryFn: () =>
-      fetchAllSessionTokens({
-        from: tokenDateRange.from,
-        to: tokenDateRange.to,
-        scope: tokenScope
-      }),
+    queryFn: async () => {
+      const summary = await fetchTokenAnalyticsSummary(tokenAnalyticsFilters);
+      const snapshotParams = {
+        ...tokenAnalyticsFilters,
+        query_snapshot_token: summary.query_snapshot_token
+      };
+      const [trends, members, teams] = await Promise.all([
+        fetchTokenAnalyticsTrends(snapshotParams),
+        fetchTokenAnalyticsRankings({ ...snapshotParams, group_by: "user" }),
+        shouldLoadTeamTokenGroups
+          ? fetchTokenAnalyticsRankings({ ...snapshotParams, group_by: "team" })
+          : Promise.resolve(undefined)
+      ]);
+      return {
+        summary,
+        trends: trends.items,
+        members: members.items,
+        teams: teams?.items
+      };
+    },
     staleTime: 60_000
   });
-  const mineTokenSessionsQuery = useQuery({
+  const mineTokenSummaryQuery = useQuery({
     queryKey: [
       "dashboard",
       currentUserId,
-      "token-sessions",
+      "token-analytics-summary",
       tokenDateRange.from,
       tokenDateRange.to,
       "mine"
     ],
     queryFn: () =>
-      fetchAllSessionTokens({ from: tokenDateRange.from, to: tokenDateRange.to, scope: "mine" }),
-    enabled: shouldLoadMineTokens,
-    staleTime: 60_000
-  });
-  const teamTokenGroupsQuery = useQuery({
-    queryKey: [
-      "dashboard",
-      currentUserId,
-      "token-groups",
-      tokenDateRange.from,
-      tokenDateRange.to,
-      "team"
-    ],
-    queryFn: () =>
-      fetchTokens({
-        period: "range",
+      fetchTokenAnalyticsSummary({
+        scope: "mine",
         from: tokenDateRange.from,
-        to: tokenDateRange.to,
-        group_by: "team"
+        to: tokenDateRange.to
       }),
-    enabled: shouldLoadTeamTokenGroups,
+    enabled: shouldLoadMineTokens,
     staleTime: 60_000
   });
   const tokenReport = useMemo(
     () =>
-      aggregateDashboardTokenReport(tokenSessionsQuery.data ?? [], tokenDateRange, {
-        mineSessions: shouldLoadMineTokens ? (mineTokenSessionsQuery.data ?? []) : undefined,
-        teamAggregation: shouldLoadTeamTokenGroups ? (teamTokenGroupsQuery.data ?? null) : null,
+      aggregateDashboardTokenAnalyticsReport(
+        tokenAnalyticsQuery.data
+          ? {
+              ...tokenAnalyticsQuery.data,
+              mineSummary: shouldLoadMineTokens ? mineTokenSummaryQuery.data : undefined
+            }
+          : undefined,
+        tokenDateRange,
+        {
         showUploaders: dashboardRole === "team_leader" || dashboardRole === "director"
-      }),
+        }
+      ),
     [
       dashboardRole,
-      mineTokenSessionsQuery.data,
+      mineTokenSummaryQuery.data,
       shouldLoadMineTokens,
-      shouldLoadTeamTokenGroups,
-      teamTokenGroupsQuery.data,
       tokenDateRange,
-      tokenSessionsQuery.data
+      tokenAnalyticsQuery.data
     ]
   );
   const isTokenLoading =
-    (tokenSessionsQuery.isLoading && !tokenSessionsQuery.data) ||
-    (shouldLoadMineTokens && mineTokenSessionsQuery.isLoading && !mineTokenSessionsQuery.data) ||
-    (shouldLoadTeamTokenGroups && teamTokenGroupsQuery.isLoading && !teamTokenGroupsQuery.data);
+    (tokenAnalyticsQuery.isLoading && !tokenAnalyticsQuery.data) ||
+    (shouldLoadMineTokens && mineTokenSummaryQuery.isLoading && !mineTokenSummaryQuery.data);
   const isTokenError =
-    tokenSessionsQuery.isError ||
-    (shouldLoadMineTokens && mineTokenSessionsQuery.isError) ||
-    (shouldLoadTeamTokenGroups && teamTokenGroupsQuery.isError);
+    tokenAnalyticsQuery.isError || (shouldLoadMineTokens && mineTokenSummaryQuery.isError);
   const followItems = useMemo<FollowItem[]>(
     () => [...(followsQuery.data?.items ?? []), ...loadedFollowItems],
     [followsQuery.data, loadedFollowItems]

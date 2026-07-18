@@ -1547,36 +1547,44 @@ type TokenAggregation struct {
 }
 
 type SessionTokens struct {
-	SessionID           string     `json:"session_id"`
-	SliceKey            string     `json:"slice_key,omitempty"`
-	LocalSessionID      string     `json:"local_session_id,omitempty"`
-	SessionRef          string     `json:"session_ref"`
-	UserID              string     `json:"user_id"`
-	UserName            string     `json:"user_name"`
-	AgentType           string     `json:"agent_type"`
-	Models              []string   `json:"models"`
-	Summary             *string    `json:"summary,omitempty"`
-	StartedAt           time.Time  `json:"started_at"`
-	ActivityDate        string     `json:"activity_date,omitempty"`
-	ActivityStartAt     *time.Time `json:"activity_start_at,omitempty"`
-	ActivityEndAt       *time.Time `json:"activity_end_at,omitempty"`
-	ActivityDates       []string   `json:"activity_dates,omitempty"`
-	SliceCount          int        `json:"slice_count"`
-	SourceHasRawLog     bool       `json:"source_has_raw_log"`
-	IsEstimated         bool       `json:"is_estimated"`
-	TokenSliceStrategy  string     `json:"token_slice_strategy,omitempty"`
-	InputTokens         int64      `json:"input_tokens"`
-	OutputTokens        int64      `json:"output_tokens"`
-	CacheCreationTokens int64      `json:"cache_creation_tokens"`
-	CacheReadTokens     int64      `json:"cache_read_tokens"`
-	TotalTokens         int64      `json:"total_tokens"`
+	SessionID            string     `json:"session_id"`
+	SliceKey             string     `json:"slice_key,omitempty"`
+	LocalSessionID       string     `json:"local_session_id,omitempty"`
+	SessionRef           string     `json:"session_ref"`
+	UserID               string     `json:"user_id"`
+	UserName             string     `json:"user_name"`
+	AgentType            string     `json:"agent_type"`
+	Models               []string   `json:"models"`
+	Summary              *string    `json:"summary,omitempty"`
+	StartedAt            time.Time  `json:"started_at"`
+	ActivityDate         string     `json:"activity_date,omitempty"`
+	ActivityStartAt      *time.Time `json:"activity_start_at,omitempty"`
+	ActivityEndAt        *time.Time `json:"activity_end_at,omitempty"`
+	ActivityDates        []string   `json:"activity_dates,omitempty"`
+	SliceCount           int        `json:"slice_count"`
+	SourceHasRawLog      bool       `json:"source_has_raw_log"`
+	IsEstimated          bool       `json:"is_estimated"`
+	TokenSliceStrategy   string     `json:"token_slice_strategy,omitempty"`
+	InputTokens          int64      `json:"input_tokens"`
+	OutputTokens         int64      `json:"output_tokens"`
+	CacheCreationTokens  int64      `json:"cache_creation_tokens"`
+	CacheReadTokens      int64      `json:"cache_read_tokens"`
+	TotalTokens          int64      `json:"total_tokens"`
+	FamilyRootSessionRef string     `json:"family_root_session_ref,omitempty"`
+	SelfTotalTokens      int64      `json:"self_total_tokens,omitempty"`
+	SubagentTotalTokens  int64      `json:"subagent_total_tokens,omitempty"`
+	FamilyTotalTokens    int64      `json:"family_total_tokens,omitempty"`
+	LifetimeTotalTokens  int64      `json:"lifetime_total_tokens,omitempty"`
+	RangeTotalTokens     int64      `json:"range_total_tokens,omitempty"`
+	MemberCount          int        `json:"member_count,omitempty"`
 }
 
 type PaginatedSessionTokens struct {
-	Items    []SessionTokens `json:"items"`
-	Total    int             `json:"total"`
-	Page     int             `json:"page"`
-	PageSize int             `json:"page_size"`
+	Items              []SessionTokens `json:"items"`
+	Total              int             `json:"total"`
+	Page               int             `json:"page"`
+	PageSize           int             `json:"page_size"`
+	QuerySnapshotToken string          `json:"query_snapshot_token,omitempty"`
 }
 
 type TokenGroup struct {

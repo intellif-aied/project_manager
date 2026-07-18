@@ -1000,9 +1000,7 @@ func (h *TaskHandler) enrichTask(t *model.Task, u *model.User) {
 			UNION
 			SELECT DISTINCT s.id::text AS source_id
 			FROM sessions s
-			JOIN token_usage tu ON tu.session_id = s.id
 			WHERE s.task_id = $1
-			  AND NOT EXISTS (SELECT 1 FROM session_activity_slices sas WHERE sas.session_id = s.id)
 		) sources
 		ORDER BY source_id`, t.ID)
 	if err == nil {

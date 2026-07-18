@@ -9,6 +9,8 @@ import (
 	"math/big"
 	"strings"
 	"time"
+
+	"github.com/aidashboard/api/internal/tokenrollup"
 )
 
 const CalculatorVersion = "aida-cost-v1"
@@ -154,6 +156,9 @@ func (s *Service) Recalculate(ctx context.Context, filter RecalculateFilter) (Re
 	if err != nil {
 		return RecalculateResult{}, err
 	}
+	if err := recalculateContributionRollupsTx(ctx, tx, filter); err != nil {
+		return RecalculateResult{}, err
+	}
 	if err := tx.Commit(); err != nil {
 		return RecalculateResult{}, err
 	}
@@ -179,6 +184,9 @@ func (s *Service) RecalculateWithAudit(
 	if err != nil {
 		return RecalculateResult{}, err
 	}
+	if err := recalculateContributionRollupsTx(ctx, tx, filter); err != nil {
+		return RecalculateResult{}, err
+	}
 	filterJSON, _ := json.Marshal(filter)
 	resultJSON, _ := json.Marshal(result)
 	if _, err := tx.ExecContext(ctx, `
@@ -196,6 +204,21 @@ func (s *Service) RecalculateWithAudit(
 
 func RecalculateRevisionTx(ctx context.Context, tx *sql.Tx, revisionID string) (RecalculateResult, error) {
 	return RecalculateTx(ctx, tx, RecalculateFilter{RevisionID: revisionID})
+}
+
+func recalculateContributionRollupsTx(ctx context.Context, tx *sql.Tx, filter RecalculateFilter) error {
+	_, activations, err := recalculateActiveContributionsTx(ctx, tx, filter)
+	if err != nil {
+		return err
+	}
+	builder := tokenrollup.NewBuilder()
+	for _, activation := range activations {
+		if err := builder.BuildForActivation(ctx, tx, activation.SessionID, activation.SourceID,
+			activation.RevisionID, CalculatorVersion); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func RecalculateTx(ctx context.Context, tx *sql.Tx, filter RecalculateFilter) (RecalculateResult, error) {

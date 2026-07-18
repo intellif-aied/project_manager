@@ -16,8 +16,7 @@ import (
 )
 
 const (
-	snapshotTTL      = 15 * time.Minute
-	maxUserSnapshots = 10
+	snapshotTTL = 15 * time.Minute
 )
 
 type Service struct {
@@ -33,13 +32,16 @@ func (s *Service) CreateSummary(ctx context.Context, actor Actor, filters Filter
 	if err != nil {
 		return Summary{}, err
 	}
-	return s.summary(ctx, snapshot)
+	return s.summary(ctx, actor, snapshot)
 }
 
 func (s *Service) Trends(ctx context.Context, actor Actor, filters Filters, token string) (Trends, error) {
 	snapshot, err := s.loadSnapshot(ctx, actor, filters, token)
 	if err != nil {
 		return Trends{}, err
+	}
+	if snapshot.Version == "rollup-v2" {
+		return s.rollupTrends(ctx, actor, snapshot)
 	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT activity_date::text, SUM(normalized_total_tokens)::text,
@@ -81,12 +83,16 @@ func (s *Service) Rankings(ctx context.Context, actor Actor, filters Filters, to
 		groupBy = "user"
 	}
 	result := Rankings{QuerySnapshotToken: token, GroupBy: groupBy, Items: []RankingItem{}}
+	if snapshot.Version == "rollup-v2" {
+		return s.rollupRankings(ctx, actor, snapshot, groupBy)
+	}
 	var rows *sql.Rows
 	switch groupBy {
 	case "user":
 		rows, err = s.db.QueryContext(ctx, `
 			SELECT member.user_id::text, member.user_display_name,
 				COALESCE(SUM(item.normalized_total_tokens), 0)::text,
+				COUNT(DISTINCT item.session_id)::text,
 				SUM(item.estimated_cost_cny) FILTER (WHERE item.pricing_status = 'priced')::text,
 				CASE
 					WHEN COUNT(item.id) = 0 THEN 'unpriced'
@@ -122,7 +128,8 @@ func (s *Service) Rankings(ctx context.Context, actor Actor, filters Filters, to
 	for rows.Next() {
 		var item RankingItem
 		var cost, lastActivity sql.NullString
-		if err := rows.Scan(&item.Key, &item.Label, &item.TotalTokens, &cost, &item.PricingStatus, &lastActivity); err != nil {
+		if err := rows.Scan(&item.Key, &item.Label, &item.TotalTokens, &item.SessionCount,
+			&cost, &item.PricingStatus, &lastActivity); err != nil {
 			return Rankings{}, err
 		}
 		item.EstimatedCostCNY = stringPtr(cost)
@@ -136,6 +143,7 @@ func (s *Service) Rankings(ctx context.Context, actor Actor, filters Filters, to
 func groupedRankingRows(ctx context.Context, db *sql.DB, snapshotID, keyExpr, labelExpr string) (*sql.Rows, error) {
 	query := fmt.Sprintf(`
 		SELECT %s, %s, SUM(normalized_total_tokens)::text,
+			COUNT(DISTINCT session_id)::text,
 			SUM(estimated_cost_cny) FILTER (WHERE pricing_status = 'priced')::text,
 			CASE
 				WHEN COUNT(*) FILTER (WHERE pricing_status = 'pricing_pending') > 0 THEN 'pricing_pending'
@@ -165,6 +173,9 @@ func (s *Service) Sessions(ctx context.Context, actor Actor, filters Filters, to
 	}
 	if pageSize > 100 {
 		pageSize = 100
+	}
+	if snapshot.Version == "rollup-v2" {
+		return s.rollupSessions(ctx, actor, snapshot, page, pageSize)
 	}
 	var total int
 	if err := s.db.QueryRowContext(ctx, `
@@ -228,7 +239,7 @@ func (s *Service) Sessions(ctx context.Context, actor Actor, filters Filters, to
 	return result, rows.Err()
 }
 
-func (s *Service) createSnapshot(ctx context.Context, actor Actor, raw Filters) (Snapshot, error) {
+func (s *Service) createSnapshotLegacy(ctx context.Context, actor Actor, raw Filters) (Snapshot, error) {
 	filters, from, to, err := normalizeFilters(raw)
 	if err != nil {
 		return Snapshot{}, err
@@ -304,7 +315,7 @@ func (s *Service) createSnapshot(ctx context.Context, actor Actor, raw Filters) 
 			metrics_snapshot_at, expires_at
 		) VALUES ($1, $2, $3, $4, $5::jsonb, statement_timestamp(), statement_timestamp() + $6::interval)
 		RETURNING id::text, metrics_snapshot_at, expires_at`, tokenHash, actor.ID,
-		filters.Scope, searchMode, string(filtersJSON), "15 minutes").Scan(
+		filters.Scope, searchMode, string(filtersJSON), snapshotTTL.String()).Scan(
 		&snapshot.ID, &snapshot.MetricsSnapshotAt, &snapshot.ExpiresAt)
 	if err != nil {
 		return Snapshot{}, err
@@ -341,19 +352,6 @@ func (s *Service) createSnapshot(ctx context.Context, actor Actor, raw Filters) 
 		return Snapshot{}, err
 	}
 
-	if _, err := tx.ExecContext(ctx, `DELETE FROM token_query_snapshots WHERE expires_at <= statement_timestamp()`); err != nil {
-		return Snapshot{}, err
-	}
-	if _, err := tx.ExecContext(ctx, `
-		DELETE FROM token_query_snapshots
-		WHERE id IN (
-			SELECT id FROM token_query_snapshots
-			WHERE user_id = $1
-			ORDER BY created_at DESC, id DESC
-			OFFSET $2
-		)`, actor.ID, maxUserSnapshots); err != nil {
-		return Snapshot{}, err
-	}
 	if err := tx.Commit(); err != nil {
 		return Snapshot{}, err
 	}
@@ -665,12 +663,12 @@ func (s *Service) loadSnapshot(ctx context.Context, actor Actor, raw Filters, to
 	var snapshot Snapshot
 	var storedFilters []byte
 	err = s.db.QueryRowContext(ctx, `
-		SELECT id::text, scope, search_mode, filters_json, metrics_snapshot_at, expires_at,
-			component_count, pending_source_count, pricing_pending_source_count
+		SELECT id::text, snapshot_version, scope, search_mode, filters_json, metrics_snapshot_at, expires_at,
+			component_count, rollup_count, pending_source_count, pricing_pending_source_count
 		FROM token_query_snapshots
 		WHERE token_hash = $1 AND user_id = $2`, snapshotTokenHash(token), actor.ID).Scan(
-		&snapshot.ID, &snapshot.Scope, &snapshot.SearchMode, &storedFilters,
-		&snapshot.MetricsSnapshotAt, &snapshot.ExpiresAt, &snapshot.ComponentCount,
+		&snapshot.ID, &snapshot.Version, &snapshot.Scope, &snapshot.SearchMode, &storedFilters,
+		&snapshot.MetricsSnapshotAt, &snapshot.ExpiresAt, &snapshot.ComponentCount, &snapshot.RollupCount,
 		&snapshot.PendingSourceCount, &snapshot.PricingPendingSourceCount)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Snapshot{}, ErrSnapshotExpired
@@ -693,7 +691,10 @@ func (s *Service) loadSnapshot(ctx context.Context, actor Actor, raw Filters, to
 	return snapshot, nil
 }
 
-func (s *Service) summary(ctx context.Context, snapshot Snapshot) (Summary, error) {
+func (s *Service) summary(ctx context.Context, actor Actor, snapshot Snapshot) (Summary, error) {
+	if snapshot.Version == "rollup-v2" {
+		return s.rollupSummary(ctx, actor, snapshot)
+	}
 	result := Summary{
 		QuerySnapshotToken:        snapshot.Token,
 		MetricsSnapshotAt:         snapshot.MetricsSnapshotAt.UTC().Format(time.RFC3339Nano),
@@ -705,6 +706,7 @@ func (s *Service) summary(ctx context.Context, snapshot Snapshot) (Summary, erro
 		PendingSourceCount:        strconv.FormatInt(snapshot.PendingSourceCount, 10),
 		PricingPendingSourceCount: strconv.FormatInt(snapshot.PricingPendingSourceCount, 10),
 		ComponentCount:            strconv.FormatInt(snapshot.ComponentCount, 10),
+		RollupCount:               strconv.FormatInt(snapshot.RollupCount, 10),
 	}
 	var costUSD, costCNY sql.NullString
 	err := s.db.QueryRowContext(ctx, `

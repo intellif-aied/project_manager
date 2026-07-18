@@ -54,7 +54,8 @@ MinIO 故障只允许使尚未生成的 Digest 延迟或失败，不能生成空
 
 ### 3.3 Ad-hoc 日期查询模式
 
-未附加 selection 的 `get_sessions` 当前读取 `session_activity_slices`，用于按日期/权限临时查询。它不读取 `content_payload`：
+未附加 selection 的 `get_sessions` 在 R5B 前读取 `session_activity_slices`，R5B 改读
+active family + family daily Rollup，仍按日期/权限返回。它不读取 `content_payload`：
 
 - 本专项不删除该路径的 Token 字段；
 - Report Source 选择器不再显示 Token，不代表 MCP ad-hoc `get_sessions` 可以删除 Token；
@@ -72,11 +73,16 @@ MinIO 故障只允许使尚未生成的 Digest 延迟或失败，不能生成空
 | Digest Worker | 从 MinIO Reader 读取 | 无外部接口变化 | R2 |
 | MCP attached digest | 继续读冻结 Payload | Schema、错误码、完整性门禁不变 | R2 回归 |
 | MCP attached full | PG Payload 改为 MinIO Reader | 分页和事件结构不变 | R2 |
-| MCP ad-hoc sessions | Token 数据源后续改为三维 Rollup | 字段先保持兼容 | R5B |
+| MCP ad-hoc sessions | 改读 active family + daily Rollup | 日期、权限和 Token 字段保持；`token_slice_strategy=family_rollup_v2` | R5B |
 | MCP `write_report_result` | 无数据源变化 | 读取完成、版本、hash 门禁不变 | 全阶段回归 |
 | Session 内容详情/导出 | 改为 MinIO Reader | 返回内容和权限不变 | R2 |
 | 内容清理/恢复 | 同步处理对象、索引、Digest、Rollup | 授权和审计语义不变 | R2/R5A |
 | Token Analytics | 改读三维 Rollup + 轻量 Snapshot | 权限、筛选和 snapshot token 保持；字段语义显式，API/前端/MCP 同版本切换 | R5B |
+| `/tokens` | 从停止更新的 `session_activity_slices` 切到同一 Rollup Snapshot | 原字段兼容，数值与 Token Analytics 对账 | R5B |
+| `/tokens/sessions` | 从日期切片旧表切到不重复 root Session Rollup | 分页真正作用于 Session Rollup；`total` 不再是切片行数；后续页复用首页 `query_snapshot_token` | R5B |
+| 工作台 Token 卡片 | 删除 `fetchAllSessionTokens` 全量翻页和浏览器汇总 | 改读 summary/trends/rankings/`session_count` | R5B |
+| 需求/任务关联工作记录 | `/tokens/sessions` 从日期切片变为 root Session | family v2 行以 root Session ID 保存；旧切片关联仍可解除 | R5B |
+| Snapshot/Rollup 回收 | 从请求内批量删除改为有超时的小批后台任务 | 无用户接口变化；未过期 Snapshot 结果稳定 | R5B |
 | 其他报告/任务/需求 MCP | 无变化 | 无变化 | 冒烟回归 |
 
 ## 5. 必须逐项执行的回归用例
@@ -116,7 +122,8 @@ MinIO 故障只允许使尚未生成的 Digest 延迟或失败，不能生成空
 | REG-MCP-006 | 未完整读取即写报告 | `write_report_result` 拒绝并返回 INCOMPLETE |
 | REG-MCP-007 | 完整读取后写报告 | 正常保存且重复写幂等 |
 | REG-MCP-008 | ad-hoc 日期查询 | 权限、日期、Session、Token 字段保持 |
-| REG-MCP-009 | 任务/需求/日报/周报等其他工具 | 响应与基线一致 |
+| REG-MCP-009 | ad-hoc 显式选择 Subagent/root | 命中正确 family，Token 不重复，日期范围外显式选择仍生效 |
+| REG-MCP-010 | 任务/需求/日报/周报等其他工具 | 响应与基线一致 |
 
 ### 其他 API
 
@@ -127,6 +134,14 @@ MinIO 故障只允许使尚未生成的 Digest 延迟或失败，不能生成空
 | REG-API-003 | Token summary/trends/rankings/sessions | 同一 Snapshot 总量可对账 |
 | REG-API-004 | 内容清理与恢复 | MinIO、派生索引、Digest、Token 生命周期一致 |
 | REG-API-005 | 前台并发 | 回填/离线对账开启后既有接口 p95 回归不超过 5% |
+| REG-API-006 | `/tokens` 与 `/tokens/sessions` | 不读 `session_activity_slices`，与同范围 Token Analytics 一致 |
+| REG-API-007 | 工作台 Token 卡片 | 不全量翻页；总量、趋势、成员排行、唯一 Session 数与服务端一致 |
+| REG-API-008 | 64 Session/18,030 Component 冷查询 | 首次 Snapshot 不物化 Component，p99 不超过 3 秒 |
+| REG-API-009 | 需求/任务关联新增 family v2 Session | 保存 root ID，不携带伪造日期，刷新后关联仍存在 |
+| REG-API-010 | 旧日期切片关联迁移/解除 | 可正常取消，随后保存 root Session 不重复 |
+| REG-API-011 | Snapshot/Rollup 后台回收 | HTTP 不执行清理 SQL；有效 Snapshot 引用不删，过期后小批回收 |
+| REG-API-012 | `/tokens/sessions` 多页 | 后续页复用首页 Snapshot；不重复写入全量 Rollup 引用；过期后可自动重建 |
+| REG-API-013 | MCP ad-hoc 活动时间 | `activity_start_at/end_at` 等于当日 Contribution 真实最早/最晚时间，不伪造整天边界 |
 
 ## 6. 停止条件
 

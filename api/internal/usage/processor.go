@@ -16,10 +16,11 @@ import (
 	"github.com/aidashboard/api/internal/biztime"
 	"github.com/aidashboard/api/internal/pricing"
 	"github.com/aidashboard/api/internal/sessionsync"
+	"github.com/aidashboard/api/internal/tokenrollup"
 )
 
 const (
-	ParserVersion     = "usage-parser-v4"
+	ParserVersion     = "usage-parser-v5"
 	NormalizerVersion = "token-normalizer-v1"
 )
 
@@ -38,24 +39,34 @@ type Processor struct {
 	store                   ObjectStore
 	claudeCacheWriteVariant string
 	normalizerVersion       string
+	rollups                 *tokenrollup.Builder
 }
 
 func NewProcessor(database *sql.DB, store ObjectStore, claudeCacheWriteVariant string) (*Processor, error) {
 	if database == nil || store == nil {
 		return nil, errors.New("database and object store are required")
 	}
+	normalizerVersion, err := NormalizerRevision(claudeCacheWriteVariant)
+	if err != nil {
+		return nil, err
+	}
+	return &Processor{
+		db: database, store: store,
+		claudeCacheWriteVariant: claudeCacheWriteVariant,
+		normalizerVersion:       normalizerVersion,
+		rollups:                 tokenrollup.NewBuilder(),
+	}, nil
+}
+
+func NormalizerRevision(claudeCacheWriteVariant string) (string, error) {
 	if claudeCacheWriteVariant != "" && claudeCacheWriteVariant != "5m" && claudeCacheWriteVariant != "1h" {
-		return nil, errors.New("Claude cache write variant must be empty, 5m, or 1h")
+		return "", errors.New("Claude cache write variant must be empty, 5m, or 1h")
 	}
 	variantVersion := claudeCacheWriteVariant
 	if variantVersion == "" {
 		variantVersion = "unspecified"
 	}
-	return &Processor{
-		db: database, store: store,
-		claudeCacheWriteVariant: claudeCacheWriteVariant,
-		normalizerVersion:       NormalizerVersion + ":claude-cache-write-" + variantVersion,
-	}, nil
+	return NormalizerVersion + ":claude-cache-write-" + variantVersion, nil
 }
 
 func (p *Processor) Process(ctx context.Context, job sessionsync.ProcessingJob) error {
@@ -212,7 +223,14 @@ func (p *Processor) processChunk(ctx context.Context, job sessionsync.Processing
 					THEN GREATEST(session_source_metrics_states.source_high_water_cursor, EXCLUDED.source_high_water_cursor)
 				ELSE EXCLUDED.source_high_water_cursor END,
 			target_generation_id = EXCLUDED.target_generation_id,
-			status = CASE WHEN session_source_metrics_states.active_revision_id = $4 THEN session_source_metrics_states.status ELSE 'rebuilding' END,
+			status = CASE
+				WHEN session_source_metrics_states.active_revision_id = $4 THEN session_source_metrics_states.status
+				WHEN session_source_metrics_states.active_revision_id IS NOT NULL
+					AND session_source_metrics_states.target_generation_id = EXCLUDED.target_generation_id
+					AND session_source_metrics_states.active_usage_parsed_cursor >= EXCLUDED.source_high_water_cursor
+					THEN session_source_metrics_states.status
+				ELSE 'rebuilding'
+			END,
 			updated_at = now()`, chunk.SourceID, chunk.GenerationID, chunk.GenerationHighWater, revision.ID); err != nil {
 		return err
 	}
@@ -572,13 +590,32 @@ func (p *Processor) applyRecord(ctx context.Context, tx *sql.Tx, revisionID stri
 			status, record.QualityReason, record.ProviderFingerprint).Scan(&logicalID); err != nil {
 			return err
 		}
-		if status == "current" {
-			_, err := p.replaceComponent(ctx, tx, revisionID, logicalID, observationID, chunk, record)
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE session_usage_observations
+			SET logical_usage_event_id = $2
+			WHERE id = $1 AND logical_usage_event_id IS NULL`, observationID, logicalID); err != nil {
 			return err
+		}
+		if status == "current" {
+			quality, err := p.replaceComponent(ctx, tx, revisionID, logicalID, observationID, chunk, record)
+			if err != nil || quality == QualityConflict || quality == QualityIncomplete {
+				return err
+			}
+			kind := contributionInitial
+			if record.Provider == "codex" {
+				kind = contributionCheckpointDelta
+			}
+			return p.insertContribution(ctx, tx, revisionID, logicalID, "", observationID, chunk, record, kind)
 		}
 		return nil
 	}
 	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE session_usage_observations
+		SET logical_usage_event_id = $2
+		WHERE id = $1 AND logical_usage_event_id IS NULL`, observationID, logicalID); err != nil {
 		return err
 	}
 	if foldStatus == "conflict" || foldStatus == "incomplete" {
@@ -615,8 +652,14 @@ func (p *Processor) applyRecord(ctx context.Context, tx *sql.Tx, revisionID stri
 			WHERE id = $1`, logicalID, observationID, fold.Reason); err != nil {
 			return err
 		}
-		_, err := p.replaceComponent(ctx, tx, revisionID, logicalID, observationID, chunk, record)
-		return err
+		quality, err := p.replaceComponent(ctx, tx, revisionID, logicalID, observationID, chunk, record)
+		if err != nil || quality == QualityConflict || quality == QualityIncomplete {
+			return err
+		}
+		deltaRecord := record
+		deltaRecord.Delta = subtractCounters(record.Counters, currentCounters)
+		return p.insertContribution(ctx, tx, revisionID, logicalID, currentObservationID,
+			observationID, chunk, deltaRecord, contributionAdvance)
 	default:
 		_, err = tx.ExecContext(ctx, `
 			UPDATE session_logical_usage_events
@@ -652,12 +695,7 @@ func (p *Processor) replaceComponent(
 		WHERE revision_id = $1 AND logical_usage_event_id = $2 AND valid_to IS NULL`, revisionID, logicalID); err != nil {
 		return record.Quality, err
 	}
-	billingVariant := "unknown"
-	if record.Provider == "claude_code" && record.Delta.CacheCreationTokens > 0 {
-		billingVariant = p.claudeCacheWriteVariant
-	} else if record.Provider == "codex" && record.Delta.RequestInputTokens > CodexLongContextInputThreshold {
-		billingVariant = "long_context"
-	}
+	billingVariant := billingVariantForRecord(record, p.claudeCacheWriteVariant)
 	componentQuality := record.Quality
 	if normalized.IsEstimated && componentQuality == QualityExact {
 		componentQuality = QualityEstimated
@@ -919,6 +957,17 @@ func (p *Processor) activateIfReady(ctx context.Context, tx *sql.Tx, revisionID,
 		return err
 	}
 	if _, err := pricing.RecalculateRevisionTx(ctx, tx, revisionID); err != nil {
+		return err
+	}
+	if _, err := pricing.EnsureContributionRevisionCostsTx(ctx, tx, revisionID); err != nil {
+		return err
+	}
+	var rollupSessionID string
+	if err := tx.QueryRowContext(ctx, `SELECT session_id FROM session_sources WHERE id = $1`, sourceID).Scan(&rollupSessionID); err != nil {
+		return err
+	}
+	if err := p.rollups.BuildForActivation(ctx, tx, rollupSessionID, sourceID,
+		revisionID, pricing.CalculatorVersion); err != nil {
 		return err
 	}
 	_, err := tx.ExecContext(ctx, `

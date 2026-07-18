@@ -1,7 +1,7 @@
-# 04：五轮 Review 记录
+# 04：七轮 Review 记录
 
 > Review 日期：2026-07-17；范围：本目录全部方案文档。
-> 结论：方案内部一致、具备分阶段开发条件；开发前执行性 Review 放行 R1，是否开始开发仍需人工明确授权。
+> 结论：R1 已完成；R5A/R5B 已获开发授权并完成隔离环境首轮实现，14.157 切换仍受本文件门槛约束。
 
 ## 第一轮：产品语义 Review
 
@@ -179,7 +179,65 @@
 
 ## Review 后仍需人工决定
 
-- 是否授权开始 R1 开发；开发前默认使用干净独立 worktree；
 - MinIO 保留和备份策略；
 - R4 旧载荷表下线观察期；
 - R5B 新增 Token 字段的最终前端展示和成员下钻入口。
+
+## 第六轮：Token 在线查询事故补充 Review（2026-07-18）
+
+### 新证据
+
+1. R1 已完成 Catalog 开发、测试服全量回填/对账和目标接口切换，Report Source 候选查询不再扫描事件表；
+2. 用户 `303` 的三天 Token 范围只有 64 个 Session，却被
+   `/token-analytics/summary` 物化为 18,030 个 Snapshot Item，冷查询超过 30 秒；
+3. `/tokens`、`/tokens/sessions` 和工作台仍读取停止更新的
+   `session_activity_slices`，七条返回数据只对应三个旧 Session；
+4. 现有 R5 的 Contribution、三维 Rollup 和轻量 Snapshot 方向正确，但消费者清单遗漏了
+   两个旧 Token API、工作台 `fetchAllSessionTokens`，以及需求/任务“关联工作记录”。
+
+### 结论
+
+- R5A：**GO**。在独立 worktree 开发附加表、异步构建、历史回填和全量对账，不改变在线读路径；
+- R5B：保持条件 GO。只有 R5A 三维等式、成本、Subagent 和真实高基数性能全部通过后，
+  才允许 API、工作台、Token 页面和 MCP ad-hoc 同版本整体切换；
+- R5C：本期不执行，不删除旧 Snapshot、旧表或兼容字段；
+- 不增加灰度/双读配置，不通过增加 30 秒前端超时或同步回填旧表止血。
+
+用户已于 2026-07-18 明确授权开始本开发单元；生产迁移、生产发布和历史数据清理仍需单独授权。
+
+## 第七轮：R5 首轮实现一致性 Review（2026-07-18）
+
+### 代码与方案对照
+
+1. Contribution 只在 Claude Advance/Codex checkpoint 产生不可变增量，重复 Observation 不增数；
+2. family total = daily = chunk = Contribution = active Component 在激活事务内校验；
+3. 新 Snapshot 只冻结 root family Rollup 引用，summary/trends/rankings/sessions 不读 Component；
+4. `/tokens*`、工作台、需求/任务关联和 MCP ad-hoc 均已纳入同版本消费者迁移；
+5. 发现并补上版本化 Rollup 的容量边界：HTTP 不再做批量删除，过期 Snapshot 与无引用
+   superseded Rollup 由有锁/语句超时的小批后台任务回收；
+6. 回填检查新增 `unsafe_sources`，Chunk 游标或 Metering 输入不完整时不得宣告完成；
+7. 64 root / 18,030 逻辑事实的隔离用例只物化 64 条引用，耗时低于 25ms；这不是 14.157 p95/p99 结论。
+
+### 无灰度的实际发布边界
+
+不增加运行时开关，但必须形成两个独立 Git/镜像提交：
+
+1. **R5A 准备提交**：Migration、parser v5、Contribution、成本、family/Rollup、回填和后台回收；在线读路径仍保持上一版本；
+2. 在 14.157 部署 R5A，低压回填至 `unsafe/missing/building/failed/dead/reconciliation` 全为零，完成三维与成本对账；
+3. **R5B 切换提交**：API、工作台、需求/任务关联和 MCP ad-hoc 一次性改读 Rollup；
+4. R5B 回归失败直接部署上一已验证 R5A 镜像，不做用户灰度或双读切换。
+
+14.157 在部署前发现已有无 Contribution/Family 实表的 `schema_migrations.version=22`；
+R5A 迁移因此改用新的正向编号 `023`，禁止删除历史版本记录或复用 `022`。
+
+### 第七轮结论
+
+- 继续开发与提交：**GO**；
+- 14.157 部署 R5A 准备版本：**已执行**；迁移 023 、API 健康和压力保护正常；
+- 14.157 部署 R5B：**NO-GO**，必须等待 R5A 全量回填和真实数据对账；
+- 生产迁移/发布/清理：未授权。
+
+14.157 真实回填的当前门禁结果为 `eligible=228 / active=215 / failed=8 / building=5 /
+dead_jobs=3 / reconciliation=0`。其中 3 个 building 来源的 MinIO key 不存在，另 2 个为
+replacement revision 回退非稳定事实。在明确“修复原始数据”或“审核后排除哪些来源”之前，
+禁止因 215 个正常来源已完成就降低 R5B 门禁。

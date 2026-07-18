@@ -1,4 +1,10 @@
-import type { SessionTokens, TokenAggregation } from "../api/types";
+import type {
+  SessionTokens,
+  TokenAggregation,
+  TokenAnalyticsRankingItem,
+  TokenAnalyticsSummary,
+  TokenAnalyticsTrendPoint
+} from "../api/types";
 
 export type DashboardTokenRange = "yesterday" | "last3days" | "last7days";
 
@@ -29,6 +35,14 @@ export interface DashboardTokenReport {
 export interface TokenDateRange {
   from: string;
   to: string;
+}
+
+export interface DashboardTokenAnalyticsData {
+  summary: TokenAnalyticsSummary;
+  trends: TokenAnalyticsTrendPoint[];
+  members: TokenAnalyticsRankingItem[];
+  teams?: TokenAnalyticsRankingItem[];
+  mineSummary?: TokenAnalyticsSummary;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -157,4 +171,78 @@ export function aggregateDashboardTokenReport(
     mine,
     status: sessions.length > 0 ? "有上报记录" : "暂无记录"
   };
+}
+
+function tokenNumber(value: string | number | undefined) {
+  const parsed = Number(value ?? 0);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+export function aggregateDashboardTokenAnalyticsReport(
+  data: DashboardTokenAnalyticsData | undefined,
+  range: TokenDateRange,
+  options?: { showUploaders?: boolean }
+): DashboardTokenReport {
+  if (!data) {
+    return {
+      total: "0",
+      sessions: 0,
+      uploaders: options?.showUploaders ? 0 : undefined,
+      bars: buildDashboardTokenBars(range, new Map()),
+      status: "暂无记录"
+    };
+  }
+
+  const totalTokens = tokenNumber(data.summary.total_tokens);
+  const sessionCount = tokenNumber(data.summary.session_count);
+  const tokenByDate = new Map(
+    data.trends.map((point) => [point.date, tokenNumber(point.total_tokens)] as const)
+  );
+  const activeMembers = data.members.filter((member) => tokenNumber(member.total_tokens) > 0);
+  const memberGroups = activeMembers.map((member) => ({
+    name: member.label,
+    total: formatDashboardTokens(tokenNumber(member.total_tokens)),
+    value: tokenNumber(member.total_tokens),
+    note: `${tokenNumber(member.session_count)} 个 session`
+  }));
+  const groups = data.teams
+    ?.filter((team) => tokenNumber(team.total_tokens) > 0)
+    .map((team) => {
+      const value = tokenNumber(team.total_tokens);
+      return {
+        name: team.label,
+        total: formatDashboardTokens(value),
+        value,
+        note: totalTokens > 0 ? `占比 ${((value / totalTokens) * 100).toFixed(1)}%` : undefined
+      };
+    });
+  const mine = data.mineSummary
+    ? {
+        sessions: tokenNumber(data.mineSummary.session_count),
+        total: formatDashboardTokens(tokenNumber(data.mineSummary.total_tokens))
+      }
+    : undefined;
+  const abnormal =
+    data.summary.quality_status === "conflict" || data.summary.quality_status === "incomplete";
+
+  return {
+    total: formatDashboardTokens(totalTokens),
+    sessions: sessionCount,
+    uploaders: options?.showUploaders ? activeMembers.length : undefined,
+    bars: buildDashboardTokenBars(range, tokenByDate),
+    groups: groups?.length ? groups : undefined,
+    memberGroups: memberGroups.length ? memberGroups : undefined,
+    mine,
+    status: abnormal ? "解析异常" : sessionCount > 0 ? "有上报记录" : "暂无记录"
+  };
+}
+
+function buildDashboardTokenBars(range: TokenDateRange, tokenByDate: Map<string, number>) {
+  const bars: DashboardTokenBar[] = [];
+  for (let day = parseDateKey(range.from); day <= parseDateKey(range.to); day = addDays(day, 1)) {
+    const key = toDateKey(day);
+    const value = tokenByDate.get(key) ?? 0;
+    bars.push({ label: labelDate(key), value, text: formatDashboardTokens(value) });
+  }
+  return bars;
 }

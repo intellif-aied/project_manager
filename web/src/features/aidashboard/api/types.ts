@@ -1275,6 +1275,13 @@ export interface SessionTokens {
   cache_creation_tokens: number;
   cache_read_tokens: number;
   total_tokens: number;
+  family_root_session_ref?: string;
+  self_total_tokens?: number;
+  subagent_total_tokens?: number;
+  family_total_tokens?: number;
+  lifetime_total_tokens?: number;
+  range_total_tokens?: number;
+  member_count?: number;
 }
 
 export interface PaginatedSessionTokens {
@@ -1282,6 +1289,7 @@ export interface PaginatedSessionTokens {
   total: number;
   page: number;
   page_size: number;
+  query_snapshot_token?: string;
 }
 
 export interface MemberStat {
@@ -1356,6 +1364,8 @@ export interface TokenAnalyticsSummary {
   pending_source_count: string;
   pricing_pending_source_count: string;
   component_count: string;
+  rollup_count: string;
+  session_count: string;
 }
 
 export interface TokenAnalyticsTrendPoint {
@@ -1369,6 +1379,7 @@ export interface TokenAnalyticsRankingItem {
   key: string;
   label: string;
   total_tokens: string;
+  session_count: string;
   estimated_cost_cny?: string;
   pricing_status: string;
   last_activity_at?: string;
@@ -1378,14 +1389,32 @@ export interface TokenAnalyticsRankingItem {
 export interface TokenAnalyticsSessionItem {
   session_id: string;
   session_ref: string;
+  family_root_session_ref: string;
+  matched_member_session_id?: string;
+  matched_member_session_ref?: string;
   user_id: string;
   user_name: string;
   agent_type: string;
   summary?: string;
+  started_at: string;
   activity_from: string;
   activity_to: string;
+  activity_dates: string[];
+  slice_count: number;
   model: string;
   total_tokens: string;
+  uncached_input_tokens: string;
+  cache_read_tokens: string;
+  cache_write_5m_tokens: string;
+  cache_write_1h_tokens: string;
+  output_tokens: string;
+  self_total_tokens: string;
+  subagent_total_tokens: string;
+  family_total_tokens: string;
+  lifetime_total_tokens: string;
+  range_total_tokens: string;
+  member_count: number;
+  included_in_family_total: boolean;
   estimated_cost_cny?: string;
   pricing_status: string;
   quality_status: string;
