@@ -1,4 +1,4 @@
-package sessiondigestv2
+package sessiondigest
 
 import (
 	"bytes"
@@ -14,29 +14,27 @@ import (
 
 const (
 	safeTextCharacters       = 8192
-	safeOutputHeadCharacters = 1024
-	safeOutputTailCharacters = 4096
+	safeOutputHeadCharacters = 512
+	safeOutputTailCharacters = 2048
 	safeFilePathCharacters   = 1024
 	safePatchFiles           = 200
 	safeClaudeBlocks         = 100
 )
 
-// projectSafeEvent is the Go equivalent of the former PostgreSQL safe-event projection.
-// Limits are character-based to preserve PostgreSQL left/right semantics for UTF-8 text.
+// projectSafeEvent preserves the legacy Digest V1 SQL projection while reading from MinIO.
 func projectSafeEvent(source contentreader.Event) (Event, error) {
+	root, err := decodeSafeProjectionObject(source.Payload)
+	if err != nil {
+		return Event{}, fmt.Errorf("decode digest v1 source event at cursor %d: %w", source.SourceStartCursor, err)
+	}
 	event := Event{
 		StartCursor:  source.SourceStartCursor,
 		EndCursor:    source.SourceEndCursor,
-		OccurredAt:   source.OccurredAt,
 		EventType:    source.EventType,
 		Summary:      "",
 		Excerpt:      "",
 		ContentSHA:   source.ContentSHA256,
-		PayloadBytes: source.SourceEndCursor - source.SourceStartCursor,
-	}
-	root, err := decodeSafeProjectionObject(source.Payload)
-	if err != nil {
-		return Event{}, fmt.Errorf("decode digest v2 source event at cursor %d: %w", source.SourceStartCursor, err)
+		PayloadBytes: int64(len(jsonbcompat.Text(root))),
 	}
 	payload := safeObject(root["payload"])
 
@@ -80,7 +78,7 @@ func projectSafeEvent(source contentreader.Event) (Event, error) {
 		matches := patchFilePattern.FindAllStringSubmatch(safeText(payload["input"]), safePatchFiles)
 		patches := make([]string, 0, len(matches))
 		for _, match := range matches {
-			patches = append(patches, "*** "+match[1]+" File: "+match[2])
+			patches = append(patches, "*** Update File: "+match[1])
 		}
 		projected = payloadEnvelope(map[string]any{
 			"name":    safeText(payload["name"]),
@@ -106,7 +104,7 @@ func projectSafeEvent(source contentreader.Event) (Event, error) {
 	}
 	encoded, err := json.Marshal(projected)
 	if err != nil {
-		return Event{}, fmt.Errorf("encode digest v2 safe event at cursor %d: %w", source.SourceStartCursor, err)
+		return Event{}, fmt.Errorf("encode digest v1 safe event at cursor %d: %w", source.SourceStartCursor, err)
 	}
 	event.Payload = encoded
 	return event, nil
@@ -244,5 +242,5 @@ func safeRight(value string, limit int) string {
 }
 
 func safeHeadTail(value string) string {
-	return safeLeft(value, safeOutputHeadCharacters) + "\n" + safeRight(value, safeOutputTailCharacters)
+	return safeLeft(value, safeOutputHeadCharacters) + " " + safeRight(value, safeOutputTailCharacters)
 }

@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/aidashboard/api/internal/contentreader"
+	"github.com/aidashboard/api/internal/jsonbcompat"
 )
 
 func TestProjectSafeEventMatchesLegacyProjectionShapes(t *testing.T) {
@@ -142,7 +143,7 @@ func TestPostgresJSONBTextCompatibility(t *testing.T) {
 		"b":  json.Number("1e-2"),
 		"a":  []any{"x", true, nil},
 	}
-	actual := postgresJSONBText(value)
+	actual := jsonbcompat.Text(value)
 	expected := `{"a": ["x", true, null], "b": 0.01, "aa": 123.00}`
 	if actual != expected {
 		t.Fatalf("jsonb text mismatch\nactual:   %s\nexpected: %s", actual, expected)

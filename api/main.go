@@ -160,6 +160,10 @@ func main() {
 		meteringWorker.Start(schedulerCtx)
 		log.Println("Session metering lifecycle worker started")
 	}
+	sessionContentReader, err := contentreader.New(database, minioStore)
+	if err != nil {
+		log.Fatalf("Failed to init session content reader: %v", err)
+	}
 	if reportSourceConfig.SessionReadMode == reportsource.ReadModeDigestV1 ||
 		reportSourceConfig.SessionReadMode == reportsource.ReadModeDigestV2 ||
 		reportSourceConfig.SessionReadMode == reportsource.ReadModeShadow {
@@ -172,7 +176,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("Failed to init session digest job repository: %v", err)
 		}
-		digestProcessor, err := sessiondigest.NewProcessor(database, digestConfig)
+		digestProcessor, err := sessiondigest.NewProcessor(database, sessionContentReader, digestConfig)
 		if err != nil {
 			log.Fatalf("Failed to init session digest processor: %v", err)
 		}
@@ -194,11 +198,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to init session digest v2 job repository: %v", err)
 	}
-	digestContentReader, err := contentreader.New(database, minioStore)
-	if err != nil {
-		log.Fatalf("Failed to init session content reader: %v", err)
-	}
-	digestProcessor, err := sessiondigestv2.NewProcessor(database, digestContentReader, digestV2Config)
+	digestProcessor, err := sessiondigestv2.NewProcessor(database, sessionContentReader, digestV2Config)
 	if err != nil {
 		log.Fatalf("Failed to init session digest v2 processor: %v", err)
 	}
