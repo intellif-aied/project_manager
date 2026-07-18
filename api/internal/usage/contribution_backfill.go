@@ -69,7 +69,7 @@ func RepairFailedContributionRevision(
 	if _, err := tx.ExecContext(ctx, `SET LOCAL lock_timeout = '250ms'`); err != nil {
 		return ContributionRepairReport{}, err
 	}
-	if _, err := tx.ExecContext(ctx, `SET LOCAL statement_timeout = '60s'`); err != nil {
+	if _, err := tx.ExecContext(ctx, `SET LOCAL statement_timeout = '10min'`); err != nil {
 		return ContributionRepairReport{}, err
 	}
 
