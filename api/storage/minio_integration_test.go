@@ -37,7 +37,14 @@ func TestMinioPutVerifiedIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Delete(context.Background(), objectKey)
-	reader, err := store.Download(ctx, objectKey)
+	readOnlyStore, err := NewMinioStorageReadOnly(&config.Config{
+		MinioEndpoint: endpoint, MinioAccessKey: accessKey, MinioSecretKey: secretKey,
+		MinioBucket: "aidashboard-v2-test", MinioUseSSL: false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := readOnlyStore.Download(ctx, objectKey)
 	if err != nil {
 		t.Fatal(err)
 	}
