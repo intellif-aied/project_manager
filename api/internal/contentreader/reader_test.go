@@ -79,20 +79,31 @@ func TestReaderFallsBackToLegacyObject(t *testing.T) {
 	}
 }
 
-func TestReaderRejectsChunkCoverageGap(t *testing.T) {
-	repository := &fakeRepository{
-		target: availableTarget(20),
-		chunks: []contentChunk{
-			{ID: "chunk-1", StartCursor: 0, EndCursor: 5, ObjectKey: "one", ObjectStatus: "available"},
-			{ID: "chunk-2", StartCursor: 6, EndCursor: 20, ObjectKey: "two", ObjectStatus: "available"},
-		},
+func TestReaderRejectsChunkCoverageGapOrOverlap(t *testing.T) {
+	tests := []struct {
+		name        string
+		secondStart int64
+	}{
+		{name: "gap", secondStart: 6},
+		{name: "overlap", secondStart: 4},
 	}
-	reader := mustReader(t, repository, memoryObjectStore{})
-	_, err := reader.Stream(context.Background(), Request{
-		RevisionID: "revision-1", StartCursor: 0, EndCursor: 20,
-	}, func(Event) error { return nil })
-	if !errors.Is(err, ErrCursorIntegrity) {
-		t.Fatalf("err=%v", err)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repository := &fakeRepository{
+				target: availableTarget(20),
+				chunks: []contentChunk{
+					{ID: "chunk-1", StartCursor: 0, EndCursor: 5, ObjectKey: "one", ObjectStatus: "available"},
+					{ID: "chunk-2", StartCursor: test.secondStart, EndCursor: 20, ObjectKey: "two", ObjectStatus: "available"},
+				},
+			}
+			reader := mustReader(t, repository, memoryObjectStore{})
+			_, err := reader.Stream(context.Background(), Request{
+				RevisionID: "revision-1", StartCursor: 0, EndCursor: 20,
+			}, func(Event) error { return nil })
+			if !errors.Is(err, ErrCursorIntegrity) {
+				t.Fatalf("err=%v", err)
+			}
+		})
 	}
 }
 
@@ -132,6 +143,24 @@ func TestReaderClassifiesMissingObject(t *testing.T) {
 		RevisionID: "revision-1", StartCursor: 0, EndCursor: int64(len(content)),
 	}, func(Event) error { return nil })
 	if !errors.Is(err, ErrObjectUnavailable) {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestReaderClassifiesIncompleteJSONLAsContentIntegrity(t *testing.T) {
+	content := []byte("{\"type\":\"user\",\"timestamp\":\"2026-07-18T01:00:00Z\"}")
+	repository := &fakeRepository{
+		target: availableTarget(int64(len(content))),
+		chunks: []contentChunk{{
+			ID: "chunk-1", StartCursor: 0, EndCursor: int64(len(content)),
+			ContentSHA256: sessionsync.HashBytes(content), ObjectKey: "chunk.jsonl", ObjectStatus: "available",
+		}},
+	}
+	reader := mustReader(t, repository, memoryObjectStore{"chunk.jsonl": content})
+	_, err := reader.Stream(context.Background(), Request{
+		RevisionID: "revision-1", StartCursor: 0, EndCursor: int64(len(content)),
+	}, func(Event) error { return nil })
+	if !errors.Is(err, ErrContentIntegrity) {
 		t.Fatalf("err=%v", err)
 	}
 }
