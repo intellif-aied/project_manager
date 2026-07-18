@@ -1,5 +1,8 @@
 # Aida Report MCP 使用说明
 
+> [!WARNING]
+> 本文档是 Report Context V1 上线前的历史使用说明，其“9 个工具”和个人报告自由调用 `get_sessions/get_tasks/get_requirements` 的流程已过时，不得用于新 Agent 或 Skill。当前用户指南见 [`doc/v2/mcp文档/自定义报告Agent使用指南.md`](../v2/mcp文档/自定义报告Agent使用指南.md)，技术契约见 [`doc/v2/mcp文档/README.md`](../v2/mcp文档/README.md)。
+
 这份文档给编写自定义 Skill 的用户使用。Aida Report MCP 用来让 Agent / Skill 读取 Aida 数据并回写日报、周报。
 
 普通用户不需要手动配置 MCP 地址和 token。默认报告 Agent 已由平台绑定 MCP，Skill 里只需要说明应该调用哪些 MCP 工具。

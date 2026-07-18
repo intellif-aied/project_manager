@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/aidashboard/api/internal/biztime"
+	"github.com/aidashboard/api/internal/reportcontext"
 	"github.com/aidashboard/api/internal/reportsource"
 	"github.com/aidashboard/api/model"
 	"github.com/aidashboard/api/service"
@@ -21,10 +22,11 @@ import (
 )
 
 type ManagedAgentHandler struct {
-	db           *sql.DB
-	client       *service.ManagedAgentClient
-	defaults     ManagedAgentDefaults
-	reportSource *reportsource.Service
+	db            *sql.DB
+	client        *service.ManagedAgentClient
+	defaults      ManagedAgentDefaults
+	reportSource  *reportsource.Service
+	reportContext *reportcontext.Service
 }
 
 const (
@@ -101,6 +103,10 @@ func NewManagedAgentHandlerWithDefaults(db *sql.DB, client *service.ManagedAgent
 
 func (h *ManagedAgentHandler) ConfigureReportSourceSelection(service *reportsource.Service) {
 	h.reportSource = service
+}
+
+func (h *ManagedAgentHandler) ConfigureReportContext(service *reportcontext.Service) {
+	h.reportContext = service
 }
 
 func normalizeManagedAgentDefaults(defaults ManagedAgentDefaults) ManagedAgentDefaults {
@@ -1248,9 +1254,10 @@ func defaultReportAgentInstructions(credentialSlot string) string {
 		defaultManagedAgentMarker,
 		"AIDA_REPORT_DEPLOYMENT:{{aida_deployment}}",
 		"你是 Aida 报告执行 Agent。报告内容、结构和写作风格由当前绑定的 Skill 决定；本 Prompt 只定义 Aida 运行参数和 MCP 读写协议。",
+		"每次报告运行必须先实际调用 Skill 工具加载 aida-report，并观察到对应的 Skill tool_result 后再调用任何报告 MCP；输入文本中出现 /aida-report 不代表已经加载。完整加载当前绑定版本的 SKILL.md 只是运行协议，不在 Prompt 中增加报告内容规则。",
 		"运行参数由 Aida 后端注入，包含 run_id、report_type、period、calendar_context、target，个人报告还可能包含 report_source_selection_id。不要要求用户提供 session IDs、URLs、token 或 credential。",
 		"Aida Report MCP 已通过 " + credentialSlot + " 凭据槽注入当前用户 Authorization。使用当前用户身份调用已绑定的 MCP tools，不要手工拼接管理员 token。",
-		"个人报告存在 report_source_selection_id 时，必须携带相同的 run_id、report_type、period 和 report_source_selection_id 调用 get_sessions；该 ID 只能放入 report_source_selection_id，不得放入 selected_session_slice_keys，也不得同时传 date_range。digest_v1 和 digest_v2 必须确认 coverage.complete=true 且 has_more=false；digest_v2 还必须确认各日 outcome_coverage.complete=true。仅 legacy full 按 next_cursor 读取到 has_more=false。",
+		"个人报告存在 report_source_selection_id 时，平台已冻结并校验来源；必须只用 run_id 调用一次 get_report_context 获取完整上下文，不得再调用 get_sessions、get_tasks 或 get_requirements 自由扫描。没有 report_source_selection_id 的兼容报告仍按当前 Skill 的旧工具路由执行。",
 		"固定工具范围：个人报告使用 self；小组报告读取个人报告时使用 team + report_scope=personal；部门报告读取小组报告时使用 department + report_scope=team。不要越权扩大或缩小目标范围。",
 		"依据当前绑定 Skill 生成报告后，必须调用 write_report_result，传入相同的 run_id、report_type、period、target 和 content；不要用最终对话回复代替 MCP 回写。生成失败时调用 write_report_failure。",
 	}, "\n")
@@ -1258,13 +1265,15 @@ func defaultReportAgentInstructions(credentialSlot string) string {
 
 func defaultReportAgentStartPromptTemplate(credentialSlot string) string {
 	return strings.Join([]string{
+		"/aida-report",
+		"协议前置条件：必须实际调用 Skill 工具并观察到 aida-report 的 tool_result；本行 /aida-report 文本本身不代表 Skill 已加载，加载完成前不得调用报告 MCP。",
 		"请根据以下业务参数生成 Aida 报告。",
 		"report_type={{ report_type }}",
 		"period={{ period_json }}",
 		"calendar_context={{ calendar_context_json }}",
 		"target={{ target_json }}",
 		"report_source_selection_id={{ report_source_selection_id }}",
-		"当 report_source_selection_id 非空时，使用该快照和 run_id 完整调用 get_sessions。快照 ID 只能传 report_source_selection_id，不得传 selected_session_slice_keys 或 date_range。digest_v1 和 digest_v2 确认完整单页 coverage；digest_v2 同时确认各日 outcome_coverage；仅 legacy full 使用 next_cursor 读取全部页面。",
+		"当 report_source_selection_id 非空时，平台已准备完整 Report Context；只传 run_id 调用一次 get_report_context。不要再调用 get_sessions、get_tasks 或 get_requirements 扫描数据。",
 		"报告内容与格式遵循当前绑定 Skill，本启动提示不增加额外内容限制。",
 		"固定工具范围：个人报告使用 self；小组报告使用 team + report_scope=personal；部门报告使用 department + report_scope=team。禁止将小组或部门报告改用 self 或 all。",
 		"run_id={{ run_id }}",
@@ -1968,6 +1977,8 @@ func mergeReportStartPromptValues(systemValues map[string]string, userValues map
 
 func buildReportRunMessage(startPromptValues map[string]string, message string, credentialSlot string) string {
 	parts := []string{
+		"/aida-report",
+		"协议前置条件：必须实际调用 Skill 工具并观察到 aida-report 的 tool_result；本行 /aida-report 文本本身不代表 Skill 已加载，加载完成前不得调用报告 MCP。",
 		"请根据以下业务参数生成 Aida 报告。",
 		"report_type=" + strings.TrimSpace(startPromptValues["report_type"]),
 		"period=" + strings.TrimSpace(startPromptValues["period_json"]),
@@ -1982,7 +1993,7 @@ func buildReportRunMessage(startPromptValues map[string]string, message string, 
 	}
 	if selectionID := strings.TrimSpace(startPromptValues["report_source_selection_id"]); selectionID != "" {
 		parts = append(parts,
-			"来源协议：report_source_selection_id 是本次个人报告的不可变来源快照。携带相同的 run_id、report_type、period 和该 ID 调用 get_sessions；快照 ID 只能放在 report_source_selection_id，不得放入 selected_session_slice_keys，也不得同时传 date_range。digest_v1 和 digest_v2 确认 coverage.complete=true、has_more=false；digest_v2 同时确认各日 outcome_coverage.complete=true。仅 legacy full 按 next_cursor 读取到 has_more=false。报告内容与格式遵循当前绑定 Skill，本消息不增加额外内容限制。",
+			"来源协议：平台已经根据 report_source_selection_id 冻结并校验本次个人报告来源。只传 run_id 调用一次 get_report_context；不得再调用其他读取工具重新扫描 Session、任务或需求。报告内容与格式遵循当前绑定 Skill，本消息不增加额外内容限制。",
 		)
 	}
 	message = strings.TrimSpace(message)
@@ -2587,6 +2598,20 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 			return
 		}
 		reportSourceSelectionID = attached.ID
+		var preparedContext reportcontext.StoredContext
+		if h.reportContext == nil {
+			err = fmt.Errorf("report context service is not configured")
+		} else {
+			preparedContext, err = h.reportContext.BuildPersonal(r.Context(), u.ID, runID, reportSourceSelectionID, req.ReportType, selectionPeriod, target)
+		}
+		if err != nil {
+			_ = h.markAIRunSubmitFailedContext(r.Context(), runID, u.ID, err.Error())
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "REPORT_CONTEXT_BUILD_FAILED", "error": "failed to prepare report context"})
+			return
+		}
+		inputRef["report_context_schema_version"] = reportcontext.SchemaVersion
+		inputRef["report_context_hash"] = preparedContext.Hash
+		inputRef["report_context_bytes"] = preparedContext.Bytes
 	} else {
 		runID, err = h.insertPendingManagedSessionAIRun(u.ID, reportAgentRunBusinessType, agentID, modelID, inputRef)
 	}
@@ -4082,6 +4107,20 @@ func (h *ManagedAgentHandler) executeReportAgentScheduleRun(ctx context.Context,
 			return nil, err
 		}
 		reportSourceSelectionID = attached.ID
+		var preparedContext reportcontext.StoredContext
+		if h.reportContext == nil {
+			err = fmt.Errorf("report context service is not configured")
+		} else {
+			preparedContext, err = h.reportContext.BuildPersonal(ctx, u.ID, runID, reportSourceSelectionID, reportType, selectionPeriod, target)
+		}
+		if err != nil {
+			_ = h.markAIRunSubmitFailedContext(ctx, runID, u.ID, err.Error())
+			_ = h.updateManagedScheduleAfterRun(ctx, schedule.ID, u.ID, runID, scheduledAt, err.Error(), advanceNext, schedule)
+			return h.loadAIRun(runID, u.ID)
+		}
+		inputRef["report_context_schema_version"] = reportcontext.SchemaVersion
+		inputRef["report_context_hash"] = preparedContext.Hash
+		inputRef["report_context_bytes"] = preparedContext.Bytes
 	} else {
 		runID, err = h.insertPendingManagedSessionAIRun(u.ID, reportAgentRunBusinessType, schedule.AgentID, modelID, inputRef)
 	}
