@@ -55,7 +55,7 @@ func TestProjectSafeEventMatchesLegacyProjectionShapes(t *testing.T) {
 			}},
 			expected: map[string]any{"payload": map[string]any{
 				"role": "assistant", "phase": "final_answer",
-				"content": `[{"text":"done","type":"text"}]`,
+				"content": `[{"text": "done", "type": "text"}]`,
 			}},
 		},
 		{
@@ -133,6 +133,19 @@ func TestProjectSafeEventMatchesLegacyProjectionShapes(t *testing.T) {
 				t.Fatalf("projection metadata changed: %+v", event)
 			}
 		})
+	}
+}
+
+func TestPostgresJSONBTextCompatibility(t *testing.T) {
+	value := map[string]any{
+		"aa": json.Number("1.2300e2"),
+		"b":  json.Number("1e-2"),
+		"a":  []any{"x", true, nil},
+	}
+	actual := postgresJSONBText(value)
+	expected := `{"a": ["x", true, null], "b": 0.01, "aa": 123.00}`
+	if actual != expected {
+		t.Fatalf("jsonb text mismatch\nactual:   %s\nexpected: %s", actual, expected)
 	}
 }
 
