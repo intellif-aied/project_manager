@@ -308,6 +308,9 @@ func parseCodexLine(
 		return UsageRecord{}, lineIgnored
 	}
 	var info codexTokenInfo
+	if bytes.Equal(bytes.TrimSpace(event.Info), []byte("null")) {
+		return UsageRecord{}, lineIgnored
+	}
 	if len(event.Info) == 0 || json.Unmarshal(event.Info, &info) != nil || len(info.Total) == 0 {
 		return UsageRecord{}, lineUnknownUsage
 	}
