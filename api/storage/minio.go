@@ -22,6 +22,15 @@ type MinioStorage struct {
 }
 
 func NewMinioStorage(cfg *config.Config) (*MinioStorage, error) {
+	return newMinioStorage(cfg, true)
+}
+
+// NewMinioStorageReadOnly opens an existing bucket without creating or modifying it.
+func NewMinioStorageReadOnly(cfg *config.Config) (*MinioStorage, error) {
+	return newMinioStorage(cfg, false)
+}
+
+func newMinioStorage(cfg *config.Config, createBucket bool) (*MinioStorage, error) {
 	client, err := minio.New(cfg.MinioEndpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(cfg.MinioAccessKey, cfg.MinioSecretKey, ""),
 		Secure: cfg.MinioUseSSL,
@@ -33,14 +42,24 @@ func NewMinioStorage(cfg *config.Config) (*MinioStorage, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	err = client.MakeBucket(ctx, cfg.MinioBucket, minio.MakeBucketOptions{})
-	if err != nil {
-		exists, errCheck := client.BucketExists(ctx, cfg.MinioBucket)
-		if errCheck != nil || !exists {
-			return nil, fmt.Errorf("minio bucket create: %w", err)
+	if createBucket {
+		err = client.MakeBucket(ctx, cfg.MinioBucket, minio.MakeBucketOptions{})
+		if err != nil {
+			exists, errCheck := client.BucketExists(ctx, cfg.MinioBucket)
+			if errCheck != nil || !exists {
+				return nil, fmt.Errorf("minio bucket create: %w", err)
+			}
+		} else {
+			log.Printf("Created MinIO bucket: %s", cfg.MinioBucket)
 		}
 	} else {
-		log.Printf("Created MinIO bucket: %s", cfg.MinioBucket)
+		exists, err := client.BucketExists(ctx, cfg.MinioBucket)
+		if err != nil {
+			return nil, fmt.Errorf("minio bucket check: %w", err)
+		}
+		if !exists {
+			return nil, fmt.Errorf("minio bucket %s does not exist", cfg.MinioBucket)
+		}
 	}
 
 	return &MinioStorage{
