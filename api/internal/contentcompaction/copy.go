@@ -24,6 +24,14 @@ const eventUpdateAssignments = `
 	content_sha256 = EXCLUDED.content_sha256,
 	created_at = EXCLUDED.created_at`
 
+func qualifiedEventColumns(alias string) string {
+	return fmt.Sprintf(`
+		%s.id, %s.content_projection_revision_id, %s.chunk_id,
+		%s.source_start_cursor, %s.source_end_cursor, %s.occurred_at,
+		%s.event_type, %s.summary, %s.excerpt, %s.content_sha256, %s.created_at`,
+		alias, alias, alias, alias, alias, alias, alias, alias, alias, alias, alias)
+}
+
 func eventFingerprint(alias string) string {
 	return fmt.Sprintf(`md5(COALESCE(string_agg(ROW(
 		%[1]s.id, %[1]s.content_projection_revision_id, %[1]s.chunk_id,
@@ -251,7 +259,7 @@ func (c *Compactor) reconcileMissingBatch(
 	}
 	query := fmt.Sprintf(`
 		WITH batch AS MATERIALIZED (
-			SELECT %s FROM %s source
+		SELECT %s FROM %s source
 			LEFT JOIN %s target ON target.id = source.id
 			WHERE target.id IS NULL AND ($1::uuid IS NULL OR source.id > $1::uuid)
 			ORDER BY source.id LIMIT $2
@@ -266,7 +274,7 @@ func (c *Compactor) reconcileMissingBatch(
 			(SELECT COUNT(*) FROM batch),
 			(SELECT %s FROM batch source),
 			(SELECT %s FROM upserted target)`,
-		eventColumns, `"`+SourceTable+`"`, `"`+ShadowTable+`"`,
+		qualifiedEventColumns("source"), `"`+SourceTable+`"`, `"`+ShadowTable+`"`,
 		`"`+ShadowTable+`"`, eventColumns, eventColumns, eventUpdateAssignments, eventColumns,
 		eventFingerprint("source"), eventFingerprint("target"))
 	var endCursor, sourceFingerprint, targetFingerprint string
@@ -311,7 +319,7 @@ func (c *Compactor) reconcileExtraBatch(
 	}
 	query := fmt.Sprintf(`
 		WITH batch AS MATERIALIZED (
-			SELECT %s FROM %s target
+		SELECT %s FROM %s target
 			LEFT JOIN %s source ON source.id = target.id
 			WHERE source.id IS NULL AND ($1::uuid IS NULL OR target.id > $1::uuid)
 			ORDER BY target.id LIMIT $2
@@ -325,7 +333,7 @@ func (c *Compactor) reconcileExtraBatch(
 			(SELECT COUNT(*) FROM batch),
 			(SELECT %s FROM batch source),
 			(SELECT %s FROM deleted target)`,
-		eventColumns, `"`+ShadowTable+`"`, `"`+SourceTable+`"`,
+		qualifiedEventColumns("target"), `"`+ShadowTable+`"`, `"`+SourceTable+`"`,
 		`"`+ShadowTable+`"`, eventColumns,
 		eventFingerprint("source"), eventFingerprint("target"))
 	var endCursor, sourceFingerprint, targetFingerprint string
