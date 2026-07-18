@@ -118,8 +118,12 @@ func createInventoryFixture(
 		t.Fatal(err)
 	}
 	if err := database.QueryRow(`
-		INSERT INTO session_source_generations (source_id, status, expected_cursor)
-		VALUES ($1, 'active', $2) RETURNING id`, sourceID, len(content)).Scan(&generationID); err != nil {
+		INSERT INTO session_source_generations (
+			source_id, status, expected_cursor, prefix_checkpoint_hash,
+			prefix_checkpoint_state, prefix_checkpoint_state_format
+		) VALUES ($1, 'active', $2, $3, $4, $5) RETURNING id`,
+		sourceID, len(content), sessionsync.HashBytes(content), []byte{1},
+		sessionsync.PrefixCheckpointStateFormat).Scan(&generationID); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.QueryRow(`
