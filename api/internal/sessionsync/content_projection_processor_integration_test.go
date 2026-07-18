@@ -85,17 +85,21 @@ func TestContentProjectionProcessorOrdersAndActivatesIntegration(t *testing.T) {
 		t.Fatalf("catalog status=%s events=%d range=%s..%s summary=%q",
 			catalogStatus, catalogEvents, catalogStart, catalogEnd, catalogSummary)
 	}
-	var summary, message, literal string
+	var summary string
+	var payloadIsNull, eventMatchesChunkHash bool
 	if err := database.QueryRow(`
-		SELECT summary, content_payload #>> '{payload,message}', content_payload #>> '{payload,literal}'
-		FROM session_content_events
-		WHERE content_projection_revision_id = $1
-		ORDER BY source_start_cursor
-		LIMIT 1`, fixture.revisionID).Scan(&summary, &message, &literal); err != nil {
+		SELECT event.summary, event.content_payload IS NULL,
+			event.content_sha256 = chunk.content_sha256
+		FROM session_content_events event
+		JOIN session_upload_chunks chunk ON chunk.id = event.chunk_id
+		WHERE event.content_projection_revision_id = $1
+		ORDER BY event.source_start_cursor
+		LIMIT 1`, fixture.revisionID).Scan(&summary, &payloadIsNull, &eventMatchesChunkHash); err != nil {
 		t.Fatal(err)
 	}
-	if summary != "before\uFFFDafter" || message != "before\uFFFDafter" || literal != `\u0000` {
-		t.Fatalf("summary=%q message=%q literal=%q", summary, message, literal)
+	if summary != "before\uFFFDafter" || !payloadIsNull || !eventMatchesChunkHash {
+		t.Fatalf("summary=%q payload_null=%v hash_matches_chunk=%v",
+			summary, payloadIsNull, eventMatchesChunkHash)
 	}
 }
 
