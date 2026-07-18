@@ -128,6 +128,36 @@ func TestSessionSyncMigrationContract(t *testing.T) {
 			content_projection_revision_id, chunk_id, source_start_cursor, source_end_cursor,
 			occurred_at, event_type, content_sha256
 		) VALUES ('`+revisionID+`', '`+firstChunkID+`', 0, 10, now(), 'message', '`+hash+`')`)
+	var compactHasPayload bool
+	if err := tx.QueryRow(`
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_schema = 'public'
+				AND table_name = 'session_content_events_compact'
+				AND column_name = 'content_payload'
+		)`).Scan(&compactHasPayload); err != nil {
+		t.Fatal(err)
+	}
+	if compactHasPayload {
+		t.Fatal("compact event table must not contain content_payload")
+	}
+	var compactEventID string
+	if err := tx.QueryRow(`
+		INSERT INTO session_content_events_compact (
+			content_projection_revision_id, chunk_id, source_start_cursor, source_end_cursor,
+			occurred_at, event_type, content_sha256
+		) VALUES ($1, $2, 10, 20, now(), 'message', $3)
+		RETURNING id`, revisionID, firstChunkID, hash).Scan(&compactEventID); err != nil {
+		t.Fatalf("compact table must accept production-shaped insert: %v", err)
+	}
+	if compactEventID == "" {
+		t.Fatal("compact table did not generate an event id")
+	}
+	expectConstraintViolation(t, tx, `
+		INSERT INTO session_content_events_compact (
+			content_projection_revision_id, chunk_id, source_start_cursor, source_end_cursor,
+			occurred_at, event_type, content_sha256
+		) VALUES ('`+revisionID+`', '`+firstChunkID+`', 10, 20, now(), 'message', '`+hash+`')`)
 	if _, err := tx.Exec(`
 		INSERT INTO session_processing_jobs (
 			job_type, session_id, generation_id, target_revision_id, content_epoch

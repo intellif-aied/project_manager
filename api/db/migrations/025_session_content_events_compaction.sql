@@ -1,5 +1,5 @@
 CREATE TABLE session_content_events_compact (
-    id                             UUID PRIMARY KEY,
+    id                             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     content_projection_revision_id UUID NOT NULL,
     chunk_id                       UUID NOT NULL,
     source_start_cursor            BIGINT NOT NULL,

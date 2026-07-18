@@ -18,8 +18,10 @@ func main() {
 	action := flag.String("action", string(contentcompaction.ActionPlan),
 		"plan, copy, mirror, reconcile, verify, cutover, rollback, or finalize")
 	apply := flag.Bool("apply", false, "allow the selected mutating action")
-	batchSize := flag.Int("batch-size", 0, "rows per bounded copy/reconcile batch")
-	maxBatches := flag.Int("max-batches", 0, "maximum batches in this invocation")
+	batchSize := flag.Int("batch-size", 0,
+		fmt.Sprintf("rows per batch (maximum %d)", contentcompaction.MaximumBatchSize))
+	maxBatches := flag.Int("max-batches", 0,
+		fmt.Sprintf("batches in this invocation (maximum %d)", contentcompaction.MaximumBatchesPerRun))
 	expectedRows := flag.Int64("expected-source-rows", -1,
 		"exact source row count required by cutover/rollback")
 	confirmDrop := flag.String("confirm-drop", "",

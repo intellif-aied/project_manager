@@ -249,7 +249,7 @@ func TestCompactorBoundedCopyMirrorCutoverRollbackAndFinalizeIntegration(t *test
 	// Simulate a query that resolved the old table before the rename. Its archive write must mirror.
 	archiveInsert := fixture.insertSourceEventInto(t, database, ArchiveTable, "queued-archive-insert", true)
 	assertEventPresence(t, database, SourceTable, archiveInsert, true)
-	currentInsert := fixture.insertLightEvent(t, database, SourceTable, "rollback-window-current-insert")
+	currentInsert := fixture.insertProjectionShapedEvent(t, database, SourceTable, "rollback-window-current-insert")
 	assertEventPresence(t, database, ArchiveTable, currentInsert, true)
 	assertPayloadNull(t, database, ArchiveTable, currentInsert)
 	if _, err := database.Exec(`DELETE FROM session_content_events_payload_archive WHERE id = $1`, mirroredInsert); err != nil {
@@ -428,6 +428,33 @@ func (fixture *compactionFixture) insertSourceEventInto(
 
 func (fixture *compactionFixture) insertLightEvent(t *testing.T, database *sql.DB, table, label string) string {
 	return fixture.insertSourceEventInto(t, database, table, label, false)
+}
+
+func (fixture *compactionFixture) insertProjectionShapedEvent(
+	t *testing.T,
+	database *sql.DB,
+	table, label string,
+) string {
+	t.Helper()
+	identifier, err := checkedTable(table)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := fixture.nextCursor
+	fixture.nextCursor += 10
+	var id string
+	err = database.QueryRow(`
+		INSERT INTO `+identifier+` (
+			content_projection_revision_id, chunk_id, source_start_cursor,
+			source_end_cursor, occurred_at, event_type, summary, excerpt,
+			content_sha256
+		) VALUES ($1, $2, $3, $4, now(), 'event_msg.user_message', $5, $5, $6)
+		RETURNING id`, fixture.revisionID, fixture.chunkID, start, start+10,
+		label, sessionsync.HashBytes([]byte(label))).Scan(&id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
 }
 
 func assertEventPresence(t *testing.T, database *sql.DB, table, id string, want bool) {

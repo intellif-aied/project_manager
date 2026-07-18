@@ -18,6 +18,9 @@ const (
 	MirrorTrigger          = "trg_mirror_session_content_events_compaction"
 	RollbackMirrorFunction = "mirror_session_content_events_rollback"
 	RollbackMirrorTrigger  = "trg_mirror_session_content_events_rollback"
+
+	MaximumBatchSize     = 10_000
+	MaximumBatchesPerRun = 20
 )
 
 type Action string
@@ -96,6 +99,12 @@ func (options Options) validate() error {
 		}
 		if options.BatchSize <= 0 || options.MaxBatches <= 0 {
 			return fmt.Errorf("%s requires positive --batch-size and --max-batches", options.Action)
+		}
+		if options.BatchSize > MaximumBatchSize {
+			return fmt.Errorf("%s --batch-size must not exceed %d", options.Action, MaximumBatchSize)
+		}
+		if options.MaxBatches > MaximumBatchesPerRun {
+			return fmt.Errorf("%s --max-batches must not exceed %d", options.Action, MaximumBatchesPerRun)
 		}
 	case ActionMirror:
 		if !options.Apply {
