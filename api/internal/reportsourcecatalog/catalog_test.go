@@ -58,7 +58,12 @@ func TestOnlineReconcileDoesNotDiscoverMissingHistoricalRows(t *testing.T) {
 
 func TestBackfillDiscoversMissingRowsAndIsBounded(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlContainsAll(
-		[]string{"LIMIT $2", "FOR UPDATE OF sl SKIP LOCKED"},
+		[]string{
+			"LIMIT $2",
+			"FOR UPDATE OF sl SKIP LOCKED",
+			"existing.status IN ('building', 'empty')",
+			"WHEN event_count = 0 THEN 'empty'",
+		},
 		[]string{"content_payload", "excerpt"},
 	)))
 	if err != nil {

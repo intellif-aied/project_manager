@@ -12,6 +12,7 @@ type BackfillStatus struct {
 	Missing  int64 `json:"missing"`
 	Building int64 `json:"building"`
 	Ready    int64 `json:"ready"`
+	Empty    int64 `json:"empty"`
 	Failed   int64 `json:"failed"`
 }
 
@@ -39,12 +40,20 @@ func InspectBackfill(ctx context.Context, database *sql.DB) (BackfillStatus, err
 			COUNT(*) FILTER (WHERE catalog.slice_id IS NULL) AS missing,
 			COUNT(*) FILTER (WHERE catalog.status = 'building') AS building,
 			COUNT(*) FILTER (WHERE catalog.status = 'ready') AS ready,
+			COUNT(*) FILTER (WHERE catalog.status = 'empty') AS empty,
 			COUNT(*) FILTER (WHERE catalog.status = 'failed') AS failed
 		FROM eligible
 		LEFT JOIN report_source_slice_catalog catalog
 			ON catalog.slice_id = eligible.slice_id
 			AND catalog.content_projection_revision_id = eligible.revision_id`,
-	).Scan(&status.Eligible, &status.Missing, &status.Building, &status.Ready, &status.Failed)
+	).Scan(
+		&status.Eligible,
+		&status.Missing,
+		&status.Building,
+		&status.Ready,
+		&status.Empty,
+		&status.Failed,
+	)
 	return status, err
 }
 
