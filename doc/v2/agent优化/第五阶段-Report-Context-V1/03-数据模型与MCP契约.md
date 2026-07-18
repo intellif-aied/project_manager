@@ -8,16 +8,15 @@ report_run_contexts
 run_id                 primary key / foreign key
 schema_version         text not null
 source_selection_id    uuid null
-digest_version         text null
-context_hash           text not null
-context_payload        jsonb not null
-context_bytes          bigint not null default 0
+    context_hash           text not null
+    context_payload        jsonb not null
+    context_bytes          bigint not null
 created_at             timestamptz not null
 ```
 
 开发前根据现有 Report Run 和 selection 表确认真实字段类型与外键，不在设计阶段指定迁移序号。
 
-一条 Run 只保存一条规范化 Context，不复制原始 Session、Digest 或完整业务对象。
+一条 Run 只保存一条 Context。它不复制原始 Session/JSONL，但会保存 selection 已冻结、已裁剪到保护上限内的完整 Digest，保证 Agent 读取与本次 Run 严格一致。
 
 ## 2. Context payload
 
@@ -27,43 +26,25 @@ created_at             timestamptz not null
   "run": {
     "run_id": "...",
     "report_type": "personal_daily",
-    "period": {"date": "2026-07-18"},
+    "period": {"start": "2026-07-18", "end": "2026-07-18"},
     "target": {"type": "self"}
   },
-  "calendar": {},
-  "identity": {},
   "source_state": {
-    "mode": "sessions_only",
+    "mode": "digest_v2",
     "coverage_complete": true
   },
-  "facts": [
-    {
-      "fact_id": "...",
-      "work_object": "Report Context V1",
-      "statement": "完成方案设计",
-      "status_hint": "completed",
-      "source_type": "session_digest",
-      "source_ref": "...",
-      "source_updated_at": "..."
-    }
-  ],
-  "coverage": {
-    "complete": true,
-    "source_count": 1,
-    "represented_count": 1
-  },
-  "context_hash": "...",
-  "context_bytes": 12345
+  "sources": {
+    "session_digest": {"content_mode": "digest_v2", "coverage": {"complete": true}}
+  }
 }
 ```
 
 说明：
 
-- `facts` 保存低损事实，不是日报段落；
-- `status_hint` 是来源状态，不是服务端对最终完成度的裁决；
-- `source_ref` 用于后台追溯，V1 不提供 Agent 回查接口；
-- 多个相互冲突的事实同时保留；
-- hash 在字段规范化后计算，不包含构建时间等易变字段。
+- `sources.session_digest` 原样保留冻结 Digest 的完整 JSON，不做第二次 Top-K 或事实筛选；
+- 完整性由现有 selection 读取校验和 Context 非空/模式校验共同保证；
+- `context_hash/context_bytes` 保存在表和 Run 元数据，不塞入给 Agent 的事实正文；
+- hash 对最终 payload 字节计算，不包含构建时间。
 
 ## 3. `get_report_context`
 
@@ -76,7 +57,7 @@ created_at             timestamptz not null
 服务端必须：
 
 - 校验当前认证用户和 Run 归属；
-- 校验 Run 状态；
+- 校验 Run 类型和归属；
 - 从 `report_run_contexts` 返回当前 Run 的 Context；
 - 不接受 report_type、period、target、selection 或 scope 覆盖参数；
 - 不允许 run_id 代替认证凭据。
@@ -99,8 +80,8 @@ write_report_failure(run_id, error_message)
 - `context_bytes` 用于监控和产品成本提示；
 - 不通过 Top-K 或重要性排序静默缩小；
 - 原始 JSONL 不进入 Context；
-- 若超过技术硬上限，Context 构建失败并更新 Run，不启动 Agent；
-- 提醒阈值和技术硬上限必须分开配置和表达。
+- selection/Digest 已有 1 MiB 保护上限继续生效；
+- Context V1 不新增可运维配置项或第二套大小限制。
 
 ## 6. V1 不建设
 

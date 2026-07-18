@@ -11,6 +11,7 @@ import (
 	"github.com/aidashboard/api/db"
 	"github.com/aidashboard/api/handler"
 	"github.com/aidashboard/api/internal/pricing"
+	"github.com/aidashboard/api/internal/reportcontext"
 	"github.com/aidashboard/api/internal/reportsource"
 	"github.com/aidashboard/api/internal/sessiondigest"
 	"github.com/aidashboard/api/internal/sessiondigestv2"
@@ -73,6 +74,7 @@ func main() {
 		log.Fatalf("Failed to init report source service: %v", err)
 	}
 	reportSourceH := handler.NewReportSourceHandler(reportSourceService)
+	reportContextService := reportcontext.NewService(database, reportSourceService)
 	managedAgentH := handler.NewManagedAgentHandlerWithDefaults(database, managedAgentClient, handler.ManagedAgentDefaults{
 		Engine:             cfg.ManagedAgentDefaultEngine,
 		ModelID:            cfg.ManagedAgentDefaultModelID,
@@ -83,8 +85,10 @@ func main() {
 		AIHubSecret:        cfg.AIHubSecret,
 	})
 	managedAgentH.ConfigureReportSourceSelection(reportSourceService)
+	managedAgentH.ConfigureReportContext(reportContextService)
 	dailyReportMCPH := handler.NewReportMCPHandler(database)
 	dailyReportMCPH.ConfigureReportSourceSelection(reportSourceService)
+	dailyReportMCPH.ConfigureReportContext(reportContextService)
 	schedulerCtx, stopScheduler := context.WithCancel(context.Background())
 	defer stopScheduler()
 	handler.NewManagedAgentScheduleRunner(managedAgentH).Start(schedulerCtx)

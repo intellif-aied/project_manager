@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/aidashboard/api/internal/biztime"
+	"github.com/aidashboard/api/internal/reportcontext"
 	"github.com/aidashboard/api/internal/reportsource"
 	"github.com/aidashboard/api/model"
 )
@@ -18,6 +20,7 @@ const (
 	mcpProtocolFallback = "2024-11-05"
 
 	toolGetSessions        = "get_sessions"
+	toolGetReportContext   = "get_report_context"
 	toolGetDailyReports    = "get_daily_reports"
 	toolGetWeeklyReports   = "get_weekly_reports"
 	toolGetTasks           = "get_tasks"
@@ -47,10 +50,12 @@ var supportedReportTypes = []string{
 }
 
 // ReportMCPHandler serves /api/v1/mcp/reports. It is the single MCP entrypoint
-// for all 6 report types and exposes the 9 atomic tools defined in doc §3.8.
+// for all 6 report types. Legacy atomic reads remain available for compatibility;
+// managed personal reports use the server-prepared Report Context V1 path.
 type ReportMCPHandler struct {
-	db           *sql.DB
-	reportSource *reportsource.Service
+	db            *sql.DB
+	reportSource  *reportsource.Service
+	reportContext *reportcontext.Service
 }
 
 func NewReportMCPHandler(db *sql.DB) *ReportMCPHandler {
@@ -59,6 +64,10 @@ func NewReportMCPHandler(db *sql.DB) *ReportMCPHandler {
 
 func (h *ReportMCPHandler) ConfigureReportSourceSelection(service *reportsource.Service) {
 	h.reportSource = service
+}
+
+func (h *ReportMCPHandler) ConfigureReportContext(service *reportcontext.Service) {
+	h.reportContext = service
 }
 
 type mcpRequest struct {
@@ -163,6 +172,8 @@ func (h *ReportMCPHandler) callTool(r *http.Request, rawParams json.RawMessage) 
 	}
 	ctx := r.Context()
 	switch params.Name {
+	case toolGetReportContext:
+		return h.toolGetReportContext(ctx, r, params.Arguments)
 	case toolGetSessions:
 		return h.toolGetSessions(ctx, r, params.Arguments)
 	case toolGetDailyReports:
@@ -184,6 +195,30 @@ func (h *ReportMCPHandler) callTool(r *http.Request, rawParams json.RawMessage) 
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", params.Name)
 	}
+}
+
+func (h *ReportMCPHandler) toolGetReportContext(ctx context.Context, r *http.Request, raw json.RawMessage) (any, error) {
+	u, err := requireUser(r)
+	if err != nil {
+		return nil, err
+	}
+	var args struct {
+		RunID string `json:"run_id"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil || strings.TrimSpace(args.RunID) == "" {
+		return nil, errRunNotFound
+	}
+	if h.reportContext == nil {
+		return nil, errMCPInternal
+	}
+	stored, err := h.reportContext.Get(ctx, u.ID, strings.TrimSpace(args.RunID))
+	if errors.Is(err, reportcontext.ErrNotFound) {
+		return nil, errRunNotFound
+	}
+	if err != nil {
+		return nil, errMCPInternal
+	}
+	return mcpTextResult(json.RawMessage(stored.Payload)), nil
 }
 
 // requireUser returns the authenticated user or an UNAUTHORIZED error.

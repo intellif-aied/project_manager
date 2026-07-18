@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/aidashboard/api/internal/reportcontext"
 	"github.com/aidashboard/api/internal/reportsource"
 	"github.com/aidashboard/api/model"
 )
@@ -119,7 +120,7 @@ func TestCopyReportRunMetadata(t *testing.T) {
 	}
 }
 
-func TestReportMCPToolsListReturns9AtomicTools(t *testing.T) {
+func TestReportMCPToolsListIncludesReportContextAndLegacyTools(t *testing.T) {
 	db, _, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
@@ -139,10 +140,11 @@ func TestReportMCPToolsListReturns9AtomicTools(t *testing.T) {
 	if !ok {
 		t.Fatalf("tools not array: %#v", result["tools"])
 	}
-	if len(tools) != 9 {
-		t.Fatalf("tools count = %d, want 9", len(tools))
+	if len(tools) != 10 {
+		t.Fatalf("tools count = %d, want 10", len(tools))
 	}
 	expected := map[string]bool{
+		"get_report_context":   true,
 		"get_sessions":         true,
 		"get_daily_reports":    true,
 		"get_weekly_reports":   true,
@@ -168,6 +170,39 @@ func TestReportMCPToolsListReturns9AtomicTools(t *testing.T) {
 				t.Fatalf("%s does not describe the business timezone: %q", name, description)
 			}
 		}
+	}
+}
+
+func TestGetReportContextReturnsOwnedPreparedPayload(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mock.ExpectQuery("FROM report_run_contexts c").
+		WithArgs("11111111-1111-1111-1111-111111111111", "304").
+		WillReturnRows(sqlmock.NewRows([]string{"context_payload", "context_hash", "context_bytes"}).
+			AddRow([]byte(`{"schema_version":"report-context/v1","source_state":{"coverage_complete":true}}`), strings.Repeat("a", 64), 81))
+	h := NewReportMCPHandler(db)
+	h.ConfigureReportContext(reportcontext.NewService(db, nil))
+	req := newReportMCPRequest("tools/call", map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      "get_report_context",
+			"arguments": map[string]any{"run_id": "11111111-1111-1111-1111-111111111111"},
+		},
+	})
+	req = req.WithContext(context.WithValue(req.Context(), userKey, &model.User{ID: "304"}))
+	rec := httptest.NewRecorder()
+	h.Serve(rec, req)
+	payload := reportMCPTextPayload(t, reportMCPBody(t, rec))
+	if payload["schema_version"] != reportcontext.SchemaVersion {
+		t.Fatalf("unexpected context payload: %#v", payload)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 

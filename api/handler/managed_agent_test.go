@@ -105,11 +105,8 @@ func TestBuildReportRunMessageIncludesSystemParams(t *testing.T) {
 		reportMCPCredentialSlot,
 		"请重点关注风险",
 		"report_source_selection_id=selection-report-source",
-		"不可变来源快照",
-		"coverage.complete=true",
-		"outcome_coverage.complete=true",
-		"legacy full",
-		"不得放入 selected_session_slice_keys",
+		"只传 run_id 调用一次 get_report_context",
+		"不得再调用其他读取工具重新扫描 Session、任务或需求",
 		"报告内容与格式遵循当前绑定 Skill",
 		"最终动作：必须调用 write_report_result 回写",
 		"最终动作：必须调用 write_report_result 回写",
@@ -119,6 +116,9 @@ func TestBuildReportRunMessageIncludesSystemParams(t *testing.T) {
 	}
 	if strings.Contains(message, "mcp_url=") {
 		t.Fatalf("message should not expose mcp_url: %q", message)
+	}
+	if strings.Contains(message, "调用 get_sessions") {
+		t.Fatalf("managed personal Context V1 message must not route back to get_sessions: %q", message)
 	}
 	for _, forbidden := range []string{"PRD/ADR", "TDD", "Top-K", "REPORT_CONTENT_INVALID", "验证记录", "文件变更"} {
 		if strings.Contains(message, forbidden) {
@@ -192,9 +192,9 @@ func TestDefaultReportAgentInstructionsContainProtocolOnly(t *testing.T) {
 		"不在 Prompt 中增加报告内容规则",
 		"run_id、report_type、period、calendar_context、target",
 		"report_source_selection_id",
-		"coverage.complete=true",
-		"outcome_coverage.complete=true",
-		"legacy full",
+		"get_report_context",
+		"不得再调用 get_sessions、get_tasks 或 get_requirements",
+		"兼容报告仍按当前 Skill 的旧工具路由",
 		"team + report_scope=personal",
 		"department + report_scope=team",
 		"write_report_result",

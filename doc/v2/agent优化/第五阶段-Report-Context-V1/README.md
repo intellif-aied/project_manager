@@ -1,8 +1,8 @@
 # 第五阶段：Report Context V1
 
 > 建立日期：2026-07-18
-> 文档分支：`docs/report-context-stage5`
-> 状态：V1 方案设计，未实施、未发布
+> 开发分支：`feat/report-context-v1`
+> 状态：V1 个人报告纵向链路开发中，未发布
 
 ## 1. 目标
 
@@ -20,7 +20,9 @@ V1 只解决一个问题：不再让默认 Report Agent 依靠超长 Skill 自�
 
 ## 2. V1 范围
 
-V1 只新增：
+V1 第一批只覆盖存在冻结 selection 的 `personal_daily/personal_weekly`。团队和部门报告继续走现有工具链，不在本批次重构。
+
+本批只新增：
 
 1. 一个确定性的 `Report Context Builder`；
 2. 一张轻量表 `report_run_contexts`；
@@ -67,3 +69,4 @@ V1 只新增：
 - [V1 数据模型与 MCP 契约](03-数据模型与MCP契约.md)
 - [实施、测试与回退](04-实施测试与迁移方案.md)
 - [三轮设计 Review](05-风险与三轮设计Review.md)
+- [开发实现记录](06-开发实现记录.md)
