@@ -119,6 +119,83 @@ func TestProcessorCodexCumulativeAcrossChunksIntegration(t *testing.T) {
 	}
 }
 
+func TestProcessorSuppressesExactCrossSourceUsageDuplicatesIntegration(t *testing.T) {
+	database := openUsageIntegrationDatabase(t)
+	const userID = int64(990039)
+	cleanupUsageUser(t, database, userID)
+	if _, err := database.Exec(`INSERT INTO users (id, username) VALUES ($1, $2)`, userID, "usage-cross-source-dedup"); err != nil {
+		t.Fatal(err)
+	}
+	defer cleanupUsageUser(t, database, userID)
+
+	shared := `{"timestamp":"2026-07-10T00:01:00Z","type":"assistant","message":{"id":"shared-message","model":"claude-sonnet","usage":{"input_tokens":10,"output_tokens":5}}}` + "\n"
+	owner := newUsageFixtureForExistingUser(t, database, userID, "usage-dedup-owner", "claude-code")
+	owner.appendChunk(t, []byte(shared+
+		`{"timestamp":"2026-07-10T00:02:00Z","type":"assistant","message":{"id":"owner-message","model":"claude-sonnet","usage":{"input_tokens":20,"output_tokens":5}}}`+"\n"))
+	ownerProcessor, _ := NewProcessor(database, owner.store, "5m")
+	if err := ownerProcessor.Process(context.Background(), owner.jobs[0]); err != nil {
+		t.Fatal(err)
+	}
+
+	candidate := newUsageFixtureForExistingUser(t, database, userID, "usage-dedup-candidate", "claude-code")
+	candidate.appendChunk(t, []byte(shared+
+		`{"timestamp":"2026-07-10T00:03:00Z","type":"assistant","message":{"id":"candidate-message","model":"claude-sonnet","usage":{"input_tokens":30,"output_tokens":5}}}`+"\n"))
+	candidateProcessor, _ := NewProcessor(database, candidate.store, "5m")
+	if err := candidateProcessor.Process(context.Background(), candidate.jobs[0]); err != nil {
+		t.Fatal(err)
+	}
+
+	var status string
+	var duplicates, activeComponents, contributions, claims, totalTokens int64
+	if err := database.QueryRow(`
+		SELECT revision.status, revision.duplicate_usage_event_count,
+			(SELECT COUNT(*) FROM session_usage_components component
+			 WHERE component.revision_id = revision.id AND component.valid_to IS NULL),
+			(SELECT COUNT(*) FROM session_usage_contributions contribution
+			 WHERE contribution.revision_id = revision.id),
+			(SELECT COUNT(*) FROM session_usage_event_claims claim
+			 WHERE claim.active_source_id = revision.source_id),
+			(SELECT COALESCE(SUM(contribution.total_tokens), 0)
+			 FROM session_usage_contributions contribution WHERE contribution.revision_id = revision.id)
+		FROM session_metrics_revisions revision
+		WHERE revision.generation_id = $1`, candidate.generationID).Scan(
+		&status, &duplicates, &activeComponents, &contributions, &claims, &totalTokens); err != nil {
+		t.Fatal(err)
+	}
+	if status != "active" || duplicates != 1 || activeComponents != 1 || contributions != 1 ||
+		claims != 1 || totalTokens != 35 {
+		t.Fatalf("status=%s duplicates=%d components=%d contributions=%d claims=%d tokens=%d",
+			status, duplicates, activeComponents, contributions, claims, totalTokens)
+	}
+	assertContributionLedger(t, database, owner.sessionID, 2, 40, map[string]int64{
+		contributionInitial: 2,
+	}, []int64{40})
+	assertContributionLedger(t, database, candidate.sessionID, 1, 35, map[string]int64{
+		contributionInitial: 1,
+	}, []int64{35})
+
+	mismatch := newUsageFixtureForExistingUser(t, database, userID, "usage-dedup-mismatch", "claude-code")
+	mismatch.appendChunk(t, []byte(
+		`{"timestamp":"2026-07-10T00:04:00Z","type":"assistant","message":{"id":"shared-message","model":"claude-sonnet","usage":{"input_tokens":11,"output_tokens":5}}}`+"\n"))
+	mismatchProcessor, _ := NewProcessor(database, mismatch.store, "5m")
+	if err := mismatchProcessor.Process(context.Background(), mismatch.jobs[0]); err != nil {
+		t.Fatal(err)
+	}
+	var mismatchStatus, mismatchQuality, mismatchReason string
+	if err := database.QueryRow(`
+		SELECT status, quality_status, calculation_reason
+		FROM session_metrics_revisions
+		WHERE generation_id = $1`, mismatch.generationID).Scan(
+		&mismatchStatus, &mismatchQuality, &mismatchReason); err != nil {
+		t.Fatal(err)
+	}
+	if mismatchStatus != "failed" || mismatchQuality != "conflict" ||
+		mismatchReason != "provider event differs from the event claimed by another source" {
+		t.Fatalf("mismatch status=%s quality=%s reason=%s",
+			mismatchStatus, mismatchQuality, mismatchReason)
+	}
+}
+
 func TestProcessorLateParentMergesSessionFamilyRollupIntegration(t *testing.T) {
 	database := openUsageIntegrationDatabase(t)
 	const userID = int64(990035)
