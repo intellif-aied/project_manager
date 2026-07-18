@@ -1,6 +1,6 @@
 # Session 与 Token 查询性能专项设计方案
 
-> 方案类型：V2 架构与开发方案；状态：开发前 Review 已通过，可进入 R1，尚未授权开发；适用范围：Report Source、Session 内容存储、Token Analytics。
+> 方案类型：V2 架构与开发方案；状态：完整版本未验收；适用范围：Report Source、Session 内容存储、Token Analytics。R1～R5 是内部工作包，不是可单独宣称专项完成的生产版本。
 > 核心原则：原始内容只保留一份，在线查询只读取面向业务的读模型。
 
 ## 1. 要解决的三个问题
@@ -166,9 +166,9 @@ Session 家族总量
 
 summary、trends、rankings、sessions 继续读取同一快照。默认 Session 列表按 root Session 展示一行，成员/Subagent 仅下钻展示并标记已包含在家族总量中，避免页面重复求和。详细定义见 [Token 三维统计与对账模型](./07-Token三维统计与对账模型.md)。
 
-## 7. 发布拆分
+## 7. 工程工作包与生产发布边界
 
-| 发布单元 | 内容 | 明确不包含 |
+| 工程工作包 | 内容 | 不能单独宣称完成 |
 | --- | --- | --- |
 | R1 | Report Source 切片目录、回填、测试服全量对账与整体切换 | MinIO 读取切换、历史清理、Token 重构 |
 | R2 | 轻量事件索引、统一 MinIO 内容读取器、消费者全量校验与整体切换 | 停写旧载荷、删除历史数据 |
@@ -178,9 +178,11 @@ summary、trends、rankings、sessions 继续读取同一快照。默认 Session
 | R5B | 轻量 Snapshot、Token API/前端/MCP ad-hoc 同版本整体切换 | 旧路径删除 |
 | R5C | 兼容 Snapshot/字段/表的独立下线评审 | Report Source/内容存储改造 |
 
-每个发布单元在测试服全量验收后整体切换。内测期不建设用户灰度、百分比 rollout 或 `legacy/shadow/new` 运行时开关；回滚使用上一 Git 提交/已验证镜像，且当期保留旧表和旧数据。
+这些是开发顺序，不是生产发布许可。生产“完整版本”必须同时包含：Report Source 轻量目录、MinIO Reader、停止新增完整 Payload、历史 Payload 清理、Token 三维 Rollup、Digest/MCP/Session/Token 全部回归和同版本 API/Web/Skill/MCP 切换。完整门禁以 [完整发布清单](./09-完整发布清单.md) 为准。
 
-## 8. 成功标准
+内测期不建设用户灰度、百分比 rollout 或 `legacy/shadow/new` 运行时开关；但不做灰度不等于允许部分功能上线。回滚使用上一 Git 提交/已验证镜像，生产数据清理必须有独立备份、恢复演练和清单证据。
+
+## 8. 完整版本成功标准
 
 - Report Source p95 不超过 300ms、p99 不超过 800ms；
 - 无日期与显式活动日期请求使用相同的目录查询路径；
@@ -191,5 +193,7 @@ summary、trends、rankings、sessions 继续读取同一快照。默认 Session
 - Token 家族总量、逐日和新增 Chunk 三维精确对账，Subagent 父历史不重复；
 - Token 页面各模块保持同一快照，统计、成本、权限和质量状态一致；
 - 任一新路径异常时，可以回滚到上一 Git 提交/已验证镜像；当期不做破坏性数据清理，因此不需要反向回滚已完成的附加表回填。
+- PostgreSQL 不再新增完整 `content_payload`，历史完整 Payload 已按清单完成对账、下线和空间回收；否则只能标记为“部分开发完成”。
+- 发布清单中的代码、迁移、数据、消费者、回归、性能、镜像、配置、备份和上线后观察项全部为“通过”。
 
 详细步骤与测试见 [开发、迁移与测试验收](./05-开发迁移与测试验收.md)。
