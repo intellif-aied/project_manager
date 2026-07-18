@@ -39,18 +39,45 @@ type ContentParseResult struct {
 }
 
 func ParseContentChunk(reader io.Reader, startCursor int64, fallbackTime *time.Time) (ContentParseResult, error) {
+	result := ContentParseResult{}
+	scanResult, err := ScanContentChunk(reader, startCursor, fallbackTime, func(event ProjectedContentEvent) error {
+		result.Events = append(result.Events, event)
+		return nil
+	})
+	if err != nil {
+		return ContentParseResult{}, err
+	}
+	result.MalformedEventCount = scanResult.MalformedEventCount
+	result.EndCursor = scanResult.EndCursor
+	return result, nil
+}
+
+type ContentScanResult struct {
+	MalformedEventCount int64
+	EndCursor           int64
+}
+
+func ScanContentChunk(
+	reader io.Reader,
+	startCursor int64,
+	fallbackTime *time.Time,
+	visit func(ProjectedContentEvent) error,
+) (ContentScanResult, error) {
 	if reader == nil || startCursor < 0 {
-		return ContentParseResult{}, errors.New("reader and non-negative start cursor are required")
+		return ContentScanResult{}, errors.New("reader and non-negative start cursor are required")
+	}
+	if visit == nil {
+		return ContentScanResult{}, errors.New("content event visitor is required")
 	}
 	buffered := bufio.NewReaderSize(reader, 64<<10)
-	result := ContentParseResult{EndCursor: startCursor}
+	result := ContentScanResult{EndCursor: startCursor}
 	for {
 		line, err := readCompleteJSONLLine(buffered)
 		if errors.Is(err, io.EOF) {
 			return result, nil
 		}
 		if err != nil {
-			return ContentParseResult{}, err
+			return ContentScanResult{}, err
 		}
 		lineStart := result.EndCursor
 		result.EndCursor += int64(len(line))
@@ -59,7 +86,9 @@ func ParseContentChunk(reader io.Reader, startCursor int64, fallbackTime *time.T
 			result.MalformedEventCount++
 			continue
 		}
-		result.Events = append(result.Events, event)
+		if err := visit(event); err != nil {
+			return ContentScanResult{}, err
+		}
 	}
 }
 

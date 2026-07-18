@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -55,6 +56,103 @@ func TestContentParserCountsMalformedJSONButPreservesCursor(t *testing.T) {
 	if len(result.Events) != 1 || result.MalformedEventCount != 1 || result.EndCursor != int64(len(content)) {
 		t.Fatalf("result=%+v", result)
 	}
+}
+
+func TestScanContentChunkMatchesParseContentChunk(t *testing.T) {
+	content := []byte(
+		"not-json\n" +
+			"{\"type\":\"user\",\"timestamp\":\"2026-07-14T00:00:00Z\"}\n" +
+			"{\"type\":\"assistant\",\"timestamp\":\"2026-07-14T00:00:01Z\"}\n",
+	)
+	parsed, err := ParseContentChunk(bytes.NewReader(content), 37, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var streamed []ProjectedContentEvent
+	scanned, err := ScanContentChunk(bytes.NewReader(content), 37, nil, func(event ProjectedContentEvent) error {
+		streamed = append(streamed, event)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scanned.EndCursor != parsed.EndCursor || scanned.MalformedEventCount != parsed.MalformedEventCount {
+		t.Fatalf("scan=%+v parse=%+v", scanned, parsed)
+	}
+	if len(streamed) != len(parsed.Events) {
+		t.Fatalf("streamed=%d parsed=%d", len(streamed), len(parsed.Events))
+	}
+	for index := range streamed {
+		if streamed[index].SourceStartCursor != parsed.Events[index].SourceStartCursor ||
+			streamed[index].SourceEndCursor != parsed.Events[index].SourceEndCursor ||
+			streamed[index].ContentSHA256 != parsed.Events[index].ContentSHA256 {
+			t.Fatalf("event %d streamed=%+v parsed=%+v", index, streamed[index], parsed.Events[index])
+		}
+	}
+}
+
+func TestScanContentChunkStopsOnVisitorError(t *testing.T) {
+	content := []byte(
+		"{\"type\":\"user\",\"timestamp\":\"2026-07-14T00:00:00Z\"}\n" +
+			"{\"type\":\"assistant\",\"timestamp\":\"2026-07-14T00:00:01Z\"}\n",
+	)
+	want := errors.New("stop")
+	visits := 0
+	_, err := ScanContentChunk(bytes.NewReader(content), 0, nil, func(ProjectedContentEvent) error {
+		visits++
+		return want
+	})
+	if !errors.Is(err, want) || visits != 1 {
+		t.Fatalf("err=%v visits=%d", err, visits)
+	}
+}
+
+func TestScanContentChunkEmitsBeforeReadingEntireObject(t *testing.T) {
+	first := "{\"type\":\"user\",\"timestamp\":\"2026-07-14T00:00:00Z\"}\n"
+	second := "{\"type\":\"assistant\",\"timestamp\":\"2026-07-14T00:00:01Z\",\"payload\":{\"message\":\"" +
+		strings.Repeat("x", 256<<10) + "\"}}\n"
+	reader := &limitedTrackingReader{content: []byte(first + second), maxRead: 256}
+	firstVisitBytes := 0
+	result, err := ScanContentChunk(reader, 0, nil, func(ProjectedContentEvent) error {
+		if firstVisitBytes == 0 {
+			firstVisitBytes = reader.bytesRead
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstVisitBytes == 0 || firstVisitBytes >= len(reader.content) {
+		t.Fatalf("first visit after %d of %d bytes", firstVisitBytes, len(reader.content))
+	}
+	if result.EndCursor != int64(len(reader.content)) {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
+type limitedTrackingReader struct {
+	content   []byte
+	offset    int
+	maxRead   int
+	bytesRead int
+}
+
+func (r *limitedTrackingReader) Read(buffer []byte) (int, error) {
+	if r.offset >= len(r.content) {
+		return 0, io.EOF
+	}
+	limit := len(buffer)
+	if limit > r.maxRead {
+		limit = r.maxRead
+	}
+	remaining := len(r.content) - r.offset
+	if limit > remaining {
+		limit = remaining
+	}
+	copy(buffer[:limit], r.content[r.offset:r.offset+limit])
+	r.offset += limit
+	r.bytesRead += limit
+	return limit, nil
 }
 
 func TestContentParserRejectsIncompleteOrOversizedLine(t *testing.T) {
