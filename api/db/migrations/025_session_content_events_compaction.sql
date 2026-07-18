@@ -86,7 +86,7 @@ CREATE TABLE session_content_events_compaction_batches (
     target_fingerprint   CHAR(32),
     created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT session_content_events_compaction_batch_operation_check CHECK (
-        operation IN ('copy', 'reconcile_missing', 'reconcile_extra', 'rollback_sync')
+        operation IN ('copy', 'reconcile_missing', 'reconcile_extra', 'rollback_verify')
     ),
     CONSTRAINT session_content_events_compaction_batch_count_check CHECK (row_count >= 0),
     CONSTRAINT session_content_events_compaction_batch_fingerprint_check CHECK (

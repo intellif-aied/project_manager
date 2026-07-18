@@ -14,8 +14,10 @@ const (
 	StateTable   = "session_content_events_compaction_state"
 	BatchTable   = "session_content_events_compaction_batches"
 
-	MirrorFunction = "mirror_session_content_events_compaction"
-	MirrorTrigger  = "trg_mirror_session_content_events_compaction"
+	MirrorFunction         = "mirror_session_content_events_compaction"
+	MirrorTrigger          = "trg_mirror_session_content_events_compaction"
+	RollbackMirrorFunction = "mirror_session_content_events_rollback"
+	RollbackMirrorTrigger  = "trg_mirror_session_content_events_rollback"
 )
 
 type Action string

@@ -249,6 +249,9 @@ func TestCompactorBoundedCopyMirrorCutoverRollbackAndFinalizeIntegration(t *test
 	// Simulate a query that resolved the old table before the rename. Its archive write must mirror.
 	archiveInsert := fixture.insertSourceEventInto(t, database, ArchiveTable, "queued-archive-insert", true)
 	assertEventPresence(t, database, SourceTable, archiveInsert, true)
+	currentInsert := fixture.insertLightEvent(t, database, SourceTable, "rollback-window-current-insert")
+	assertEventPresence(t, database, ArchiveTable, currentInsert, true)
+	assertPayloadNull(t, database, ArchiveTable, currentInsert)
 	if _, err := database.Exec(`DELETE FROM session_content_events_payload_archive WHERE id = $1`, mirroredInsert); err != nil {
 		t.Fatal(err)
 	}
