@@ -142,13 +142,29 @@ func (c *Compactor) basicReport(
 		ExtraCursor: state.ExtraCursor,
 	}
 	var err error
-	report.SourceRows, err = c.tableRows(ctx, c.db, source)
-	if err != nil {
-		return Report{}, err
-	}
-	report.TargetRows, err = c.tableRows(ctx, c.db, target)
-	if err != nil {
-		return Report{}, err
+	report.RowCountsExact = action == ActionVerify
+	if report.RowCountsExact {
+		report.SourceRows, err = c.tableRows(ctx, c.db, source)
+		if err != nil {
+			return Report{}, err
+		}
+		report.TargetRows, err = c.tableRows(ctx, c.db, target)
+		if err != nil {
+			return Report{}, err
+		}
+	} else {
+		report.SourceRows, err = c.estimatedTableRows(ctx, c.db, source)
+		if err != nil {
+			return Report{}, err
+		}
+		report.TargetRows, err = c.estimatedTableRows(ctx, c.db, target)
+		if err != nil {
+			return Report{}, err
+		}
+		if action == ActionCopy {
+			report.SourceRows = state.SourceRowsAtStart
+			report.TargetRows = state.CopiedRows
+		}
 	}
 	report.SourceBytes, err = c.relationBytes(ctx, source)
 	if err != nil {
@@ -167,6 +183,26 @@ func (c *Compactor) basicReport(
 		return Report{}, err
 	}
 	return report, nil
+}
+
+func (c *Compactor) estimatedTableRows(
+	ctx context.Context,
+	queryer stateQueryer,
+	table string,
+) (int64, error) {
+	if _, err := checkedTable(table); err != nil {
+		return 0, err
+	}
+	var count int64
+	err := queryer.QueryRowContext(ctx, `
+		SELECT GREATEST(COALESCE(relation.reltuples, 0)::bigint, 0)
+		FROM pg_class relation
+		JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+		WHERE namespace.nspname = 'public' AND relation.relname = $1`, table).Scan(&count)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	return count, err
 }
 
 func (c *Compactor) tableRows(ctx context.Context, queryer stateQueryer, table string) (int64, error) {
@@ -234,15 +270,10 @@ func (c *Compactor) populateDeepVerification(
 	}
 	query := fmt.Sprintf(`
 		SELECT
-			(SELECT COUNT(*) FROM %[1]s source
-				LEFT JOIN %[2]s target ON target.id = source.id
-				WHERE target.id IS NULL),
-			(SELECT COUNT(*) FROM %[2]s target
-				LEFT JOIN %[1]s source ON source.id = target.id
-				WHERE source.id IS NULL),
-			(SELECT COUNT(*) FROM %[1]s source
-				JOIN %[2]s target ON target.id = source.id
-				WHERE ROW(
+			COUNT(*) FILTER (WHERE target.id IS NULL),
+			COUNT(*) FILTER (WHERE source.id IS NULL),
+			COUNT(*) FILTER (
+				WHERE source.id IS NOT NULL AND target.id IS NOT NULL AND ROW(
 					source.content_projection_revision_id, source.chunk_id,
 					source.source_start_cursor, source.source_end_cursor,
 					source.occurred_at, source.event_type, source.summary,
@@ -252,7 +283,10 @@ func (c *Compactor) populateDeepVerification(
 					target.source_start_cursor, target.source_end_cursor,
 					target.occurred_at, target.event_type, target.summary,
 					target.excerpt, target.content_sha256, target.created_at
-				))`, sourceSQL, targetSQL)
+				)
+			)
+		FROM %[1]s source
+		FULL OUTER JOIN %[2]s target ON target.id = source.id`, sourceSQL, targetSQL)
 	return queryer.QueryRowContext(ctx, query).Scan(
 		&report.MissingRows, &report.ExtraRows, &report.MismatchedRows,
 	)

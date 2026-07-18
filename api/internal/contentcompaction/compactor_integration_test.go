@@ -47,9 +47,21 @@ func TestCompactorBoundedCopyMirrorCutoverRollbackAndFinalizeIntegration(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Phase != "initialized" || plan.SourceRows != 7 || plan.TargetRows != 0 ||
+	if plan.Phase != "initialized" || plan.Applied || plan.RowCountsExact ||
 		!plan.SourceHasPayload || plan.TargetHasPayload {
 		t.Fatalf("initial plan=%+v", plan)
+	}
+	var initialPhase string
+	var initialCopiedRows int64
+	if err := database.QueryRow(`
+		SELECT phase, copied_rows
+		FROM session_content_events_compaction_state WHERE id = 1`).Scan(
+		&initialPhase, &initialCopiedRows,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if initialPhase != "initialized" || initialCopiedRows != 0 {
+		t.Fatalf("plan changed state: phase=%s copied=%d", initialPhase, initialCopiedRows)
 	}
 
 	copyReport, err := compactor.Run(ctx, Options{
@@ -59,8 +71,21 @@ func TestCompactorBoundedCopyMirrorCutoverRollbackAndFinalizeIntegration(t *test
 		t.Fatal(err)
 	}
 	if copyReport.ProcessedRows != 2 || copyReport.ProcessedBatches != 1 ||
-		copyReport.TargetRows != 2 || copyReport.Complete {
+		copyReport.TargetRows != 2 || copyReport.RowCountsExact || copyReport.Complete {
 		t.Fatalf("first copy=%+v", copyReport)
+	}
+	// Writes can continue while the bounded copy is between invocations. The later
+	// mirror + reconcile phase must repair both sides regardless of UUID ordering.
+	duringCopyInsert := fixture.insertSourceEvent(t, database, "during-copy-insert")
+	var duringCopyDelete string
+	if err := database.QueryRow(`
+		SELECT id::text FROM session_content_events_compact ORDER BY id LIMIT 1`).Scan(
+		&duringCopyDelete,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`DELETE FROM session_content_events WHERE id = $1`, duringCopyDelete); err != nil {
+		t.Fatal(err)
 	}
 	for attempts := 0; !copyReport.Complete && attempts < 10; attempts++ {
 		copyReport, err = compactor.Run(ctx, Options{
@@ -70,8 +95,17 @@ func TestCompactorBoundedCopyMirrorCutoverRollbackAndFinalizeIntegration(t *test
 			t.Fatal(err)
 		}
 	}
-	if !copyReport.Complete || copyReport.Phase != "copied" || copyReport.TargetRows != 7 {
+	if !copyReport.Complete || copyReport.Phase != "copied" {
 		t.Fatalf("completed copy=%+v", copyReport)
+	}
+	idempotentCopy, err := compactor.Run(ctx, Options{
+		Action: ActionCopy, Apply: true, BatchSize: 2, MaxBatches: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if idempotentCopy.ProcessedRows != 0 || !idempotentCopy.Complete || idempotentCopy.Phase != "copied" {
+		t.Fatalf("idempotent completed copy=%+v", idempotentCopy)
 	}
 
 	// Create one pre-mirror missing row and one target-only extra row. Reconcile must repair both.
@@ -86,7 +120,12 @@ func TestCompactorBoundedCopyMirrorCutoverRollbackAndFinalizeIntegration(t *test
 		t.Fatalf("mirror=%+v", mirrorReport)
 	}
 	mirroredInsert := fixture.insertSourceEvent(t, database, "mirrored-insert")
-	deletedID := fixture.sourceEvents[0]
+	var deletedID string
+	if err := database.QueryRow(`
+		SELECT id::text FROM session_content_events WHERE id <> $1 ORDER BY id LIMIT 1`,
+		duringCopyInsert).Scan(&deletedID); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := database.Exec(`DELETE FROM session_content_events WHERE id = $1`, deletedID); err != nil {
 		t.Fatal(err)
 	}
@@ -110,6 +149,8 @@ func TestCompactorBoundedCopyMirrorCutoverRollbackAndFinalizeIntegration(t *test
 	}
 	assertEventPresence(t, database, ShadowTable, preMirrorMissing, true)
 	assertEventPresence(t, database, ShadowTable, targetExtra, false)
+	assertEventPresence(t, database, ShadowTable, duringCopyInsert, true)
+	assertEventPresence(t, database, ShadowTable, duringCopyDelete, false)
 	verify, err := compactor.Run(ctx, Options{Action: ActionVerify})
 	if err != nil {
 		t.Fatal(err)
@@ -117,11 +158,82 @@ func TestCompactorBoundedCopyMirrorCutoverRollbackAndFinalizeIntegration(t *test
 	if !verify.Complete || verify.MissingRows != 0 || verify.ExtraRows != 0 || verify.MismatchedRows != 0 {
 		t.Fatalf("verify before cutover=%+v", verify)
 	}
+	if !verify.RowCountsExact {
+		t.Fatalf("verify row counts were not marked exact: %+v", verify)
+	}
+
+	if _, err := database.Exec(`
+		UPDATE session_content_events_compact SET summary = summary || '-mismatch'
+		WHERE id = $1`, preMirrorMissing); err != nil {
+		t.Fatal(err)
+	}
+	mismatch, err := compactor.Run(ctx, Options{Action: ActionVerify})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mismatch.Complete || mismatch.MismatchedRows != 1 {
+		t.Fatalf("mismatch was not detected: %+v", mismatch)
+	}
+	if _, err := compactor.Run(ctx, Options{
+		Action: ActionCutover, Apply: true, ExpectedSourceRows: mismatch.SourceRows,
+	}); err == nil || !strings.Contains(err.Error(), "verification failed") {
+		t.Fatalf("mismatched cutover error=%v", err)
+	}
+	if _, err := database.Exec(`
+		UPDATE session_content_events_compact target SET summary = source.summary
+		FROM session_content_events source
+		WHERE target.id = source.id AND target.id = $1`, preMirrorMissing); err != nil {
+		t.Fatal(err)
+	}
+	verify, err = compactor.Run(ctx, Options{Action: ActionVerify})
+	if err != nil || !verify.Complete {
+		t.Fatalf("verify after mismatch repair=%+v error=%v", verify, err)
+	}
 
 	if _, err := compactor.Run(ctx, Options{
 		Action: ActionCutover, Apply: true, ExpectedSourceRows: verify.SourceRows + 1,
 	}); err == nil {
 		t.Fatal("cutover accepted an incorrect expected row count")
+	}
+	lockTx, err := database.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lockTx.ExecContext(ctx, `
+		LOCK TABLE session_content_events_compact IN ACCESS EXCLUSIVE MODE`); err != nil {
+		lockTx.Rollback()
+		t.Fatal(err)
+	}
+	_, lockErr := compactor.Run(ctx, Options{
+		Action: ActionCutover, Apply: true, ExpectedSourceRows: verify.SourceRows,
+		LockTimeout: 20 * time.Millisecond,
+	})
+	if lockErr == nil || !strings.Contains(lockErr.Error(), "acquire cutover lock") {
+		lockTx.Rollback()
+		t.Fatalf("cutover lock error=%v", lockErr)
+	}
+	if err := lockTx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	var phaseAfterLockFailure string
+	if err := database.QueryRow(`
+		SELECT phase FROM session_content_events_compaction_state WHERE id = 1`).Scan(
+		&phaseAfterLockFailure,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if phaseAfterLockFailure != "reconciled" {
+		t.Fatalf("phase after lock failure=%s", phaseAfterLockFailure)
+	}
+	var archiveAfterLockFailure bool
+	if err := database.QueryRow(`
+		SELECT to_regclass('public.session_content_events_payload_archive') IS NOT NULL`).Scan(
+		&archiveAfterLockFailure,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if archiveAfterLockFailure {
+		t.Fatal("archive exists after failed cutover lock")
 	}
 	cutover, err := compactor.Run(ctx, Options{
 		Action: ActionCutover, Apply: true, ExpectedSourceRows: verify.SourceRows,

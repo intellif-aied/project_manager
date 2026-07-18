@@ -77,7 +77,7 @@ func (c *Compactor) copyBatch(ctx context.Context, batchSize int) (int64, bool, 
 		return 0, false, fmt.Errorf("copy is not allowed in phase %s", state.Phase)
 	}
 	if state.Phase == "initialized" {
-		rows, err := c.tableRows(ctx, tx, SourceTable)
+		rows, err := c.estimatedTableRows(ctx, tx, SourceTable)
 		if err != nil {
 			return 0, false, err
 		}

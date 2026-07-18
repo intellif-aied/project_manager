@@ -49,6 +49,7 @@ type Report struct {
 	TargetTable        string `json:"target_table"`
 	SourceRows         int64  `json:"source_rows"`
 	TargetRows         int64  `json:"target_rows"`
+	RowCountsExact     bool   `json:"row_counts_exact"`
 	MissingRows        int64  `json:"missing_rows,omitempty"`
 	ExtraRows          int64  `json:"extra_rows,omitempty"`
 	MismatchedRows     int64  `json:"mismatched_rows,omitempty"`
