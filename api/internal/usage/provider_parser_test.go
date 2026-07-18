@@ -256,6 +256,38 @@ func TestCodexCounterDecreaseAndModelTransitionRemainExplicit(t *testing.T) {
 	}
 }
 
+func TestCodexSameModelCounterResetUsesLastUsage(t *testing.T) {
+	content := []byte(
+		`{"timestamp":"2026-07-10T00:00:00Z","type":"turn_context","payload":{"model":"gpt-5.5"}}` + "\n" +
+			`{"timestamp":"2026-07-10T00:01:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20,"total_tokens":120},"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20,"total_tokens":120}}}}` + "\n" +
+			`{"timestamp":"2026-07-10T00:02:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":90,"cached_input_tokens":10,"output_tokens":25,"total_tokens":115},"last_token_usage":{"input_tokens":15,"cached_input_tokens":5,"output_tokens":5,"total_tokens":20}}}}` + "\n",
+	)
+	parsed, err := ParseProviderChunk("codex", bytes.NewReader(content), 0, ParseState{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Records) != 2 || parsed.Records[1].Quality == QualityConflict {
+		t.Fatalf("records=%+v", parsed.Records)
+	}
+	if parsed.Records[1].Delta.TotalTokens != 20 || parsed.Records[1].QualityReason != "Codex cumulative counter reset; used provider last_token_usage" {
+		t.Fatalf("reset record=%+v", parsed.Records[1])
+	}
+}
+
+func TestCodexTotalOnlyInitializationMarkerIsIgnored(t *testing.T) {
+	content := []byte(
+		`{"timestamp":"2026-07-10T00:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":0,"cached_input_tokens":0,"output_tokens":0,"total_tokens":316252}}}}` + "\n" +
+			`{"timestamp":"2026-07-10T00:01:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10,"total_tokens":110}}}}` + "\n",
+	)
+	parsed, err := ParseProviderChunk("codex", bytes.NewReader(content), 0, ParseState{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Records) != 1 || parsed.Records[0].Delta.TotalTokens != 110 || parsed.Records[0].Quality == QualityConflict {
+		t.Fatalf("parsed=%+v", parsed)
+	}
+}
+
 func TestProviderParserIsInvariantAcrossLineAlignedChunkBoundaries(t *testing.T) {
 	for _, test := range []struct {
 		name     string
