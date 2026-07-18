@@ -78,3 +78,4 @@ Token Contribution + Session 家族/按天/按 Chunk Rollup
 - 隔离 PostgreSQL 的 64 个 root Session / 18,030 个逻辑事实样本，Snapshot 只写 64 条 Rollup 引用，单次用例耗时低于 25ms；该数值是合成回归证据，不替代 14.157 真实数据 p95/p99 验收；
 - 14.157 已生成 78,230 条 active Contribution，三维/成本对账失败为 0；8 个 revision 未通过 conflict/incomplete quality gate、3 个测试来源的 MinIO key 缺失、2 个替换 revision 回退了非稳定事实。确认该环境全部为测试数据后，不再修复这 13 个历史来源，R5B 已切换；该处置不得复制为生产迁移规则。
 - R5B 切换后，用户 303 的 `/tokens/sessions` 首次实测约 136ms、同 Snapshot 后续页约 14ms，三天 `/token-analytics/summary` 首次实测约 86ms；集成镜像重启后的冒烟请求分别约 31ms 和 14ms。以上是单次测试服证据，不冒充 p95/p99。
+- 集成镜像稳定后各串行请求 20 次：`/tokens/sessions` p50 约 19.5ms、p95 约 27.6ms、最大约 35.8ms；三天 Summary p50 约 14.7ms、p95 约 16.8ms、最大约 17.0ms。该短样本不含并发负载，不能替代生产容量测试。
