@@ -10,6 +10,7 @@ import (
 	"github.com/aidashboard/api/config"
 	"github.com/aidashboard/api/db"
 	"github.com/aidashboard/api/handler"
+	"github.com/aidashboard/api/internal/contentreader"
 	"github.com/aidashboard/api/internal/pricing"
 	"github.com/aidashboard/api/internal/reportcontext"
 	"github.com/aidashboard/api/internal/reportsource"
@@ -193,7 +194,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to init session digest v2 job repository: %v", err)
 	}
-	digestProcessor, err := sessiondigestv2.NewProcessor(database, digestV2Config)
+	digestContentReader, err := contentreader.New(database, minioStore)
+	if err != nil {
+		log.Fatalf("Failed to init session content reader: %v", err)
+	}
+	digestProcessor, err := sessiondigestv2.NewProcessor(database, digestContentReader, digestV2Config)
 	if err != nil {
 		log.Fatalf("Failed to init session digest v2 processor: %v", err)
 	}

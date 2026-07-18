@@ -9,6 +9,7 @@ import (
 	"time"
 
 	projectdb "github.com/aidashboard/api/db"
+	"github.com/aidashboard/api/internal/contentreader"
 	"github.com/aidashboard/api/internal/sessionsync"
 )
 
@@ -65,9 +66,9 @@ func TestDigestV2ReconcilerAndProcessorIntegration(t *testing.T) {
 		INSERT INTO session_content_projection_revisions (
 			generation_id, content_parser_version, status, content_indexed_cursor,
 			source_high_water_cursor, event_count, activated_at
-		) VALUES ($1, 'integration-v2', 'active', 100, 100, 5, now())
+		) VALUES ($1, $2, 'active', 100, 100, 5, now())
 		RETURNING id::text`,
-		generationID,
+		generationID, sessionsync.ContentParserVersion,
 	).Scan(&projectionID); err != nil {
 		t.Fatal(err)
 	}
@@ -126,20 +127,31 @@ func TestDigestV2ReconcilerAndProcessorIntegration(t *testing.T) {
 			},
 		}},
 	}
+	baseTime := time.Date(2026, 7, 18, 1, 0, 0, 0, time.UTC)
+	reader := &integrationContentReader{}
 	for index, event := range events {
 		payload, _ := json.Marshal(event.payload)
+		contentSHA := strings.Repeat(string(rune('b'+index)), 64)
+		reader.events = append(reader.events, contentreader.Event{
+			SourceStartCursor: int64(event.start),
+			SourceEndCursor:   int64(event.end),
+			OccurredAt:        baseTime.Add(time.Duration(index) * time.Second),
+			EventType:         event.typeName,
+			Payload:           payload,
+			ContentSHA256:     contentSHA,
+		})
 		if _, err := database.ExecContext(ctx, `
 			INSERT INTO session_content_events (
 				content_projection_revision_id, chunk_id,
 				source_start_cursor, source_end_cursor, occurred_at,
 				event_type, summary, content_payload, content_sha256
 			) VALUES (
-				$1, $2, $3, $4, now() + ($5 * interval '1 second'),
+				$1, $2, $3, $4, $5,
 				$6, $7, $8, $9
 			)`,
-			projectionID, chunkID, event.start, event.end, index,
+			projectionID, chunkID, event.start, event.end, baseTime.Add(time.Duration(index)*time.Second),
 			event.typeName, "integration event", payload,
-			strings.Repeat(string(rune('b'+index)), 64),
+			contentSHA,
 		); err != nil {
 			t.Fatal(err)
 		}
@@ -190,7 +202,7 @@ func TestDigestV2ReconcilerAndProcessorIntegration(t *testing.T) {
 	if job == nil {
 		t.Fatalf("v2 digest job for %s was not claimable: %#v", revisionID, jobs)
 	}
-	processor, err := NewProcessor(database, config)
+	processor, err := NewProcessor(database, reader, config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,6 +216,11 @@ func TestDigestV2ReconcilerAndProcessorIntegration(t *testing.T) {
 	}
 	if err := processor.Process(ctx, *job); err != nil {
 		t.Fatalf("ready v2 digest replay must be idempotent: %v", err)
+	}
+	if len(reader.requests) != 1 || reader.requests[0] != (contentreader.Request{
+		RevisionID: projectionID, StartCursor: 0, EndCursor: 100,
+	}) {
+		t.Fatalf("unexpected content reader requests: %#v", reader.requests)
 	}
 
 	var status, digestText, digestHash string
@@ -248,4 +265,30 @@ func TestDigestV2ReconcilerAndProcessorIntegration(t *testing.T) {
 		len(digest.WorkUnits[0].ResultStatements) < 2 {
 		t.Fatalf("unexpected v2 digest: %#v", digest)
 	}
+}
+
+type integrationContentReader struct {
+	events   []contentreader.Event
+	requests []contentreader.Request
+}
+
+func (r *integrationContentReader) Stream(
+	ctx context.Context,
+	request contentreader.Request,
+	consume func(contentreader.Event) error,
+) (contentreader.Result, error) {
+	r.requests = append(r.requests, request)
+	for _, event := range r.events {
+		if err := ctx.Err(); err != nil {
+			return contentreader.Result{}, err
+		}
+		if err := consume(event); err != nil {
+			return contentreader.Result{}, err
+		}
+	}
+	return contentreader.Result{
+		StartCursor: request.StartCursor,
+		EndCursor:   request.EndCursor,
+		EventCount:  int64(len(r.events)),
+	}, nil
 }

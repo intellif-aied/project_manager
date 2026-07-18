@@ -10,23 +10,33 @@ import (
 	"hash"
 	"strings"
 
+	"github.com/aidashboard/api/internal/contentreader"
 	"github.com/aidashboard/api/internal/sessionsync"
 )
 
+type ContentReader interface {
+	Stream(
+		context.Context,
+		contentreader.Request,
+		func(contentreader.Event) error,
+	) (contentreader.Result, error)
+}
+
 type Processor struct {
 	db     *sql.DB
+	reader ContentReader
 	config Config
 }
 
-func NewProcessor(database *sql.DB, config Config) (*Processor, error) {
-	if database == nil {
-		return nil, errors.New("database is required")
+func NewProcessor(database *sql.DB, reader ContentReader, config Config) (*Processor, error) {
+	if database == nil || reader == nil {
+		return nil, errors.New("database and content reader are required")
 	}
 	normalized, err := config.Normalized()
 	if err != nil {
 		return nil, err
 	}
-	return &Processor{db: database, config: normalized}, nil
+	return &Processor{db: database, reader: reader, config: normalized}, nil
 }
 
 func (p *Processor) Process(ctx context.Context, job sessionsync.ProcessingJob) error {
@@ -59,33 +69,20 @@ func (p *Processor) Process(ctx context.Context, job sessionsync.ProcessingJob) 
 
 	extractor := NewExtractor()
 	sourceHasher := sha256.New()
-	rows, err := p.db.QueryContext(ctx, safeEventProjectionSQL,
-		target.Revision.ProjectionRevisionID,
-		target.Revision.StartCursor,
-		target.Revision.EndCursor,
-	)
-	if err != nil {
-		return p.recordFailure(ctx, job, err)
-	}
-	for rows.Next() {
-		var event Event
-		var payload []byte
-		if err := rows.Scan(
-			&event.StartCursor, &event.EndCursor, &event.OccurredAt, &event.EventType,
-			&event.Summary, &event.Excerpt, &payload, &event.ContentSHA, &event.PayloadBytes,
-		); err != nil {
-			rows.Close()
-			return p.recordFailure(ctx, job, err)
+	_, err = p.reader.Stream(ctx, contentreader.Request{
+		RevisionID:  target.Revision.ProjectionRevisionID,
+		StartCursor: target.Revision.StartCursor,
+		EndCursor:   target.Revision.EndCursor,
+	}, func(source contentreader.Event) error {
+		event, err := projectSafeEvent(source)
+		if err != nil {
+			return err
 		}
-		event.Payload = payload
 		writeSourceIdentity(sourceHasher, event)
 		extractor.Consume(event)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return p.recordFailure(ctx, job, err)
-	}
-	if err := rows.Close(); err != nil {
+		return nil
+	})
+	if err != nil {
 		return p.recordFailure(ctx, job, err)
 	}
 
@@ -114,109 +111,6 @@ func (p *Processor) Process(ctx context.Context, job sessionsync.ProcessingJob) 
 	}
 	return nil
 }
-
-const safeEventProjectionSQL = `
-	SELECT source_start_cursor, source_end_cursor, occurred_at, event_type,
-		''::text, ''::text,
-		CASE event_type
-		WHEN 'event_msg.user_message' THEN jsonb_build_object('payload', jsonb_build_object(
-			'message', left(COALESCE(content_payload #>> '{payload,message}', ''), 8192)))
-		WHEN 'event_msg.agent_message' THEN jsonb_build_object('payload', jsonb_build_object(
-			'phase', COALESCE(content_payload #>> '{payload,phase}', ''),
-			'message', left(COALESCE(content_payload #>> '{payload,message}', ''), 8192)))
-		WHEN 'event_msg.task_complete' THEN jsonb_build_object('payload', jsonb_build_object(
-			'last_agent_message', left(COALESCE(content_payload #>> '{payload,last_agent_message}', ''), 8192)))
-		WHEN 'event_msg.patch_apply_end' THEN jsonb_build_object('payload', jsonb_build_object(
-			'changes', COALESCE((
-				SELECT jsonb_object_agg(file_name, jsonb_build_object())
-				FROM (
-					SELECT file_name
-					FROM jsonb_object_keys(CASE
-						WHEN jsonb_typeof(content_payload #> '{payload,changes}') = 'object'
-						THEN content_payload #> '{payload,changes}' ELSE '{}'::jsonb END) AS file_name
-					ORDER BY file_name LIMIT 200
-				) files
-			), '{}'::jsonb)))
-		WHEN 'response_item.message' THEN jsonb_build_object('payload', jsonb_build_object(
-			'role', COALESCE(content_payload #>> '{payload,role}', ''),
-			'phase', COALESCE(content_payload #>> '{payload,phase}', ''),
-			'content', left(COALESCE(content_payload #>> '{payload,content}', ''), 8192)))
-		WHEN 'response_item.custom_tool_call' THEN jsonb_build_object('payload', jsonb_build_object(
-			'name', COALESCE(content_payload #>> '{payload,name}', ''),
-			'call_id', COALESCE(content_payload #>> '{payload,call_id}', ''),
-			'input', COALESCE((
-				SELECT string_agg(
-					'*** ' || match[1] || ' File: ' || match[2],
-					E'\n' ORDER BY ordinal
-				)
-				FROM (
-					SELECT match, ordinal
-					FROM regexp_matches(
-						COALESCE(content_payload #>> '{payload,input}', ''),
-						'(?m)^\*\*\* (Add|Update|Delete) File: (.+)$', 'g'
-					) WITH ORDINALITY AS found(match, ordinal)
-					ORDER BY ordinal LIMIT 200
-				) matches
-			), '')))
-		WHEN 'response_item.function_call' THEN jsonb_build_object('payload', jsonb_build_object(
-			'call_id', COALESCE(content_payload #>> '{payload,call_id}', ''),
-			'arguments', left(COALESCE(content_payload #>> '{payload,arguments}', ''), 8192)))
-		WHEN 'response_item.function_call_output' THEN
-			jsonb_build_object('payload', jsonb_build_object(
-				'call_id', COALESCE(content_payload #>> '{payload,call_id}', ''),
-				'output', left(COALESCE(content_payload #>> '{payload,output}', ''), 1024) || E'\n' ||
-					right(COALESCE(content_payload #>> '{payload,output}', ''), 4096)))
-		WHEN 'response_item.custom_tool_call_output' THEN
-			jsonb_build_object('payload', jsonb_build_object(
-				'call_id', COALESCE(content_payload #>> '{payload,call_id}', ''),
-				'output', left(COALESCE(content_payload #>> '{payload,output}', ''), 1024) || E'\n' ||
-					right(COALESCE(content_payload #>> '{payload,output}', ''), 4096)))
-		WHEN 'user' THEN jsonb_build_object('message', jsonb_build_object('content', COALESCE((
-			SELECT jsonb_agg(safe_block ORDER BY ordinal)
-			FROM (
-				SELECT ordinal, CASE block->>'type'
-					WHEN 'text' THEN jsonb_build_object(
-						'type', 'text', 'text', left(COALESCE(block->>'text', ''), 8192))
-					WHEN 'tool_result' THEN jsonb_build_object(
-						'type', 'tool_result', 'tool_use_id', COALESCE(block->>'tool_use_id', ''),
-						'content', left(COALESCE(block->>'content', ''), 1024) || E'\n' ||
-							right(COALESCE(block->>'content', ''), 4096))
-					ELSE jsonb_build_object('type', COALESCE(block->>'type', 'unknown'))
-				END AS safe_block
-				FROM jsonb_array_elements(CASE
-					WHEN jsonb_typeof(content_payload #> '{message,content}') = 'array'
-					THEN content_payload #> '{message,content}' ELSE '[]'::jsonb END)
-					WITH ORDINALITY AS blocks(block, ordinal)
-				ORDER BY ordinal LIMIT 100
-			) safe_blocks
-		), '[]'::jsonb)))
-		WHEN 'assistant' THEN jsonb_build_object('message', jsonb_build_object('content', COALESCE((
-			SELECT jsonb_agg(safe_block ORDER BY ordinal)
-			FROM (
-				SELECT ordinal, CASE block->>'type'
-					WHEN 'text' THEN jsonb_build_object(
-						'type', 'text', 'text', left(COALESCE(block->>'text', ''), 8192))
-					WHEN 'tool_use' THEN jsonb_build_object(
-						'type', 'tool_use', 'id', COALESCE(block->>'id', ''),
-						'name', COALESCE(block->>'name', ''),
-						'input', jsonb_build_object(
-							'file_path', left(COALESCE(block #>> '{input,file_path}', ''), 1024),
-							'command', left(COALESCE(block #>> '{input,command}', ''), 8192)))
-					ELSE jsonb_build_object('type', COALESCE(block->>'type', 'unknown'))
-				END AS safe_block
-				FROM jsonb_array_elements(CASE
-					WHEN jsonb_typeof(content_payload #> '{message,content}') = 'array'
-					THEN content_payload #> '{message,content}' ELSE '[]'::jsonb END)
-					WITH ORDINALITY AS blocks(block, ordinal)
-				ORDER BY ordinal LIMIT 100
-			) safe_blocks
-		), '[]'::jsonb)))
-		ELSE NULL END,
-		content_sha256, source_end_cursor - source_start_cursor
-	FROM session_content_events
-	WHERE content_projection_revision_id = $1
-		AND source_start_cursor >= $2 AND source_end_cursor <= $3
-	ORDER BY source_start_cursor, source_end_cursor, id`
 
 func (p *Processor) loadTarget(
 	ctx context.Context,
