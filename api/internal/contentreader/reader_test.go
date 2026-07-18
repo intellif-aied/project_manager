@@ -239,6 +239,54 @@ func TestReaderHonorsCancellationAndConsumerBackpressure(t *testing.T) {
 	}
 }
 
+func TestReaderIndexedRangeSeeksAndReadsOnlyRequestedBytes(t *testing.T) {
+	first := []byte("{\"type\":\"user\",\"timestamp\":\"2026-07-18T01:00:00Z\",\"payload\":{\"message\":\"first\"}}\n")
+	second := []byte("{\"type\":\"assistant\",\"timestamp\":\"2026-07-18T01:00:01Z\",\"payload\":{\"message\":\"second\"}}\n")
+	third := []byte("{\"type\":\"assistant\",\"timestamp\":\"2026-07-18T01:00:02Z\",\"payload\":{\"message\":\"third\"}}\n")
+	content := append(append(append([]byte{}, first...), second...), third...)
+	start := int64(len(first))
+	end := start + int64(len(second))
+	events := parseEvents(t, second, start)
+	repository := &fakeRepository{
+		target: func() readTarget {
+			target := availableTarget(int64(len(content)))
+			target.LegacyObjectKey = "legacy.jsonl"
+			return target
+		}(),
+		expected: expectedFrom(events),
+	}
+	store := &trackingSeekStore{content: content}
+	reader := mustReader(t, repository, store)
+	var received []Event
+	result, err := reader.Stream(context.Background(), Request{
+		RevisionID: "revision-1", StartCursor: start, EndCursor: end,
+		ValidationMode: ValidationIndexedRange,
+	}, func(event Event) error {
+		received = append(received, event)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(received) != 1 || received[0].Summary != "second" || result.EventCount != 1 {
+		t.Fatalf("received=%+v result=%+v", received, result)
+	}
+	if store.last == nil || store.last.seekOffset != start || store.last.bytesRead != int64(len(second)) {
+		t.Fatalf("range read=%+v want offset=%d bytes=%d", store.last, start, len(second))
+	}
+}
+
+func TestReaderRejectsUnknownValidationMode(t *testing.T) {
+	reader := mustReader(t, &fakeRepository{}, memoryObjectStore{})
+	_, err := reader.Stream(context.Background(), Request{
+		RevisionID: "revision-1", StartCursor: 0, EndCursor: 1,
+		ValidationMode: ValidationMode("unknown"),
+	}, func(Event) error { return nil })
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("err=%v", err)
+	}
+}
+
 func TestReaderValidatesRevisionAndContentState(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -353,6 +401,38 @@ func (s memoryObjectStore) Download(_ context.Context, key string) (io.ReadClose
 	}
 	return io.NopCloser(bytes.NewReader(content)), nil
 }
+
+type trackingSeekStore struct {
+	content []byte
+	last    *trackingSeekReadCloser
+}
+
+func (s *trackingSeekStore) Download(_ context.Context, _ string) (io.ReadCloser, error) {
+	s.last = &trackingSeekReadCloser{reader: bytes.NewReader(s.content), seekOffset: -1}
+	return s.last, nil
+}
+
+type trackingSeekReadCloser struct {
+	reader     *bytes.Reader
+	seekOffset int64
+	bytesRead  int64
+}
+
+func (r *trackingSeekReadCloser) Read(buffer []byte) (int, error) {
+	count, err := r.reader.Read(buffer)
+	r.bytesRead += int64(count)
+	return count, err
+}
+
+func (r *trackingSeekReadCloser) Seek(offset int64, whence int) (int64, error) {
+	position, err := r.reader.Seek(offset, whence)
+	if err == nil && whence == io.SeekStart {
+		r.seekOffset = position
+	}
+	return position, err
+}
+
+func (r *trackingSeekReadCloser) Close() error { return nil }
 
 func availableTarget(indexedCursor int64) readTarget {
 	return readTarget{

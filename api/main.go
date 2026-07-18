@@ -52,6 +52,10 @@ func main() {
 	} else {
 		log.Println("MinIO not configured, raw log upload disabled")
 	}
+	sessionContentReader, err := contentreader.New(database, minioStore)
+	if err != nil {
+		log.Fatalf("Failed to init session content reader: %v", err)
+	}
 
 	aihubClient := service.NewAIHubClient(cfg.AIHubHost, cfg.AIHubToken)
 	modelCatalogClient := service.NewModelCatalogClient(cfg.AIGatewayModelsURL)
@@ -72,7 +76,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("Invalid report source digest configuration: %v", err)
 	}
-	reportSourceService, err := reportsource.NewServiceWithConfig(database, reportSourceConfig)
+	reportSourceService, err := reportsource.NewServiceWithConfigAndReader(
+		database, sessionContentReader, reportSourceConfig,
+	)
 	if err != nil {
 		log.Fatalf("Failed to init report source service: %v", err)
 	}
@@ -159,10 +165,6 @@ func main() {
 		}
 		meteringWorker.Start(schedulerCtx)
 		log.Println("Session metering lifecycle worker started")
-	}
-	sessionContentReader, err := contentreader.New(database, minioStore)
-	if err != nil {
-		log.Fatalf("Failed to init session content reader: %v", err)
 	}
 	if reportSourceConfig.SessionReadMode == reportsource.ReadModeDigestV1 ||
 		reportSourceConfig.SessionReadMode == reportsource.ReadModeDigestV2 ||

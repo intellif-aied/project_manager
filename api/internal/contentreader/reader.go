@@ -27,11 +27,21 @@ var (
 // Event is the canonical event projection produced by the shared Session content parser.
 type Event = sessionsync.ProjectedContentEvent
 
+type ValidationMode string
+
+const (
+	// ValidationFull verifies complete overlapping objects and is the default for background consumers.
+	ValidationFull ValidationMode = ""
+	// ValidationIndexedRange reads only the requested byte range and verifies every event against the index.
+	ValidationIndexedRange ValidationMode = "indexed_range"
+)
+
 // Request identifies an indexed revision range. Cursor bounds use [start, end) semantics.
 type Request struct {
-	RevisionID  string
-	StartCursor int64
-	EndCursor   int64
+	RevisionID     string
+	StartCursor    int64
+	EndCursor      int64
+	ValidationMode ValidationMode
 }
 
 // Result describes the successfully validated range. It is valid only when Stream returns nil.
@@ -79,7 +89,8 @@ func (r *Reader) Stream(
 	consume func(Event) error,
 ) (result Result, returnedErr error) {
 	request.RevisionID = strings.TrimSpace(request.RevisionID)
-	if request.RevisionID == "" || request.StartCursor < 0 || request.EndCursor <= request.StartCursor || consume == nil {
+	if request.RevisionID == "" || request.StartCursor < 0 || request.EndCursor <= request.StartCursor || consume == nil ||
+		(request.ValidationMode != ValidationFull && request.ValidationMode != ValidationIndexedRange) {
 		return Result{}, ErrInvalidRequest
 	}
 	if err := ctx.Err(); err != nil {
@@ -152,6 +163,9 @@ func (r *Reader) Stream(
 			0,
 			-1,
 			"",
+			request.StartCursor,
+			request.EndCursor,
+			request.ValidationMode == ValidationIndexedRange,
 			fallback,
 			visit,
 		)
@@ -171,12 +185,17 @@ func (r *Reader) Stream(
 	} else {
 		for _, chunk := range chunks {
 			fallback := nullableTime(chunk.EventStartAt)
+			rangeStart := max(request.StartCursor, chunk.StartCursor)
+			rangeEnd := min(request.EndCursor, chunk.EndCursor)
 			scanResult, err := r.scanObject(
 				ctx,
 				chunk.ObjectKey,
 				chunk.StartCursor,
 				chunk.EndCursor,
 				chunk.ContentSHA256,
+				rangeStart,
+				rangeEnd,
+				request.ValidationMode == ValidationIndexedRange,
 				fallback,
 				visit,
 			)
@@ -265,6 +284,9 @@ func (r *Reader) scanObject(
 	startCursor int64,
 	expectedEndCursor int64,
 	expectedSHA256 string,
+	rangeStartCursor int64,
+	rangeEndCursor int64,
+	useIndexedRange bool,
 	fallbackTime *time.Time,
 	visit func(Event) error,
 ) (sessionsync.ContentScanResult, error) {
@@ -272,13 +294,36 @@ func (r *Reader) scanObject(
 	if err != nil {
 		return sessionsync.ContentScanResult{}, fmt.Errorf("%w: %s: %v", ErrObjectUnavailable, objectKey, err)
 	}
-	hasher := sha256.New()
+	parseStartCursor := startCursor
+	parseEndCursor := expectedEndCursor
+	verifySHA256 := expectedSHA256
 	input := io.Reader(&contextReader{ctx: ctx, reader: object})
-	if expectedSHA256 != "" {
+	if useIndexedRange && (rangeStartCursor > startCursor || expectedEndCursor < 0 || rangeEndCursor < expectedEndCursor) {
+		if seeker, ok := object.(io.Seeker); ok {
+			offset := rangeStartCursor - startCursor
+			if offset < 0 || rangeEndCursor <= rangeStartCursor {
+				_ = object.Close()
+				return sessionsync.ContentScanResult{}, ErrInvalidRequest
+			}
+			if _, err := seeker.Seek(offset, io.SeekStart); err != nil {
+				_ = object.Close()
+				return sessionsync.ContentScanResult{}, fmt.Errorf("%w: seek %s: %v", ErrObjectUnavailable, objectKey, err)
+			}
+			input = io.LimitReader(
+				&contextReader{ctx: ctx, reader: object},
+				rangeEndCursor-rangeStartCursor,
+			)
+			parseStartCursor = rangeStartCursor
+			parseEndCursor = rangeEndCursor
+			verifySHA256 = ""
+		}
+	}
+	hasher := sha256.New()
+	if verifySHA256 != "" {
 		input = io.TeeReader(input, hasher)
 	}
 	var visitErr error
-	scanResult, scanErr := sessionsync.ScanContentChunk(input, startCursor, fallbackTime, func(event Event) error {
+	scanResult, scanErr := sessionsync.ScanContentChunk(input, parseStartCursor, fallbackTime, func(event Event) error {
 		if err := visit(event); err != nil {
 			visitErr = err
 			return err
@@ -301,24 +346,24 @@ func (r *Reader) scanObject(
 	if closeErr != nil {
 		return sessionsync.ContentScanResult{}, fmt.Errorf("%w: close %s: %v", ErrObjectUnavailable, objectKey, closeErr)
 	}
-	if expectedEndCursor >= 0 && scanResult.EndCursor != expectedEndCursor {
+	if parseEndCursor >= 0 && scanResult.EndCursor != parseEndCursor {
 		return sessionsync.ContentScanResult{}, fmt.Errorf(
 			"%w: object %s ends at %d, chunk ends at %d",
 			ErrCursorIntegrity,
 			objectKey,
 			scanResult.EndCursor,
-			expectedEndCursor,
+			parseEndCursor,
 		)
 	}
-	if expectedSHA256 != "" {
+	if verifySHA256 != "" {
 		actual := hex.EncodeToString(hasher.Sum(nil))
-		if actual != expectedSHA256 {
+		if actual != verifySHA256 {
 			return sessionsync.ContentScanResult{}, fmt.Errorf(
 				"%w: object %s sha256 %s, expected %s",
 				ErrContentIntegrity,
 				objectKey,
 				actual,
-				expectedSHA256,
+				verifySHA256,
 			)
 		}
 	}
