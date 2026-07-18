@@ -13,6 +13,7 @@ import (
 	"time"
 
 	projectdb "github.com/aidashboard/api/db"
+	"github.com/aidashboard/api/internal/contentreader"
 	"github.com/aidashboard/api/internal/reportsourcecatalog"
 )
 
@@ -51,7 +52,8 @@ func TestReportSourceSelectionLifecycleIntegration(t *testing.T) {
 	}()
 
 	fixture := insertReportSourceFixture(t, database, userID)
-	service, err := NewService(database)
+	contentReader := &databaseContentReader{db: database}
+	service, err := NewServiceWithReader(database, contentReader)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,12 +271,20 @@ func TestReportSourceSelectionLifecycleIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertAttachedSelectionValidationError(t, ctx, database, service, pagedAttached.ID, pagedRunID, selection.Period, ErrSourceIncomplete)
+	firstRequestIndex := len(contentReader.requests)
 	firstPage, err := service.ReadAttachedSelection(ctx, "990040", pagedAttached.ID, pagedRunID, "personal_weekly", selection.Period, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !firstPage.HasMore || firstPage.NextCursor == nil || firstPage.ReturnedEvents != 100 || firstPage.Completeness != "partial" {
 		t.Fatalf("first paged read=%+v", firstPage)
+	}
+	if len(contentReader.requests) != firstRequestIndex+1 {
+		t.Fatalf("first page did not use a bounded indexed range: %#v", contentReader.requests[firstRequestIndex:])
+	}
+	firstPageRequest := contentReader.requests[firstRequestIndex]
+	if firstPageRequest.ValidationMode != contentreader.ValidationIndexedRange || firstPageRequest.EndCursor >= 1400 {
+		t.Fatalf("first page did not use a bounded indexed range: %+v", firstPageRequest)
 	}
 	assertAttachedSelectionValidationError(t, ctx, database, service, pagedAttached.ID, pagedRunID, selection.Period, ErrSourceIncomplete)
 	retriedFirstPage, err := service.ReadAttachedSelection(ctx, "990040", pagedAttached.ID, pagedRunID, "personal_weekly", selection.Period, "")
@@ -285,12 +295,21 @@ func TestReportSourceSelectionLifecycleIntegration(t *testing.T) {
 		retriedFirstPage.ReturnedEvents != firstPage.ReturnedEvents {
 		t.Fatalf("first page retry changed cursor or contents first=%+v retry=%+v", firstPage, retriedFirstPage)
 	}
+	secondRequestIndex := len(contentReader.requests)
 	secondPage, err := service.ReadAttachedSelection(ctx, "990040", pagedAttached.ID, pagedRunID, "personal_weekly", selection.Period, *firstPage.NextCursor)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if secondPage.HasMore || secondPage.ReturnedEvents != 5 || secondPage.Completeness != "complete" {
 		t.Fatalf("second paged read=%+v", secondPage)
+	}
+	if len(contentReader.requests) != secondRequestIndex+1 {
+		t.Fatalf("second page reader request count changed: %#v", contentReader.requests[secondRequestIndex:])
+	}
+	secondPageRequest := contentReader.requests[secondRequestIndex]
+	if secondPageRequest.StartCursor != firstPageRequest.EndCursor || secondPageRequest.EndCursor != 1400 {
+		t.Fatalf("second page range does not continue the first: first=%+v second=%+v",
+			firstPageRequest, secondPageRequest)
 	}
 	assertAttachedSelectionValidationError(t, ctx, database, service, pagedAttached.ID, pagedRunID, selection.Period, nil)
 	retriedSecondPage, err := service.ReadAttachedSelection(ctx, "990040", pagedAttached.ID, pagedRunID, "personal_weekly", selection.Period, *firstPage.NextCursor)
@@ -373,6 +392,61 @@ type reportSourceFixture struct {
 	chunkID    string
 	sliceKeys  []string
 	times      []time.Time
+}
+
+// databaseContentReader is a service-level test double. Content Reader's MinIO,
+// cursor, and hash behavior is covered in internal/contentreader tests.
+type databaseContentReader struct {
+	db       *sql.DB
+	requests []contentreader.Request
+}
+
+func (r *databaseContentReader) Stream(
+	ctx context.Context,
+	request contentreader.Request,
+	consume func(contentreader.Event) error,
+) (contentreader.Result, error) {
+	r.requests = append(r.requests, request)
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT source_start_cursor, source_end_cursor, occurred_at, event_type,
+			COALESCE(summary, ''), COALESCE(excerpt, ''), content_payload, content_sha256
+		FROM session_content_events
+		WHERE content_projection_revision_id = $1
+			AND source_start_cursor >= $2 AND source_end_cursor <= $3
+		ORDER BY source_start_cursor, source_end_cursor, id`,
+		request.RevisionID, request.StartCursor, request.EndCursor,
+	)
+	if err != nil {
+		return contentreader.Result{}, err
+	}
+	defer rows.Close()
+	result := contentreader.Result{
+		StartCursor: request.StartCursor,
+		EndCursor:   request.EndCursor,
+	}
+	for rows.Next() {
+		var event contentreader.Event
+		if err := rows.Scan(
+			&event.SourceStartCursor,
+			&event.SourceEndCursor,
+			&event.OccurredAt,
+			&event.EventType,
+			&event.Summary,
+			&event.Excerpt,
+			&event.Payload,
+			&event.ContentSHA256,
+		); err != nil {
+			return contentreader.Result{}, err
+		}
+		if err := consume(event); err != nil {
+			return contentreader.Result{}, err
+		}
+		result.EventCount++
+	}
+	if err := rows.Err(); err != nil {
+		return contentreader.Result{}, err
+	}
+	return result, nil
 }
 
 func insertReportSourceFixture(t *testing.T, database *sql.DB, userID int64) reportSourceFixture {

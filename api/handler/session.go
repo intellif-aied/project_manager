@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aidashboard/api/internal/contentreader"
 	"github.com/aidashboard/api/model"
 	"github.com/aidashboard/api/service"
 	"github.com/aidashboard/api/storage"
@@ -23,8 +24,13 @@ const sessionRawLogUploadTimeout = 5 * time.Minute
 type SessionHandler struct {
 	db            *sql.DB
 	store         *storage.MinioStorage
+	contentReader SessionContentReader
 	ai            *service.AIClient
 	eventRecorder *service.WorkItemEventRecorder
+}
+
+type SessionContentReader interface {
+	WriteRaw(context.Context, string, io.Writer) (contentreader.Result, error)
 }
 
 func NewSessionHandler(db *sql.DB, store *storage.MinioStorage, ai *service.AIClient) *SessionHandler {
@@ -38,6 +44,10 @@ func NewSessionHandlerWithRecorder(
 	recorder *service.WorkItemEventRecorder,
 ) *SessionHandler {
 	return &SessionHandler{db: db, store: store, ai: ai, eventRecorder: recorder}
+}
+
+func (h *SessionHandler) ConfigureContentReader(reader SessionContentReader) {
+	h.contentReader = reader
 }
 
 func (h *SessionHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -90,6 +100,17 @@ func (h *SessionHandler) List(w http.ResponseWriter, r *http.Request) {
 			s.tool_calls_json, s.git_commits,
 			s.task_id, COALESCE(t.title,''), s.requirement_id, s.match_confidence,
 			CASE WHEN s.content_status = 'available' THEN s.raw_log_url END,
+			CASE WHEN s.content_status = 'available' AND (
+				NULLIF(s.raw_log_url, '') IS NOT NULL OR EXISTS (
+					SELECT 1
+					FROM session_sources log_source
+					JOIN session_upload_chunks log_chunk
+						ON log_chunk.generation_id = log_source.active_generation_id
+						AND log_chunk.object_status = 'available'
+					WHERE log_source.session_id = s.id
+						AND log_source.active_content_projection_revision_id IS NOT NULL
+				)
+			) THEN true ELSE false END,
 			s.content_status, s.uploaded_at
 		FROM sessions s
 		LEFT JOIN users u ON u.id = s.user_id
@@ -119,7 +140,7 @@ func (h *SessionHandler) List(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Scan(&s.ID, &s.SessionRef, &s.UserID, &s.UserName, &s.AgentType, &s.StartedAt, &endedAt,
 			&durationSecs, &modelName, &summary, &toolCallsJSON, &gitCommits,
 			&taskID, &taskTitle, &reqID, &confidence,
-			&rawLogURL, &s.ContentStatus, &s.UploadedAt); err != nil {
+			&rawLogURL, &s.HasLogContent, &s.ContentStatus, &s.UploadedAt); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
@@ -182,6 +203,17 @@ func (h *SessionHandler) Get(w http.ResponseWriter, r *http.Request) {
 			s.tool_calls_json, s.git_commits,
 			s.task_id, COALESCE(t.title,''), s.requirement_id, s.match_confidence,
 			CASE WHEN s.content_status = 'available' THEN s.raw_log_url END,
+			CASE WHEN s.content_status = 'available' AND (
+				NULLIF(s.raw_log_url, '') IS NOT NULL OR EXISTS (
+					SELECT 1
+					FROM session_sources log_source
+					JOIN session_upload_chunks log_chunk
+						ON log_chunk.generation_id = log_source.active_generation_id
+						AND log_chunk.object_status = 'available'
+					WHERE log_source.session_id = s.id
+						AND log_source.active_content_projection_revision_id IS NOT NULL
+				)
+			) THEN true ELSE false END,
 			s.content_status, s.uploaded_at
 		FROM sessions s
 		LEFT JOIN users u ON u.id = s.user_id
@@ -190,7 +222,7 @@ func (h *SessionHandler) Get(w http.ResponseWriter, r *http.Request) {
 		&s.ID, &s.SessionRef, &s.UserID, &s.UserName, &s.AgentType, &s.StartedAt, &endedAt,
 		&durationSecs, &modelName, &summary, &toolCallsJSON, &gitCommits,
 		&taskID, &taskTitle, &reqID, &confidence,
-		&rawLogURL, &s.ContentStatus, &s.UploadedAt,
+		&rawLogURL, &s.HasLogContent, &s.ContentStatus, &s.UploadedAt,
 	)
 	if err == sql.ErrNoRows {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
@@ -693,9 +725,25 @@ func (h *SessionHandler) DownloadLog(w http.ResponseWriter, r *http.Request) {
 	u := getUser(r)
 
 	var rawLogURL sql.NullString
-	var ownerID string
+	var ownerID, projectionRevisionID string
 	var contentStatus string
-	err := h.db.QueryRow("SELECT raw_log_url, user_id, content_status FROM sessions WHERE id = $1", id).Scan(&rawLogURL, &ownerID, &contentStatus)
+	err := h.db.QueryRow(`
+		SELECT s.raw_log_url, s.user_id, s.content_status, COALESCE((
+			SELECT source.active_content_projection_revision_id::text
+			FROM session_sources source
+			WHERE source.session_id = s.id
+				AND source.active_generation_id IS NOT NULL
+				AND source.active_content_projection_revision_id IS NOT NULL
+				AND EXISTS (
+					SELECT 1 FROM session_upload_chunks chunk
+					WHERE chunk.generation_id = source.active_generation_id
+						AND chunk.object_status = 'available'
+				)
+			ORDER BY CASE WHEN source.source_role = 'main' THEN 0 ELSE 1 END, source.source_role
+			LIMIT 1
+		), '')
+		FROM sessions s WHERE s.id = $1`, id,
+	).Scan(&rawLogURL, &ownerID, &contentStatus, &projectionRevisionID)
 	if err == sql.ErrNoRows {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
@@ -714,18 +762,35 @@ func (h *SessionHandler) DownloadLog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !rawLogURL.Valid || rawLogURL.String == "" {
+	if (!rawLogURL.Valid || rawLogURL.String == "") && projectionRevisionID == "" {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no raw log available"})
-		return
-	}
-
-	if h.store == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "raw log storage not configured"})
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
+	w.Header().Set("Content-Type", "application/x-jsonlines")
+	w.Header().Set("Content-Disposition", "attachment; filename=\""+id+".jsonl\"")
+
+	if !rawLogURL.Valid || rawLogURL.String == "" {
+		if h.contentReader == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "session content reader not configured"})
+			return
+		}
+		writer := &countingWriter{writer: w}
+		if _, err := h.contentReader.WriteRaw(ctx, projectionRevisionID, writer); err != nil {
+			if writer.written == 0 {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "download failed: " + err.Error()})
+			} else {
+				log.Printf("V2 session log stream failed after %d bytes (session=%s): %v", writer.written, id, err)
+			}
+		}
+		return
+	}
+	if h.store == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "raw log storage not configured"})
+		return
+	}
 
 	stream, err := h.store.Download(ctx, rawLogURL.String)
 	if err != nil {
@@ -734,9 +799,20 @@ func (h *SessionHandler) DownloadLog(w http.ResponseWriter, r *http.Request) {
 	}
 	defer stream.Close()
 
-	w.Header().Set("Content-Type", "application/x-jsonlines")
-	w.Header().Set("Content-Disposition", "attachment; filename=\""+id+".jsonl\"")
-	io.Copy(w, stream)
+	if _, err := io.Copy(w, stream); err != nil {
+		log.Printf("legacy session log stream failed (session=%s): %v", id, err)
+	}
+}
+
+type countingWriter struct {
+	writer  io.Writer
+	written int64
+}
+
+func (w *countingWriter) Write(buffer []byte) (int, error) {
+	count, err := w.writer.Write(buffer)
+	w.written += int64(count)
+	return count, err
 }
 
 func (h *SessionHandler) UpdateTask(w http.ResponseWriter, r *http.Request) {

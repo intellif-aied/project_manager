@@ -145,14 +145,14 @@ func (p *ContentProjectionProcessor) processChunk(ctx context.Context, job Proce
 			INSERT INTO session_content_events (
 				content_projection_revision_id, chunk_id, source_start_cursor,
 				source_end_cursor, occurred_at, event_type, summary, excerpt,
-				content_payload, content_sha256
-			) VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), NULLIF($8, ''), $9, $10)
+				content_sha256
+			) VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), NULLIF($8, ''), $9)
 			ON CONFLICT (
 				content_projection_revision_id, chunk_id, source_start_cursor, source_end_cursor
 			) DO NOTHING`,
 			revisionID, chunk.ID, event.SourceStartCursor, event.SourceEndCursor,
 			event.OccurredAt, event.EventType, event.Summary, event.Excerpt,
-			[]byte(event.Payload), event.ContentSHA256); err != nil {
+			event.ContentSHA256); err != nil {
 			return err
 		}
 	}

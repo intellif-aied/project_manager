@@ -373,6 +373,7 @@ type Session struct {
 	RequirementID   *string    `json:"requirement_id,omitempty"`
 	MatchConfidence *float64   `json:"match_confidence,omitempty"`
 	RawLogURL       *string    `json:"raw_log_url,omitempty"`
+	HasLogContent   bool       `json:"has_log_content"`
 	ContentStatus   string     `json:"content_status"`
 	UploadedAt      time.Time  `json:"uploaded_at"`
 }

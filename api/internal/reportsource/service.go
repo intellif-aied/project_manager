@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aidashboard/api/internal/contentreader"
 	"github.com/lib/pq"
 )
 
@@ -21,6 +22,7 @@ var (
 	ErrSelectionMismatch                = errors.New("report source selection does not match the managed report run")
 	ErrSourceIncomplete                 = errors.New("report source selection has not been read completely")
 	ErrContentItemTooLarge              = errors.New("report source content item exceeds the page limit")
+	ErrContentReaderUnavailable         = errors.New("report source content reader is unavailable")
 	ErrLargeContextConfirmationRequired = errors.New("large report context confirmation is required")
 )
 
@@ -31,14 +33,31 @@ const reportSourcePageMaxBytes = 512 << 10
 
 type Service struct {
 	db     *sql.DB
+	reader ContentReader
 	config Config
 }
 
+type ContentReader interface {
+	Stream(
+		context.Context,
+		contentreader.Request,
+		func(contentreader.Event) error,
+	) (contentreader.Result, error)
+}
+
 func NewService(database *sql.DB) (*Service, error) {
-	return NewServiceWithConfig(database, DefaultConfig())
+	return NewServiceWithConfigAndReader(database, nil, DefaultConfig())
+}
+
+func NewServiceWithReader(database *sql.DB, reader ContentReader) (*Service, error) {
+	return NewServiceWithConfigAndReader(database, reader, DefaultConfig())
 }
 
 func NewServiceWithConfig(database *sql.DB, config Config) (*Service, error) {
+	return NewServiceWithConfigAndReader(database, nil, config)
+}
+
+func NewServiceWithConfigAndReader(database *sql.DB, reader ContentReader, config Config) (*Service, error) {
 	if database == nil {
 		return nil, errors.New("database is required")
 	}
@@ -46,7 +65,7 @@ func NewServiceWithConfig(database *sql.DB, config Config) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Service{db: database, config: normalized}, nil
+	return &Service{db: database, reader: reader, config: normalized}, nil
 }
 
 type Period struct {
@@ -541,6 +560,9 @@ func (s *Service) ReadAttachedSelection(
 	if requiredReadMode != ReadModeFull {
 		return ContentPage{}, ErrReadModeMismatch
 	}
+	if s.reader == nil {
+		return ContentPage{}, ErrContentReaderUnavailable
+	}
 
 	itemOffset := 0
 	nextEventCursor := int64(0)
@@ -568,18 +590,26 @@ func (s *Service) ReadAttachedSelection(
 	nextOffset := itemOffset
 	nextCursorValue := nextEventCursor
 	for nextOffset < len(items) {
+		if page.ReturnedEvents >= reportSourcePageMaxEvents {
+			break
+		}
 		item := items[nextOffset]
 		cursor := item.StartCursor
 		if nextOffset == itemOffset && nextEventCursor > cursor {
 			cursor = nextEventCursor
 		}
-		rows, err := tx.QueryContext(ctx, `
-			SELECT source_start_cursor, source_end_cursor, occurred_at, event_type,
-				COALESCE(summary, ''), COALESCE(excerpt, ''), COALESCE(content_payload, '{}'::jsonb)
-			FROM session_content_events
-			WHERE content_projection_revision_id = $1
-				AND source_start_cursor >= $2 AND source_end_cursor <= $3
-			ORDER BY source_start_cursor, source_end_cursor`, item.ProjectionRevision, cursor, item.EndCursor)
+		if cursor > item.EndCursor {
+			return ContentPage{}, ErrSelectionMismatch
+		}
+		if cursor == item.EndCursor {
+			nextOffset++
+			nextCursorValue = 0
+			continue
+		}
+		plan, err := planContentRange(
+			ctx, tx, item.ProjectionRevision, cursor, item.EndCursor,
+			reportSourcePageMaxEvents-page.ReturnedEvents,
+		)
 		if err != nil {
 			return ContentPage{}, err
 		}
@@ -589,42 +619,56 @@ func (s *Service) ReadAttachedSelection(
 			Summary: item.Summary, ContentQuality: "exact", ContentEventCount: item.ContentEventCount,
 			Events: []ContentEvent{},
 		}
-		itemComplete := true
-		for rows.Next() {
-			var event ContentEvent
-			var eventStart, eventEnd int64
-			if err := rows.Scan(&eventStart, &eventEnd, &event.OccurredAt, &event.EventType,
-				&event.Summary, &event.Excerpt, &event.Payload); err != nil {
-				rows.Close()
-				return ContentPage{}, err
+		pageOverflow := false
+		overflowCursor := int64(0)
+		readResult, err := s.reader.Stream(ctx, contentreader.Request{
+			RevisionID:     item.ProjectionRevision,
+			StartCursor:    cursor,
+			EndCursor:      plan.EndCursor,
+			ValidationMode: contentreader.ValidationIndexedRange,
+		}, func(source contentreader.Event) error {
+			event := ContentEvent{
+				OccurredAt: source.OccurredAt,
+				EventType:  source.EventType,
+				Summary:    source.Summary,
+				Excerpt:    source.Excerpt,
+				Payload:    redactReportUsageMetrics(source.Payload),
 			}
-			event.Payload = redactReportUsageMetrics(event.Payload)
 			encoded, err := json.Marshal(event)
 			if err != nil {
-				rows.Close()
-				return ContentPage{}, err
+				return err
 			}
 			if len(encoded) > reportSourcePageMaxBytes {
-				rows.Close()
-				return ContentPage{}, ErrContentItemTooLarge
+				return ErrContentItemTooLarge
 			}
-			if page.ReturnedEvents >= reportSourcePageMaxEvents || pageBytes+len(encoded) > reportSourcePageMaxBytes {
-				itemComplete = false
-				nextCursorValue = eventStart
-				break
+			if pageOverflow {
+				return nil
+			}
+			if pageBytes+len(encoded) > reportSourcePageMaxBytes {
+				pageOverflow = true
+				overflowCursor = source.SourceStartCursor
+				return nil
 			}
 			contentItem.Events = append(contentItem.Events, event)
 			page.ReturnedEvents++
 			pageBytes += len(encoded)
-			nextCursorValue = eventEnd
-		}
-		if err := rows.Close(); err != nil {
+			nextCursorValue = source.SourceEndCursor
+			return nil
+		})
+		if err != nil {
 			return ContentPage{}, err
+		}
+		if readResult.EventCount != int64(plan.EventCount) {
+			return ContentPage{}, ErrSourceUnavailable
 		}
 		if len(contentItem.Events) > 0 {
 			page.Items = append(page.Items, contentItem)
 		}
-		if !itemComplete {
+		if pageOverflow {
+			nextCursorValue = overflowCursor
+			break
+		}
+		if plan.HasMore {
 			break
 		}
 		nextOffset++
@@ -664,6 +708,61 @@ func (s *Service) ReadAttachedSelection(
 		return ContentPage{}, err
 	}
 	return page, nil
+}
+
+type contentRangePlan struct {
+	EndCursor  int64
+	EventCount int
+	HasMore    bool
+}
+
+func planContentRange(
+	ctx context.Context,
+	tx *sql.Tx,
+	revisionID string,
+	startCursor, itemEndCursor int64,
+	maxEvents int,
+) (contentRangePlan, error) {
+	if tx == nil || strings.TrimSpace(revisionID) == "" || startCursor < 0 ||
+		itemEndCursor <= startCursor || maxEvents <= 0 {
+		return contentRangePlan{}, ErrInvalidRequest
+	}
+	rows, err := tx.QueryContext(ctx, `
+		SELECT source_start_cursor, source_end_cursor
+		FROM session_content_events
+		WHERE content_projection_revision_id = $1
+			AND source_start_cursor >= $2 AND source_end_cursor <= $3
+		ORDER BY source_start_cursor, source_end_cursor, id
+		LIMIT $4`, revisionID, startCursor, itemEndCursor, maxEvents+1)
+	if err != nil {
+		return contentRangePlan{}, err
+	}
+	defer rows.Close()
+	type boundary struct {
+		start int64
+		end   int64
+	}
+	boundaries := make([]boundary, 0, maxEvents+1)
+	for rows.Next() {
+		var current boundary
+		if err := rows.Scan(&current.start, &current.end); err != nil {
+			return contentRangePlan{}, err
+		}
+		if current.start < startCursor || current.end <= current.start || current.end > itemEndCursor {
+			return contentRangePlan{}, ErrSourceUnavailable
+		}
+		boundaries = append(boundaries, current)
+	}
+	if err := rows.Err(); err != nil {
+		return contentRangePlan{}, err
+	}
+	plan := contentRangePlan{EndCursor: itemEndCursor, EventCount: len(boundaries)}
+	if len(boundaries) > maxEvents {
+		plan.EventCount = maxEvents
+		plan.EndCursor = boundaries[maxEvents-1].end
+		plan.HasMore = true
+	}
+	return plan, nil
 }
 
 func loadInternalSelectionItems(ctx context.Context, tx *sql.Tx, selectionID string) ([]SelectionItem, error) {

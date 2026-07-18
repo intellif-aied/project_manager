@@ -10,6 +10,7 @@ import (
 	"github.com/aidashboard/api/config"
 	"github.com/aidashboard/api/db"
 	"github.com/aidashboard/api/handler"
+	"github.com/aidashboard/api/internal/contentreader"
 	"github.com/aidashboard/api/internal/pricing"
 	"github.com/aidashboard/api/internal/reportcontext"
 	"github.com/aidashboard/api/internal/reportsource"
@@ -51,6 +52,10 @@ func main() {
 	} else {
 		log.Println("MinIO not configured, raw log upload disabled")
 	}
+	sessionContentReader, err := contentreader.New(database, minioStore)
+	if err != nil {
+		log.Fatalf("Failed to init session content reader: %v", err)
+	}
 
 	aihubClient := service.NewAIHubClient(cfg.AIHubHost, cfg.AIHubToken)
 	modelCatalogClient := service.NewModelCatalogClient(cfg.AIGatewayModelsURL)
@@ -62,6 +67,7 @@ func main() {
 	reqH := handler.NewRequirementHandlerWithRecorder(database, aiClient, workItemEventRecorder)
 	taskH := handler.NewTaskHandlerWithRecorder(database, workItemEventRecorder)
 	sessionH := handler.NewSessionHandlerWithRecorder(database, minioStore, aiClient, workItemEventRecorder)
+	sessionH.ConfigureContentReader(sessionContentReader)
 	sessionSyncH, err := handler.NewSessionSyncHandler(database, minioStore)
 	if err != nil {
 		log.Fatalf("Failed to init session sync handler: %v", err)
@@ -71,7 +77,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("Invalid report source digest configuration: %v", err)
 	}
-	reportSourceService, err := reportsource.NewServiceWithConfig(database, reportSourceConfig)
+	reportSourceService, err := reportsource.NewServiceWithConfigAndReader(
+		database, sessionContentReader, reportSourceConfig,
+	)
 	if err != nil {
 		log.Fatalf("Failed to init report source service: %v", err)
 	}
@@ -171,7 +179,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("Failed to init session digest job repository: %v", err)
 		}
-		digestProcessor, err := sessiondigest.NewProcessor(database, digestConfig)
+		digestProcessor, err := sessiondigest.NewProcessor(database, sessionContentReader, digestConfig)
 		if err != nil {
 			log.Fatalf("Failed to init session digest processor: %v", err)
 		}
@@ -193,7 +201,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to init session digest v2 job repository: %v", err)
 	}
-	digestProcessor, err := sessiondigestv2.NewProcessor(database, digestV2Config)
+	digestProcessor, err := sessiondigestv2.NewProcessor(database, sessionContentReader, digestV2Config)
 	if err != nil {
 		log.Fatalf("Failed to init session digest v2 processor: %v", err)
 	}

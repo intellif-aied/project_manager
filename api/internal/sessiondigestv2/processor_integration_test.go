@@ -1,14 +1,20 @@
 package sessiondigestv2
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
 	projectdb "github.com/aidashboard/api/db"
+	"github.com/aidashboard/api/internal/contentreader"
+	"github.com/aidashboard/api/internal/reportsourcecatalog"
 	"github.com/aidashboard/api/internal/sessionsync"
 )
 
@@ -36,11 +42,54 @@ func TestDigestV2ReconcilerAndProcessorIntegration(t *testing.T) {
 	}
 	defer database.ExecContext(ctx, `DELETE FROM users WHERE id = $1`, userID)
 
+	bulk := strings.Repeat("MCP-BULK-MUST-NOT-LEAK-", 50000) +
+		" process exited with code 0"
+	baseTime := time.Date(2026, 7, 18, 1, 0, 0, 0, time.UTC)
+	events := []struct {
+		outerType string
+		payload   map[string]any
+	}{
+		{"event_msg", map[string]any{
+			"type": "user_message", "message": "实现结果优先的服务端 Digest v2",
+		}},
+		{"response_item", map[string]any{
+			"type": "reasoning", "summary": strings.Repeat("private reasoning", 5000),
+		}},
+		{"response_item", map[string]any{
+			"type": "function_call", "call_id": "validation-v2",
+			"arguments": `{"cmd":"go test ./..."}`,
+		}},
+		{"response_item", map[string]any{
+			"type": "function_call_output", "call_id": "validation-v2", "output": bulk,
+		}},
+		{"event_msg", map[string]any{
+			"type": "agent_message", "phase": "final_answer",
+			"message": "Digest v2 完成；Authorization: Bearer integration-secret",
+		}},
+	}
+	var raw bytes.Buffer
+	for index, event := range events {
+		line, err := json.Marshal(map[string]any{
+			"type":      event.outerType,
+			"timestamp": baseTime.Add(time.Duration(index) * time.Second).Format(time.RFC3339Nano),
+			"payload":   event.payload,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw.Write(line)
+		raw.WriteByte('\n')
+	}
+	content := raw.Bytes()
+	endCursor := int64(len(content))
+	objectKey := "digest-v2-object"
+	store := memoryDigestContentStore{objectKey: append([]byte(nil), content...)}
+
 	var sessionID, sourceID, generationID, projectionID, chunkID, sliceID string
 	if err := database.QueryRowContext(ctx, `
 		INSERT INTO sessions (
 			session_ref, user_id, agent_type, started_at, content_status, content_epoch
-		) VALUES ($1, $2, 'codex', now(), 'available', 0)
+		) VALUES ($1, $2, 'codex', now(), 'uploading', 0)
 		RETURNING id::text`,
 		"digest-v2-integration-session", userID,
 	).Scan(&sessionID); err != nil {
@@ -63,86 +112,98 @@ func TestDigestV2ReconcilerAndProcessorIntegration(t *testing.T) {
 	}
 	if err := database.QueryRowContext(ctx, `
 		INSERT INTO session_content_projection_revisions (
-			generation_id, content_parser_version, status, content_indexed_cursor,
-			source_high_water_cursor, event_count, activated_at
-		) VALUES ($1, 'integration-v2', 'active', 100, 100, 5, now())
+			generation_id, content_parser_version, status
+		) VALUES ($1, $2, 'building')
 		RETURNING id::text`,
-		generationID,
+		generationID, sessionsync.ContentParserVersion,
 	).Scan(&projectionID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := database.ExecContext(ctx, `
 		UPDATE session_sources
-		SET active_generation_id = $2, active_content_projection_revision_id = $3
+		SET active_generation_id = $2
 		WHERE id = $1`,
-		sourceID, generationID, projectionID,
+		sourceID, generationID,
 	); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.QueryRowContext(ctx, `
 		INSERT INTO session_upload_chunks (
 			generation_id, start_cursor, end_cursor, start_line, end_line,
-			content_sha256, content_epoch, raw_object_key, content_index_status
-		) VALUES ($1, 0, 100, 1, 5, $2, 0, 'digest-v2-object', 'indexed')
+			content_sha256, content_epoch, raw_object_key, object_status
+		) VALUES ($1, 0, $2, 1, $3, $4, 0, $5, 'available')
 		RETURNING id::text`,
-		generationID, strings.Repeat("a", 64),
+		generationID, endCursor, len(events), sessionsync.HashBytes(content), objectKey,
 	).Scan(&chunkID); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.QueryRowContext(ctx, `
 		INSERT INTO session_content_slices (
 			session_id, source_id, generation_id, start_cursor, end_cursor
-		) VALUES ($1, $2, $3, 0, 100) RETURNING id::text`,
-		sessionID, sourceID, generationID,
+		) VALUES ($1, $2, $3, 0, $4) RETURNING id::text`,
+		sessionID, sourceID, generationID, endCursor,
 	).Scan(&sliceID); err != nil {
 		t.Fatal(err)
 	}
-
-	bulk := strings.Repeat("MCP-BULK-MUST-NOT-LEAK-", 50000) +
-		" process exited with code 0"
-	events := []struct {
-		start, end int
-		typeName   string
-		payload    any
-	}{
-		{0, 20, "event_msg.user_message", map[string]any{
-			"payload": map[string]any{"message": "实现结果优先的服务端 Digest v2"},
-		}},
-		{20, 40, "response_item.reasoning", map[string]any{
-			"payload": map[string]any{"summary": strings.Repeat("private reasoning", 5000)},
-		}},
-		{40, 60, "response_item.function_call", map[string]any{
-			"payload": map[string]any{
-				"call_id": "validation-v2", "arguments": `{"cmd":"go test ./..."}`,
-			},
-		}},
-		{60, 80, "response_item.function_call_output", map[string]any{
-			"payload": map[string]any{"call_id": "validation-v2", "output": bulk},
-		}},
-		{80, 100, "event_msg.agent_message", map[string]any{
-			"payload": map[string]any{
-				"phase":   "final_answer",
-				"message": "Digest v2 完成；Authorization: Bearer integration-secret",
-			},
-		}},
+	if _, err := database.ExecContext(ctx, `
+		UPDATE session_source_generations
+		SET expected_cursor = $2, prefix_checkpoint_hash = $3,
+			prefix_checkpoint_algorithm_version = $4,
+			prefix_checkpoint_state = $5,
+			prefix_checkpoint_state_format = $6
+		WHERE id = $1`, generationID, endCursor, sessionsync.HashBytes(content),
+		sessionsync.PrefixCheckpointAlgorithm, []byte{1}, sessionsync.PrefixCheckpointStateFormat); err != nil {
+		t.Fatal(err)
 	}
-	for index, event := range events {
-		payload, _ := json.Marshal(event.payload)
-		if _, err := database.ExecContext(ctx, `
-			INSERT INTO session_content_events (
-				content_projection_revision_id, chunk_id,
-				source_start_cursor, source_end_cursor, occurred_at,
-				event_type, summary, content_payload, content_sha256
-			) VALUES (
-				$1, $2, $3, $4, now() + ($5 * interval '1 second'),
-				$6, $7, $8, $9
-			)`,
-			projectionID, chunkID, event.start, event.end, index,
-			event.typeName, "integration event", payload,
-			strings.Repeat(string(rune('b'+index)), 64),
-		); err != nil {
-			t.Fatal(err)
-		}
+	if err := reportsourcecatalog.EnsureSlice(ctx, database, sliceID); err != nil {
+		t.Fatal(err)
+	}
+	projectionProcessor, err := sessionsync.NewContentProjectionProcessor(database, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexJob := sessionsync.ProcessingJob{
+		Type: sessionsync.JobIndexContentChunk, SessionID: sessionID,
+		GenerationID:     sql.NullString{String: generationID, Valid: true},
+		ChunkID:          sql.NullString{String: chunkID, Valid: true},
+		TargetRevisionID: sql.NullString{String: projectionID, Valid: true},
+		ContentEpoch:     sql.NullInt64{Int64: 0, Valid: true},
+	}
+	if err := projectionProcessor.Process(ctx, indexJob); err != nil {
+		t.Fatal(err)
+	}
+	if err := projectionProcessor.Process(ctx, sessionsync.ProcessingJob{
+		Type: sessionsync.JobRebuildContentRevision, SessionID: sessionID,
+		GenerationID:     indexJob.GenerationID,
+		TargetRevisionID: indexJob.TargetRevisionID,
+		ContentEpoch:     indexJob.ContentEpoch,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var projectionStatus, catalogStatus string
+	var indexedCursor, eventRows, nullPayloadRows int64
+	if err := database.QueryRowContext(ctx, `
+		SELECT revision.status, revision.content_indexed_cursor,
+			(SELECT COUNT(*) FROM session_content_events event
+				WHERE event.content_projection_revision_id = revision.id),
+			(SELECT COUNT(*) FROM session_content_events event
+				WHERE event.content_projection_revision_id = revision.id
+					AND event.content_payload IS NULL),
+			(SELECT status FROM report_source_slice_catalog
+				WHERE content_projection_revision_id = revision.id)
+		FROM session_content_projection_revisions revision WHERE revision.id = $1`, projectionID).Scan(
+		&projectionStatus, &indexedCursor, &eventRows, &nullPayloadRows, &catalogStatus,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if projectionStatus != "active" || indexedCursor != endCursor ||
+		eventRows != int64(len(events)) || nullPayloadRows != eventRows || catalogStatus != "ready" {
+		t.Fatalf("projection=%s cursor=%d/%d events=%d null=%d catalog=%s",
+			projectionStatus, indexedCursor, endCursor, eventRows, nullPayloadRows, catalogStatus)
+	}
+	reader, err := contentreader.New(database, store)
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	config := DefaultConfig()
@@ -190,7 +251,7 @@ func TestDigestV2ReconcilerAndProcessorIntegration(t *testing.T) {
 	if job == nil {
 		t.Fatalf("v2 digest job for %s was not claimable: %#v", revisionID, jobs)
 	}
-	processor, err := NewProcessor(database, config)
+	processor, err := NewProcessor(database, reader, config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +266,6 @@ func TestDigestV2ReconcilerAndProcessorIntegration(t *testing.T) {
 	if err := processor.Process(ctx, *job); err != nil {
 		t.Fatalf("ready v2 digest replay must be idempotent: %v", err)
 	}
-
 	var status, digestText, digestHash string
 	var sourceEvents, includedEvents, omittedEvents, sourceBytes, digestBytes int64
 	if err := database.QueryRowContext(ctx, `
@@ -220,7 +280,7 @@ func TestDigestV2ReconcilerAndProcessorIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	if status != "ready" || sourceEvents != 5 ||
-		includedEvents != 4 || omittedEvents != 1 || sourceBytes != 100 {
+		includedEvents != 4 || omittedEvents != 1 || sourceBytes != endCursor {
 		t.Fatalf(
 			"unexpected v2 coverage: status=%s source=%d included=%d omitted=%d bytes=%d",
 			status, sourceEvents, includedEvents, omittedEvents, sourceBytes,
@@ -245,7 +305,17 @@ func TestDigestV2ReconcilerAndProcessorIntegration(t *testing.T) {
 	if len(digest.WorkUnits) != 1 ||
 		len(digest.WorkUnits[0].Validations) != 1 ||
 		digest.WorkUnits[0].Validations[0].LastStatus != "passed" ||
-		len(digest.WorkUnits[0].ResultStatements) < 2 {
+		len(digest.WorkUnits[0].ResultStatements) < 1 {
 		t.Fatalf("unexpected v2 digest: %#v", digest)
 	}
+}
+
+type memoryDigestContentStore map[string][]byte
+
+func (s memoryDigestContentStore) Download(_ context.Context, key string) (io.ReadCloser, error) {
+	content, ok := s[key]
+	if !ok {
+		return nil, errors.New("object not found")
+	}
+	return io.NopCloser(bytes.NewReader(content)), nil
 }

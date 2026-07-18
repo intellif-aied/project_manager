@@ -9,6 +9,7 @@ import (
 	"time"
 
 	projectdb "github.com/aidashboard/api/db"
+	"github.com/aidashboard/api/internal/contentreader"
 	"github.com/aidashboard/api/internal/sessionsync"
 )
 
@@ -54,8 +55,8 @@ func TestDigestReconcilerAndProcessorIntegration(t *testing.T) {
 		INSERT INTO session_content_projection_revisions (
 			generation_id, content_parser_version, status, content_indexed_cursor,
 			source_high_water_cursor, event_count, activated_at
-		) VALUES ($1, 'integration-v1', 'active', 100, 100, 5, now()) RETURNING id::text`,
-		generationID).Scan(&projectionID); err != nil {
+		) VALUES ($1, $2, 'active', 100, 100, 5, now()) RETURNING id::text`,
+		generationID, sessionsync.ContentParserVersion).Scan(&projectionID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := database.ExecContext(ctx, `
@@ -90,15 +91,26 @@ func TestDigestReconcilerAndProcessorIntegration(t *testing.T) {
 		{60, 80, "response_item.function_call_output", map[string]any{"payload": map[string]any{"call_id": "validation-1", "output": bulk}}},
 		{80, 100, "event_msg.agent_message", map[string]any{"payload": map[string]any{"phase": "final_answer", "message": "Digest 完成；Authorization: Bearer integration-secret"}}},
 	}
+	baseTime := time.Date(2026, 7, 18, 1, 0, 0, 0, time.UTC)
+	reader := &integrationContentReader{}
 	for index, event := range events {
 		payload, _ := json.Marshal(event.payload)
+		contentSHA := strings.Repeat(string(rune('b'+index)), 64)
+		reader.events = append(reader.events, contentreader.Event{
+			SourceStartCursor: int64(event.start),
+			SourceEndCursor:   int64(event.end),
+			OccurredAt:        baseTime.Add(time.Duration(index) * time.Second),
+			EventType:         event.typeName,
+			Payload:           payload,
+			ContentSHA256:     contentSHA,
+		})
 		if _, err := database.ExecContext(ctx, `
 			INSERT INTO session_content_events (
 				content_projection_revision_id, chunk_id, source_start_cursor, source_end_cursor,
 				occurred_at, event_type, summary, content_payload, content_sha256
-			) VALUES ($1, $2, $3, $4, now() + ($5 * interval '1 second'), $6, $7, $8, $9)`,
-			projectionID, chunkID, event.start, event.end, index, event.typeName,
-			"integration event", payload, strings.Repeat(string(rune('b'+index)), 64)); err != nil {
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+			projectionID, chunkID, event.start, event.end, baseTime.Add(time.Duration(index)*time.Second), event.typeName,
+			"integration event", payload, contentSHA); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -141,7 +153,7 @@ func TestDigestReconcilerAndProcessorIntegration(t *testing.T) {
 	if job == nil {
 		t.Fatalf("digest job for revision %s was not claimable: %#v", revisionID, jobs)
 	}
-	processor, err := NewProcessor(database, config)
+	processor, err := NewProcessor(database, reader, config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,6 +165,11 @@ func TestDigestReconcilerAndProcessorIntegration(t *testing.T) {
 	}
 	if err := processor.Process(ctx, *job); err != nil {
 		t.Fatalf("ready digest replay must be idempotent: %v", err)
+	}
+	if len(reader.requests) != 1 || reader.requests[0] != (contentreader.Request{
+		RevisionID: projectionID, StartCursor: 0, EndCursor: 100,
+	}) {
+		t.Fatalf("unexpected content reader requests: %#v", reader.requests)
 	}
 
 	var status, digestText, digestHash string
@@ -188,4 +205,30 @@ func TestDigestReconcilerAndProcessorIntegration(t *testing.T) {
 	if len(digest.Outcomes) != 1 || !strings.Contains(digest.Outcomes[0], "Digest 完成") {
 		t.Fatalf("unexpected outcome digest: %#v", digest.Outcomes)
 	}
+}
+
+type integrationContentReader struct {
+	events   []contentreader.Event
+	requests []contentreader.Request
+}
+
+func (r *integrationContentReader) Stream(
+	ctx context.Context,
+	request contentreader.Request,
+	consume func(contentreader.Event) error,
+) (contentreader.Result, error) {
+	r.requests = append(r.requests, request)
+	for _, event := range r.events {
+		if err := ctx.Err(); err != nil {
+			return contentreader.Result{}, err
+		}
+		if err := consume(event); err != nil {
+			return contentreader.Result{}, err
+		}
+	}
+	return contentreader.Result{
+		StartCursor: request.StartCursor,
+		EndCursor:   request.EndCursor,
+		EventCount:  int64(len(r.events)),
+	}, nil
 }

@@ -392,6 +392,8 @@ export interface Session {
   requirement_id?: string;
   match_confidence?: number;
   raw_log_url?: string;
+  has_log_content: boolean;
+  content_status: string;
   uploaded_at: string;
 }
 

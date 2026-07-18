@@ -287,7 +287,7 @@ export function SessionsPage() {
               width: 140,
               render: (_: unknown, s) => (
                 <Space>
-                  {s.raw_log_url ? (
+                  {s.has_log_content ? (
                     <Button
                       size="small"
                       icon={<DownloadOutlined />}
@@ -365,7 +365,7 @@ export function SessionsPage() {
                 />
               </div>
               <div className="sessions-page__mobile-actions">
-                {session.raw_log_url ? <Button icon={<DownloadOutlined />} onClick={() => handleDownload(session.id)}>下载日志</Button> : <span />}
+                {session.has_log_content ? <Button icon={<DownloadOutlined />} onClick={() => handleDownload(session.id)}>下载日志</Button> : <span />}
                 <Popconfirm
                   title="撤回此 session？"
                   description="此操作将永久删除，包括 Token 统计。"
