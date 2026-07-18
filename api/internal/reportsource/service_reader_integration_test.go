@@ -126,6 +126,9 @@ func TestAttachedFullReadsNullPayloadIndexThroughContentReader(t *testing.T) {
 	if err := reportsourcecatalog.EnsureSlice(ctx, database, sliceID); err != nil {
 		t.Fatal(err)
 	}
+	if reconciled, err := reportsourcecatalog.ReconcileRevision(ctx, database, revisionID, 1); err != nil || reconciled != 1 {
+		t.Fatalf("catalog reconciled=%d err=%v", reconciled, err)
+	}
 
 	service, err := NewServiceWithReader(database, reader)
 	if err != nil {
