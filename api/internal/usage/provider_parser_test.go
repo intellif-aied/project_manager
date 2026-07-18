@@ -120,6 +120,25 @@ func TestCodexUnchangedCumulativeCountersAdvanceCursorWithoutUsageRecord(t *test
 	}
 }
 
+func TestCodexNullTokenInfoIsInitializationMarker(t *testing.T) {
+	content := []byte(
+		`{"timestamp":"2026-07-10T00:00:00Z","type":"turn_context","payload":{"model":"gpt-5.6-sol"}}` + "\n" +
+			`{"timestamp":"2026-07-10T00:00:01Z","type":"event_msg","payload":{"type":"token_count","info":null}}` + "\n" +
+			`{"timestamp":"2026-07-10T00:01:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":80,"output_tokens":20,"total_tokens":120}}}}` + "\n",
+	)
+	parsed, err := ParseProviderChunk("codex", bytes.NewReader(content), 0, ParseState{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Records) != 1 || parsed.UnknownUsageCount != 0 || parsed.MalformedCount != 0 ||
+		parsed.EndCursor != int64(len(content)) {
+		t.Fatalf("parsed=%+v", parsed)
+	}
+	if parsed.Records[0].Counters.TotalTokens != 120 {
+		t.Fatalf("record=%+v", parsed.Records[0])
+	}
+}
+
 func TestCodexForkInheritedCountersAreBaselineOnly(t *testing.T) {
 	content := strings.Join([]string{
 		`{"timestamp":"2026-07-16T02:00:00Z","type":"session_meta","payload":{"id":"child","timestamp":"2026-07-16T02:00:00Z","source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent"}}}}}`,
