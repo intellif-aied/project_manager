@@ -1,6 +1,6 @@
 # Session 与 Token 查询性能专项
 
-> 状态：R1 已在 14.157 完成；R5A 已在 14.157 执行迁移和低压回填，228 个来源中 215 个激活，剩余 13 个被内容质量、对象缺失或替换覆盖门禁阻断；R5B 明确 NO-GO，未切换在线 Token/API/前端/MCP 读路径，未执行生产操作；更新时间：2026-07-18。
+> 状态：R1、R5A、R5B 已在 14.157 完成开发与切换验证；14.157 的既有数据均为可丢弃测试数据，228 个历史来源中剩余 13 个异常来源不再作为测试服部署门禁，也不继续投入时间修复；生产迁移、生产发布和生产数据清理均未执行；更新时间：2026-07-18。
 > 当前授权只覆盖独立 worktree 中的 R5A/R5B 开发和 14.157 验证，不包含生产迁移、生产发布或历史数据清理。
 
 ## 一句话结论
@@ -56,13 +56,13 @@ Report Source 切片目录
 Token Contribution + Session 家族/按天/按 Chunk Rollup
   -> 轻量 Snapshot
   -> 旧 Token API、工作台、需求/任务关联、MCP ad-hoc 同步迁移
-  -> 测试服全量回归与对账
+  -> 测试服功能、性能与新上传链路回归
   -> Token API、前端、MCP ad-hoc 同版本整体切换
 ```
 
 ## 当前执行边界
 
-- R5A/R5B 只在独立 worktree 开发；R5A 对账通过前不切换在线 Token 读路径；
+- R5A/R5B 先在独立 worktree 开发；14.157 作为可丢弃测试环境，以功能、性能和新上传链路回归作为切换门槛，不要求修复全部旧测试数据；生产迁移仍须重新执行完整对账；
 - 不删除、置空或批量更新生产 `content_payload`；
 - 不为了变快而默认增加日期条件；
 - 不把 Token Analytics、Digest、MCP 或报告生成一起重写；
@@ -76,4 +76,5 @@ Token Contribution + Session 家族/按天/按 Chunk Rollup
 - 新 Snapshot 不再写 `token_query_snapshot_items`，在线清理也已移出 HTTP 请求，改为小批量后台回收；
 - `/token-analytics/*`、`/tokens*`、工作台和 MCP ad-hoc 已在隔离分支切换到 Rollup；`/tokens/sessions` 分页复用首页 Snapshot，需求/任务关联按 root Session 保存；
 - 隔离 PostgreSQL 的 64 个 root Session / 18,030 个逻辑事实样本，Snapshot 只写 64 条 Rollup 引用，单次用例耗时低于 25ms；该数值是合成回归证据，不替代 14.157 真实数据 p95/p99 验收；
-- 14.157 已生成 78,230 条 active Contribution，三维/成本对账失败为 0；但 8 个 revision 未通过 conflict/incomplete quality gate、3 个测试来源的 MinIO key 缺失、2 个替换 revision 回退了非稳定事实，因此 R5B 不得切换。
+- 14.157 已生成 78,230 条 active Contribution，三维/成本对账失败为 0；8 个 revision 未通过 conflict/incomplete quality gate、3 个测试来源的 MinIO key 缺失、2 个替换 revision 回退了非稳定事实。确认该环境全部为测试数据后，不再修复这 13 个历史来源，R5B 已切换；该处置不得复制为生产迁移规则。
+- R5B 切换后，用户 303 的 `/tokens/sessions` 首次实测约 136ms、同 Snapshot 后续页约 14ms，三天 `/token-analytics/summary` 首次实测约 86ms；集成镜像重启后的冒烟请求分别约 31ms 和 14ms。以上是单次测试服证据，不冒充 p95/p99。
