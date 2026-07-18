@@ -122,4 +122,5 @@ R5A/R5B 修复：
   `object_status=available` 但 MinIO key 不存在，2 个为 replacement revision 回退非稳定事实；
 - 14.157 已确认为全部可丢弃测试数据，不再修复上述 13 个历史异常来源；API、Web 和 MCP ad-hoc 已切换到 R5B。
 - 用户 303 冒烟验证：`/tokens/sessions` 首次约 136ms、复用 Snapshot 后续页约 14ms；原超时的三天 Summary 首次约 86ms。集成镜像重启后两接口再次返回 200，单次耗时约 31ms 和 14ms。
+- 集成镜像稳定后各串行请求 20 次：Session 列表 p95 约 27.6ms、最大约 35.8ms；三天 Summary p95 约 16.8ms、最大约 17.0ms。该结果只用于测试服短样本回归，不替代生产并发压测。
 - 测试服 P0 问题已修复；生产发布前仍须执行本文件的生产数据完整性与 p95/p99 验收。
