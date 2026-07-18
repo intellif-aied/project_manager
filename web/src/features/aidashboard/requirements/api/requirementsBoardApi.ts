@@ -146,6 +146,7 @@ function dateDaysAgo(days: number) {
 }
 
 function sessionTokenSourceId(source: SessionTokens) {
+  if (source.token_slice_strategy === "family_rollup_v2") return source.session_id;
   return (
     source.slice_key ||
     `${source.session_id}:${source.activity_date || source.activity_start_at || source.started_at}`
@@ -378,7 +379,7 @@ export const requirementsBoardApi = {
       });
       return sources.map((source) => ({
         id: sessionTokenSourceId(source),
-        recorded_at: source.activity_start_at ?? source.started_at,
+        recorded_at: source.activity_date ?? source.activity_start_at ?? source.started_at,
         tool: source.agent_type,
         uploader: source.user_name,
         token: source.total_tokens,

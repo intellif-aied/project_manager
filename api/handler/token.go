@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -9,16 +11,201 @@ import (
 	"time"
 
 	"github.com/aidashboard/api/internal/biztime"
+	"github.com/aidashboard/api/internal/tokenanalytics"
 	"github.com/aidashboard/api/model"
 	"github.com/lib/pq"
 )
 
 type TokenHandler struct {
-	db *sql.DB
+	db        *sql.DB
+	analytics tokenAnalyticsService
+}
+
+type tokenAnalyticsService interface {
+	CreateSummary(context.Context, tokenanalytics.Actor, tokenanalytics.Filters) (tokenanalytics.Summary, error)
+	Trends(context.Context, tokenanalytics.Actor, tokenanalytics.Filters, string) (tokenanalytics.Trends, error)
+	Rankings(context.Context, tokenanalytics.Actor, tokenanalytics.Filters, string, string) (tokenanalytics.Rankings, error)
+	Sessions(context.Context, tokenanalytics.Actor, tokenanalytics.Filters, string, int, int) (tokenanalytics.Sessions, error)
 }
 
 func NewTokenHandler(db *sql.DB) *TokenHandler {
-	return &TokenHandler{db: db}
+	return &TokenHandler{db: db, analytics: tokenanalytics.NewService(db)}
+}
+
+func (h *TokenHandler) Aggregate(w http.ResponseWriter, r *http.Request) {
+	u := getUser(r)
+	if u == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	actor, err := legacyTokenActor(u)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	period := r.URL.Query().Get("period")
+	if period == "" {
+		period = "week"
+	}
+	groupBy := r.URL.Query().Get("group_by")
+	if groupBy == "" {
+		groupBy = "model"
+	}
+	startDate, endDate, err := resolvePeriod(period, r.URL.Query().Get("from"), r.URL.Query().Get("to"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	filters := tokenanalytics.Filters{
+		Scope: legacyTokenScope(u, r.URL.Query().Get("scope")), From: startDate, To: endDate,
+	}
+	summary, err := h.analytics.CreateSummary(r.Context(), actor, filters)
+	if err != nil {
+		writeTokenAnalyticsError(w, err)
+		return
+	}
+	trends, err := h.analytics.Trends(r.Context(), actor, filters, summary.QuerySnapshotToken)
+	if err != nil {
+		writeTokenAnalyticsError(w, err)
+		return
+	}
+	groups := []model.TokenGroup{}
+	if groupBy == "team" || groupBy == "user" || groupBy == "model" ||
+		groupBy == "requirement" || groupBy == "task" {
+		rankings, rankErr := h.analytics.Rankings(r.Context(), actor, filters,
+			summary.QuerySnapshotToken, groupBy)
+		if rankErr != nil {
+			writeTokenAnalyticsError(w, rankErr)
+			return
+		}
+		total := parseTokenInt(summary.TotalTokens)
+		for _, ranking := range rankings.Items {
+			value := parseTokenInt(ranking.TotalTokens)
+			percent := 0.0
+			if total > 0 {
+				percent = float64(value) / float64(total) * 100
+			}
+			groups = append(groups, model.TokenGroup{Key: ranking.Key, Label: ranking.Label, Value: value, Percent: percent})
+		}
+	}
+	series := make([]model.TokenPoint, 0, len(trends.Items))
+	for _, point := range trends.Items {
+		series = append(series, model.TokenPoint{Date: point.Date, Value: parseTokenInt(point.TotalTokens)})
+	}
+	writeJSON(w, http.StatusOK, model.TokenAggregation{
+		Total: parseTokenInt(summary.TotalTokens), InputSum: parseTokenInt(summary.UncachedInputTokens),
+		OutputSum:        parseTokenInt(summary.OutputTokens),
+		CacheCreationSum: parseTokenInt(summary.CacheWrite5mTokens) + parseTokenInt(summary.CacheWrite1hTokens),
+		CacheReadSum:     parseTokenInt(summary.CacheReadTokens), Groups: groups, Series: series,
+		Period: period, GroupBy: groupBy,
+	})
+}
+
+func (h *TokenHandler) ListSessionTokens(w http.ResponseWriter, r *http.Request) {
+	u := getUser(r)
+	if u == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	actor, err := legacyTokenActor(u)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	page, pageSize := parsePagination(r, 20, 100)
+	from, to := legacyTokenDateRange(r.URL.Query().Get("from"), r.URL.Query().Get("to"))
+	filters := tokenanalytics.Filters{Scope: legacyTokenScope(u, r.URL.Query().Get("scope")), From: from, To: to}
+	snapshotToken := strings.TrimSpace(r.URL.Query().Get("query_snapshot_token"))
+	if snapshotToken == "" {
+		summary, err := h.analytics.CreateSummary(r.Context(), actor, filters)
+		if err != nil {
+			writeTokenAnalyticsError(w, err)
+			return
+		}
+		snapshotToken = summary.QuerySnapshotToken
+	}
+	sessions, err := h.analytics.Sessions(r.Context(), actor, filters,
+		snapshotToken, page, pageSize)
+	if errors.Is(err, tokenanalytics.ErrSnapshotExpired) {
+		summary, refreshErr := h.analytics.CreateSummary(r.Context(), actor, filters)
+		if refreshErr != nil {
+			writeTokenAnalyticsError(w, refreshErr)
+			return
+		}
+		snapshotToken = summary.QuerySnapshotToken
+		sessions, err = h.analytics.Sessions(r.Context(), actor, filters,
+			snapshotToken, page, pageSize)
+	}
+	if err != nil {
+		writeTokenAnalyticsError(w, err)
+		return
+	}
+	items := make([]model.SessionTokens, 0, len(sessions.Items))
+	for _, item := range sessions.Items {
+		startedAt, _ := time.Parse(time.RFC3339Nano, item.StartedAt)
+		models := []string{}
+		for _, value := range strings.Split(item.Model, ",") {
+			if value = strings.TrimSpace(value); value != "" {
+				models = append(models, value)
+			}
+		}
+		if len(models) == 0 {
+			models = []string{"unknown"}
+		}
+		current := model.SessionTokens{
+			SessionID: item.SessionID, LocalSessionID: item.SessionRef, SessionRef: item.SessionRef,
+			UserID: item.UserID, UserName: item.UserName, AgentType: item.AgentType,
+			Models: models, Summary: item.Summary, StartedAt: startedAt,
+			ActivityDate: item.ActivityFrom, ActivityDates: item.ActivityDates, SliceCount: item.SliceCount,
+			IsEstimated: item.QualityStatus != "exact", TokenSliceStrategy: "family_rollup_v2",
+			InputTokens: parseTokenInt(item.UncachedInputTokens), OutputTokens: parseTokenInt(item.OutputTokens),
+			CacheCreationTokens: parseTokenInt(item.CacheWrite5mTokens) + parseTokenInt(item.CacheWrite1hTokens),
+			CacheReadTokens:     parseTokenInt(item.CacheReadTokens), TotalTokens: parseTokenInt(item.RangeTotalTokens),
+			FamilyRootSessionRef: item.FamilyRootSessionRef,
+			SelfTotalTokens:      parseTokenInt(item.SelfTotalTokens),
+			SubagentTotalTokens:  parseTokenInt(item.SubagentTotalTokens),
+			FamilyTotalTokens:    parseTokenInt(item.FamilyTotalTokens),
+			LifetimeTotalTokens:  parseTokenInt(item.LifetimeTotalTokens),
+			RangeTotalTokens:     parseTokenInt(item.RangeTotalTokens), MemberCount: item.MemberCount,
+		}
+		items = append(items, current)
+	}
+	writeJSON(w, http.StatusOK, model.PaginatedSessionTokens{
+		Items: items, Total: sessions.Total, Page: sessions.Page, PageSize: sessions.PageSize,
+		QuerySnapshotToken: snapshotToken,
+	})
+}
+
+func legacyTokenActor(user *model.User) (tokenanalytics.Actor, error) {
+	id, err := strconv.ParseInt(user.ID, 10, 64)
+	if err != nil || id <= 0 {
+		return tokenanalytics.Actor{}, errors.New("invalid local user identity")
+	}
+	return tokenanalytics.Actor{ID: id, Role: user.Role, TeamID: user.TeamID}, nil
+}
+
+func legacyTokenScope(user *model.User, requested string) string {
+	if requested == "mine" || user.Role == "employee" || user.Role == "pm" {
+		return "mine"
+	}
+	return "management"
+}
+
+func parseTokenInt(value string) int64 {
+	result, _ := strconv.ParseInt(value, 10, 64)
+	return result
+}
+
+func legacyTokenDateRange(from, to string) (string, string) {
+	from = strings.TrimSpace(from)
+	to = strings.TrimSpace(to)
+	if from == "" {
+		from = "1970-01-01"
+	}
+	if to == "" {
+		to = "9999-12-31"
+	}
+	return from, to
 }
 
 // Aggregate returns:
@@ -27,7 +214,7 @@ func NewTokenHandler(db *sql.DB) *TokenHandler {
 //   - series: daily totals within the period
 //
 // Query: GET /tokens?period=today|week|month|range&from=&to=&group_by=
-func (h *TokenHandler) Aggregate(w http.ResponseWriter, r *http.Request) {
+func (h *TokenHandler) aggregateLegacy(w http.ResponseWriter, r *http.Request) {
 	u := getUser(r)
 	if u == nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
@@ -109,7 +296,7 @@ func (h *TokenHandler) Aggregate(w http.ResponseWriter, r *http.Request) {
 // (or their team / whole org depending on role). Filters: ?from=&to= (YYYY-MM-DD),
 // no date filter is applied when both bounds are omitted. A single local session can
 // appear multiple times when it has activity on multiple dates.
-func (h *TokenHandler) ListSessionTokens(w http.ResponseWriter, r *http.Request) {
+func (h *TokenHandler) listSessionTokensLegacy(w http.ResponseWriter, r *http.Request) {
 	u := getUser(r)
 	if u == nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})

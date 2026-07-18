@@ -4,12 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"testing"
 	"time"
 
 	projectdb "github.com/aidashboard/api/db"
 	"github.com/aidashboard/api/internal/pricing"
+	"github.com/aidashboard/api/internal/tokenrollup"
 )
 
 const (
@@ -64,8 +66,43 @@ func TestTokenAnalyticsOrganizationPricingAndSnapshotIntegration(t *testing.T) {
 	}
 	if firstSummary.TotalTokens != "1000000" || firstSummary.PricingStatus != "priced" ||
 		firstSummary.EstimatedCostCNY == nil || *firstSummary.EstimatedCostCNY != "21.000000000000" ||
-		firstSummary.PendingSourceCount != "1" || firstSummary.DataFreshness != "pending" {
+		firstSummary.PendingSourceCount != "1" || firstSummary.DataFreshness != "pending" ||
+		firstSummary.PricingPendingSourceCount != "0" ||
+		firstSummary.RollupCount != "1" || firstSummary.ComponentCount != "1" || firstSummary.SessionCount != "1" {
 		t.Fatalf("first summary = %+v", firstSummary)
+	}
+	var snapshotItems, snapshotRollups int64
+	if err := database.QueryRow(`
+		SELECT
+			(SELECT COUNT(*) FROM token_query_snapshot_items),
+			(SELECT COUNT(*) FROM token_query_snapshot_rollups)`).Scan(&snapshotItems, &snapshotRollups); err != nil {
+		t.Fatal(err)
+	}
+	if snapshotItems != 0 || snapshotRollups != 1 {
+		t.Fatalf("snapshot items=%d rollups=%d want 0/1", snapshotItems, snapshotRollups)
+	}
+	if _, err := database.Exec(`
+		UPDATE session_source_metrics_states
+		SET status='pending', source_high_water_cursor=11
+		WHERE source_id=$1`, fixture.sourceID); err != nil {
+		t.Fatal(err)
+	}
+	modelFilters := Filters{Scope: "management", From: fixture.activityDate, To: fixture.activityDate,
+		Model: "gpt-stage3-canonical"}
+	modelSummary, err := analyticsService.CreateSummary(context.Background(), director, modelFilters)
+	if err != nil || modelSummary.TotalTokens != "1000000" || modelSummary.ComponentCount != "1" ||
+		modelSummary.PendingSourceCount != "1" || modelSummary.DataFreshness != "pending" {
+		t.Fatalf("model-filtered pending summary=%+v err=%v", modelSummary, err)
+	}
+	if _, err := database.Exec(`DELETE FROM token_query_snapshots WHERE token_hash=$1`,
+		snapshotTokenHash(modelSummary.QuerySnapshotToken)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`
+		UPDATE session_source_metrics_states
+		SET status='ready', source_high_water_cursor=10
+		WHERE source_id=$1`, fixture.sourceID); err != nil {
+		t.Fatal(err)
 	}
 
 	trends, err := analyticsService.Trends(context.Background(), director, filters, firstSummary.QuerySnapshotToken)
@@ -73,12 +110,18 @@ func TestTokenAnalyticsOrganizationPricingAndSnapshotIntegration(t *testing.T) {
 		t.Fatalf("trends=%+v err=%v", trends, err)
 	}
 	rankings, err := analyticsService.Rankings(context.Background(), director, filters, firstSummary.QuerySnapshotToken, "user")
-	if err != nil || len(rankings.Items) != 4 || rankings.Items[0].Key != "991103" || rankings.Items[0].TotalTokens != "1000000" {
+	if err != nil || len(rankings.Items) != 4 || rankings.Items[0].Key != "991103" ||
+		rankings.Items[0].TotalTokens != "1000000" || rankings.Items[0].SessionCount != "1" {
 		t.Fatalf("rankings=%+v err=%v", rankings, err)
 	}
 	sessions, err := analyticsService.Sessions(context.Background(), director, filters, firstSummary.QuerySnapshotToken, 1, 20)
-	if err != nil || sessions.Total != 1 || len(sessions.Items) != 1 || sessions.Items[0].SessionRef != "stage3-token-session" {
+	if err != nil || sessions.Total != 1 || len(sessions.Items) != 1 || sessions.Items[0].SessionRef != "stage3-token-session" ||
+		sessions.Items[0].RangeTotalTokens != "1000000" || sessions.Items[0].LifetimeTotalTokens != "1000000" ||
+		sessions.Items[0].SelfTotalTokens != "1000000" || sessions.Items[0].SubagentTotalTokens != "0" {
 		t.Fatalf("sessions=%+v err=%v", sessions, err)
+	}
+	if _, err := time.Parse(time.RFC3339Nano, sessions.Items[0].StartedAt); err != nil {
+		t.Fatalf("session started_at=%q is not RFC3339: %v", sessions.Items[0].StartedAt, err)
 	}
 
 	if _, err := analyticsService.Trends(context.Background(), director,
@@ -136,12 +179,46 @@ func TestTokenAnalyticsOrganizationPricingAndSnapshotIntegration(t *testing.T) {
 	if newSummary.TotalTokens != "2000000" || newSummary.EstimatedCostCNY == nil || *newSummary.EstimatedCostCNY != "56.000000000000" {
 		t.Fatalf("new summary = %+v", newSummary)
 	}
+	var oldRollupID string
+	if err := database.QueryRow(`
+		SELECT reference.rollup_version_id::text
+		FROM token_query_snapshots snapshot
+		JOIN token_query_snapshot_rollups reference ON reference.snapshot_id = snapshot.id
+		WHERE snapshot.token_hash = $1`, snapshotTokenHash(firstSummary.QuerySnapshotToken)).Scan(&oldRollupID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`
+		UPDATE token_query_snapshots
+		SET created_at = now() - interval '2 hours', expires_at = now() - interval '1 hour'
+		WHERE token_hash = $1`, snapshotTokenHash(firstSummary.QuerySnapshotToken)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`
+		UPDATE session_family_rollup_versions
+		SET superseded_at = now() - interval '1 hour'
+		WHERE id = $1 AND status = 'superseded'`, oldRollupID); err != nil {
+		t.Fatal(err)
+	}
+	cleanup, err := tokenrollup.NewReconciler(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupResult, err := cleanup.RunOnce(context.Background())
+	if err != nil || cleanupResult.Snapshots != 1 || cleanupResult.Rollups != 1 {
+		t.Fatalf("cleanup result=%+v err=%v", cleanupResult, err)
+	}
 
 	teamOneFilters := Filters{Scope: "management", From: fixture.activityDate, To: fixture.activityDate}
 	teamOne := Actor{ID: analyticsLeaderID, Role: "team_leader", TeamID: &fixture.teamOneID}
 	teamSummary, err := analyticsService.CreateSummary(context.Background(), teamOne, teamOneFilters)
 	if err != nil || teamSummary.TotalTokens != "1000000" {
 		t.Fatalf("historical team summary=%+v err=%v", teamSummary, err)
+	}
+	teamRankings, err := analyticsService.Rankings(context.Background(), teamOne, teamOneFilters,
+		teamSummary.QuerySnapshotToken, "user")
+	if err != nil || len(teamRankings.Items) != 2 || teamRankings.Items[0].Key != "991103" ||
+		teamRankings.Items[0].TotalTokens != teamSummary.TotalTokens {
+		t.Fatalf("historical team rankings=%+v err=%v", teamRankings, err)
 	}
 
 	if _, err := database.Exec(`
@@ -152,6 +229,101 @@ func TestTokenAnalyticsOrganizationPricingAndSnapshotIntegration(t *testing.T) {
 	if _, err := database.Exec(`UPDATE model_price_versions SET input_per_million=99 WHERE id=$1`, fixture.priceID); err == nil {
 		t.Fatal("expected superseded published price to remain immutable")
 	}
+	assertTokenAnalyticsSnapshotScale(t, database, fixture)
+}
+
+func assertTokenAnalyticsSnapshotScale(t *testing.T, database *sql.DB, fixture *analyticsFixture) {
+	t.Helper()
+	remainingFacts := int64(18_028)
+	for index := 0; index < 63; index++ {
+		var sessionID, familyID, rollupID string
+		if err := database.QueryRow(`
+			INSERT INTO sessions(session_ref, user_id, agent_type, started_at, last_activity_at, summary)
+			VALUES($1, $2, 'codex', now(), now(), 'scale fixture') RETURNING id::text`,
+			fmt.Sprintf("stage3-scale-%02d", index), analyticsEmployeeID).Scan(&sessionID); err != nil {
+			t.Fatal(err)
+		}
+		hash := fmt.Sprintf("%064x", index+1)
+		if err := database.QueryRow(`
+			INSERT INTO session_family_versions(
+				user_id, root_session_id, relation_hash, status, quality_status,
+				member_count, subagent_count, activated_at
+			) VALUES($1, $2, $3, 'active', 'exact', 1, 0, now()) RETURNING id::text`,
+			analyticsEmployeeID, sessionID, hash).Scan(&familyID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := database.Exec(`
+			INSERT INTO session_family_memberships(
+				family_version_id, root_session_id, member_session_id,
+				depth, relation_source, quality_status
+			) VALUES($1, $2, $2, 0, 'self', 'exact')`, familyID, sessionID); err != nil {
+			t.Fatal(err)
+		}
+		factCount := remainingFacts / int64(63-index)
+		remainingFacts -= factCount
+		if err := database.QueryRow(`
+			INSERT INTO session_family_rollup_versions(
+				family_version_id, root_session_id, revision_set_hash, cost_set_hash,
+				calculator_version, status, quality_status, member_count,
+				source_count, contribution_count, activated_at
+			) VALUES($1, $2, $3, $3, $4, 'active', 'exact', 1, 0, $5, now())
+			RETURNING id::text`, familyID, sessionID, hash, pricing.CalculatorVersion, factCount).Scan(&rollupID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := database.Exec(`
+			INSERT INTO session_family_token_totals(
+				rollup_version_id, root_session_id, user_id, team_id_snapshot,
+				department_id_snapshot, provider, canonical_model, billing_variant,
+				uncached_input_tokens, total_tokens, self_total_tokens, subagent_total_tokens,
+				pricing_status, contribution_count, quality_status
+			) VALUES($1, $2, $3, $4, $5, 'codex', 'scale-model', 'unknown',
+				100, 100, 100, 0, 'unpriced', $6, 'exact')`, rollupID, sessionID,
+			analyticsEmployeeID, fixture.teamOneID, fixture.departmentID, factCount); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := database.Exec(`
+			INSERT INTO session_family_daily_usage(
+				rollup_version_id, root_session_id, user_id, team_id_snapshot,
+				department_id_snapshot, activity_date, activity_start_at, activity_end_at,
+				provider, canonical_model,
+				billing_variant, uncached_input_tokens, total_tokens,
+				self_total_tokens, subagent_total_tokens, pricing_status,
+				contribution_count, quality_status
+			) VALUES($1, $2, $3, $4, $5, current_date, now(), now(), 'codex', 'scale-model',
+				'unknown', 100, 100, 100, 0, 'unpriced', $6, 'exact')`, rollupID, sessionID,
+			analyticsEmployeeID, fixture.teamOneID, fixture.departmentID, factCount); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	startedAt := time.Now()
+	summary, err := NewService(database).CreateSummary(context.Background(),
+		Actor{ID: analyticsEmployeeID, Role: "employee"},
+		Filters{Scope: "mine", From: fixture.activityDate, To: fixture.activityDate})
+	elapsed := time.Since(startedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.RollupCount != "64" || summary.SessionCount != "64" || summary.ComponentCount != "18030" {
+		t.Fatalf("summary counts=%+v", summary)
+	}
+	if elapsed > 5*time.Second {
+		t.Fatalf("64-rollup snapshot took %s", elapsed)
+	}
+	var snapshotItems, snapshotRollups int64
+	if err := database.QueryRow(`
+		SELECT (SELECT COUNT(*) FROM token_query_snapshot_items),
+			(SELECT COUNT(*)
+			 FROM token_query_snapshot_rollups reference
+			 JOIN token_query_snapshots snapshot ON snapshot.id = reference.snapshot_id
+			 WHERE snapshot.token_hash = $1)`, snapshotTokenHash(summary.QuerySnapshotToken)).Scan(
+		&snapshotItems, &snapshotRollups); err != nil {
+		t.Fatal(err)
+	}
+	if snapshotItems != 0 || snapshotRollups != 64 {
+		t.Fatalf("snapshot materialization items=%d rollups=%d", snapshotItems, snapshotRollups)
+	}
+	t.Logf("64 root sessions / 18,030 logical facts snapshot completed in %s", elapsed)
 }
 
 func newAnalyticsFixture(t *testing.T, database *sql.DB) *analyticsFixture {
@@ -319,6 +491,30 @@ func (fixture *analyticsFixture) insertUsageComponent(t *testing.T, key string, 
 			'gpt-stage3', 'unknown', $7, $7, 'stage3-exact', 'exact', false)
 		RETURNING id::text`, fixture.revisionID, eventID, observationID, fixture.chunkID,
 		fixture.sessionID, userID, inputTokens).Scan(&componentID); err != nil {
+		t.Fatal(err)
+	}
+	contributionHashCharacter := "d"
+	if key == "second" {
+		contributionHashCharacter = "e"
+	}
+	if _, err := fixture.db.Exec(`
+		UPDATE session_usage_observations SET logical_usage_event_id = $2 WHERE id = $1`,
+		observationID, eventID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.db.Exec(`
+		INSERT INTO session_usage_contributions (
+			revision_id, generation_id, logical_usage_event_id, to_observation_id,
+			contribution_kind, member_session_id, user_id, chunk_id,
+			activity_date, occurred_at, provider, raw_model, canonical_model,
+			billing_variant, uncached_input_tokens, total_tokens,
+			normalization_strategy, quality_status, is_estimated, contribution_hash
+		) VALUES (
+			$1, $2, $3, $4, 'checkpoint_delta', $5, $6, $7,
+			current_date, now(), 'codex', 'gpt-stage3', 'gpt-stage3',
+			'unknown', $8, $8, 'stage3-exact', 'exact', false, repeat($9, 64)
+		)`, fixture.revisionID, fixture.generationID, eventID, observationID,
+		fixture.sessionID, userID, fixture.chunkID, inputTokens, contributionHashCharacter); err != nil {
 		t.Fatal(err)
 	}
 	return componentID

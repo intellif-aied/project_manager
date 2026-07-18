@@ -119,11 +119,18 @@ valid_from / valid_to
 - family relation version；
 - quality 与数据高水位。
 
+每个 Rollup Version 还必须通过 `session_family_rollup_revision_refs` 明确记录
+`source_id + revision_id + generation_id + cursor`。`revision_set_hash` 只用于幂等比较，
+不能单独充当可追溯关系；否则 Snapshot 虽然冻结了 Rollup ID，却无法离线证明它包含了哪些 Metrics Revision。
+
 ### 5.2 `session_family_daily_usage`
 
 粒度：`root_session_id + activity_date + 用户/组织归属快照 + provider + model + billing_variant`。
 
 `activity_date` 固定使用 `Asia/Shanghai`。跨天 Session 分日累加，所有日期总和必须等于 Session 家族生命周期总量。
+每个分日维度同时保留 `activity_start_at` / `activity_end_at` 和
+`contribution_count`：前者供 MCP 保持真实活动时间语义，后者供查询接口在不读
+Contribution 明细的前提下返回精确的逻辑事实数。
 
 ### 5.3 `session_chunk_usage`
 
@@ -160,6 +167,18 @@ total_tokens
   + output
 ```
 
+逻辑事实数也必须对账：
+
+```text
+Σ family_total.contribution_count
+  = Σ family_daily.contribution_count
+  = Σ chunk_usage.contribution_count
+  = COUNT(active session_usage_contributions)
+```
+
+`summary.component_count` 是当前权限、日期和模型筛选后的
+`family_daily.contribution_count` 之和，不是被引用家族的生命周期总数，也不得为计算该字段回读 Contribution/Component 明细。
+
 全平台、用户、小组、部门汇总必须直接对 Contribution 或互不重叠的 root family Rollup 求和，禁止同时把父 Session 家族行和 Subagent 成员行相加。
 
 `session_activity_slices` 是兼容数据，切换后不得与 Contribution/Rollup 同时求和。
@@ -181,9 +200,10 @@ Chunk accepted
   -> Observation / Logical Event Fold
   -> 生成不可变 Contribution
   -> 构建 Chunk、Daily、Family Rollup
+  -> 写入 Rollup Revision Refs
   -> 校验三维对账等式
   -> 原子激活 Metrics Revision + Rollup Version
-  -> 失效受影响的 Token Query Snapshot
+  -> 新查询读取新 Rollup；已有 Query Snapshot 保持冻结到自然过期
 ```
 
 上传请求不等待上述流程。前端通过 pending source/data-through cursor 判断数据是否完整，不能把仍在处理的统计显示成最终值。
@@ -219,15 +239,20 @@ data_through_cursor
 
 内测切换规则：
 
-- 旧 `total_tokens` 字段不静默改义；
 - 在 14.157 完成全量对账后，Token API、前端与 MCP ad-hoc 在同一内测版本切换到 family/range 字段，不设字段灰度期；
-- 旧 `total_tokens` 可在该协同版本保留原语义并标记废弃，或在确认所有消费者同步更新后删除，不允许同名改义；
+- `/tokens/sessions` 的 `total_tokens` 在该协同内测版本明确作为 `range_total_tokens` 的兼容别名，
+  同时返回 `token_slice_strategy=family_rollup_v2`；工作台和需求/任务等全部已知消费者同版本更新，禁止只更新后端；
+- 新代码和新页面使用显式 family/range 字段，不再基于 `total_tokens` 猜测生命周期或日期口径；
 - 精确搜索 Subagent 时返回所属 root family，并标记命中的 member；
 - MCP ad-hoc `get_sessions` 必须参与相同的对账和同版本回归，不得单独落后。
 
+Snapshot 过期和 superseded Rollup 回收不得夹在 HTTP 查询中。目标使用独立小批量后台任务：
+先删除已过期 Snapshot，再删除超过保护窗口、且不再被任何 Snapshot 引用的 superseded
+Rollup；active Rollup、未过期 Snapshot 引用和 Contribution/成本审计均不得删除。
+
 ## 11. 成本口径
 
-当前 `session_activity_costs` 绑定 Component。R5A 应新增绑定 Contribution 的版本化成本记录（建议 `session_usage_contribution_costs`），或以等价方式让成本明确引用 Contribution；不能继续把 Component 最终值成本直接分配给新增 Chunk。
+当前 `session_activity_costs` 绑定 Component。R5A 采用绑定 Contribution 的版本化成本记录 `session_usage_contribution_costs`，使成本明确引用 Contribution；不再把 Component 最终值成本直接分配给新增 Chunk。
 
 成本由 Contribution 的 Token 分项按其活动日期、模型、价格版本和汇率版本计算，再生成三套同粒度成本 Rollup：
 
@@ -256,6 +281,9 @@ data_through_cursor
 | TOK-3D-013 | 显式重计价 | Token 不变，三维成本同步切换版本 |
 | TOK-3D-014 | 内容清理后 Metering Envelope 重放 | Token/成本不增加、不丢失 |
 | TOK-3D-015 | summary/trends/rankings/sessions | 同一 Snapshot 下全部可对账 |
+| TOK-3D-016 | Snapshot 过期与 Rollup 后台回收 | 有效引用不删；过期后小批回收；HTTP 无清理 SQL |
+| TOK-3D-017 | 日期/模型筛选后逻辑事实数 | `component_count` 等于同范围 Daily `contribution_count`，查询不扫明细 |
+| TOK-3D-018 | Rollup 来源追溯 | Revision Refs 数等于 `source_count`，每个 revision/generation/cursor 可反查 |
 
 ## 13. 发布拆分
 
@@ -263,12 +291,15 @@ data_through_cursor
 
 - 新增 Contribution、family membership 和三套 Rollup；
 - 继续保留现有 Component、Daily Usage 和查询路径；
+- 单个来源激活时的中间 Family Rollup 只引用与候选 revision 相同 parser/normalizer 版本的 active revision，不混算尚无 Contribution 的旧 Component；
 - 在测试服执行历史回填、三维全量对账和重算验证，不把对账嵌入用户请求。
 
 ### R5B：Snapshot 与 API 切换
 
 - Snapshot 改为冻结 revision/family/Rollup 版本；
 - Token API 添加明确的 self/subagent/family/range 字段；
+- 工作台改读 summary/trends/rankings，需求/任务关联改存 root Session ID；
+- Snapshot 与 superseded Rollup 由低频、小批量、有锁/语句超时的后台任务回收；
 - 统计、权限、成本与性能全部通过后，Token API、前端和 MCP ad-hoc 在同一内测版本整体切换；
 - 不增加用户灰度、百分比 rollout 或 `legacy/shadow/rollups` 配置。
 

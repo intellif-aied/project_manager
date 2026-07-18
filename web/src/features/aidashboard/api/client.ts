@@ -932,6 +932,7 @@ export const fetchSessionTokens = (params: {
   scope?: "mine" | "team";
   page?: string;
   page_size?: string;
+  query_snapshot_token?: string;
 }) => unwrap(api.get<PaginatedSessionTokens>("/tokens/sessions", params));
 
 export async function fetchAllSessionTokens(params: {
@@ -952,7 +953,10 @@ export async function fetchAllSessionTokens(params: {
     const nextPage = await fetchSessionTokens({
       ...params,
       page: String(page),
-      page_size: String(pageSize)
+      page_size: String(pageSize),
+      ...(firstPage.query_snapshot_token
+        ? { query_snapshot_token: firstPage.query_snapshot_token }
+        : {})
     });
     items.push(...nextPage.items);
   }

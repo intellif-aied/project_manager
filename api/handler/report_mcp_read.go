@@ -357,34 +357,42 @@ func (h *ReportMCPHandler) toolGetSessions(ctx context.Context, r *http.Request,
 		limit = len(selectedSliceKeys)
 	}
 	rows, err := h.db.QueryContext(ctx, `
-			SELECT s.id::text, sas.user_id::text, COALESCE(NULLIF(u.nickname,''),u.username), COALESCE(u.role,''), COALESCE(u.team_id::text,''), COALESCE(t.name,''),
-		       s.session_ref, s.agent_type, s.started_at, s.ended_at,
-		       sas.activity_date::text, sas.activity_start_at, sas.activity_end_at,
-		       ARRAY[sas.activity_date::text],
-		       COALESCE(NULLIF(sas.summary, ''), COALESCE(s.summary,'')),
-		       COALESCE(sas.excerpt, ''),
-		       COALESCE(sas.message_count, 0)::int,
-		       COALESCE(sas.source_event_count, 0)::int,
-		       COALESCE(sas.input_tokens, 0),
-		       COALESCE(sas.output_tokens, 0),
-		       COALESCE(sas.cache_creation_tokens, 0),
-		       COALESCE(sas.cache_read_tokens, 0),
-		       COALESCE(sas.total_tokens, 0),
-		       1::int,
-		       sas.source_has_raw_log,
-		       sas.token_slice_strategy,
-		       sas.summary_strategy,
-		       sas.is_estimated
-		FROM session_activity_slices sas
-			JOIN sessions s ON s.id = sas.session_id
-			JOIN users u ON u.id = sas.user_id
-			LEFT JOIN teams t ON t.id = u.team_id
-			WHERE sas.user_id::text = ANY($3)
+			SELECT root.id::text, daily.user_id::text,
+		       COALESCE(NULLIF(user_row.nickname,''), user_row.username), COALESCE(user_row.role,''),
+		       COALESCE(user_row.team_id::text,''), COALESCE(team.name,''),
+		       root.session_ref, root.agent_type, root.started_at, root.ended_at,
+		       daily.activity_date::text,
+		       MIN(daily.activity_start_at), MAX(daily.activity_end_at),
+		       ARRAY[daily.activity_date::text], COALESCE(root.summary,''), ''::text,
+		       0::int, 0::int,
+		       SUM(daily.uncached_input_tokens), SUM(daily.output_tokens),
+		       SUM(daily.cache_write_5m_tokens + daily.cache_write_1h_tokens),
+		       SUM(daily.cache_read_tokens), SUM(daily.total_tokens),
+		       1::int, BOOL_OR(root.content_status = 'available'),
+		       'family_rollup_v2'::text, 'session_summary'::text,
+		       BOOL_OR(daily.quality_status <> 'exact')
+		FROM session_family_rollup_versions rollup
+			JOIN session_family_versions family ON family.id = rollup.family_version_id
+			JOIN session_family_daily_usage daily ON daily.rollup_version_id = rollup.id
+			JOIN sessions root ON root.id = rollup.root_session_id
+			JOIN users user_row ON user_row.id = daily.user_id
+			LEFT JOIN teams team ON team.id = user_row.team_id
+			WHERE rollup.status = 'active' AND family.status = 'active'
+			  AND daily.user_id::text = ANY($3)
 			  AND (
-			       (COALESCE(cardinality($4::text[]), 0) = 0 AND sas.activity_date >= $1::date AND sas.activity_date <= $2::date)
-			       OR (s.id::text || ':' || sas.activity_date::text) = ANY($4::text[])
+			       (COALESCE(cardinality($4::text[]), 0) = 0
+			        AND daily.activity_date >= $1::date AND daily.activity_date <= $2::date)
+			       OR EXISTS (
+			           SELECT 1 FROM session_family_memberships selected_membership
+			           WHERE selected_membership.family_version_id = family.id
+			             AND selected_membership.valid_to IS NULL
+			             AND (selected_membership.member_session_id::text || ':' || daily.activity_date::text) = ANY($4::text[])
+			       )
 			  )
-			ORDER BY sas.activity_end_at DESC LIMIT $5`, start, end, pq.Array(visible), pq.Array(selectedSliceKeys), limit)
+			GROUP BY root.id, daily.user_id, user_row.nickname, user_row.username,
+			  user_row.role, user_row.team_id, team.name, daily.activity_date
+			ORDER BY daily.activity_date DESC, root.id DESC LIMIT $5`,
+		start, end, pq.Array(visible), pq.Array(selectedSliceKeys), limit)
 	if err != nil {
 		return nil, errMCPInternal
 	}

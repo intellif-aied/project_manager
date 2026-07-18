@@ -983,7 +983,7 @@ func TestReportMCPGetSessionsReturnsScopeContextRoster(t *testing.T) {
 	}).
 		AddRow("s-305", "305", "测试03", "team_leader", "team-a", "测试小组A", "prod-305", "codex", now, now.Add(10*time.Minute), "2026-07-06", now, now.Add(10*time.Minute), "{2026-07-06}", "日报验收", "", 6, 6, 100, 20, 0, 0, 120, 1, true, "actual", "summary", false).
 		AddRow("s-306", "306", "测试04", "employee", "team-a", "测试小组A", "prod-306", "codex", now, now.Add(10*time.Minute), "2026-07-06", now, now.Add(10*time.Minute), "{2026-07-06}", "日报验收", "", 6, 6, 100, 20, 0, 0, 120, 1, true, "actual", "summary", false)
-	mock.ExpectQuery("SELECT s.id::text, sas.user_id::text").
+	mock.ExpectQuery("SELECT root.id::text, daily.user_id::text").
 		WithArgs("2026-07-06", "2026-07-06", sqlmock.AnyArg(), sqlmock.AnyArg(), 100).
 		WillReturnRows(sessionRows)
 
@@ -1074,7 +1074,7 @@ func TestReportMCPGetSessionsSelectedSliceKeysOverrideDateRange(t *testing.T) {
 		"token_slice_strategy", "summary_strategy", "is_estimated",
 	}).
 		AddRow("s-old", "305", "测试03", "employee", "team-a", "测试小组A", "prod-old", "codex", now, now.Add(10*time.Minute), "2026-07-01", now, now.Add(10*time.Minute), "{2026-07-01}", "用户显式选择的旧切片", "", 6, 6, 100, 20, 0, 0, 120, 1, true, "actual", "summary", false)
-	mock.ExpectQuery("SELECT s.id::text, sas.user_id::text").
+	mock.ExpectQuery("SELECT root.id::text, daily.user_id::text").
 		WithArgs("2026-07-06", "2026-07-06", sqlmock.AnyArg(), sqlmock.AnyArg(), 100).
 		WillReturnRows(sessionRows)
 	mock.ExpectQuery("SELECT u.id::text,").

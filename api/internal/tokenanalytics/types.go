@@ -32,12 +32,14 @@ type Filters struct {
 type Snapshot struct {
 	ID                        string
 	Token                     string
+	Version                   string
 	Scope                     string
 	SearchMode                string
 	Filters                   Filters
 	MetricsSnapshotAt         time.Time
 	ExpiresAt                 time.Time
 	ComponentCount            int64
+	RollupCount               int64
 	PendingSourceCount        int64
 	PricingPendingSourceCount int64
 }
@@ -66,6 +68,8 @@ type Summary struct {
 	PendingSourceCount        string  `json:"pending_source_count"`
 	PricingPendingSourceCount string  `json:"pricing_pending_source_count"`
 	ComponentCount            string  `json:"component_count"`
+	RollupCount               string  `json:"rollup_count"`
+	SessionCount              string  `json:"session_count"`
 }
 
 type TrendPoint struct {
@@ -84,6 +88,7 @@ type RankingItem struct {
 	Key              string  `json:"key"`
 	Label            string  `json:"label"`
 	TotalTokens      string  `json:"total_tokens"`
+	SessionCount     string  `json:"session_count"`
 	EstimatedCostCNY *string `json:"estimated_cost_cny"`
 	PricingStatus    string  `json:"pricing_status"`
 	LastActivityAt   *string `json:"last_activity_at"`
@@ -97,19 +102,37 @@ type Rankings struct {
 }
 
 type SessionItem struct {
-	SessionID        string  `json:"session_id"`
-	SessionRef       string  `json:"session_ref"`
-	UserID           string  `json:"user_id"`
-	UserName         string  `json:"user_name"`
-	AgentType        string  `json:"agent_type"`
-	Summary          *string `json:"summary"`
-	ActivityFrom     string  `json:"activity_from"`
-	ActivityTo       string  `json:"activity_to"`
-	Model            string  `json:"model"`
-	TotalTokens      string  `json:"total_tokens"`
-	EstimatedCostCNY *string `json:"estimated_cost_cny"`
-	PricingStatus    string  `json:"pricing_status"`
-	QualityStatus    string  `json:"quality_status"`
+	SessionID               string   `json:"session_id"`
+	SessionRef              string   `json:"session_ref"`
+	FamilyRootSessionRef    string   `json:"family_root_session_ref"`
+	MatchedMemberSessionID  *string  `json:"matched_member_session_id,omitempty"`
+	MatchedMemberSessionRef *string  `json:"matched_member_session_ref,omitempty"`
+	UserID                  string   `json:"user_id"`
+	UserName                string   `json:"user_name"`
+	AgentType               string   `json:"agent_type"`
+	Summary                 *string  `json:"summary"`
+	StartedAt               string   `json:"started_at"`
+	ActivityFrom            string   `json:"activity_from"`
+	ActivityTo              string   `json:"activity_to"`
+	ActivityDates           []string `json:"activity_dates"`
+	SliceCount              int      `json:"slice_count"`
+	Model                   string   `json:"model"`
+	TotalTokens             string   `json:"total_tokens"`
+	UncachedInputTokens     string   `json:"uncached_input_tokens"`
+	CacheReadTokens         string   `json:"cache_read_tokens"`
+	CacheWrite5mTokens      string   `json:"cache_write_5m_tokens"`
+	CacheWrite1hTokens      string   `json:"cache_write_1h_tokens"`
+	OutputTokens            string   `json:"output_tokens"`
+	SelfTotalTokens         string   `json:"self_total_tokens"`
+	SubagentTotalTokens     string   `json:"subagent_total_tokens"`
+	FamilyTotalTokens       string   `json:"family_total_tokens"`
+	LifetimeTotalTokens     string   `json:"lifetime_total_tokens"`
+	RangeTotalTokens        string   `json:"range_total_tokens"`
+	MemberCount             int      `json:"member_count"`
+	IncludedInFamilyTotal   bool     `json:"included_in_family_total"`
+	EstimatedCostCNY        *string  `json:"estimated_cost_cny"`
+	PricingStatus           string   `json:"pricing_status"`
+	QualityStatus           string   `json:"quality_status"`
 }
 
 type Sessions struct {

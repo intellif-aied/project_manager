@@ -53,7 +53,7 @@ import {
 import type { TableProps } from "antd";
 import dayjs from "dayjs";
 import type { ReactNode } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "@/shared/auth/authContext";
@@ -757,6 +757,7 @@ function realSessionId(session: SessionTokens) {
 }
 
 function sessionRowKey(session: SessionTokens) {
+  if (session.token_slice_strategy === "family_rollup_v2") return session.session_id;
   return (
     session.slice_key ||
     `${session.session_id}:${session.activity_date || session.activity_start_at || session.started_at}`
@@ -764,6 +765,12 @@ function sessionRowKey(session: SessionTokens) {
 }
 
 function formatSessionActivityRange(session: SessionTokens) {
+  if (session.token_slice_strategy === "family_rollup_v2") {
+    const dates = session.activity_dates ?? [];
+    const startDate = dates[0] ?? session.activity_date;
+    const endDate = dates.at(-1) ?? startDate;
+    if (startDate) return endDate && endDate !== startDate ? `${startDate} ~ ${endDate}` : startDate;
+  }
   const start = session.activity_start_at || session.started_at;
   const end = session.activity_end_at;
   if (!end || end === start) return formatTokenSourceTime(start);
@@ -2096,17 +2103,32 @@ function TokenSourcePicker({
   const [dateRange, setDateRange] = useState<[string, string]>();
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+  const sessionSnapshotRef = useRef<{ filterKey: string; token: string }>();
+  const sessionFilterKey = dateRange?.join(":") ?? "all";
   const selectedIdsKey = useMemo(() => selectedIds.join("|"), [selectedIds]);
   const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
   const sessionsQuery = useQuery({
     queryKey: ["requirements-board", "linkable-session-tokens", page, pageSize, dateRange],
-    queryFn: () =>
-      fetchSessionTokens({
+    queryFn: async () => {
+      const snapshotToken =
+        sessionSnapshotRef.current?.filterKey === sessionFilterKey
+          ? sessionSnapshotRef.current.token
+          : undefined;
+      const result = await fetchSessionTokens({
         scope: "mine",
         ...(dateRange ? { from: dateRange[0], to: dateRange[1] } : {}),
         page: String(page),
-        page_size: String(pageSize)
-      }),
+        page_size: String(pageSize),
+        ...(snapshotToken ? { query_snapshot_token: snapshotToken } : {})
+      });
+      if (result.query_snapshot_token) {
+        sessionSnapshotRef.current = {
+          filterKey: sessionFilterKey,
+          token: result.query_snapshot_token
+        };
+      }
+      return result;
+    },
     enabled: open,
     placeholderData: (previousData) => previousData,
     staleTime: 60_000
