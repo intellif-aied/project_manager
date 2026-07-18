@@ -26,6 +26,9 @@ func (c *Compactor) Run(ctx context.Context, options Options) (Report, error) {
 	if options.LockTimeout == 0 {
 		options.LockTimeout = 5 * time.Second
 	}
+	if options.StatementTimeout == 0 {
+		options.StatementTimeout = 5 * time.Second
+	}
 	processedRows := int64(0)
 	processedBatches := 0
 	switch options.Action {

@@ -3,6 +3,7 @@ package contentcompaction
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -333,6 +334,38 @@ func TestCompactorBoundedCopyMirrorCutoverRollbackAndFinalizeIntegration(t *test
 	}
 	if archiveExists {
 		t.Fatal("archive table still exists after finalize")
+	}
+}
+
+func TestSetLocalStatementTimeoutIntegration(t *testing.T) {
+	databaseURL := os.Getenv("AIDA_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("AIDA_TEST_DATABASE_URL is not set")
+	}
+	database, err := projectdb.Connect(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	tx, err := database.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := setLocalStatementTimeout(context.Background(), tx, 20*time.Millisecond); err != nil {
+		tx.Rollback()
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(`SELECT pg_sleep(0.2)`); err == nil ||
+		!strings.Contains(err.Error(), "statement timeout") {
+		tx.Rollback()
+		t.Fatalf("statement timeout error=%v", err)
+	}
+	if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+		t.Fatal(err)
+	}
+	var one int
+	if err := database.QueryRow(`SELECT 1`).Scan(&one); err != nil || one != 1 {
+		t.Fatalf("database after timeout one=%d err=%v", one, err)
 	}
 }
 

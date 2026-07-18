@@ -28,6 +28,9 @@ func main() {
 		"must equal session_content_events_payload_archive for finalize")
 	lockTimeout := flag.Duration("lock-timeout", 5*time.Second,
 		"maximum wait for mirror/cutover/rollback/finalize table locks")
+	statementTimeout := flag.Duration("statement-timeout", 5*time.Second,
+		fmt.Sprintf("maximum duration of a cutover/rollback/finalize SQL statement (hard maximum %s)",
+			contentcompaction.MaximumCriticalStatementTimeout))
 	timeout := flag.Duration("timeout", 30*time.Minute, "overall command timeout")
 	flag.Parse()
 
@@ -47,7 +50,7 @@ func main() {
 		Action: contentcompaction.Action(*action), Apply: *apply,
 		BatchSize: *batchSize, MaxBatches: *maxBatches,
 		ExpectedSourceRows: *expectedRows, ConfirmDrop: *confirmDrop,
-		LockTimeout: *lockTimeout,
+		LockTimeout: *lockTimeout, StatementTimeout: *statementTimeout,
 	})
 	if err != nil {
 		log.Fatal(err)

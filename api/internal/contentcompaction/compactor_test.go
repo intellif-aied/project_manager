@@ -1,6 +1,9 @@
 package contentcompaction
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestOptionsRequireBoundedAndExplicitMutations(t *testing.T) {
 	tests := []struct {
@@ -18,6 +21,7 @@ func TestOptionsRequireBoundedAndExplicitMutations(t *testing.T) {
 		{name: "cutover zero allowed", options: Options{Action: ActionCutover, Apply: true, ExpectedSourceRows: 0}},
 		{name: "finalize confirmation rejected", options: Options{Action: ActionFinalize, Apply: true, ConfirmDrop: "yes"}, wantErr: true},
 		{name: "finalize exact confirmation", options: Options{Action: ActionFinalize, Apply: true, ConfirmDrop: ArchiveTable}},
+		{name: "critical statement timeout too large", options: Options{Action: ActionPlan, StatementTimeout: MaximumCriticalStatementTimeout + time.Second}, wantErr: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

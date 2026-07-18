@@ -19,8 +19,9 @@ const (
 	RollbackMirrorFunction = "mirror_session_content_events_rollback"
 	RollbackMirrorTrigger  = "trg_mirror_session_content_events_rollback"
 
-	MaximumBatchSize     = 10_000
-	MaximumBatchesPerRun = 20
+	MaximumBatchSize                = 10_000
+	MaximumBatchesPerRun            = 20
+	MaximumCriticalStatementTimeout = 30 * time.Second
 )
 
 type Action string
@@ -44,6 +45,7 @@ type Options struct {
 	ExpectedSourceRows int64
 	ConfirmDrop        string
 	LockTimeout        time.Duration
+	StatementTimeout   time.Duration
 }
 
 type Report struct {
@@ -129,6 +131,9 @@ func (options Options) validate() error {
 	}
 	if options.LockTimeout < 0 {
 		return errors.New("lock timeout must not be negative")
+	}
+	if options.StatementTimeout < 0 || options.StatementTimeout > MaximumCriticalStatementTimeout {
+		return fmt.Errorf("statement timeout must be between 0 and %s", MaximumCriticalStatementTimeout)
 	}
 	return nil
 }

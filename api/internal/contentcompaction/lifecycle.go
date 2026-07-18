@@ -52,6 +52,9 @@ func (c *Compactor) cutover(ctx context.Context, options Options) error {
 	if err := setLocalLockTimeout(ctx, tx, options.LockTimeout); err != nil {
 		return err
 	}
+	if err := setLocalStatementTimeout(ctx, tx, options.StatementTimeout); err != nil {
+		return err
+	}
 	state, err := c.lockState(ctx, tx)
 	if err != nil {
 		return err
@@ -128,6 +131,9 @@ func (c *Compactor) rollback(ctx context.Context, options Options) error {
 	}
 	defer tx.Rollback()
 	if err := setLocalLockTimeout(ctx, tx, options.LockTimeout); err != nil {
+		return err
+	}
+	if err := setLocalStatementTimeout(ctx, tx, options.StatementTimeout); err != nil {
 		return err
 	}
 	state, err := c.lockState(ctx, tx)
@@ -218,6 +224,9 @@ func (c *Compactor) finalize(ctx context.Context, options Options) error {
 	}
 	defer tx.Rollback()
 	if err := setLocalLockTimeout(ctx, tx, options.LockTimeout); err != nil {
+		return err
+	}
+	if err := setLocalStatementTimeout(ctx, tx, options.StatementTimeout); err != nil {
 		return err
 	}
 	state, err := c.lockState(ctx, tx)
@@ -444,5 +453,10 @@ func (c *Compactor) mirrorTriggerExists(
 
 func setLocalLockTimeout(ctx context.Context, tx *sql.Tx, timeout time.Duration) error {
 	_, err := tx.ExecContext(ctx, `SELECT set_config('lock_timeout', $1, true)`, timeout.String())
+	return err
+}
+
+func setLocalStatementTimeout(ctx context.Context, tx *sql.Tx, timeout time.Duration) error {
+	_, err := tx.ExecContext(ctx, `SELECT set_config('statement_timeout', $1, true)`, timeout.String())
 	return err
 }
