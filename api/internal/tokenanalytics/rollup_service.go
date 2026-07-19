@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -14,7 +15,31 @@ import (
 
 const rollupSnapshotVersion = "rollup-v2"
 
+var snapshotRetryDelays = []time.Duration{50 * time.Millisecond, 150 * time.Millisecond}
+
 func (s *Service) createSnapshot(ctx context.Context, actor Actor, raw Filters) (Snapshot, error) {
+	for attempt := 0; ; attempt++ {
+		snapshot, err := s.createSnapshotOnce(ctx, actor, raw)
+		if err == nil || !isSerializationConflict(err) || attempt >= len(snapshotRetryDelays) {
+			return snapshot, err
+		}
+
+		timer := time.NewTimer(snapshotRetryDelays[attempt])
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return Snapshot{}, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func isSerializationConflict(err error) bool {
+	var pqErr *pq.Error
+	return errors.As(err, &pqErr) && string(pqErr.Code) == "40001"
+}
+
+func (s *Service) createSnapshotOnce(ctx context.Context, actor Actor, raw Filters) (Snapshot, error) {
 	filters, from, to, err := normalizeFilters(raw)
 	if err != nil {
 		return Snapshot{}, err
