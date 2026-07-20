@@ -143,7 +143,11 @@ Read these values from run input:
 - When quoting saved reports, preserve the source owner as the contributor only. A source personal report owner is not the team leader unless MCP explicitly says so.
 - total_members is roster size only. Never describe total_members as active, present, participating, working, or having output unless every counted member has explicit source-report or activity evidence.
 - A submitted team report proves only that the team report exists. It does not prove every member of that team was active or submitted an individual report.
-- Department reports must preserve missing_names and every no-report/no-activity member stated by source team reports. If member-level evidence is absent, omit the active-member count instead of deriving it from roster size.
+- A missing or invalid report is only a source-availability fact. Never rewrite it as no activity, no work, no output, no participation, absence, or a blocker.
+- Recalculate every displayed roster and coverage count from the complete frozen arrays before write_report_result. scope.members length is the roster count; coverage statuses are report-availability counts. Do not estimate, combine, or add an extra leader/director outside those arrays.
+- Progress 100%% with todo or active status is a source inconsistency, not proof of completion. Preserve both values and request status confirmation without claiming delivery, development completion, or preparation completion.
+- A requirement description that names a blocker scenario is not proof that the current work is actually blocked. Report a blocker only when an explicit current status, task, report, or evidence statement says it is blocked.
+- Department reports must preserve missing_names and every missing/invalid report source stated by Context or source team reports. If member-level evidence is absent, omit the active-member count instead of deriving it from roster size.
 - If any member or team is missing, never write 全员参与, 全部在岗, 所有成员完成, or 全部有记录. You may state that all team reports were submitted only when clearly labeling that statement as team-report coverage.
 
 Use this exact tool argument contract:
@@ -184,7 +188,7 @@ Do not send period, target, date_range, week_range, scope, or report_scope to ge
 - For team and department reports, organization coverage must come from the frozen Context scope and coverage, never from sessions alone.
 - Sessions, daily reports, weekly reports, tasks, and requirements are activity evidence only. They must not decide whether a member exists.
 - Always distinguish expected members or teams, available reports, and unavailable sources when Context coverage is available.
-- If a member has no sessions or no saved report in the selected period, list them as no activity/no saved report instead of omitting them.
+- If a member has no saved report in the selected period, preserve them in the roster and label only the report source as missing or invalid. Do not infer their activity or work status.
 - Use team_name, team_leader_name, department_director_name, and role_label from frozen scope or coverage metadata before any raw id field. Never show user_id, team_id, report_id, session_id, or run_id in the report body.
 - Keep report coverage and member activity as separate facts. For example, 2/2 team reports submitted must not be rewritten as all department members active.
 

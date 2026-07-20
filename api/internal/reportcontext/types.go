@@ -91,9 +91,11 @@ type Actor struct {
 }
 
 type TeamScope struct {
-	ID        string   `json:"id"`
-	Name      string   `json:"name"`
-	MemberIDs []string `json:"member_ids"`
+	ID         string   `json:"id"`
+	Name       string   `json:"name"`
+	LeaderID   string   `json:"leader_id,omitempty"`
+	LeaderName string   `json:"leader_name,omitempty"`
+	MemberIDs  []string `json:"member_ids"`
 }
 
 type Scope struct {

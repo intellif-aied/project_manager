@@ -28,9 +28,11 @@ func loadScope(ctx context.Context, tx *sql.Tx, request BuildRequest) (Scope, er
 	case ReportTypeTeamDaily, ReportTypeTeamWeekly:
 		scope.Type = "team"
 		scope.TeamID = request.Target.TeamID
-		if err := tx.QueryRowContext(ctx, `SELECT name FROM teams WHERE id = $1`, scope.TeamID).Scan(&scope.TeamName); err != nil {
+		team, err := loadTeamScope(ctx, tx, scope.TeamID)
+		if err != nil {
 			return Scope{}, mapNoRows(err)
 		}
+		scope.TeamName = team.Name
 		members, err := loadUsersForTeam(ctx, tx, scope.TeamID)
 		if err != nil {
 			return Scope{}, err
@@ -39,7 +41,8 @@ func loadScope(ctx context.Context, tx *sql.Tx, request BuildRequest) (Scope, er
 		for _, member := range members {
 			scope.UserIDs = append(scope.UserIDs, member.ID)
 		}
-		scope.Teams = []TeamScope{{ID: scope.TeamID, Name: scope.TeamName, MemberIDs: append([]string(nil), scope.UserIDs...)}}
+		team.MemberIDs = append([]string(nil), scope.UserIDs...)
+		scope.Teams = []TeamScope{team}
 	case ReportTypeDepartmentDaily, ReportTypeDepartmentWeekly:
 		scope.Type = "department"
 		scope.DepartmentID = request.Target.DepartmentID
@@ -69,6 +72,26 @@ func loadScope(ctx context.Context, tx *sql.Tx, request BuildRequest) (Scope, er
 	}
 	sort.Strings(scope.UserIDs)
 	return scope, nil
+}
+
+func loadTeamScope(ctx context.Context, tx *sql.Tx, teamID string) (TeamScope, error) {
+	var team TeamScope
+	team.ID = teamID
+	team.MemberIDs = []string{}
+	err := tx.QueryRowContext(ctx, `
+		SELECT t.name,
+		       COALESCE(tl.id::text, ''),
+		       COALESCE(NULLIF(tl.nickname, ''), NULLIF(tl.name, ''), tl.username, '')
+		FROM teams t
+		LEFT JOIN LATERAL (
+			SELECT u.id, u.nickname, u.name, u.username
+			FROM users u
+			WHERE u.team_id = t.id AND u.role = 'team_leader' AND u.status = 'active'
+			ORDER BY u.id
+			LIMIT 1
+		) tl ON true
+		WHERE t.id = $1`, teamID).Scan(&team.Name, &team.LeaderID, &team.LeaderName)
+	return team, mapNoRows(err)
 }
 
 func loadUser(ctx context.Context, tx *sql.Tx, userID string) (Actor, error) {
@@ -121,7 +144,20 @@ func scanActors(rows *sql.Rows) ([]Actor, error) {
 }
 
 func loadTeamsForDepartment(ctx context.Context, tx *sql.Tx, departmentID string) ([]TeamScope, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT id::text, name FROM teams WHERE department_id = $1 ORDER BY id`, departmentID)
+	rows, err := tx.QueryContext(ctx, `
+		SELECT t.id::text, t.name,
+		       COALESCE(tl.id::text, ''),
+		       COALESCE(NULLIF(tl.nickname, ''), NULLIF(tl.name, ''), tl.username, '')
+		FROM teams t
+		LEFT JOIN LATERAL (
+			SELECT u.id, u.nickname, u.name, u.username
+			FROM users u
+			WHERE u.team_id = t.id AND u.role = 'team_leader' AND u.status = 'active'
+			ORDER BY u.id
+			LIMIT 1
+		) tl ON true
+		WHERE t.department_id = $1
+		ORDER BY t.id`, departmentID)
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +166,7 @@ func loadTeamsForDepartment(ctx context.Context, tx *sql.Tx, departmentID string
 	for rows.Next() {
 		var team TeamScope
 		team.MemberIDs = []string{}
-		if err := rows.Scan(&team.ID, &team.Name); err != nil {
+		if err := rows.Scan(&team.ID, &team.Name, &team.LeaderID, &team.LeaderName); err != nil {
 			return nil, err
 		}
 		teams = append(teams, team)

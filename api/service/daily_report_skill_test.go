@@ -23,6 +23,10 @@ func TestReportSkillMarkdownUsesDeterministicDisplayContext(t *testing.T) {
 		"Never show user_id, team_id, report_id, session_id, or run_id in the report body",
 		"total_members is roster size only",
 		"A submitted team report proves only that the team report exists",
+		"A missing or invalid report is only a source-availability fact",
+		"Recalculate every displayed roster and coverage count from the complete frozen arrays before write_report_result",
+		"Progress 100% with todo or active status is a source inconsistency, not proof of completion",
+		"A requirement description that names a blocker scenario is not proof that the current work is actually blocked",
 		"2/2 team reports submitted must not be rewritten as all department members active",
 		"Call get_report_context exactly once with only run_id for all six report types",
 		"source_state.coverage_complete=true",
@@ -84,6 +88,9 @@ func TestReportSkillMarkdownUsesDeterministicDisplayContext(t *testing.T) {
 	}
 	if strings.Contains(markdown, "session-digest Skill") || strings.Contains(markdown, "run session-digest") {
 		t.Fatal("default report skill must rely on the server-side digest, not an Agent-side digest skill")
+	}
+	if strings.Contains(markdown, "list them as no activity/no saved report") {
+		t.Fatal("missing report guidance must not equate source absence with no activity")
 	}
 	for _, obsolete := range []string{
 		"REPORT_CONTENT_INVALID",

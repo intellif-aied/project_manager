@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -111,6 +112,50 @@ func TestPersonalWeeklyAllowsNoSessionSelection(t *testing.T) {
 	request.ReportType = ReportTypePersonalDaily
 	if err := request.validate(); !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("personal daily without selection must fail, got %v", err)
+	}
+}
+
+func TestLoadTeamScopeIncludesCurrentLeaderIdentity(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mock.ExpectQuery("SELECT t.name").
+		WithArgs("team-1").
+		WillReturnRows(sqlmock.NewRows([]string{"name", "leader_id", "leader_name"}).AddRow("研发一组", "7", "负责人甲"))
+	mock.ExpectQuery("FROM users u LEFT JOIN teams").
+		WithArgs("team-1").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "team_id", "team_name"}).
+			AddRow("7", "负责人甲", "team-1", "研发一组").
+			AddRow("8", "成员乙", "team-1", "研发一组"))
+
+	scope, err := loadScope(context.Background(), tx, BuildRequest{
+		UserID: "7", ReportType: ReportTypeTeamDaily,
+		Target: Target{Type: "team", TeamID: "team-1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"leader_id":"7"`) || !strings.Contains(string(encoded), `"leader_name":"负责人甲"`) {
+		t.Fatalf("team leader identity missing from scope: %s", encoded)
+	}
+	mock.ExpectRollback()
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 
