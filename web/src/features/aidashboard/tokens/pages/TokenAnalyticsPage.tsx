@@ -51,10 +51,19 @@ import {
 import { useAuth } from "@/shared/auth/authContext";
 import { BaseEChart } from "@/shared/charts/BaseEChart";
 import { PagePanel } from "@/shared/components/PagePanel/PagePanel";
+import { businessDateKey } from "@/shared/utils/businessTime";
+
+import {
+  buildModelUsageTopN,
+  getTokenAnalyticsPreset,
+  getTokenAnalyticsPresetRange
+} from "../tokenAnalyticsView";
+import type {
+  TokenAnalyticsDatePreset,
+  TokenAnalyticsDateRange
+} from "../tokenAnalyticsView";
 
 import "./TokenAnalyticsPage.css";
-
-type DateRange = [dayjs.Dayjs, dayjs.Dayjs];
 
 export interface TokenAnalyticsMember {
   id: string;
@@ -66,15 +75,16 @@ interface TokenAnalyticsPageProps {
   member?: TokenAnalyticsMember;
   onOpenMember?: (member: TokenAnalyticsMember) => void;
   onBack?: () => void;
+  dateRange?: TokenAnalyticsDateRange;
+  onDateRangeChange?: (range: TokenAnalyticsDateRange) => void;
 }
 
 interface TokenAnalyticsDrilldownState {
   tokenAnalyticsMember?: TokenAnalyticsMember;
 }
 
-function defaultRange(): DateRange {
-  const end = dayjs();
-  return [end.subtract(2, "day"), end];
+function defaultRange(): TokenAnalyticsDateRange {
+  return getTokenAnalyticsPresetRange("today", businessDateKey());
 }
 
 function formatTokenValue(raw: string | undefined) {
@@ -132,8 +142,11 @@ export function TokenAnalyticsManagementPage() {
   const navigate = useNavigate();
   const returnScrollTopRef = useRef(0);
   const returnFocusRef = useRef<HTMLElement | null>(null);
+  const returnTimerRef = useRef<number>();
   const previousMemberRef = useRef<TokenAnalyticsMember>();
-  const [hasOpenedMember, setHasOpenedMember] = useState(false);
+  const [isReturning, setIsReturning] = useState(false);
+  const [dateRange, setDateRange] = useState<TokenAnalyticsDateRange>(() => defaultRange());
+  const [memberDateRange, setMemberDateRange] = useState<TokenAnalyticsDateRange>();
   const locationState = (location.state ?? {}) as TokenAnalyticsDrilldownState;
   const selectedMember = locationState.tokenAnalyticsMember;
 
@@ -142,13 +155,27 @@ export function TokenAnalyticsManagementPage() {
     returnScrollTopRef.current = scrollContainer?.scrollTop ?? 0;
     returnFocusRef.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    setHasOpenedMember(true);
+    setIsReturning(false);
+    setMemberDateRange(dateRange);
     navigate(`${location.pathname}${location.search}`, {
       state: { ...locationState, tokenAnalyticsMember: nextMember }
     });
   };
 
-  const closeMember = () => navigate(-1);
+  const closeMember = () => {
+    if (isReturning) return;
+    setIsReturning(true);
+    returnTimerRef.current = window.setTimeout(() => {
+      navigate(-1);
+    }, 200);
+  };
+
+  useEffect(
+    () => () => {
+      if (returnTimerRef.current) window.clearTimeout(returnTimerRef.current);
+    },
+    []
+  );
 
   useEffect(() => {
     const scrollContainer = document.getElementById("main-content-scroll-container");
@@ -165,19 +192,33 @@ export function TokenAnalyticsManagementPage() {
     });
   }, [selectedMember]);
 
+  const drilldownView = selectedMember && !isReturning ? "detail" : "overview";
+
   return (
-    <div className="token-analytics-drilldown">
+    <div className="token-analytics-drilldown" data-view={drilldownView}>
       <div
-        className={`token-analytics-drilldown__view token-analytics-drilldown__view--overview${
-          !selectedMember && hasOpenedMember ? " is-entering" : ""
-        }`}
-        hidden={Boolean(selectedMember)}
+        className="token-analytics-drilldown__view token-analytics-drilldown__view--overview"
+        aria-hidden={drilldownView !== "overview"}
       >
-        <TokenAnalyticsPage scope="management" onOpenMember={openMember} />
+        <TokenAnalyticsPage
+          scope="management"
+          onOpenMember={openMember}
+          dateRange={dateRange}
+          onDateRangeChange={setDateRange}
+        />
       </div>
       {selectedMember ? (
-        <div className="token-analytics-drilldown__view token-analytics-drilldown__view--detail is-entering">
-          <TokenAnalyticsPage scope="management" member={selectedMember} onBack={closeMember} />
+        <div
+          className="token-analytics-drilldown__view token-analytics-drilldown__view--detail"
+          aria-hidden={drilldownView !== "detail"}
+        >
+          <TokenAnalyticsPage
+            scope="management"
+            member={selectedMember}
+            onBack={closeMember}
+            dateRange={memberDateRange ?? dateRange}
+            onDateRangeChange={setMemberDateRange}
+          />
         </div>
       ) : null}
     </div>
@@ -188,13 +229,16 @@ export function TokenAnalyticsPage({
   scope,
   member,
   onOpenMember,
-  onBack
+  onBack,
+  dateRange: controlledDateRange,
+  onDateRangeChange
 }: TokenAnalyticsPageProps) {
   const { user } = useAuth();
   const navigate = useNavigate();
   const isMemberDetail = scope === "management" && Boolean(member);
   const isPersonalView = scope === "mine" || isMemberDetail;
-  const [range, setRange] = useState<DateRange>(() => defaultRange());
+  const [localDateRange, setLocalDateRange] = useState<TokenAnalyticsDateRange>(() => defaultRange());
+  const dateRange = controlledDateRange ?? localDateRange;
   const [queryInput, setQueryInput] = useState("");
   const [query, setQuery] = useState("");
   const [teamID, setTeamID] = useState<string>();
@@ -208,6 +252,24 @@ export function TokenAnalyticsPage({
   );
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+  const today = businessDateKey();
+  const datePreset = getTokenAnalyticsPreset(dateRange, today);
+
+  const applyDateRange = (nextRange: TokenAnalyticsDateRange) => {
+    if (onDateRangeChange) {
+      onDateRangeChange(nextRange);
+    } else {
+      setLocalDateRange(nextRange);
+    }
+    setQuery("");
+    setQueryInput("");
+    setPage(1);
+    setMemberPage(1);
+  };
+
+  const applyDatePreset = (preset: Exclude<TokenAnalyticsDatePreset, "custom">) => {
+    applyDateRange(getTokenAnalyticsPresetRange(preset, today));
+  };
 
   const capabilityQuery = useQuery({
     queryKey: ["token-analytics-capability", user?.id],
@@ -226,12 +288,12 @@ export function TokenAnalyticsPage({
   const baseOverviewFilters = useMemo<TokenAnalyticsFilters>(
     () => ({
       scope,
-      from: range[0].format("YYYY-MM-DD"),
-      to: range[1].format("YYYY-MM-DD"),
+      from: dateRange.from,
+      to: dateRange.to,
       ...(departmentID ? { department_id: departmentID } : {}),
       ...(member ? { user_id: member.id } : {})
     }),
-    [departmentID, member, range, scope]
+    [dateRange, departmentID, member, scope]
   );
   const overviewFilters = useMemo<TokenAnalyticsFilters>(
     () => ({
@@ -290,6 +352,16 @@ export function TokenAnalyticsPage({
         group_by: rankingGroup
       }),
     enabled: Boolean(snapshotToken)
+  });
+  const modelRankingsQuery = useQuery({
+    queryKey: ["token-analytics-model-rankings", snapshotToken],
+    queryFn: () =>
+      fetchTokenAnalyticsRankings({
+        ...overviewFilters,
+        query_snapshot_token: snapshotToken!,
+        group_by: "model"
+      }),
+    enabled: !isPersonalView && Boolean(snapshotToken)
   });
   const peopleRankingsQuery = useQuery({
     queryKey: ["token-analytics-people-rankings", snapshotToken],
@@ -435,6 +507,65 @@ export function TokenAnalyticsPage({
     };
   }, [rankingsQuery.data]);
 
+  const allModelUsageItems = isPersonalView
+    ? (rankingsQuery.data?.items ?? [])
+    : (modelRankingsQuery.data?.items ?? []);
+  const modelUsageItems = useMemo(
+    () => buildModelUsageTopN(allModelUsageItems, 8),
+    [allModelUsageItems]
+  );
+  const modelUsageOption = useMemo<EChartsOption>(() => {
+    const totalTokens = allModelUsageItems.reduce(
+      (total, item) => total + Number(item.total_tokens),
+      0
+    );
+    return {
+      tooltip: {
+        trigger: "axis",
+        axisPointer: { type: "shadow" },
+        formatter: (params: unknown) => {
+          const item = Array.isArray(params) ? params[0] : params;
+          const index =
+            item && typeof item === "object" && "dataIndex" in item
+              ? Number((item as { dataIndex: number }).dataIndex)
+              : 0;
+          const model = modelUsageItems[index];
+          if (!model) return "";
+          const tokens = Number(model.total_tokens);
+          const percentage = totalTokens > 0 ? `${((tokens / totalTokens) * 100).toFixed(1)}%` : "0%";
+          return `${model.label}<br />Token：${formatTokenValue(model.total_tokens)}<br />占比：${percentage}`;
+        }
+      },
+      grid: { left: 132, right: 28, top: 22, bottom: 40 },
+      xAxis: {
+        type: "value",
+        axisLine: { lineStyle: { color: "#d8e0ea" } },
+        axisTick: { show: false },
+        splitLine: { lineStyle: { color: "#edf1f5" } },
+        axisLabel: {
+          color: "#748195",
+          formatter: (value: number) => formatTokenValue(String(Math.round(value)))
+        }
+      },
+      yAxis: {
+        type: "category",
+        inverse: true,
+        data: modelUsageItems.map((item) => item.label),
+        axisTick: { show: false },
+        axisLine: { show: false },
+        axisLabel: { color: "#526173", margin: 12 }
+      },
+      series: [
+        {
+          type: "bar",
+          data: modelUsageItems.map((item) => Number(item.total_tokens)),
+          barMaxWidth: 18,
+          itemStyle: { color: "#5b6acf", borderRadius: [0, 3, 3, 0] }
+        }
+      ]
+    };
+  }, [allModelUsageItems, modelUsageItems]);
+
   if (capabilityQuery.isLoading) {
     return (
       <PagePanel title={scope === "mine" ? "我的 Token" : "团队 AI 使用分析"}>
@@ -477,7 +608,11 @@ export function TokenAnalyticsPage({
       onOpenMember({ id: item.key, name: item.label });
       return;
     }
-    const params = new URLSearchParams({ name: item.label });
+    const params = new URLSearchParams({
+      name: item.label,
+      from: dateRange.from,
+      to: dateRange.to
+    });
     navigate(`/token-analytics/member/${encodeURIComponent(item.key)}?${params.toString()}`);
   };
   const toggleMemberList = () => {
@@ -532,16 +667,26 @@ export function TokenAnalyticsPage({
           </div>
         </div>
         <div className="token-analytics-toolbar">
+          <Segmented
+            value={datePreset === "custom" ? "" : datePreset}
+            options={[
+              { label: "当天", value: "today" },
+              { label: "近 3 天", value: "last3days" },
+              { label: "近 7 天", value: "last7days" }
+            ]}
+            onChange={(value) =>
+              applyDatePreset(value as Exclude<TokenAnalyticsDatePreset, "custom">)
+            }
+          />
           <DatePicker.RangePicker
-            value={range}
+            value={[dayjs(dateRange.from), dayjs(dateRange.to)]}
             allowClear={false}
             onChange={(value) => {
               if (!value?.[0] || !value[1]) return;
-              setRange([value[0], value[1]]);
-              setQuery("");
-              setQueryInput("");
-              setPage(1);
-              setMemberPage(1);
+              applyDateRange({
+                from: value[0].format("YYYY-MM-DD"),
+                to: value[1].format("YYYY-MM-DD")
+              });
             }}
           />
           {isAdminManagement ? (
@@ -843,10 +988,20 @@ export function TokenAnalyticsPage({
         </section>
         <section>
           <header>
-            <h3>
-              {isPersonalView ? "模型构成" : `${rankingLabel}对比`}
-            </h3>
-            {scope === "management" && !isMemberDetail ? (
+            <h3>模型使用 TOP 8</h3>
+          </header>
+          <BaseEChart
+            option={modelUsageOption}
+            height={280}
+            loading={isPersonalView ? rankingsQuery.isLoading : modelRankingsQuery.isLoading}
+            empty={!modelUsageItems.length}
+            renderer="svg"
+          />
+        </section>
+        {!isPersonalView ? (
+          <section className="token-analytics-charts__comparison">
+            <header>
+              <h3>{`${rankingLabel}对比`}</h3>
               <Segmented
                 size="small"
                 value={rankingGroup}
@@ -854,20 +1009,19 @@ export function TokenAnalyticsPage({
                 options={[
                   ...(user?.role === "admin" ? [{ label: "部门", value: "department" }] : []),
                   { label: "小组", value: "team" },
-                  { label: "人员", value: "user" },
-                  { label: "模型", value: "model" }
+                  { label: "人员", value: "user" }
                 ]}
               />
-            ) : null}
-          </header>
-          <BaseEChart
-            option={rankingOption}
-            height={280}
-            loading={rankingsQuery.isLoading}
-            empty={!rankingsQuery.data?.items.length}
-            renderer="svg"
-          />
-        </section>
+            </header>
+            <BaseEChart
+              option={rankingOption}
+              height={280}
+              loading={rankingsQuery.isLoading}
+              empty={!rankingsQuery.data?.items.length}
+              renderer="svg"
+            />
+          </section>
+        ) : null}
       </div>
 
       {isPersonalView ? <section className="token-analytics-section">
