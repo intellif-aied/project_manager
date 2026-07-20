@@ -26,7 +26,11 @@ type ManagedAgentHandler struct {
 	client        *service.ManagedAgentClient
 	defaults      ManagedAgentDefaults
 	reportSource  *reportsource.Service
-	reportContext *reportcontext.Service
+	reportContext reportContextBuilder
+}
+
+type reportContextBuilder interface {
+	Build(context.Context, reportcontext.BuildRequest) (reportcontext.StoredContext, error)
 }
 
 const (
@@ -1257,8 +1261,8 @@ func defaultReportAgentInstructions(credentialSlot string) string {
 		"每次报告运行必须先实际调用 Skill 工具加载 aida-report，并观察到对应的 Skill tool_result 后再调用任何报告 MCP；输入文本中出现 /aida-report 不代表已经加载。完整加载当前绑定版本的 SKILL.md 只是运行协议，不在 Prompt 中增加报告内容规则。",
 		"运行参数由 Aida 后端注入，包含 run_id、report_type、period、calendar_context、target，个人报告还可能包含 report_source_selection_id。不要要求用户提供 session IDs、URLs、token 或 credential。",
 		"Aida Report MCP 已通过 " + credentialSlot + " 凭据槽注入当前用户 Authorization。使用当前用户身份调用已绑定的 MCP tools，不要手工拼接管理员 token。",
-		"个人报告存在 report_source_selection_id 时，平台已冻结并校验来源；必须只用 run_id 调用一次 get_report_context 获取完整上下文，不得再调用 get_sessions、get_tasks 或 get_requirements 自由扫描。没有 report_source_selection_id 的兼容报告仍按当前 Skill 的旧工具路由执行。",
-		"固定工具范围：个人报告使用 self；小组报告读取个人报告时使用 team + report_scope=personal；部门报告读取小组报告时使用 department + report_scope=team。不要越权扩大或缩小目标范围。",
+		"平台已为六类托管报告冻结 Report Context。必须只用 run_id 调用一次 get_report_context 获取完整上下文，不得再调用 get_sessions、get_tasks、get_requirements、get_daily_reports、get_weekly_reports 或 get_report_inventory 重新扫描数据。",
+		"报告目标和权限范围已经冻结在 Report Context 中；必须使用 Context 的 run.target 和 scope，不得越权扩大、缩小或替换目标范围。",
 		"依据当前绑定 Skill 生成报告后，必须调用 write_report_result，传入相同的 run_id、report_type、period、target 和 content；不要用最终对话回复代替 MCP 回写。生成失败时调用 write_report_failure。",
 	}, "\n")
 }
@@ -1273,9 +1277,9 @@ func defaultReportAgentStartPromptTemplate(credentialSlot string) string {
 		"calendar_context={{ calendar_context_json }}",
 		"target={{ target_json }}",
 		"report_source_selection_id={{ report_source_selection_id }}",
-		"当 report_source_selection_id 非空时，平台已准备完整 Report Context；只传 run_id 调用一次 get_report_context。不要再调用 get_sessions、get_tasks 或 get_requirements 扫描数据。",
+		"平台已为本次托管报告准备完整 Report Context；只传 run_id 调用一次 get_report_context。不要再调用其他读取工具扫描 Session、报告、任务、需求或组织数据。",
 		"报告内容与格式遵循当前绑定 Skill，本启动提示不增加额外内容限制。",
-		"固定工具范围：个人报告使用 self；小组报告使用 team + report_scope=personal；部门报告使用 department + report_scope=team。禁止将小组或部门报告改用 self 或 all。",
+		"报告目标与权限范围以 Report Context 的 run.target 和 scope 为准，不得改用其他范围。",
 		"run_id={{ run_id }}",
 		"当前用户凭据已通过 " + credentialSlot + " credential slot 注入；优先调用已绑定的 Aida Report MCP tools 获取上下文并回写生成结果，不要手工拼接 Authorization。",
 		"最终必须调用 write_report_result 完成回写；生成失败时调用 write_report_failure。",
@@ -1859,6 +1863,24 @@ func reportPeriodInputRef(reportType, date, weekStart, weekEnd string) map[strin
 	return map[string]string{"date": date}
 }
 
+func reportContextPeriod(reportType, date, weekStart, weekEnd string) reportsource.Period {
+	if reportType == reportTypePersonalWeekly || reportType == reportTypeTeamWeekly || reportType == reportTypeDepartmentWeekly {
+		return reportsource.Period{Start: weekStart, End: weekEnd}
+	}
+	return reportsource.Period{Start: date, End: date}
+}
+
+func reportContextBuildRequest(userID, runID, reportType string, period reportsource.Period, timezone, triggerSource, modelID string, target reportTarget, selectionID string) reportcontext.BuildRequest {
+	return reportcontext.BuildRequest{
+		UserID: userID, RunID: runID, ReportType: reportType, Period: period,
+		Timezone: timezone, TriggerSource: triggerSource, ModelID: modelID,
+		Target: reportcontext.Target{
+			Type: target.Type, UserID: target.UserID, TeamID: target.TeamID, DepartmentID: target.DepartmentID,
+		},
+		SourceSelectionID: selectionID,
+	}
+}
+
 func reportWeekdayLabel(day time.Time) string {
 	labels := [...]string{"周日", "周一", "周二", "周三", "周四", "周五", "周六"}
 	return labels[day.Weekday()]
@@ -1988,33 +2010,15 @@ func buildReportRunMessage(startPromptValues map[string]string, message string, 
 		"run_id=" + strings.TrimSpace(startPromptValues["run_id"]),
 		"当前用户凭据已通过 " + strings.TrimSpace(credentialSlot) + " credential slot 注入；优先调用已绑定的 Aida Report MCP tools 获取上下文并回写生成结果，不要手工拼接 Authorization。",
 	}
-	if instruction := reportRunScopeInstruction(startPromptValues["report_type"]); instruction != "" {
-		parts = append(parts, instruction)
-	}
-	if selectionID := strings.TrimSpace(startPromptValues["report_source_selection_id"]); selectionID != "" {
-		parts = append(parts,
-			"来源协议：平台已经根据 report_source_selection_id 冻结并校验本次个人报告来源。只传 run_id 调用一次 get_report_context；不得再调用其他读取工具重新扫描 Session、任务或需求。报告内容与格式遵循当前绑定 Skill，本消息不增加额外内容限制。",
-		)
-	}
+	parts = append(parts,
+		"来源协议：平台已经为本次托管报告冻结完整 Report Context。只传 run_id 调用一次 get_report_context；不得再调用其他读取工具重新扫描 Session、下级报告、任务、需求或组织数据。报告目标和权限范围以 Context 为准；报告内容与格式遵循当前绑定 Skill，本消息不增加额外内容限制。",
+	)
 	message = strings.TrimSpace(message)
 	if message != "" {
 		parts = append(parts, "", "用户补充说明：", message)
 	}
 	parts = append(parts, "", "最终动作：必须调用 write_report_result 回写；生成失败时调用 write_report_failure。")
 	return strings.Join(parts, "\n")
-}
-
-func reportRunScopeInstruction(reportType string) string {
-	switch strings.TrimSpace(reportType) {
-	case reportTypePersonalDaily, reportTypePersonalWeekly:
-		return "强制工具范围：个人报告使用 scope.type=self。"
-	case reportTypeTeamDaily, reportTypeTeamWeekly:
-		return "强制工具范围：小组报告读取下级报告时必须使用 scope.type=team、report_scope=personal；禁止改用 self 或 all。"
-	case reportTypeDepartmentDaily, reportTypeDepartmentWeekly:
-		return "强制工具范围：部门报告读取下级报告时必须使用 scope.type=department、report_scope=team；禁止改用 self 或 all。"
-	default:
-		return ""
-	}
 }
 
 func fallbackReportRunMessage(reportType, date, weekStart, weekEnd string, target reportTarget) string {
@@ -2548,7 +2552,8 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 		})
 		return
 	}
-	reportSourceAvailable := isPersonalReport && h.reportSource != nil
+	needsReportSourceSelection := req.ReportType == reportTypePersonalDaily ||
+		(req.ReportType == reportTypePersonalWeekly && (reportSourceSelectionID != "" || len(selectedSessionSliceKeys) > 0))
 
 	modelID := strings.TrimSpace(req.ModelID)
 	inputRef := map[string]any{
@@ -2567,20 +2572,16 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 		inputRef["credential_override_slots"] = sortedStringMapKeys(runtimeOverrides)
 		inputRef["credential_override"] = "redacted"
 	}
+	contextPeriod := reportContextPeriod(req.ReportType, date, weekStart, weekEnd)
 	var runID string
-	if reportSourceAvailable {
-		selectionPeriod, periodErr := reportsource.ReportPeriod(req.ReportType, date, weekStart, weekEnd)
-		if periodErr != nil {
-			writeReportSourceError(w, periodErr)
-			return
-		}
+	if needsReportSourceSelection && h.reportSource != nil {
 		if len(selectedSessionSliceKeys) > 0 {
 			inputs := make([]reportsource.SourceInput, 0, len(selectedSessionSliceKeys))
 			for _, sliceKey := range selectedSessionSliceKeys {
 				inputs = append(inputs, reportsource.SourceInput{SliceKey: sliceKey})
 			}
 			prepared, prepareErr := h.reportSource.CreateExplicit(
-				r.Context(), u.ID, req.ReportType, selectionPeriod, inputs,
+				r.Context(), u.ID, req.ReportType, contextPeriod, inputs,
 			)
 			if prepareErr != nil {
 				writeReportSourceError(w, prepareErr)
@@ -2590,7 +2591,7 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 		}
 		var attached reportsource.Selection
 		runID, attached, err = h.reportSource.CreateAttachedRun(
-			r.Context(), u.ID, req.ReportType, selectionPeriod, reportSourceSelectionID,
+			r.Context(), u.ID, req.ReportType, contextPeriod, reportSourceSelectionID,
 			reportAgentRunBusinessType, agentID, modelID, req.LargeContextConfirmed, inputRef,
 		)
 		if err != nil {
@@ -2598,20 +2599,6 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 			return
 		}
 		reportSourceSelectionID = attached.ID
-		var preparedContext reportcontext.StoredContext
-		if h.reportContext == nil {
-			err = fmt.Errorf("report context service is not configured")
-		} else {
-			preparedContext, err = h.reportContext.BuildPersonal(r.Context(), u.ID, runID, reportSourceSelectionID, req.ReportType, selectionPeriod, target)
-		}
-		if err != nil {
-			_ = h.markAIRunSubmitFailedContext(r.Context(), runID, u.ID, err.Error())
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "REPORT_CONTEXT_BUILD_FAILED", "error": "failed to prepare report context"})
-			return
-		}
-		inputRef["report_context_schema_version"] = reportcontext.SchemaVersion
-		inputRef["report_context_hash"] = preparedContext.Hash
-		inputRef["report_context_bytes"] = preparedContext.Bytes
 	} else {
 		runID, err = h.insertPendingManagedSessionAIRun(u.ID, reportAgentRunBusinessType, agentID, modelID, inputRef)
 	}
@@ -2619,6 +2606,22 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	var preparedContext reportcontext.StoredContext
+	if h.reportContext == nil {
+		err = fmt.Errorf("report context service is not configured")
+	} else {
+		preparedContext, err = h.reportContext.Build(r.Context(), reportContextBuildRequest(
+			u.ID, runID, req.ReportType, contextPeriod, biztime.Zone, "manual", modelID, target, reportSourceSelectionID,
+		))
+	}
+	if err != nil {
+		_ = h.markAIRunSubmitFailedContext(r.Context(), runID, u.ID, err.Error())
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "REPORT_CONTEXT_BUILD_FAILED", "error": "failed to prepare report context"})
+		return
+	}
+	inputRef["report_context_schema_version"] = reportcontext.SchemaVersion
+	inputRef["report_context_hash"] = preparedContext.Hash
+	inputRef["report_context_bytes"] = preparedContext.Bytes
 
 	credential, err := client.CreateCredential(r.Context(), service.CreateManagedCredentialRequest{
 		Name:  "Aida Report MCP Auth " + runID,
@@ -2830,6 +2833,7 @@ func (h *ManagedAgentHandler) DailyReportIntegration(w http.ResponseWriter, r *h
 			"managed":     true,
 			"description": h.defaults.ReportMCPDescription,
 			"tools": []string{
+				"get_report_context",
 				"get_sessions",
 				"get_daily_reports",
 				"get_weekly_reports",
@@ -4091,42 +4095,41 @@ func (h *ManagedAgentHandler) executeReportAgentScheduleRun(ctx context.Context,
 	inputRef["mcp_server"] = h.defaults.ReportMCPSlug
 	inputRef["credential_slot"] = h.defaults.ReportMCPCredentialSlot
 	reportSourceSelectionID := ""
+	contextPeriod := reportContextPeriod(reportType, period.Date, period.WeekStart, period.WeekEnd)
 	var runID string
-	isPersonalReport := reportType == reportTypePersonalDaily || reportType == reportTypePersonalWeekly
-	if isPersonalReport && h.reportSource != nil {
-		selectionPeriod, periodErr := reportsource.ReportPeriod(reportType, period.Date, period.WeekStart, period.WeekEnd)
-		if periodErr != nil {
-			return nil, periodErr
-		}
+	if reportType == reportTypePersonalDaily && h.reportSource != nil {
 		var attached reportsource.Selection
 		runID, attached, err = h.reportSource.CreateAttachedRun(
-			ctx, u.ID, reportType, selectionPeriod, "", reportAgentRunBusinessType,
+			ctx, u.ID, reportType, contextPeriod, "", reportAgentRunBusinessType,
 			schedule.AgentID, modelID, true, inputRef,
 		)
 		if err != nil {
 			return nil, err
 		}
 		reportSourceSelectionID = attached.ID
-		var preparedContext reportcontext.StoredContext
-		if h.reportContext == nil {
-			err = fmt.Errorf("report context service is not configured")
-		} else {
-			preparedContext, err = h.reportContext.BuildPersonal(ctx, u.ID, runID, reportSourceSelectionID, reportType, selectionPeriod, target)
-		}
-		if err != nil {
-			_ = h.markAIRunSubmitFailedContext(ctx, runID, u.ID, err.Error())
-			_ = h.updateManagedScheduleAfterRun(ctx, schedule.ID, u.ID, runID, scheduledAt, err.Error(), advanceNext, schedule)
-			return h.loadAIRun(runID, u.ID)
-		}
-		inputRef["report_context_schema_version"] = reportcontext.SchemaVersion
-		inputRef["report_context_hash"] = preparedContext.Hash
-		inputRef["report_context_bytes"] = preparedContext.Bytes
 	} else {
 		runID, err = h.insertPendingManagedSessionAIRun(u.ID, reportAgentRunBusinessType, schedule.AgentID, modelID, inputRef)
 	}
 	if err != nil {
 		return nil, err
 	}
+	var preparedContext reportcontext.StoredContext
+	if h.reportContext == nil {
+		err = fmt.Errorf("report context service is not configured")
+	} else {
+		triggerSource, _ := inputRef["trigger_source"].(string)
+		preparedContext, err = h.reportContext.Build(ctx, reportContextBuildRequest(
+			u.ID, runID, reportType, contextPeriod, schedule.Timezone, triggerSource, modelID, target, reportSourceSelectionID,
+		))
+	}
+	if err != nil {
+		_ = h.markAIRunSubmitFailedContext(ctx, runID, u.ID, err.Error())
+		_ = h.updateManagedScheduleAfterRun(ctx, schedule.ID, u.ID, runID, scheduledAt, err.Error(), advanceNext, schedule)
+		return h.loadAIRun(runID, u.ID)
+	}
+	inputRef["report_context_schema_version"] = reportcontext.SchemaVersion
+	inputRef["report_context_hash"] = preparedContext.Hash
+	inputRef["report_context_bytes"] = preparedContext.Bytes
 	credential, err := client.CreateCredential(ctx, service.CreateManagedCredentialRequest{
 		Name:  "Aida Report MCP Auth " + runID,
 		Kind:  "secret",

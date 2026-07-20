@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/aidashboard/api/internal/biztime"
 	"github.com/aidashboard/api/internal/reportsource"
 )
 
@@ -20,6 +21,7 @@ var (
 	ErrInvalidRequest = errors.New("invalid report context request")
 	ErrNotFound       = errors.New("report context not found")
 	ErrIncomplete     = errors.New("report context source is incomplete")
+	ErrDuplicate      = errors.New("duplicate report context source")
 )
 
 type sourceReader interface {
@@ -35,66 +37,117 @@ func NewService(db *sql.DB, source *reportsource.Service) *Service {
 	return &Service{db: db, source: source}
 }
 
-type Run struct {
-	ID         string              `json:"run_id"`
-	ReportType string              `json:"report_type"`
-	Period     reportsource.Period `json:"period"`
-	Target     any                 `json:"target"`
-}
-
-type SourceState struct {
-	Mode             string `json:"mode"`
-	CoverageComplete bool   `json:"coverage_complete"`
-}
-
-type Sources struct {
-	SessionDigest json.RawMessage `json:"session_digest"`
-}
-
-type Payload struct {
-	SchemaVersion string      `json:"schema_version"`
-	Run           Run         `json:"run"`
-	SourceState   SourceState `json:"source_state"`
-	Sources       Sources     `json:"sources"`
-}
-
 type StoredContext struct {
 	Payload []byte
 	Hash    string
 	Bytes   int
 }
 
-func (s *Service) BuildPersonal(ctx context.Context, userID, runID, selectionID, reportType string, period reportsource.Period, target any) (StoredContext, error) {
-	if s == nil || s.db == nil || s.source == nil || strings.TrimSpace(userID) == "" || strings.TrimSpace(runID) == "" || strings.TrimSpace(selectionID) == "" {
+// Build prepares and freezes all platform-defined facts for one report run.
+// A successful context is immutable: repeated calls return the stored payload
+// instead of reading current business tables again.
+func (s *Service) Build(ctx context.Context, request BuildRequest) (StoredContext, error) {
+	if err := request.validate(); err != nil || s == nil || s.db == nil {
 		return StoredContext{}, ErrInvalidRequest
 	}
-	page, err := s.source.ReadAttachedSelection(ctx, userID, selectionID, runID, reportType, period, "")
+	if stored, err := s.Get(ctx, request.UserID, request.RunID); err == nil {
+		return stored, nil
+	} else if !errors.Is(err, ErrNotFound) {
+		return StoredContext{}, err
+	}
+
+	sessions, legacyDigest, sourceMode, err := s.loadSessions(ctx, request)
 	if err != nil {
 		return StoredContext{}, err
 	}
-	digest, sourceMode, err := normalizeFrozenPayload(page.FrozenPayload)
+
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: false})
 	if err != nil {
 		return StoredContext{}, err
 	}
-	payload, err := json.Marshal(Payload{
-		SchemaVersion: SchemaVersion,
-		Run:           Run{ID: runID, ReportType: reportType, Period: period, Target: target},
-		SourceState:   SourceState{Mode: sourceMode, CoverageComplete: true},
-		Sources:       Sources{SessionDigest: digest},
-	})
+	defer tx.Rollback()
+
+	if err := verifyRun(ctx, tx, request.UserID, request.RunID); err != nil {
+		return StoredContext{}, err
+	}
+	assembled, err := assemble(ctx, tx, request)
+	if err != nil {
+		return StoredContext{}, err
+	}
+	assembled.Sessions = sessions
+	assembled.SourceState = sourceStateFor(assembled, sourceMode)
+	if len(sessions) > 0 {
+		assembled.SourceState.Mode = sessions[0].Mode
+	}
+	assembled.Sources = Sources{SessionDigest: legacyDigest}
+
+	encoded, err := json.Marshal(assembled)
+	if err != nil {
+		return StoredContext{}, err
+	}
+	payload, err := canonicalJSON(encoded)
 	if err != nil {
 		return StoredContext{}, err
 	}
 	sum := sha256.Sum256(payload)
 	hash := hex.EncodeToString(sum[:])
-	if _, err := s.db.ExecContext(ctx, `
+	result, err := tx.ExecContext(ctx, `
 		INSERT INTO report_run_contexts (
 			run_id, schema_version, source_selection_id, context_hash, context_payload, context_bytes
-		) VALUES ($1, $2, $3, $4, $5::jsonb, $6)`,
-		runID, SchemaVersion, selectionID, hash, payload, len(payload)); err != nil {
+		) VALUES ($1, $2, NULLIF($3, '')::uuid, $4, $5::jsonb, $6)
+		ON CONFLICT (run_id) DO NOTHING`,
+		request.RunID, SchemaVersion, request.SourceSelectionID, hash, payload, len(payload))
+	if err != nil {
 		return StoredContext{}, fmt.Errorf("store report context: %w", err)
 	}
+	written, err := result.RowsAffected()
+	if err != nil {
+		return StoredContext{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return StoredContext{}, err
+	}
+	if written == 0 {
+		return s.Get(ctx, request.UserID, request.RunID)
+	}
 	return StoredContext{Payload: payload, Hash: hash, Bytes: len(payload)}, nil
+}
+
+// BuildPersonal remains as a compatibility wrapper while all callers move to
+// Build. It preserves the existing personal-report entry point.
+func (s *Service) BuildPersonal(ctx context.Context, userID, runID, selectionID, reportType string, period reportsource.Period, target any) (StoredContext, error) {
+	typedTarget, err := targetFromAny(target)
+	if err != nil {
+		return StoredContext{}, err
+	}
+	return s.Build(ctx, BuildRequest{
+		UserID:            userID,
+		RunID:             runID,
+		ReportType:        reportType,
+		Period:            period,
+		Timezone:          biztime.Zone,
+		TriggerSource:     "manual",
+		Target:            typedTarget,
+		SourceSelectionID: selectionID,
+	})
+}
+
+func (s *Service) loadSessions(ctx context.Context, request BuildRequest) ([]SessionSource, json.RawMessage, string, error) {
+	if request.SourceSelectionID == "" {
+		return []SessionSource{}, nil, sourceModeForReport(request.ReportType, false), nil
+	}
+	if s.source == nil {
+		return nil, nil, "", ErrIncomplete
+	}
+	page, err := s.source.ReadAttachedSelection(ctx, request.UserID, request.SourceSelectionID, request.RunID, request.ReportType, request.Period, "")
+	if err != nil {
+		return nil, nil, "", err
+	}
+	digest, digestMode, err := normalizeFrozenPayload(page.FrozenPayload)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	return []SessionSource{{SelectionID: request.SourceSelectionID, Mode: digestMode, Digest: digest}}, digest, sourceModeForReport(request.ReportType, true), nil
 }
 
 func (s *Service) Get(ctx context.Context, userID, runID string) (StoredContext, error) {
@@ -116,10 +169,11 @@ func (s *Service) Get(ctx context.Context, userID, runID string) (StoredContext,
 	if err != nil {
 		return StoredContext{}, err
 	}
-	if normalized, err := normalizeJSON(payload); err != nil || len(normalized) == 0 {
+	normalized, err := canonicalJSON(payload)
+	if err != nil || len(normalized) == 0 {
 		return StoredContext{}, ErrIncomplete
 	}
-	return StoredContext{Payload: payload, Hash: hash, Bytes: size}, nil
+	return StoredContext{Payload: normalized, Hash: hash, Bytes: size}, nil
 }
 
 func normalizeFrozenPayload(raw json.RawMessage) (json.RawMessage, string, error) {
@@ -144,4 +198,14 @@ func normalizeJSON(raw []byte) ([]byte, error) {
 		return nil, err
 	}
 	return buffer.Bytes(), nil
+}
+
+func canonicalJSON(raw []byte) ([]byte, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, err
+	}
+	return json.Marshal(value)
 }

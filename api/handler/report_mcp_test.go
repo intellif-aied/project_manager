@@ -15,6 +15,7 @@ import (
 	"github.com/aidashboard/api/internal/reportcontext"
 	"github.com/aidashboard/api/internal/reportsource"
 	"github.com/aidashboard/api/model"
+	"github.com/lib/pq"
 )
 
 func newReportMCPRequest(method string, body any) *http.Request {
@@ -553,7 +554,10 @@ func TestReportMCPWriteReportResultAcceptsSkillAuthoredContent(t *testing.T) {
 		WillReturnError(sql.ErrNoRows)
 	content := "# 周报\n- PRD 042 已按 TDD 完成，详见 `docs/prd/042.md`。\n- `go test ./...` 验证通过，参考 https://example.com/result。"
 	mock.ExpectQuery("INSERT INTO personal_weekly_reports").
-		WithArgs("310", "2026-06-08", "2026-06-14", content, "run-1", "agent-1", "MiniMax-M2.5").
+		WithArgs(
+			"310", "2026-06-08", "2026-06-14", content, "run-1", "agent-1", "MiniMax-M2.5",
+			pq.Array([]string{}), pq.Array([]string{}),
+		).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("report-1"))
 	mock.ExpectExec("UPDATE ai_runs").
 		WithArgs("report-1", sqlmock.AnyArg(), "run-1", "310").
@@ -580,6 +584,78 @@ func TestReportMCPWriteReportResultAcceptsSkillAuthoredContent(t *testing.T) {
 	h.Serve(rec, req)
 	payload := reportMCPTextPayload(t, reportMCPBody(t, rec))
 	if payload["status"] != "saved" || payload["report_id"] != "report-1" {
+		t.Fatalf("unexpected write payload: %#v", payload)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReportMCPWriteDepartmentDailyPersistsFrozenTeamReportSources(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	h := NewReportMCPHandler(db)
+	h.ConfigureReportContext(reportcontext.NewService(db, nil))
+	now := time.Date(2026, 7, 16, 8, 0, 0, 0, time.UTC)
+	inputRef := []byte(`{"report_type":"department_daily","period":{"date":"2026-07-16"},"target":{"type":"department","department_id":"department-1"},"report_context_hash":"context-hash"}`)
+	mock.ExpectQuery("SELECT id::text, business_type").
+		WithArgs("run-1", "304").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "business_type", "agent_id", "model_id", "status", "input_ref_json", "output_ref_json", "created_at"}).
+			AddRow("run-1", reportAgentRunBusinessType, "agent-1", "MiniMax-M2.5", "running", inputRef, []byte(`{}`), now))
+
+	contextPayload := []byte(`{
+		"schema_version":"report-context/v1",
+		"source_reports":[
+			{"id":"team-report-a","report_type":"team_daily"},
+			{"id":"personal-report-direct","report_type":"personal_daily"},
+			{"id":"team-report-b","report_type":"team_daily"}
+		]
+	}`)
+	mock.ExpectQuery("SELECT c.context_payload, c.context_hash, c.context_bytes").
+		WithArgs("run-1", "304").
+		WillReturnRows(sqlmock.NewRows([]string{"context_payload", "context_hash", "context_bytes"}).
+			AddRow(contextPayload, "context-hash", len(contextPayload)))
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT id::text, edited, updated_at FROM department_reports").
+		WithArgs("department-1", "2026-07-16").
+		WillReturnError(sql.ErrNoRows)
+	content := "# 部门日报\n\n包含两个直属小组的日报。"
+	mock.ExpectQuery("INSERT INTO department_reports").
+		WithArgs(
+			"department-1", "2026-07-16", content, "run-1", "agent-1", "MiniMax-M2.5",
+			pq.Array([]string{"team-report-a", "team-report-b"}),
+		).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("department-report-1"))
+	mock.ExpectExec("UPDATE ai_runs").
+		WithArgs("department-report-1", sqlmock.AnyArg(), "run-1", "304").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	req := newReportMCPRequest("tools/call", map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "write_report_result",
+			"arguments": map[string]any{
+				"report_type": "department_daily",
+				"period":      map[string]any{"date": "2026-07-16"},
+				"target":      map[string]any{"type": "department", "department_id": "department-1"},
+				"run_id":      "run-1",
+				"content":     content,
+			},
+		},
+	})
+	departmentID := "department-1"
+	req = requestWithUser(req, &model.User{ID: "304", Role: "director", DepartmentID: &departmentID})
+	rec := httptest.NewRecorder()
+	h.Serve(rec, req)
+	payload := reportMCPTextPayload(t, reportMCPBody(t, rec))
+	if payload["status"] != "saved" || payload["report_id"] != "department-report-1" {
 		t.Fatalf("unexpected write payload: %#v", payload)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {

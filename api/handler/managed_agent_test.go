@@ -14,10 +14,18 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/aidashboard/api/internal/reportcontext"
+	"github.com/aidashboard/api/internal/reportsource"
 	"github.com/aidashboard/api/model"
 	"github.com/aidashboard/api/service"
 	"github.com/go-chi/chi/v5"
 )
+
+type reportContextBuilderStub struct{}
+
+func (reportContextBuilderStub) Build(context.Context, reportcontext.BuildRequest) (reportcontext.StoredContext, error) {
+	return reportcontext.StoredContext{Payload: []byte(`{"schema_version":"report-context/v1"}`), Hash: strings.Repeat("a", 64), Bytes: 38}, nil
+}
 
 type jsonStringArg struct {
 	require []string
@@ -81,6 +89,31 @@ func requireContainsAll(t *testing.T, value string, expected ...string) {
 	}
 }
 
+func TestReportContextBuildRequestMapsAllReportTargets(t *testing.T) {
+	tests := []struct {
+		reportType string
+		target     reportTarget
+		wantID     string
+	}{
+		{reportTypePersonalDaily, reportTarget{Type: "self", UserID: "u1"}, "u1"},
+		{reportTypePersonalWeekly, reportTarget{Type: "user", UserID: "u1"}, "u1"},
+		{reportTypeTeamDaily, reportTarget{Type: "team", TeamID: "t1"}, "t1"},
+		{reportTypeTeamWeekly, reportTarget{Type: "team", TeamID: "t1"}, "t1"},
+		{reportTypeDepartmentDaily, reportTarget{Type: "department", DepartmentID: "d1"}, "d1"},
+		{reportTypeDepartmentWeekly, reportTarget{Type: "department", DepartmentID: "d1"}, "d1"},
+	}
+	for _, test := range tests {
+		t.Run(test.reportType, func(t *testing.T) {
+			period := reportsource.Period{Start: "2026-07-13", End: "2026-07-19"}
+			request := reportContextBuildRequest("runner", "run-1", test.reportType, period, "Asia/Shanghai", "manual", "model-1", test.target, "selection-1")
+			gotID := request.Target.UserID + request.Target.TeamID + request.Target.DepartmentID
+			if request.ReportType != test.reportType || gotID != test.wantID || request.Timezone != "Asia/Shanghai" || request.TriggerSource != "manual" {
+				t.Fatalf("unexpected request: %+v", request)
+			}
+		})
+	}
+}
+
 func TestBuildReportRunMessageIncludesSystemParams(t *testing.T) {
 	message := buildReportRunMessage(map[string]string{
 		"report_type":                "personal_daily",
@@ -106,7 +139,7 @@ func TestBuildReportRunMessageIncludesSystemParams(t *testing.T) {
 		"请重点关注风险",
 		"report_source_selection_id=selection-report-source",
 		"只传 run_id 调用一次 get_report_context",
-		"不得再调用其他读取工具重新扫描 Session、任务或需求",
+		"不得再调用其他读取工具重新扫描 Session、下级报告、任务、需求或组织数据",
 		"报告内容与格式遵循当前绑定 Skill",
 		"最终动作：必须调用 write_report_result 回写",
 		"最终动作：必须调用 write_report_result 回写",
@@ -127,7 +160,7 @@ func TestBuildReportRunMessageIncludesSystemParams(t *testing.T) {
 	}
 }
 
-func TestBuildReportRunMessagePinsDepartmentScope(t *testing.T) {
+func TestBuildReportRunMessageUsesFrozenContextWithoutSelection(t *testing.T) {
 	message := buildReportRunMessage(map[string]string{
 		"report_type":           "department_weekly",
 		"period_json":           `{"week_start":"2026-07-13","week_end":"2026-07-19"}`,
@@ -137,10 +170,15 @@ func TestBuildReportRunMessagePinsDepartmentScope(t *testing.T) {
 	}, "", reportMCPCredentialSlot)
 
 	requireContainsAll(t, message,
-		"scope.type=department",
-		"report_scope=team",
-		"禁止改用 self 或 all",
+		"平台已经为本次托管报告冻结完整 Report Context",
+		"只传 run_id 调用一次 get_report_context",
+		"报告目标和权限范围以 Context 为准",
 	)
+	for _, legacy := range []string{"get_daily_reports", "get_weekly_reports", "get_report_inventory", "report_scope=team"} {
+		if strings.Contains(message, legacy) {
+			t.Fatalf("managed organization report message contains legacy routing %q: %q", legacy, message)
+		}
+	}
 }
 
 func TestValidateReportSourceRunInputRejectsOrganizationSourceParameters(t *testing.T) {
@@ -193,10 +231,9 @@ func TestDefaultReportAgentInstructionsContainProtocolOnly(t *testing.T) {
 		"run_id、report_type、period、calendar_context、target",
 		"report_source_selection_id",
 		"get_report_context",
-		"不得再调用 get_sessions、get_tasks 或 get_requirements",
-		"兼容报告仍按当前 Skill 的旧工具路由",
-		"team + report_scope=personal",
-		"department + report_scope=team",
+		"平台已为六类托管报告冻结 Report Context",
+		"不得再调用 get_sessions、get_tasks、get_requirements、get_daily_reports、get_weekly_reports 或 get_report_inventory",
+		"必须使用 Context 的 run.target 和 scope",
 		"write_report_result",
 		"write_report_failure",
 		"不要用最终对话回复代替 MCP 回写",
@@ -1858,6 +1895,7 @@ func TestStartReportAgentRunUsesSessionCredentialOverrides(t *testing.T) {
 			AddRow("run-report", "user-1", reportAgentRunBusinessType, nil, "managed_session", "agent-report", nil, nil, "session-1", "MiniMax-M2.5", "running", []byte(`{"trigger_source":"manual","report_type":"personal_daily","period":{"date":"2026-06-30"},"target":{"type":"self","user_id":"user-1"},"model_id":"MiniMax-M2.5","mcp_url":"https://aida.example.com/api/v1/mcp/reports","credential_slot":"AIDA_REPORT_MCP_AUTH","start_prompt_values":{"report_type":"personal_daily","run_id":"run-report"},"credential_override":"redacted"}`), []byte(`{}`), nil, now, nil, now))
 
 	h := NewManagedAgentHandlerWithDefaults(db, service.NewManagedAgentClient(platform.URL, "platform-token"), testManagedAgentDefaults())
+	h.reportContext = reportContextBuilderStub{}
 	req := httptest.NewRequest(http.MethodPost, "/ai-assets/report-agents/agent-report/runs", bytes.NewBufferString(`{"report_type":"personal_daily","period":{"date":"2026-06-30"},"target":{"type":"self"},"model_id":"MiniMax-M2.5","credential_overrides":{"mcp-custom":"cred-custom"}}`))
 	req.Host = "aida.example.com"
 	req.Header.Set("X-Forwarded-Proto", "https")
@@ -2004,6 +2042,7 @@ func TestStartReportAgentRunFallsBackToMessageWhenTemplateMissing(t *testing.T) 
 			AddRow("run-report", "305", reportAgentRunBusinessType, nil, "managed_session", "agent-report", nil, nil, "session-1", "MiniMax-M2.5", "running", []byte(`{"trigger_source":"manual","report_type":"personal_daily","period":{"date":"2026-07-01"},"target":{"type":"self","user_id":"305"},"model_id":"MiniMax-M2.5","mcp_url":"https://aida.example.com/api/v1/mcp/reports","credential_slot":"AIDA_REPORT_MCP_AUTH","start_prompt_values":{"report_type":"personal_daily","report_date":"2026-07-01"},"message":"请生成 Aida 报告。\nreport_type=personal_daily\ndate=2026-07-01\ntarget_type=self\ntarget_user_id=305","credential_override":"redacted"}`), []byte(`{}`), nil, now, nil, now))
 
 	h := NewManagedAgentHandlerWithDefaults(db, service.NewManagedAgentClient(platform.URL, "platform-token"), testManagedAgentDefaults())
+	h.reportContext = reportContextBuilderStub{}
 	req := httptest.NewRequest(http.MethodPost, "/ai-assets/report-agents/agent-report/runs", bytes.NewBufferString(`{"report_type":"personal_daily","period":{"date":"2026-07-01"},"target":{"type":"self"},"model_id":"MiniMax-M2.5"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer user-token")
@@ -2123,6 +2162,7 @@ func TestExecuteManagedAgentScheduleRunUsesUserScopedClient(t *testing.T) {
 			AddRow("run-report", "305", reportAgentRunBusinessType, nil, "managed_session", "agent-report", nil, nil, "session-1", "MiniMax-M2.5", "running", []byte(`{"trigger_source":"save_and_run"}`), []byte(`{}`), nil, now, nil, now))
 
 	h := NewManagedAgentHandlerWithDefaults(db, service.NewManagedAgentClient(platform.URL, "platform-token"), testManagedAgentDefaults())
+	h.reportContext = reportContextBuilderStub{}
 	run, err := h.executeManagedAgentScheduleRun(context.Background(), schedule, &model.User{ID: "305", Username: "t03"}, "user-token", "save_and_run", now, false)
 	if err != nil {
 		t.Fatalf("executeManagedAgentScheduleRun error = %v", err)
@@ -2276,7 +2316,7 @@ func TestDailyReportIntegrationReturnsMCPAndSkill(t *testing.T) {
 	if strings.Contains(got.Skill.SkillMD, got.MCP.URL) {
 		t.Fatalf("skill markdown should not include mcp url")
 	}
-	if len(got.MCP.Tools) != 9 {
+	if len(got.MCP.Tools) != 10 || got.MCP.Tools[0] != "get_report_context" {
 		t.Fatalf("tools = %#v", got.MCP.Tools)
 	}
 }
