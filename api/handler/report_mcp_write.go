@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aidashboard/api/internal/reportcontext"
 	"github.com/aidashboard/api/internal/reportsource"
 	"github.com/lib/pq"
 )
@@ -43,6 +44,14 @@ type writeReportFailureArgs struct {
 	RunID        string       `json:"run_id"`
 	ErrorCode    string       `json:"error_code,omitempty"`
 	ErrorMessage string       `json:"error_message"`
+}
+
+type frozenReportSourceRefs struct {
+	PersonalDailyIDs  []string
+	PersonalWeeklyIDs []string
+	TeamDailyIDs      []string
+	TeamWeeklyIDs     []string
+	TaskIDs           []string
 }
 
 func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.RawMessage) (any, error) {
@@ -84,6 +93,10 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 			"agent_run_id":    run.ID,
 			"already_written": true,
 		}), nil
+	}
+	sourceRefs, err := h.loadFrozenReportSourceRefs(r.Context(), u.ID, run)
+	if err != nil {
+		return nil, errMCPInternal
 	}
 
 	ctx := r.Context()
@@ -135,7 +148,7 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 		return nil, errReportEditConflict
 	}
 
-	reportID, err := upsertReportContent(ctx, tx, args.ReportType, date, ws, we, target, content, run, u.ID)
+	reportID, err := upsertReportContent(ctx, tx, args.ReportType, date, ws, we, target, content, run, u.ID, sourceRefs)
 	if err != nil {
 		return nil, errMCPInternal
 	}
@@ -176,6 +189,61 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 		"origin":               "ai",
 		"updated_by_user":      false,
 	}), nil
+}
+
+func (h *ReportMCPHandler) loadFrozenReportSourceRefs(ctx context.Context, userID string, run *reportAIRun) (frozenReportSourceRefs, error) {
+	refs := frozenReportSourceRefs{
+		PersonalDailyIDs:  []string{},
+		PersonalWeeklyIDs: []string{},
+		TeamDailyIDs:      []string{},
+		TeamWeeklyIDs:     []string{},
+		TaskIDs:           []string{},
+	}
+	if h.reportContext == nil || run == nil || strings.TrimSpace(stringFromAny(run.InputRef["report_context_hash"])) == "" {
+		return refs, nil
+	}
+	stored, err := h.reportContext.Get(ctx, userID, run.ID)
+	if err != nil {
+		return refs, err
+	}
+	if expected := strings.TrimSpace(stringFromAny(run.InputRef["report_context_hash"])); expected != stored.Hash {
+		return refs, fmt.Errorf("report context hash mismatch")
+	}
+	var payload reportcontext.Payload
+	if err := json.Unmarshal(stored.Payload, &payload); err != nil {
+		return refs, err
+	}
+	for _, report := range payload.SourceReports {
+		id := strings.TrimSpace(report.ID)
+		if id == "" {
+			continue
+		}
+		switch report.ReportType {
+		case reportTypePersonalDaily:
+			refs.PersonalDailyIDs = appendUniqueString(refs.PersonalDailyIDs, id)
+		case reportTypePersonalWeekly:
+			refs.PersonalWeeklyIDs = appendUniqueString(refs.PersonalWeeklyIDs, id)
+		case reportTypeTeamDaily:
+			refs.TeamDailyIDs = appendUniqueString(refs.TeamDailyIDs, id)
+		case reportTypeTeamWeekly:
+			refs.TeamWeeklyIDs = appendUniqueString(refs.TeamWeeklyIDs, id)
+		}
+	}
+	for _, task := range payload.Tasks {
+		if id := strings.TrimSpace(task.ID); id != "" {
+			refs.TaskIDs = appendUniqueString(refs.TaskIDs, id)
+		}
+	}
+	return refs, nil
+}
+
+func appendUniqueString(values []string, value string) []string {
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
 }
 
 func copyReportRunMetadata(out map[string]any, input map[string]any) {
@@ -426,7 +494,7 @@ func selectForUpdateQuery(reportType, date, ws, we string, target reportTarget) 
 
 // upsertReportContent writes content + agent metadata into the target table and returns the report ID.
 // leaderID is the current user's ID, used for team_reports / team_weekly_reports leader_id column.
-func upsertReportContent(ctx context.Context, tx *sql.Tx, reportType, date, ws, we string, target reportTarget, content string, run *reportAIRun, leaderID string) (string, error) {
+func upsertReportContent(ctx context.Context, tx *sql.Tx, reportType, date, ws, we string, target reportTarget, content string, run *reportAIRun, leaderID string, sourceRefs frozenReportSourceRefs) (string, error) {
 	switch reportType {
 	case reportTypePersonalDaily:
 		var reportID string
@@ -448,8 +516,8 @@ func upsertReportContent(ctx context.Context, tx *sql.Tx, reportType, date, ws, 
 	case reportTypePersonalWeekly:
 		var reportID string
 		err := tx.QueryRowContext(ctx, `
-			INSERT INTO personal_weekly_reports (user_id, week_start, week_end, content, status, generation_mode, managed_agent_run_id, agent_id, model_id, edited, saved_at)
-			VALUES ($1, $2, $3, $4, 'saved', 'managed_agent', $5, $6, $7, false, now())
+			INSERT INTO personal_weekly_reports (user_id, week_start, week_end, content, status, generation_mode, managed_agent_run_id, agent_id, model_id, edited, saved_at, source_daily_report_ids, source_task_ids)
+			VALUES ($1, $2, $3, $4, 'saved', 'managed_agent', $5, $6, $7, false, now(), $8, $9)
 			ON CONFLICT (user_id, week_start) DO UPDATE
 			SET content = EXCLUDED.content,
 			    week_end = EXCLUDED.week_end,
@@ -460,14 +528,16 @@ func upsertReportContent(ctx context.Context, tx *sql.Tx, reportType, date, ws, 
 			    model_id = EXCLUDED.model_id,
 			    edited = false,
 			    saved_at = now(),
+			    source_daily_report_ids = EXCLUDED.source_daily_report_ids,
+			    source_task_ids = EXCLUDED.source_task_ids,
 			    updated_at = now()
-			RETURNING id::text`, target.UserID, ws, we, content, run.ID, nullableValue(run.AgentID), nullablePtrValue(run.ModelID)).Scan(&reportID)
+			RETURNING id::text`, target.UserID, ws, we, content, run.ID, nullableValue(run.AgentID), nullablePtrValue(run.ModelID), pq.Array(sourceRefs.PersonalDailyIDs), pq.Array(sourceRefs.TaskIDs)).Scan(&reportID)
 		return reportID, err
 	case reportTypeTeamDaily:
 		var reportID string
 		err := tx.QueryRowContext(ctx, `
-			INSERT INTO team_reports (team_id, leader_id, report_date, content, generation_mode, managed_agent_run_id, agent_id, model_id, edited, status, saved_at)
-			VALUES ($1, $2, $3, $4, 'managed_agent', $5, $6, $7, false, 'saved', now())
+			INSERT INTO team_reports (team_id, leader_id, report_date, content, generation_mode, managed_agent_run_id, agent_id, model_id, edited, status, saved_at, member_report_ids, source_daily_report_ids)
+			VALUES ($1, $2, $3, $4, 'managed_agent', $5, $6, $7, false, 'saved', now(), $8, $8)
 			ON CONFLICT (team_id, report_date) DO UPDATE
 			SET content = EXCLUDED.content,
 			    leader_id = EXCLUDED.leader_id,
@@ -478,14 +548,16 @@ func upsertReportContent(ctx context.Context, tx *sql.Tx, reportType, date, ws, 
 			    edited = false,
 			    status = 'saved',
 			    saved_at = now(),
+			    member_report_ids = EXCLUDED.member_report_ids,
+			    source_daily_report_ids = EXCLUDED.source_daily_report_ids,
 			    updated_at = now()
-			RETURNING id::text`, target.TeamID, leaderID, date, content, run.ID, nullableValue(run.AgentID), nullablePtrValue(run.ModelID)).Scan(&reportID)
+			RETURNING id::text`, target.TeamID, leaderID, date, content, run.ID, nullableValue(run.AgentID), nullablePtrValue(run.ModelID), pq.Array(sourceRefs.PersonalDailyIDs)).Scan(&reportID)
 		return reportID, err
 	case reportTypeTeamWeekly:
 		var reportID string
 		err := tx.QueryRowContext(ctx, `
-			INSERT INTO team_weekly_reports (team_id, leader_id, week_start, week_end, content, generation_mode, managed_agent_run_id, agent_id, model_id, edited)
-			VALUES ($1, $2, $3, $4, $5, 'managed_agent', $6, $7, $8, false)
+			INSERT INTO team_weekly_reports (team_id, leader_id, week_start, week_end, content, generation_mode, managed_agent_run_id, agent_id, model_id, edited, source_personal_weekly_report_ids, source_task_ids)
+			VALUES ($1, $2, $3, $4, $5, 'managed_agent', $6, $7, $8, false, $9, $10)
 			ON CONFLICT (team_id, week_start) DO UPDATE
 			SET content = EXCLUDED.content,
 			    leader_id = EXCLUDED.leader_id,
@@ -495,14 +567,16 @@ func upsertReportContent(ctx context.Context, tx *sql.Tx, reportType, date, ws, 
 			    agent_id = EXCLUDED.agent_id,
 			    model_id = EXCLUDED.model_id,
 			    edited = false,
+			    source_personal_weekly_report_ids = EXCLUDED.source_personal_weekly_report_ids,
+			    source_task_ids = EXCLUDED.source_task_ids,
 			    updated_at = now()
-			RETURNING id::text`, target.TeamID, leaderID, ws, we, content, run.ID, nullableValue(run.AgentID), nullablePtrValue(run.ModelID)).Scan(&reportID)
+			RETURNING id::text`, target.TeamID, leaderID, ws, we, content, run.ID, nullableValue(run.AgentID), nullablePtrValue(run.ModelID), pq.Array(sourceRefs.PersonalWeeklyIDs), pq.Array(sourceRefs.TaskIDs)).Scan(&reportID)
 		return reportID, err
 	case reportTypeDepartmentDaily:
 		var reportID string
 		err := tx.QueryRowContext(ctx, `
-			INSERT INTO department_reports (department_id, report_date, content, generation_mode, managed_agent_run_id, agent_id, model_id, edited, status, saved_at)
-			VALUES ($1, $2, $3, 'managed_agent', $4, $5, $6, false, 'saved', now())
+			INSERT INTO department_reports (department_id, report_date, content, generation_mode, managed_agent_run_id, agent_id, model_id, edited, status, saved_at, source_team_report_ids)
+			VALUES ($1, $2, $3, 'managed_agent', $4, $5, $6, false, 'saved', now(), $7)
 			ON CONFLICT (department_id, report_date) WHERE department_id IS NOT NULL DO UPDATE
 			SET content = EXCLUDED.content,
 			    generation_mode = 'managed_agent',
@@ -512,14 +586,15 @@ func upsertReportContent(ctx context.Context, tx *sql.Tx, reportType, date, ws, 
 			    edited = false,
 			    status = 'saved',
 			    saved_at = now(),
+			    source_team_report_ids = EXCLUDED.source_team_report_ids,
 			    updated_at = now()
-			RETURNING id::text`, target.DepartmentID, date, content, run.ID, nullableValue(run.AgentID), nullablePtrValue(run.ModelID)).Scan(&reportID)
+			RETURNING id::text`, target.DepartmentID, date, content, run.ID, nullableValue(run.AgentID), nullablePtrValue(run.ModelID), pq.Array(sourceRefs.TeamDailyIDs)).Scan(&reportID)
 		return reportID, err
 	case reportTypeDepartmentWeekly:
 		var reportID string
 		err := tx.QueryRowContext(ctx, `
-			INSERT INTO department_weekly_reports (department_id, week_start, week_end, content, generation_mode, managed_agent_run_id, agent_id, model_id, edited)
-			VALUES ($1, $2, $3, $4, 'managed_agent', $5, $6, $7, false)
+			INSERT INTO department_weekly_reports (department_id, week_start, week_end, content, generation_mode, managed_agent_run_id, agent_id, model_id, edited, source_team_weekly_report_ids)
+			VALUES ($1, $2, $3, $4, 'managed_agent', $5, $6, $7, false, $8)
 			ON CONFLICT (department_id, week_start) WHERE department_id IS NOT NULL DO UPDATE
 			SET content = EXCLUDED.content,
 			    week_end = EXCLUDED.week_end,
@@ -528,8 +603,9 @@ func upsertReportContent(ctx context.Context, tx *sql.Tx, reportType, date, ws, 
 			    agent_id = EXCLUDED.agent_id,
 			    model_id = EXCLUDED.model_id,
 			    edited = false,
+			    source_team_weekly_report_ids = EXCLUDED.source_team_weekly_report_ids,
 			    updated_at = now()
-			RETURNING id::text`, target.DepartmentID, ws, we, content, run.ID, nullableValue(run.AgentID), nullablePtrValue(run.ModelID)).Scan(&reportID)
+			RETURNING id::text`, target.DepartmentID, ws, we, content, run.ID, nullableValue(run.AgentID), nullablePtrValue(run.ModelID), pq.Array(sourceRefs.TeamWeeklyIDs)).Scan(&reportID)
 		return reportID, err
 	}
 	return "", fmt.Errorf("unsupported report_type: %s", reportType)
@@ -562,5 +638,3 @@ func nullablePtrValue(p *string) any {
 	}
 	return *p
 }
-
-var _ = pq.Array
