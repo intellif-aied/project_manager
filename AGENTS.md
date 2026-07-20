@@ -161,3 +161,38 @@ Canonical documents:
 ## Documentation
 
 Business documents, validation cases, rollout notes, and deployment instructions are maintained under [doc/](/home/intellif/dev/project_manager/doc).
+
+### Product and architecture document governance
+
+For product, architecture, development, and test documents, use the templates under `doc/v2/文档模板/` and follow this order:
+
+1. finalize product requirements;
+2. verify current code and data facts;
+3. propose the smallest architecture that satisfies the requirements;
+4. validate uncertain decisions;
+5. confirm architecture decisions;
+6. split development work;
+7. derive tests and acceptance from the requirements.
+
+Every material statement must be classified as one of:
+
+- **Product rule**: explicitly approved behavior or scope;
+- **Verified code fact**: supported by a current source path, migration, test, or runtime evidence;
+- **Necessary consequence**: unavoidable to satisfy a product rule, with the reasoning recorded;
+- **Recommendation**: a candidate choice that is not yet approved.
+
+Only product rules and necessary consequences that are both evidence-backed and confirmed may create implementation tasks. A code fact by itself does not create product scope or a development task. Recommendations and unverified architecture judgments must remain decision items; do not silently turn them into required tables, migrations, services, protocols, states, configuration, refactors, or future abstractions.
+
+Each key architecture decision must record:
+
+```text
+对应需求 / 当前代码事实 / 待解决问题 / 候选方案 / 选择方案 / 验证证据 / 是否已确认
+```
+
+Each development task must trace to both a requirement section and a confirmed architecture decision. If either reference is missing, the task is not ready for implementation.
+
+Default to the smallest change that closes the current product requirement on the current system. “Best practice” is only a candidate, not an implementation mandate. Logical responsibilities in a diagram do not require new packages, interfaces, processes, or services. Prefer one deep module with a small public interface and keep querying, pagination, deduplication, freezing, and validation details internal unless a proven boundary requires otherwise.
+
+Before asking for full-document review, provide a one-page decision delta containing only behavior changes, code changes, new resources, unresolved decisions, and explicit non-goals. Do not rely on reviewers finding hidden scope expansion in long documents.
+
+When requirements are already approved, architecture, development, and test documents must treat the requirements document as the sole product baseline. Earlier drafts and superseded split documents are not sources of truth. If implementation reveals a product-rule conflict, stop and amend the requirements first instead of resolving it inside the development plan.

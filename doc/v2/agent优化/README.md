@@ -19,6 +19,9 @@
 | 第一阶段：容量与稳定性优化 | 已完成并上线 | 解决大 Session 分页失控、Token 超限和运行超时，落地服务端 `session-digest/v1` | [第一阶段-容量与稳定性优化/](第一阶段-容量与稳定性优化/README.md) |
 | 第二阶段：结果质量优化 | 已归档；v2.8 为当前生产实现基线，v2.9 未实施 | 记录结果质量演进、真实样本和历史设计取舍 | [第二阶段-结果质量优化/](第二阶段-结果质量优化/README.md) |
 | 第三阶段：Digest 规模化验证 | 方案完成，待执行 | 用 8～10 个真实 Session 分层验证 Digest 与最终日报并准确归因 | [第三阶段-Digest规模化验证/](第三阶段-Digest规模化验证/README.md) |
+| 第四阶段：Agent Skill 结果质量优化 | 开发测试完成，候选未发布 | 冻结 Digest 和样本，验证默认 Skill 的结果表达 | [第四阶段-Agent-Skill结果质量优化/](第四阶段-Agent-Skill结果质量优化/README.md) |
+| 第五阶段：Report Context V1 | 14.157 开发与验收完成，未发布 | 个人报告使用冻结 Context 简化 Agent 读取链路 | [第五阶段-Report-Context-V1/](第五阶段-Report-Context-V1/README.md) |
+| 第六阶段：通用 Report Context V1 | 需求已收口，待架构设计 | 六类报告由平台确定性准备并冻结 Context，标准 Agent 只读取一次 Context | [第六阶段-分层来源与组织覆盖/](第六阶段-分层来源与组织覆盖/README.md) |
 
 ## 统一边界
 
