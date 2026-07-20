@@ -139,7 +139,7 @@ func TestBuildReportRunMessageIncludesSystemParams(t *testing.T) {
 		"请重点关注风险",
 		"report_source_selection_id=selection-report-source",
 		"只传 run_id 调用一次 get_report_context",
-		"不得再调用其他读取工具重新扫描 Session、任务或需求",
+		"不得再调用其他读取工具重新扫描 Session、下级报告、任务、需求或组织数据",
 		"报告内容与格式遵循当前绑定 Skill",
 		"最终动作：必须调用 write_report_result 回写",
 		"最终动作：必须调用 write_report_result 回写",
@@ -160,7 +160,7 @@ func TestBuildReportRunMessageIncludesSystemParams(t *testing.T) {
 	}
 }
 
-func TestBuildReportRunMessagePinsDepartmentScope(t *testing.T) {
+func TestBuildReportRunMessageUsesFrozenContextWithoutSelection(t *testing.T) {
 	message := buildReportRunMessage(map[string]string{
 		"report_type":           "department_weekly",
 		"period_json":           `{"week_start":"2026-07-13","week_end":"2026-07-19"}`,
@@ -170,10 +170,15 @@ func TestBuildReportRunMessagePinsDepartmentScope(t *testing.T) {
 	}, "", reportMCPCredentialSlot)
 
 	requireContainsAll(t, message,
-		"scope.type=department",
-		"report_scope=team",
-		"禁止改用 self 或 all",
+		"平台已经为本次托管报告冻结完整 Report Context",
+		"只传 run_id 调用一次 get_report_context",
+		"报告目标和权限范围以 Context 为准",
 	)
+	for _, legacy := range []string{"get_daily_reports", "get_weekly_reports", "get_report_inventory", "report_scope=team"} {
+		if strings.Contains(message, legacy) {
+			t.Fatalf("managed organization report message contains legacy routing %q: %q", legacy, message)
+		}
+	}
 }
 
 func TestValidateReportSourceRunInputRejectsOrganizationSourceParameters(t *testing.T) {
@@ -226,10 +231,9 @@ func TestDefaultReportAgentInstructionsContainProtocolOnly(t *testing.T) {
 		"run_id、report_type、period、calendar_context、target",
 		"report_source_selection_id",
 		"get_report_context",
-		"不得再调用 get_sessions、get_tasks 或 get_requirements",
-		"兼容报告仍按当前 Skill 的旧工具路由",
-		"team + report_scope=personal",
-		"department + report_scope=team",
+		"平台已为六类托管报告冻结 Report Context",
+		"不得再调用 get_sessions、get_tasks、get_requirements、get_daily_reports、get_weekly_reports 或 get_report_inventory",
+		"必须使用 Context 的 run.target 和 scope",
 		"write_report_result",
 		"write_report_failure",
 		"不要用最终对话回复代替 MCP 回写",
@@ -2312,7 +2316,7 @@ func TestDailyReportIntegrationReturnsMCPAndSkill(t *testing.T) {
 	if strings.Contains(got.Skill.SkillMD, got.MCP.URL) {
 		t.Fatalf("skill markdown should not include mcp url")
 	}
-	if len(got.MCP.Tools) != 9 {
+	if len(got.MCP.Tools) != 10 || got.MCP.Tools[0] != "get_report_context" {
 		t.Fatalf("tools = %#v", got.MCP.Tools)
 	}
 }

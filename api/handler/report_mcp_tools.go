@@ -8,7 +8,7 @@ import (
 )
 
 // reportMCPTools returns the current Report MCP schemas. Legacy read tools stay
-// available while managed personal reports use get_report_context.
+// available for compatibility while all managed report runs use get_report_context.
 func reportMCPTools() []map[string]any {
 	const businessTimeContract = "Business dates use Asia/Shanghai. Returned RFC3339 timestamps are already converted to +08:00 and must not be converted again."
 	targetSchema := map[string]any{
@@ -58,7 +58,7 @@ func reportMCPTools() []map[string]any {
 	return []map[string]any{
 		{
 			"name":        toolGetReportContext,
-			"description": "Read the complete server-prepared context for a managed personal report run. Call once with the injected run_id; do not rescan sessions, tasks, or requirements for the same run. " + businessTimeContract,
+			"description": "Read the complete server-prepared context for a managed report run. Call once with the injected run_id; do not rescan sessions, lower-level reports, tasks, or requirements for the same run. " + businessTimeContract,
 			"inputSchema": map[string]any{
 				"type":     "object",
 				"required": []string{"run_id"},

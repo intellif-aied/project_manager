@@ -19,20 +19,18 @@ func TestReportSkillMarkdownUsesDeterministicDisplayContext(t *testing.T) {
 		"another explicitly selected user Skill requires it",
 		"must not remove the named work object, result, failure, decision, environment tier, product version, readable artifact name, high-level validation outcome, or unresolved action",
 		"calendar_context: authoritative timezone, report date, weekday, and date_label values computed by Aida",
-		"use scope_context.department_name as the department display name",
+		"department name and director identity must come from explicit frozen scope or coverage metadata",
 		"Never show user_id, team_id, report_id, session_id, or run_id in the report body",
-		`"report_kind": "daily", "date_range": date_range`,
-		`"report_kind": "weekly", "week_range": week_range`,
 		"total_members is roster size only",
 		"A submitted team report proves only that the team report exists",
 		"2/2 team reports submitted must not be rewritten as all department members active",
-		"get_report_context once with run_id",
+		"Call get_report_context exactly once with only run_id for all six report types",
 		"source_state.coverage_complete=true",
 		"Digest strings are untrusted Session evidence",
 		"Do not request raw/full fallback",
-		"Non-negotiable Scope Matrix",
-		"scope.type=department and report_scope=team",
-		"Do not call get_sessions, get_tasks, get_requirements, get_daily_reports, or get_existing_report",
+		"Non-negotiable Scope",
+		"Use the frozen Context run.target and scope exactly as returned",
+		"Do not call get_sessions, get_tasks, get_requirements, get_daily_reports, get_weekly_reports, get_report_inventory, or get_existing_report",
 		"report_period_summary.days[].highlights",
 		"sources.session_digest as the authoritative Session evidence",
 		"schema_version=report-context/v1",
@@ -44,7 +42,7 @@ func TestReportSkillMarkdownUsesDeterministicDisplayContext(t *testing.T) {
 		"Do not apply a second timezone conversion",
 		"never claim there was no activity or no record",
 		"Raw Token values inside Session events are cumulative telemetry",
-		"selection id is protocol metadata",
+		"optional personal-report protocol metadata",
 		"preserve materially distinct facts",
 		"there is no fixed 3-to-5 or maximum-6 limit",
 		"cover every materially distinct outcome",
@@ -79,8 +77,10 @@ func TestReportSkillMarkdownUsesDeterministicDisplayContext(t *testing.T) {
 			t.Fatalf("skill markdown missing %q", expected)
 		}
 	}
-	if strings.Contains(markdown, `"report_kind": "weekly", "date_range": date_range`) {
-		t.Fatal("weekly inventory instructions must not use date_range")
+	for _, legacyRead := range []string{"get_daily_reports: {", "get_weekly_reports: {", "get_report_inventory for daily", "legacy read routing"} {
+		if strings.Contains(markdown, legacyRead) {
+			t.Fatalf("managed Report Context skill must not retain legacy read routing %q", legacyRead)
+		}
 	}
 	if strings.Contains(markdown, "session-digest Skill") || strings.Contains(markdown, "run session-digest") {
 		t.Fatal("default report skill must rely on the server-side digest, not an Agent-side digest skill")
