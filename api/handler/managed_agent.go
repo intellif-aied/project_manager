@@ -26,7 +26,11 @@ type ManagedAgentHandler struct {
 	client        *service.ManagedAgentClient
 	defaults      ManagedAgentDefaults
 	reportSource  *reportsource.Service
-	reportContext *reportcontext.Service
+	reportContext reportContextBuilder
+}
+
+type reportContextBuilder interface {
+	Build(context.Context, reportcontext.BuildRequest) (reportcontext.StoredContext, error)
 }
 
 const (
@@ -1859,6 +1863,24 @@ func reportPeriodInputRef(reportType, date, weekStart, weekEnd string) map[strin
 	return map[string]string{"date": date}
 }
 
+func reportContextPeriod(reportType, date, weekStart, weekEnd string) reportsource.Period {
+	if reportType == reportTypePersonalWeekly || reportType == reportTypeTeamWeekly || reportType == reportTypeDepartmentWeekly {
+		return reportsource.Period{Start: weekStart, End: weekEnd}
+	}
+	return reportsource.Period{Start: date, End: date}
+}
+
+func reportContextBuildRequest(userID, runID, reportType string, period reportsource.Period, timezone, triggerSource, modelID string, target reportTarget, selectionID string) reportcontext.BuildRequest {
+	return reportcontext.BuildRequest{
+		UserID: userID, RunID: runID, ReportType: reportType, Period: period,
+		Timezone: timezone, TriggerSource: triggerSource, ModelID: modelID,
+		Target: reportcontext.Target{
+			Type: target.Type, UserID: target.UserID, TeamID: target.TeamID, DepartmentID: target.DepartmentID,
+		},
+		SourceSelectionID: selectionID,
+	}
+}
+
 func reportWeekdayLabel(day time.Time) string {
 	labels := [...]string{"周日", "周一", "周二", "周三", "周四", "周五", "周六"}
 	return labels[day.Weekday()]
@@ -2548,7 +2570,8 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 		})
 		return
 	}
-	reportSourceAvailable := isPersonalReport && h.reportSource != nil
+	needsReportSourceSelection := req.ReportType == reportTypePersonalDaily ||
+		(req.ReportType == reportTypePersonalWeekly && (reportSourceSelectionID != "" || len(selectedSessionSliceKeys) > 0))
 
 	modelID := strings.TrimSpace(req.ModelID)
 	inputRef := map[string]any{
@@ -2567,20 +2590,16 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 		inputRef["credential_override_slots"] = sortedStringMapKeys(runtimeOverrides)
 		inputRef["credential_override"] = "redacted"
 	}
+	contextPeriod := reportContextPeriod(req.ReportType, date, weekStart, weekEnd)
 	var runID string
-	if reportSourceAvailable {
-		selectionPeriod, periodErr := reportsource.ReportPeriod(req.ReportType, date, weekStart, weekEnd)
-		if periodErr != nil {
-			writeReportSourceError(w, periodErr)
-			return
-		}
+	if needsReportSourceSelection && h.reportSource != nil {
 		if len(selectedSessionSliceKeys) > 0 {
 			inputs := make([]reportsource.SourceInput, 0, len(selectedSessionSliceKeys))
 			for _, sliceKey := range selectedSessionSliceKeys {
 				inputs = append(inputs, reportsource.SourceInput{SliceKey: sliceKey})
 			}
 			prepared, prepareErr := h.reportSource.CreateExplicit(
-				r.Context(), u.ID, req.ReportType, selectionPeriod, inputs,
+				r.Context(), u.ID, req.ReportType, contextPeriod, inputs,
 			)
 			if prepareErr != nil {
 				writeReportSourceError(w, prepareErr)
@@ -2590,7 +2609,7 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 		}
 		var attached reportsource.Selection
 		runID, attached, err = h.reportSource.CreateAttachedRun(
-			r.Context(), u.ID, req.ReportType, selectionPeriod, reportSourceSelectionID,
+			r.Context(), u.ID, req.ReportType, contextPeriod, reportSourceSelectionID,
 			reportAgentRunBusinessType, agentID, modelID, req.LargeContextConfirmed, inputRef,
 		)
 		if err != nil {
@@ -2598,20 +2617,6 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 			return
 		}
 		reportSourceSelectionID = attached.ID
-		var preparedContext reportcontext.StoredContext
-		if h.reportContext == nil {
-			err = fmt.Errorf("report context service is not configured")
-		} else {
-			preparedContext, err = h.reportContext.BuildPersonal(r.Context(), u.ID, runID, reportSourceSelectionID, req.ReportType, selectionPeriod, target)
-		}
-		if err != nil {
-			_ = h.markAIRunSubmitFailedContext(r.Context(), runID, u.ID, err.Error())
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "REPORT_CONTEXT_BUILD_FAILED", "error": "failed to prepare report context"})
-			return
-		}
-		inputRef["report_context_schema_version"] = reportcontext.SchemaVersion
-		inputRef["report_context_hash"] = preparedContext.Hash
-		inputRef["report_context_bytes"] = preparedContext.Bytes
 	} else {
 		runID, err = h.insertPendingManagedSessionAIRun(u.ID, reportAgentRunBusinessType, agentID, modelID, inputRef)
 	}
@@ -2619,6 +2624,22 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	var preparedContext reportcontext.StoredContext
+	if h.reportContext == nil {
+		err = fmt.Errorf("report context service is not configured")
+	} else {
+		preparedContext, err = h.reportContext.Build(r.Context(), reportContextBuildRequest(
+			u.ID, runID, req.ReportType, contextPeriod, biztime.Zone, "manual", modelID, target, reportSourceSelectionID,
+		))
+	}
+	if err != nil {
+		_ = h.markAIRunSubmitFailedContext(r.Context(), runID, u.ID, err.Error())
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "REPORT_CONTEXT_BUILD_FAILED", "error": "failed to prepare report context"})
+		return
+	}
+	inputRef["report_context_schema_version"] = reportcontext.SchemaVersion
+	inputRef["report_context_hash"] = preparedContext.Hash
+	inputRef["report_context_bytes"] = preparedContext.Bytes
 
 	credential, err := client.CreateCredential(r.Context(), service.CreateManagedCredentialRequest{
 		Name:  "Aida Report MCP Auth " + runID,
@@ -4091,42 +4112,41 @@ func (h *ManagedAgentHandler) executeReportAgentScheduleRun(ctx context.Context,
 	inputRef["mcp_server"] = h.defaults.ReportMCPSlug
 	inputRef["credential_slot"] = h.defaults.ReportMCPCredentialSlot
 	reportSourceSelectionID := ""
+	contextPeriod := reportContextPeriod(reportType, period.Date, period.WeekStart, period.WeekEnd)
 	var runID string
-	isPersonalReport := reportType == reportTypePersonalDaily || reportType == reportTypePersonalWeekly
-	if isPersonalReport && h.reportSource != nil {
-		selectionPeriod, periodErr := reportsource.ReportPeriod(reportType, period.Date, period.WeekStart, period.WeekEnd)
-		if periodErr != nil {
-			return nil, periodErr
-		}
+	if reportType == reportTypePersonalDaily && h.reportSource != nil {
 		var attached reportsource.Selection
 		runID, attached, err = h.reportSource.CreateAttachedRun(
-			ctx, u.ID, reportType, selectionPeriod, "", reportAgentRunBusinessType,
+			ctx, u.ID, reportType, contextPeriod, "", reportAgentRunBusinessType,
 			schedule.AgentID, modelID, true, inputRef,
 		)
 		if err != nil {
 			return nil, err
 		}
 		reportSourceSelectionID = attached.ID
-		var preparedContext reportcontext.StoredContext
-		if h.reportContext == nil {
-			err = fmt.Errorf("report context service is not configured")
-		} else {
-			preparedContext, err = h.reportContext.BuildPersonal(ctx, u.ID, runID, reportSourceSelectionID, reportType, selectionPeriod, target)
-		}
-		if err != nil {
-			_ = h.markAIRunSubmitFailedContext(ctx, runID, u.ID, err.Error())
-			_ = h.updateManagedScheduleAfterRun(ctx, schedule.ID, u.ID, runID, scheduledAt, err.Error(), advanceNext, schedule)
-			return h.loadAIRun(runID, u.ID)
-		}
-		inputRef["report_context_schema_version"] = reportcontext.SchemaVersion
-		inputRef["report_context_hash"] = preparedContext.Hash
-		inputRef["report_context_bytes"] = preparedContext.Bytes
 	} else {
 		runID, err = h.insertPendingManagedSessionAIRun(u.ID, reportAgentRunBusinessType, schedule.AgentID, modelID, inputRef)
 	}
 	if err != nil {
 		return nil, err
 	}
+	var preparedContext reportcontext.StoredContext
+	if h.reportContext == nil {
+		err = fmt.Errorf("report context service is not configured")
+	} else {
+		triggerSource, _ := inputRef["trigger_source"].(string)
+		preparedContext, err = h.reportContext.Build(ctx, reportContextBuildRequest(
+			u.ID, runID, reportType, contextPeriod, schedule.Timezone, triggerSource, modelID, target, reportSourceSelectionID,
+		))
+	}
+	if err != nil {
+		_ = h.markAIRunSubmitFailedContext(ctx, runID, u.ID, err.Error())
+		_ = h.updateManagedScheduleAfterRun(ctx, schedule.ID, u.ID, runID, scheduledAt, err.Error(), advanceNext, schedule)
+		return h.loadAIRun(runID, u.ID)
+	}
+	inputRef["report_context_schema_version"] = reportcontext.SchemaVersion
+	inputRef["report_context_hash"] = preparedContext.Hash
+	inputRef["report_context_bytes"] = preparedContext.Bytes
 	credential, err := client.CreateCredential(ctx, service.CreateManagedCredentialRequest{
 		Name:  "Aida Report MCP Auth " + runID,
 		Kind:  "secret",
