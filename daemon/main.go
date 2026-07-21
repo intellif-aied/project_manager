@@ -110,6 +110,11 @@ func main() {
 	os.Exit(run(os.Args[1:]))
 }
 
+func stdinIsInteractive() bool {
+	inputInfo, err := os.Stdin.Stat()
+	return err == nil && inputInfo.Mode()&os.ModeCharDevice != 0
+}
+
 func run(args []string) int {
 	if len(args) < 1 {
 		printUsage()
@@ -127,14 +132,16 @@ func run(args []string) int {
 
 	switch args[0] {
 	case "auto-sync":
-		inputInfo, err := os.Stdin.Stat()
-		interactive := err == nil && inputInfo.Mode()&os.ModeCharDevice != 0
-		return cmdAutoSyncCLI(args[1:], os.Stdin, os.Stdout, interactive)
+		return cmdAutoSyncCLI(args[1:], os.Stdin, os.Stdout, stdinIsInteractive())
 	case "login":
 		if !requireUpdate() {
 			return 3
 		}
-		return cmdLogin(args[1:])
+		code := cmdLogin(args[1:])
+		if code == 0 {
+			finishLoginAutoSync(os.Stdin, os.Stdout, stdinIsInteractive())
+		}
+		return code
 	case "sessions", "ls":
 		fmt.Fprintln(os.Stderr, "aida sessions 已移除，请使用 aida upload 查看并选择本地 Session。")
 		return 2
@@ -144,6 +151,7 @@ func run(args []string) int {
 		}
 		return cmdUpload(args[1:])
 	case "status":
+		_ = writeAutoSyncStatus(os.Stdout)
 		if !requireUpdate() {
 			return 3
 		}
