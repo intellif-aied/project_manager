@@ -160,6 +160,9 @@ func (m *sessionPickerModel) View() string {
 				truncateToDisplayWidth(compactSessionText(firstNonEmpty(session.Summary, "暂无摘要")), contentWidth))
 			fmt.Fprintf(&builder, "%s%s\n", lastPrefix,
 				truncateToDisplayWidth(firstNonEmpty(displayRecentSummary(session), "暂无消息"), contentWidth))
+			if position+1 < end {
+				builder.WriteByte('\n')
+			}
 		}
 	}
 	builder.WriteString(strings.Repeat("-", sessionPickerLineWidth(m.width)) + "\n")
@@ -214,7 +217,7 @@ func (m *sessionPickerModel) move(delta int) {
 }
 
 func (m *sessionPickerModel) visibleRows() int {
-	return max(2, (m.height-7)/2)
+	return max(2, (m.height-7)/3)
 }
 
 func (m *sessionPickerModel) visibleRange() (int, int) {

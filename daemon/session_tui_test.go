@@ -73,6 +73,26 @@ func TestSessionPickerShowsTwoLineSummaryAndFullSessionID(t *testing.T) {
 	}
 }
 
+func TestSessionPickerSeparatesSessionsWithBlankLine(t *testing.T) {
+	sessions := fakeSessionList(2)
+	sessions[0].RecentSummary = "first latest message"
+	model := newSessionPickerModel(sessions)
+	model.width = 120
+
+	view := model.View()
+	firstLatest := "first latest message"
+	secondSummary := compactSessionText(model.sessions[1].Summary)
+	if !strings.Contains(view, firstLatest+"\n\n") {
+		t.Fatalf("first Session is not followed by a blank line:\n%s", view)
+	}
+	if !strings.Contains(view, secondSummary) {
+		t.Fatalf("second Session missing from view:\n%s", view)
+	}
+	if got := model.visibleRows(); got != 7 {
+		t.Fatalf("visible rows=%d, want 7 for three-line Session entries", got)
+	}
+}
+
 func TestSessionPickerSearchesChildAgentPath(t *testing.T) {
 	root := testGroupedSession("root", "", 1)
 	child := testGroupedSession("child", "root", 2)
