@@ -31,7 +31,6 @@ func maybeAutoUpdate(cfg *Config) error {
 	if err != nil {
 		knownVersion := strings.TrimSpace(cfg.LastKnownVersion)
 		if knownVersion != "" && versionGreater(knownVersion, Version) {
-			fmt.Fprintf(os.Stderr, "Unable to refresh Aida version metadata; retrying required update %s -> %s.\n", Version, cfg.LastKnownVersion)
 			updated, updateErr := performSelfUpdateVersion(cfg)
 			if updateErr != nil {
 				return updateErr
@@ -40,18 +39,15 @@ func maybeAutoUpdate(cfg *Config) error {
 				return restartAfterUpdate()
 			}
 		}
-		fmt.Fprintf(os.Stderr, "Warning: unable to check for Aida updates: %v\n", err)
 		return nil
 	}
 	cfg.LastKnownVersion = latest
 	cfg.LastUpdateCheck = time.Now().UTC().Format(time.RFC3339)
-	if saveErr := saveConfig(cfg); saveErr != nil {
-		fmt.Fprintf(os.Stderr, "Warning: unable to cache Aida update status: %v\n", saveErr)
-	}
+	_ = saveConfig(cfg)
 	if !versionGreater(latest, Version) {
 		return nil
 	}
-	fmt.Printf("Aida update available: %s -> %s. Updating now...\n", Version, latest)
+	fmt.Printf("发现新版本 %s，正在更新...\n", latest)
 	updated, err := performSelfUpdateVersion(cfg)
 	if err != nil {
 		return err
@@ -70,19 +66,19 @@ func cmdUpdate() int {
 func cmdUpdateResult() (int, bool) {
 	cfg := loadConfig()
 	if strings.TrimSpace(cfg.ReleaseURL) == "" {
-		fmt.Println("Update unavailable: release_url is not configured. Re-run the installer once to enable self-update.")
+		fmt.Println("当前安装暂不支持自动更新，请重新运行 Aida 安装程序")
 		return 1, false
 	}
 	updated, err := performSelfUpdate(cfg)
 	if err != nil {
-		fmt.Printf("Update failed: %v\n", err)
+		fmt.Println("更新失败，请稍后重试")
 		return 1, false
 	}
 	if !updated {
-		fmt.Printf("aida v%s is already current.\n", Version)
+		fmt.Printf("当前已是最新版本：%s\n", Version)
 		return 0, false
 	}
-	fmt.Println("Update installed. The new version will be used on the next command.")
+	fmt.Println("Aida 更新完成")
 	return 0, true
 }
 
@@ -194,10 +190,10 @@ func restartAfterUpdate() error {
 		return fmt.Errorf("resolve updated executable: %w", err)
 	}
 	if runtime.GOOS == "windows" {
-		fmt.Println("Aida updated. Restarting the command...")
+		fmt.Println("Aida 已更新，正在继续...")
 		os.Exit(0)
 	}
-	fmt.Println("Aida updated. Restarting the command...")
+	fmt.Println("Aida 已更新，正在继续...")
 	command := exec.Command(executable, os.Args[1:]...)
 	command.Stdin = os.Stdin
 	command.Stdout = os.Stdout

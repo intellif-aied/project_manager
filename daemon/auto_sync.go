@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,12 +9,30 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"time"
 )
 
 var autoSyncNow = time.Now
 var autoSyncPlatform = runtime.GOOS
+
+const (
+	autoSyncConfigSchemaVersion = 2
+	autoSyncTimezone            = "Asia/Shanghai"
+)
+
+var autoSyncLocation = loadAutoSyncLocation()
+
+func loadAutoSyncLocation() *time.Location {
+	location, err := time.LoadLocation(autoSyncTimezone)
+	if err == nil {
+		return location
+	}
+	return time.FixedZone(autoSyncTimezone, 8*60*60)
+}
+
+func autoSyncBusinessTime(value time.Time) time.Time {
+	return value.In(autoSyncLocation)
+}
 
 var errAutoSyncSystemdUnavailable = errors.New("systemd user manager unavailable")
 var errAutoSyncLockHeld = errors.New("AutoSync lock already held")
@@ -32,6 +49,7 @@ type autoSyncConfig struct {
 	SchemaVersion       int    `json:"schema_version"`
 	Enabled             bool   `json:"enabled"`
 	DailyTime           string `json:"daily_time,omitempty"`
+	Timezone            string `json:"timezone,omitempty"`
 	ScheduleEffectiveAt string `json:"schedule_effective_at,omitempty"`
 }
 
@@ -49,8 +67,9 @@ func autoSyncDue(now time.Time, cfg autoSyncConfig, schedule autoSyncSchedule) b
 	if err != nil {
 		return false
 	}
-	target := time.Date(now.Year(), now.Month(), now.Day(), parsed.Hour(), parsed.Minute(), 0, 0, now.Location())
-	if now.Before(target) {
+	businessNow := autoSyncBusinessTime(now)
+	target := time.Date(businessNow.Year(), businessNow.Month(), businessNow.Day(), parsed.Hour(), parsed.Minute(), 0, 0, autoSyncLocation)
+	if businessNow.Before(target) {
 		return false
 	}
 	if cfg.ScheduleEffectiveAt != "" {
@@ -59,7 +78,7 @@ func autoSyncDue(now time.Time, cfg autoSyncConfig, schedule autoSyncSchedule) b
 			return false
 		}
 	}
-	if schedule.LastSuccessDate == now.Format("2006-01-02") {
+	if schedule.LastSuccessDate == businessNow.Format("2006-01-02") {
 		return false
 	}
 	if schedule.LastAttemptAt != "" {
@@ -94,7 +113,7 @@ func acquireAutoSyncNamedLock(name string) (func(), error) {
 func loadAutoSyncConfig() (autoSyncConfig, error) {
 	data, err := os.ReadFile(autoSyncConfigPath())
 	if os.IsNotExist(err) {
-		return autoSyncConfig{SchemaVersion: 1}, nil
+		return autoSyncConfig{SchemaVersion: autoSyncConfigSchemaVersion, Timezone: autoSyncTimezone}, nil
 	}
 	if err != nil {
 		return autoSyncConfig{}, err
@@ -104,13 +123,44 @@ func loadAutoSyncConfig() (autoSyncConfig, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return autoSyncConfig{}, err
 	}
+	if cfg.SchemaVersion < autoSyncConfigSchemaVersion || cfg.Timezone == "" {
+		cfg.SchemaVersion = autoSyncConfigSchemaVersion
+		cfg.Timezone = autoSyncTimezone
+		if cfg.Enabled && cfg.DailyTime != "" {
+			if parsed, parseErr := time.Parse("15:04", cfg.DailyTime); parseErr == nil {
+				now := autoSyncBusinessTime(autoSyncNow())
+				target := time.Date(now.Year(), now.Month(), now.Day(), parsed.Hour(), parsed.Minute(), 0, 0, autoSyncLocation)
+				if !now.Before(target) {
+					target = now
+				}
+				cfg.ScheduleEffectiveAt = target.Format(time.RFC3339)
+			}
+		}
+		if err := saveAutoSyncConfig(cfg); err != nil {
+			return autoSyncConfig{}, err
+		}
+	}
 	return cfg, nil
 }
 
-func saveAutoSyncConfig(cfg autoSyncConfig) error {
-	if cfg.SchemaVersion == 0 {
-		cfg.SchemaVersion = 1
+func autoSyncConfigNeedsMigration() bool {
+	data, err := os.ReadFile(autoSyncConfigPath())
+	if err != nil {
+		return false
 	}
+	var stored struct {
+		SchemaVersion int    `json:"schema_version"`
+		Timezone      string `json:"timezone"`
+	}
+	if json.Unmarshal(data, &stored) != nil {
+		return false
+	}
+	return stored.SchemaVersion < autoSyncConfigSchemaVersion || stored.Timezone == ""
+}
+
+func saveAutoSyncConfig(cfg autoSyncConfig) error {
+	cfg.SchemaVersion = autoSyncConfigSchemaVersion
+	cfg.Timezone = autoSyncTimezone
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
@@ -214,14 +264,14 @@ func runAutoSyncOnce(now time.Time, execute func() int) (bool, error) {
 	if !autoSyncDue(now, cfg, schedule) {
 		return false, nil
 	}
-	schedule.LastAttemptAt = now.Format(time.RFC3339)
+	schedule.LastAttemptAt = now.UTC().Format(time.RFC3339)
 	if err := saveAutoSyncSchedule(schedule); err != nil {
 		return false, err
 	}
 	if code := execute(); code != 0 {
 		return true, fmt.Errorf("automatic Session upload exited with code %d", code)
 	}
-	schedule.LastSuccessDate = now.Format("2006-01-02")
+	schedule.LastSuccessDate = autoSyncBusinessTime(now).Format("2006-01-02")
 	if err := saveAutoSyncSchedule(schedule); err != nil {
 		return true, err
 	}
@@ -337,18 +387,19 @@ func cmdAutoSyncCLI(args []string, input io.Reader, output io.Writer, interactiv
 		fmt.Fprintln(output, "开启自动 Session 同步需要交互式终端，请运行 aida auto-sync enable")
 		return 2
 	}
+	if len(args) == 1 && (args[0] == "enable" || args[0] == "status" || args[0] == "set-time") {
+		_ = ensureAutoSyncBackground()
+	}
 	return cmdAutoSync(args, input, output)
 }
 
 func finishLoginAutoSync(input io.Reader, output io.Writer, interactive bool) {
 	cfg, err := loadAutoSyncConfig()
 	if err != nil {
-		fmt.Fprintf(output, "读取自动 Session 同步状态失败：%v\n", err)
+		fmt.Fprintln(output, "无法读取自动同步设置，请运行 aida status 检查")
 		return
 	}
 	if cfg.Enabled {
-		fmt.Fprintln(output, "自动 Session 同步：已开启")
-		fmt.Fprintf(output, "每日同步时间：%s（本机时间）\n", cfg.DailyTime)
 		return
 	}
 	if !interactive {
@@ -364,6 +415,7 @@ func ensureAutoSyncBackground() error {
 		return err
 	}
 	defer release()
+	needsRestart := autoSyncConfigNeedsMigration()
 	cfg, err := loadAutoSyncConfig()
 	if err != nil {
 		return err
@@ -374,7 +426,13 @@ func ensureAutoSyncBackground() error {
 	if err := autoSyncCheckBackgroundSupport(); err != nil {
 		return err
 	}
-	return autoSyncStartBackground()
+	if err := autoSyncStartBackground(); err != nil {
+		return err
+	}
+	if needsRestart {
+		return autoSyncRestartBackground()
+	}
+	return nil
 }
 
 func restartAutoSyncAfterUpdate() error {
@@ -391,12 +449,12 @@ func restartAutoSyncAfterUpdate() error {
 func writeAutoSyncStatus(output io.Writer) int {
 	cfg, err := loadAutoSyncConfig()
 	if err != nil {
-		fmt.Fprintf(output, "读取自动 Session 同步状态失败：%v\n", err)
+		fmt.Fprintln(output, "无法读取自动同步设置，请运行 aida status 检查")
 		return 1
 	}
 	if cfg.Enabled {
 		fmt.Fprintln(output, "自动 Session 同步：已开启")
-		fmt.Fprintf(output, "每日同步时间：%s（本机时间）\n", cfg.DailyTime)
+		fmt.Fprintf(output, "每日同步时间：%s（北京时间）\n", cfg.DailyTime)
 	} else {
 		fmt.Fprintln(output, "自动 Session 同步：未开启")
 		fmt.Fprintln(output, "开启方式：aida auto-sync enable")
@@ -406,11 +464,14 @@ func writeAutoSyncStatus(output io.Writer) int {
 
 func cmdAutoSync(args []string, input io.Reader, output io.Writer) int {
 	if len(args) != 1 {
-		fmt.Fprintln(output, "Usage: aida auto-sync <enable|status|set-time|disable>")
+		writeAutoSyncHelp(output)
 		return 2
 	}
 
 	switch args[0] {
+	case "help", "--help", "-h":
+		writeAutoSyncHelp(output)
+		return 0
 	case "daemon-run":
 		return autoSyncRunDaemon()
 	case "execute":
@@ -419,7 +480,7 @@ func cmdAutoSync(args []string, input io.Reader, output io.Writer) int {
 		return cmdUpload([]string{"--all"})
 	case "ensure":
 		if err := ensureAutoSyncBackground(); err != nil {
-			fmt.Fprintf(output, "自动 Session 同步后台自检失败：%v\n", err)
+			fmt.Fprintln(output, "自动同步暂时不可用，请运行 aida status 检查")
 			return 1
 		}
 		return 0
@@ -428,63 +489,54 @@ func cmdAutoSync(args []string, input io.Reader, output io.Writer) int {
 	case "enable":
 		cfg, err := loadAutoSyncConfig()
 		if err != nil {
-			fmt.Fprintf(output, "读取自动 Session 同步状态失败：%v\n", err)
+			fmt.Fprintln(output, "无法读取自动同步设置，请运行 aida status 检查")
 			return 1
 		}
 		if cfg.Enabled {
-			fmt.Fprintln(output, "自动 Session 同步已经开启")
-			fmt.Fprintf(output, "每日同步时间：%s（本机时间）\n", cfg.DailyTime)
-			fmt.Fprintln(output, "修改时间：aida auto-sync set-time")
-			fmt.Fprintln(output, "关闭方式：aida auto-sync disable")
+			fmt.Fprintf(output, "自动同步已开启，每天 %s（北京时间）\n", cfg.DailyTime)
 			return 0
 		}
 		if err := autoSyncCheckBackgroundSupport(); err != nil {
 			if errors.Is(err, errAutoSyncSystemdUnavailable) {
-				if autoSyncPlatform != "linux" {
-					fmt.Fprintln(output, "当前平台暂不支持自动 Session 同步；首期仅支持具备 systemd user manager 的 Linux")
-				} else {
-					fmt.Fprintln(output, "当前 Linux 环境缺少可用的 systemd user manager，暂不支持自动 Session 同步")
-				}
+				fmt.Fprintln(output, "当前环境暂不支持自动同步")
 				return 2
 			}
-			fmt.Fprintf(output, "检测自动 Session 同步运行环境失败：%v\n", err)
+			fmt.Fprintln(output, "无法检查自动同步运行环境，请运行 aida status 检查")
 			return 1
 		}
 
-		reader := bufio.NewReader(input)
-		fmt.Fprintln(output, "开启后，Aida 将在你选择的每日时间自动上传全部 Session。")
-		fmt.Fprintln(output, "如果错过该时间，将在 Aida 恢复运行后第一时间补传。")
-		fmt.Fprintln(output, "是否继续？[y/N]")
-		confirmation, _ := reader.ReadString('\n')
-		if !strings.EqualFold(strings.TrimSpace(confirmation), "y") {
+		enabled, cancelled, chooseErr := autoSyncChooseEnable(input, output)
+		if chooseErr != nil {
+			fmt.Fprintln(output, "无法完成自动同步设置，请重试")
+			return 1
+		}
+		if cancelled || !enabled {
 			fmt.Fprintln(output, "自动 Session 同步保持未开启")
 			return 0
 		}
 
-		var value string
-		var parsed time.Time
-		for {
-			fmt.Fprintln(output, "请选择每天同步时间（HH:MM，按本机时间）：")
-			line, readErr := reader.ReadString('\n')
-			if readErr != nil && len(line) == 0 {
-				fmt.Fprintln(output, "自动 Session 同步保持未开启")
-				return 0
-			}
-			value = strings.TrimSpace(line)
-			parsed, err = time.Parse("15:04", value)
-			if err == nil && parsed.Format("15:04") == value {
-				break
-			}
-			fmt.Fprintln(output, "时间格式无效，请使用 HH:MM，例如 18:00")
+		value, cancelled, chooseErr := autoSyncChooseTime("18:00", input, output)
+		if chooseErr != nil {
+			fmt.Fprintln(output, "无法完成时间设置，请重试")
+			return 1
+		}
+		if cancelled {
+			fmt.Fprintln(output, "自动 Session 同步保持未开启")
+			return 0
+		}
+		parsed, err := time.Parse("15:04", value)
+		if err != nil {
+			fmt.Fprintln(output, "无法完成时间设置，请重试")
+			return 1
 		}
 
-		now := autoSyncNow()
-		effectiveAt := time.Date(now.Year(), now.Month(), now.Day(), parsed.Hour(), parsed.Minute(), 0, 0, now.Location())
+		now := autoSyncBusinessTime(autoSyncNow())
+		effectiveAt := time.Date(now.Year(), now.Month(), now.Day(), parsed.Hour(), parsed.Minute(), 0, 0, autoSyncLocation)
 		var pastChoice *autoSyncStartChoice
 		if effectiveAt.Before(now) {
 			choice, cancelled, chooseErr := autoSyncChoosePastTime(value, input, output)
 			if chooseErr != nil {
-				fmt.Fprintf(output, "选择首次同步时间失败：%v\n", chooseErr)
+				fmt.Fprintln(output, "无法完成首次同步设置，请重试")
 				return 1
 			}
 			if cancelled {
@@ -510,33 +562,31 @@ func cmdAutoSync(args []string, input io.Reader, output io.Writer) int {
 		defer releaseStart()
 		latestConfig, err := loadAutoSyncConfig()
 		if err != nil {
-			fmt.Fprintf(output, "读取自动 Session 同步状态失败：%v\n", err)
+			fmt.Fprintln(output, "无法读取自动同步设置，请运行 aida status 检查")
 			return 1
 		}
 		if latestConfig.Enabled {
-			fmt.Fprintln(output, "自动 Session 同步已经开启")
-			fmt.Fprintf(output, "每日同步时间：%s（本机时间）\n", latestConfig.DailyTime)
+			fmt.Fprintf(output, "自动同步已开启，每天 %s（北京时间）\n", latestConfig.DailyTime)
 			return 0
 		}
 		if err := saveAutoSyncConfig(cfg); err != nil {
-			fmt.Fprintf(output, "开启自动 Session 同步失败：%v\n", err)
+			fmt.Fprintln(output, "自动同步开启失败，请运行 aida status 检查")
 			return 1
 		}
 		if err := autoSyncStartBackground(); err != nil {
 			cfg.Enabled = false
 			_ = saveAutoSyncConfig(cfg)
-			fmt.Fprintf(output, "开启自动 Session 同步失败：%v\n", err)
+			fmt.Fprintln(output, "自动同步开启失败，请运行 aida status 检查")
 			return 1
 		}
 
-		fmt.Fprintln(output, "自动 Session 同步已开启")
-		fmt.Fprintf(output, "每天 %s（本机时间）自动上传全部 Session\n", value)
-		fmt.Fprintln(output, "如果错过该时间，将在 Aida 恢复运行后第一时间补传")
+		fmt.Fprintln(output, "自动同步已开启")
+		fmt.Fprintf(output, "每天 %s（北京时间）同步 Session\n", value)
 		if pastChoice != nil {
 			if *pastChoice == autoSyncStartImmediate {
 				fmt.Fprintln(output, "今天将立即同步一次")
 			} else {
-				fmt.Fprintf(output, "首次自动同步：明天 %s（本机时间）\n", value)
+				fmt.Fprintf(output, "首次自动同步：明天 %s（北京时间）\n", value)
 			}
 		}
 		return 0
@@ -549,7 +599,7 @@ func cmdAutoSync(args []string, input io.Reader, output io.Writer) int {
 		defer releaseStart()
 		cfg, err := loadAutoSyncConfig()
 		if err != nil {
-			fmt.Fprintf(output, "读取自动 Session 同步状态失败：%v\n", err)
+			fmt.Fprintln(output, "无法读取自动同步设置，请运行 aida status 检查")
 			return 1
 		}
 		if !cfg.Enabled {
@@ -558,20 +608,19 @@ func cmdAutoSync(args []string, input io.Reader, output io.Writer) int {
 		}
 		cfg.Enabled = false
 		if err := saveAutoSyncConfig(cfg); err != nil {
-			fmt.Fprintf(output, "关闭自动 Session 同步失败：%v\n", err)
+			fmt.Fprintln(output, "自动同步关闭失败，请运行 aida status 检查")
 			return 1
 		}
 		if err := autoSyncStopBackground(); err != nil {
-			fmt.Fprintf(output, "自动 Session 同步已关闭，但停止后台服务失败：%v\n", err)
+			fmt.Fprintln(output, "自动同步关闭未完全生效，请运行 aida status 检查")
 			return 1
 		}
-		fmt.Fprintln(output, "自动 Session 同步已关闭")
-		fmt.Fprintln(output, "你仍可使用 aida upload 或 aida upload --all 手动上传 Session")
+		fmt.Fprintln(output, "自动同步已关闭")
 		return 0
 	case "set-time":
 		cfg, err := loadAutoSyncConfig()
 		if err != nil {
-			fmt.Fprintf(output, "读取自动 Session 同步状态失败：%v\n", err)
+			fmt.Fprintln(output, "无法读取自动同步设置，请运行 aida status 检查")
 			return 1
 		}
 		if !cfg.Enabled {
@@ -579,32 +628,29 @@ func cmdAutoSync(args []string, input io.Reader, output io.Writer) int {
 			return 1
 		}
 
-		fmt.Fprintf(output, "当前每日同步时间：%s（本机时间）\n", cfg.DailyTime)
-		reader := bufio.NewReader(input)
-		var value string
-		var parsed time.Time
-		for {
-			fmt.Fprintln(output, "请输入新的每日同步时间（HH:MM，按本机时间）：")
-			line, readErr := reader.ReadString('\n')
-			if readErr != nil && len(line) == 0 {
-				fmt.Fprintln(output, "未修改每日同步时间")
-				return 0
-			}
-			value = strings.TrimSpace(line)
-			parsed, err = time.Parse("15:04", value)
-			if err == nil && parsed.Format("15:04") == value {
-				break
-			}
-			fmt.Fprintln(output, "时间格式无效，请使用 HH:MM，例如 18:00")
+		fmt.Fprintf(output, "当前每日同步时间：%s（北京时间）\n", cfg.DailyTime)
+		value, cancelled, chooseErr := autoSyncChooseTime(cfg.DailyTime, input, output)
+		if chooseErr != nil {
+			fmt.Fprintln(output, "无法完成时间设置，请重试")
+			return 1
+		}
+		if cancelled {
+			fmt.Fprintln(output, "未修改每日同步时间")
+			return 0
+		}
+		parsed, err := time.Parse("15:04", value)
+		if err != nil {
+			fmt.Fprintln(output, "无法完成时间设置，请重试")
+			return 1
 		}
 
-		now := autoSyncNow()
-		effectiveAt := time.Date(now.Year(), now.Month(), now.Day(), parsed.Hour(), parsed.Minute(), 0, 0, now.Location())
+		now := autoSyncBusinessTime(autoSyncNow())
+		effectiveAt := time.Date(now.Year(), now.Month(), now.Day(), parsed.Hour(), parsed.Minute(), 0, 0, autoSyncLocation)
 		var pastChoice *autoSyncStartChoice
 		if effectiveAt.Before(now) {
 			choice, cancelled, err := autoSyncChoosePastTime(value, input, output)
 			if err != nil {
-				fmt.Fprintf(output, "选择首次同步时间失败：%v\n", err)
+				fmt.Fprintln(output, "无法完成首次同步设置，请重试")
 				return 1
 			}
 			if cancelled {
@@ -628,7 +674,7 @@ func cmdAutoSync(args []string, input io.Reader, output io.Writer) int {
 		defer releaseStart()
 		latestConfig, err := loadAutoSyncConfig()
 		if err != nil {
-			fmt.Fprintf(output, "读取自动 Session 同步状态失败：%v\n", err)
+			fmt.Fprintln(output, "无法读取自动同步设置，请运行 aida status 检查")
 			return 1
 		}
 		if !latestConfig.Enabled {
@@ -639,20 +685,34 @@ func cmdAutoSync(args []string, input io.Reader, output io.Writer) int {
 		cfg.DailyTime = value
 		cfg.ScheduleEffectiveAt = effectiveAt.Format(time.RFC3339)
 		if err := saveAutoSyncConfig(cfg); err != nil {
-			fmt.Fprintf(output, "修改每日同步时间失败：%v\n", err)
+			fmt.Fprintln(output, "同步时间修改失败，请运行 aida status 检查")
 			return 1
 		}
-		fmt.Fprintf(output, "每日同步时间已更新为 %s（本机时间）\n", value)
+		fmt.Fprintf(output, "同步时间已改为每天 %s（北京时间）\n", value)
 		if pastChoice != nil {
 			if *pastChoice == autoSyncStartImmediate {
 				fmt.Fprintln(output, "今天将立即同步一次")
 			} else {
-				fmt.Fprintf(output, "首次自动同步：明天 %s（本机时间）\n", value)
+				fmt.Fprintf(output, "首次自动同步：明天 %s（北京时间）\n", value)
 			}
 		}
 		return 0
 	}
 
-	fmt.Fprintln(output, "Usage: aida auto-sync <enable|status|set-time|disable>")
+	writeAutoSyncHelp(output)
 	return 2
+}
+
+func writeAutoSyncHelp(output io.Writer) {
+	fmt.Fprint(output, `自动同步 Session
+
+用法：
+  aida auto-sync <命令>
+
+命令：
+  enable      开启自动同步
+  status      查看自动同步状态
+  set-time    修改每天的同步时间
+  disable     关闭自动同步
+`)
 }

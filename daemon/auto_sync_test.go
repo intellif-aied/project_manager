@@ -36,17 +36,21 @@ func TestAutoSyncSetTimeUpdatesFutureSchedule(t *testing.T) {
 	}
 	oldNow := autoSyncNow
 	autoSyncNow = func() time.Time {
-		return time.Date(2026, 7, 21, 18, 30, 0, 0, time.UTC)
+		return time.Date(2026, 7, 21, 10, 30, 0, 0, time.UTC)
 	}
 	t.Cleanup(func() { autoSyncNow = oldNow })
+	oldTimeChooser := autoSyncChooseTime
+	autoSyncChooseTime = func(string, io.Reader, io.Writer) (string, bool, error) {
+		return "19:00", false, nil
+	}
+	t.Cleanup(func() { autoSyncChooseTime = oldTimeChooser })
 
 	var output bytes.Buffer
-	if code := cmdAutoSync([]string{"set-time"}, strings.NewReader("19:00\n"), &output); code != 0 {
+	if code := cmdAutoSync([]string{"set-time"}, strings.NewReader(""), &output); code != 0 {
 		t.Fatalf("set-time exit code = %d, want 0; output=%q", code, output.String())
 	}
-	want := "当前每日同步时间：18:00（本机时间）\n" +
-		"请输入新的每日同步时间（HH:MM，按本机时间）：\n" +
-		"每日同步时间已更新为 19:00（本机时间）\n"
+	want := "当前每日同步时间：18:00（北京时间）\n" +
+		"同步时间已改为每天 19:00（北京时间）\n"
 	if output.String() != want {
 		t.Fatalf("set-time output = %q, want %q", output.String(), want)
 	}
@@ -55,29 +59,35 @@ func TestAutoSyncSetTimeUpdatesFutureSchedule(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.DailyTime != "19:00" || cfg.ScheduleEffectiveAt != "2026-07-21T19:00:00Z" {
+	if cfg.DailyTime != "19:00" || cfg.ScheduleEffectiveAt != "2026-07-21T19:00:00+08:00" || cfg.Timezone != autoSyncTimezone {
 		t.Fatalf("saved config = %+v", cfg)
 	}
 }
 
-func TestAutoSyncSetTimeRepromptsAfterInvalidValue(t *testing.T) {
+func TestAutoSyncSetTimeCancellationKeepsCurrentValue(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	if err := saveAutoSyncConfig(autoSyncConfig{SchemaVersion: 1, Enabled: true, DailyTime: "18:00"}); err != nil {
 		t.Fatal(err)
 	}
-	oldNow := autoSyncNow
-	autoSyncNow = func() time.Time { return time.Date(2026, 7, 21, 18, 30, 0, 0, time.UTC) }
-	t.Cleanup(func() { autoSyncNow = oldNow })
+	oldTimeChooser := autoSyncChooseTime
+	autoSyncChooseTime = func(string, io.Reader, io.Writer) (string, bool, error) {
+		return "", true, nil
+	}
+	t.Cleanup(func() { autoSyncChooseTime = oldTimeChooser })
 
 	var output bytes.Buffer
-	if code := cmdAutoSync([]string{"set-time"}, strings.NewReader("bad\n19:00\n"), &output); code != 0 {
+	if code := cmdAutoSync([]string{"set-time"}, strings.NewReader(""), &output); code != 0 {
 		t.Fatalf("set-time exit code = %d; output=%q", code, output.String())
 	}
-	if strings.Count(output.String(), "请输入新的每日同步时间") != 2 {
-		t.Fatalf("set-time did not reprompt: %q", output.String())
-	}
-	if !strings.Contains(output.String(), "时间格式无效") {
+	if !strings.Contains(output.String(), "未修改每日同步时间") {
 		t.Fatalf("set-time output = %q", output.String())
+	}
+	cfg, err := loadAutoSyncConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DailyTime != "18:00" {
+		t.Fatalf("daily time = %q, want unchanged", cfg.DailyTime)
 	}
 }
 
@@ -92,7 +102,7 @@ func TestAutoSyncSetPastTimeCanStartTomorrow(t *testing.T) {
 	}
 	oldNow := autoSyncNow
 	autoSyncNow = func() time.Time {
-		return time.Date(2026, 7, 21, 18, 30, 0, 0, time.UTC)
+		return time.Date(2026, 7, 21, 10, 30, 0, 0, time.UTC)
 	}
 	t.Cleanup(func() { autoSyncNow = oldNow })
 	oldChooser := autoSyncChoosePastTime
@@ -100,19 +110,24 @@ func TestAutoSyncSetPastTimeCanStartTomorrow(t *testing.T) {
 		return autoSyncStartTomorrow, false, nil
 	}
 	t.Cleanup(func() { autoSyncChoosePastTime = oldChooser })
+	oldTimeChooser := autoSyncChooseTime
+	autoSyncChooseTime = func(string, io.Reader, io.Writer) (string, bool, error) {
+		return "18:00", false, nil
+	}
+	t.Cleanup(func() { autoSyncChooseTime = oldTimeChooser })
 
 	var output bytes.Buffer
-	if code := cmdAutoSync([]string{"set-time"}, strings.NewReader("18:00\n"), &output); code != 0 {
+	if code := cmdAutoSync([]string{"set-time"}, strings.NewReader(""), &output); code != 0 {
 		t.Fatalf("set-time exit code = %d, want 0; output=%q", code, output.String())
 	}
 	cfg, err := loadAutoSyncConfig()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.ScheduleEffectiveAt != "2026-07-22T18:00:00Z" {
+	if cfg.ScheduleEffectiveAt != "2026-07-22T18:00:00+08:00" {
 		t.Fatalf("schedule effective at = %q, want next day", cfg.ScheduleEffectiveAt)
 	}
-	if !strings.Contains(output.String(), "首次自动同步：明天 18:00（本机时间）") {
+	if !strings.Contains(output.String(), "首次自动同步：明天 18:00（北京时间）") {
 		t.Fatalf("set-time output = %q", output.String())
 	}
 }
@@ -124,26 +139,35 @@ func TestAutoSyncEnablePersistsFutureScheduleAfterConfirmation(t *testing.T) {
 	t.Cleanup(func() { autoSyncCheckBackgroundSupport = oldChecker })
 	oldNow := autoSyncNow
 	autoSyncNow = func() time.Time {
-		return time.Date(2026, 7, 21, 18, 30, 0, 0, time.UTC)
+		return time.Date(2026, 7, 21, 10, 30, 0, 0, time.UTC)
 	}
 	t.Cleanup(func() { autoSyncNow = oldNow })
 	oldStarter := autoSyncStartBackground
 	autoSyncStartBackground = func() error { return nil }
 	t.Cleanup(func() { autoSyncStartBackground = oldStarter })
+	oldEnableChooser := autoSyncChooseEnable
+	autoSyncChooseEnable = func(io.Reader, io.Writer) (bool, bool, error) {
+		return true, false, nil
+	}
+	t.Cleanup(func() { autoSyncChooseEnable = oldEnableChooser })
+	oldTimeChooser := autoSyncChooseTime
+	autoSyncChooseTime = func(string, io.Reader, io.Writer) (string, bool, error) {
+		return "19:00", false, nil
+	}
+	t.Cleanup(func() { autoSyncChooseTime = oldTimeChooser })
 
 	var output bytes.Buffer
-	if code := cmdAutoSync([]string{"enable"}, strings.NewReader("y\n19:00\n"), &output); code != 0 {
+	if code := cmdAutoSync([]string{"enable"}, strings.NewReader(""), &output); code != 0 {
 		t.Fatalf("enable exit code = %d, want 0; output=%q", code, output.String())
 	}
 	cfg, err := loadAutoSyncConfig()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.Enabled || cfg.DailyTime != "19:00" || cfg.ScheduleEffectiveAt != "2026-07-21T19:00:00Z" {
+	if !cfg.Enabled || cfg.DailyTime != "19:00" || cfg.ScheduleEffectiveAt != "2026-07-21T19:00:00+08:00" {
 		t.Fatalf("saved config = %+v", cfg)
 	}
-	if !strings.Contains(output.String(), "自动 Session 同步已开启") ||
-		!strings.Contains(output.String(), "每天 19:00（本机时间）自动上传全部 Session") {
+	if output.String() != "自动同步已开启\n每天 19:00（北京时间）同步 Session\n" {
 		t.Fatalf("enable output = %q", output.String())
 	}
 }
@@ -160,7 +184,7 @@ func TestAutoSyncEnableRejectsLinuxWithoutSystemdUserManager(t *testing.T) {
 	if code != 2 {
 		t.Fatalf("unsupported Linux enable exit code = %d, want 2", code)
 	}
-	want := "当前 Linux 环境缺少可用的 systemd user manager，暂不支持自动 Session 同步\n"
+	want := "当前环境暂不支持自动同步\n"
 	if output.String() != want {
 		t.Fatalf("unsupported Linux output = %q, want %q", output.String(), want)
 	}
@@ -183,7 +207,7 @@ func TestAutoSyncEnableReportsUnsupportedNonLinuxPlatform(t *testing.T) {
 	if code != 2 {
 		t.Fatalf("unsupported platform exit code = %d, want 2", code)
 	}
-	want := "当前平台暂不支持自动 Session 同步；首期仅支持具备 systemd user manager 的 Linux\n"
+	want := "当前环境暂不支持自动同步\n"
 	if output.String() != want {
 		t.Fatalf("unsupported platform output = %q, want %q", output.String(), want)
 	}
@@ -202,7 +226,7 @@ func TestAutoSyncEnableShowsExistingStateBeforeSupportCheck(t *testing.T) {
 	if code := cmdAutoSync([]string{"enable"}, strings.NewReader(""), &output); code != 0 {
 		t.Fatalf("enable exit code = %d, want 0", code)
 	}
-	if !strings.Contains(output.String(), "自动 Session 同步已经开启") {
+	if output.String() != "自动同步已开启，每天 18:00（北京时间）\n" {
 		t.Fatalf("enable output = %q", output.String())
 	}
 }
@@ -283,7 +307,7 @@ func TestRunStatusPrintsAutoSyncBeforeRequiredUpdateFailure(t *testing.T) {
 	if code != 3 {
 		t.Fatalf("status exit code = %d, want update failure 3", code)
 	}
-	if !strings.Contains(string(output), "自动 Session 同步：已开启\n每日同步时间：18:00（本机时间）") {
+	if !strings.Contains(string(output), "自动 Session 同步：已开启\n每日同步时间：18:00（北京时间）") {
 		t.Fatalf("status output = %q", string(output))
 	}
 }
@@ -304,7 +328,7 @@ func TestAutoSyncStatusReportsEnabledSchedule(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("status exit code = %d, want 0", code)
 	}
-	want := "自动 Session 同步：已开启\n每日同步时间：18:00（本机时间）\n"
+	want := "自动 Session 同步：已开启\n每日同步时间：18:00（北京时间）\n"
 	if output.String() != want {
 		t.Fatalf("status output = %q, want %q", output.String(), want)
 	}
@@ -327,7 +351,7 @@ func TestAutoSyncDisablePersistsUserChoice(t *testing.T) {
 	if code := cmdAutoSync([]string{"disable"}, strings.NewReader(""), &output); code != 0 {
 		t.Fatalf("disable exit code = %d, want 0", code)
 	}
-	want := "自动 Session 同步已关闭\n你仍可使用 aida upload 或 aida upload --all 手动上传 Session\n"
+	want := "自动同步已关闭\n"
 	if output.String() != want {
 		t.Fatalf("disable output = %q, want %q", output.String(), want)
 	}
@@ -363,13 +387,43 @@ func TestAutoSyncDisableIsIdempotentWhenAlreadyDisabled(t *testing.T) {
 	}
 }
 
+func TestAutoSyncMigratesLegacyLocalTimeToBeijingTime(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if err := os.MkdirAll(autoSyncDir(), 0700); err != nil {
+		t.Fatal(err)
+	}
+	legacy := []byte(`{"schema_version":1,"enabled":true,"daily_time":"15:35","schedule_effective_at":"2026-07-21T15:35:00Z"}`)
+	if err := os.WriteFile(autoSyncConfigPath(), legacy, 0600); err != nil {
+		t.Fatal(err)
+	}
+	oldNow := autoSyncNow
+	autoSyncNow = func() time.Time {
+		return time.Date(2026, 7, 21, 7, 36, 0, 0, time.UTC)
+	}
+	t.Cleanup(func() { autoSyncNow = oldNow })
+
+	cfg, err := loadAutoSyncConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SchemaVersion != autoSyncConfigSchemaVersion || cfg.Timezone != autoSyncTimezone {
+		t.Fatalf("migrated config = %+v", cfg)
+	}
+	if cfg.DailyTime != "15:35" || cfg.ScheduleEffectiveAt != "2026-07-21T15:36:00+08:00" {
+		t.Fatalf("migrated schedule = %+v", cfg)
+	}
+	if !autoSyncDue(autoSyncNow(), cfg, autoSyncSchedule{}) {
+		t.Fatal("migrated overdue schedule should run immediately")
+	}
+}
+
 func TestAutoSyncDueFollowsDailySuccessAndRetryRules(t *testing.T) {
-	now := time.Date(2026, 7, 21, 18, 30, 0, 0, time.UTC)
+	now := time.Date(2026, 7, 21, 10, 30, 0, 0, time.UTC)
 	baseConfig := autoSyncConfig{
 		SchemaVersion:       1,
 		Enabled:             true,
 		DailyTime:           "18:00",
-		ScheduleEffectiveAt: "2026-07-20T18:00:00Z",
+		ScheduleEffectiveAt: "2026-07-20T18:00:00+08:00",
 	}
 
 	tests := []struct {
@@ -380,10 +434,10 @@ func TestAutoSyncDueFollowsDailySuccessAndRetryRules(t *testing.T) {
 		want     bool
 	}{
 		{name: "due after daily time", now: now, cfg: baseConfig, want: true},
-		{name: "not due before daily time", now: time.Date(2026, 7, 21, 17, 59, 0, 0, time.UTC), cfg: baseConfig, want: false},
+		{name: "not due before daily time", now: time.Date(2026, 7, 21, 9, 59, 0, 0, time.UTC), cfg: baseConfig, want: false},
 		{name: "not due after success today", now: now, cfg: baseConfig, schedule: autoSyncSchedule{LastSuccessDate: "2026-07-21"}, want: false},
-		{name: "not due within retry interval", now: now, cfg: baseConfig, schedule: autoSyncSchedule{LastAttemptAt: "2026-07-21T18:29:30Z"}, want: false},
-		{name: "not due before schedule becomes effective", now: now, cfg: autoSyncConfig{SchemaVersion: 1, Enabled: true, DailyTime: "18:00", ScheduleEffectiveAt: "2026-07-22T18:00:00Z"}, want: false},
+		{name: "not due within retry interval", now: now, cfg: baseConfig, schedule: autoSyncSchedule{LastAttemptAt: "2026-07-21T10:29:30Z"}, want: false},
+		{name: "not due before schedule becomes effective", now: now, cfg: autoSyncConfig{SchemaVersion: 2, Enabled: true, DailyTime: "18:00", ScheduleEffectiveAt: "2026-07-22T18:00:00+08:00"}, want: false},
 	}
 
 	for _, test := range tests {
@@ -397,12 +451,12 @@ func TestAutoSyncDueFollowsDailySuccessAndRetryRules(t *testing.T) {
 
 func TestAutoSyncRunOnceRecordsDailySuccess(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	now := time.Date(2026, 7, 21, 18, 30, 0, 0, time.UTC)
+	now := time.Date(2026, 7, 21, 10, 30, 0, 0, time.UTC)
 	if err := saveAutoSyncConfig(autoSyncConfig{
 		SchemaVersion:       1,
 		Enabled:             true,
 		DailyTime:           "18:00",
-		ScheduleEffectiveAt: "2026-07-20T18:00:00Z",
+		ScheduleEffectiveAt: "2026-07-20T18:00:00+08:00",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -475,6 +529,44 @@ func TestAutoSyncEnsureRespectsDisabledChoice(t *testing.T) {
 	}
 	if starts != 1 {
 		t.Fatalf("background starts = %d, want 1", starts)
+	}
+}
+
+func TestAutoSyncEnsureRestartsBackgroundAfterTimezoneMigration(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if err := os.MkdirAll(autoSyncDir(), 0700); err != nil {
+		t.Fatal(err)
+	}
+	legacy := []byte(`{"schema_version":1,"enabled":true,"daily_time":"15:35","schedule_effective_at":"2026-07-21T15:35:00Z"}`)
+	if err := os.WriteFile(autoSyncConfigPath(), legacy, 0600); err != nil {
+		t.Fatal(err)
+	}
+	oldChecker := autoSyncCheckBackgroundSupport
+	autoSyncCheckBackgroundSupport = func() error { return nil }
+	t.Cleanup(func() { autoSyncCheckBackgroundSupport = oldChecker })
+	oldStarter := autoSyncStartBackground
+	starts := 0
+	autoSyncStartBackground = func() error {
+		starts++
+		return nil
+	}
+	t.Cleanup(func() { autoSyncStartBackground = oldStarter })
+	oldRestarter := autoSyncRestartBackground
+	restarts := 0
+	autoSyncRestartBackground = func() error {
+		restarts++
+		return nil
+	}
+	t.Cleanup(func() { autoSyncRestartBackground = oldRestarter })
+
+	if err := ensureAutoSyncBackground(); err != nil {
+		t.Fatal(err)
+	}
+	if starts != 1 || restarts != 1 {
+		t.Fatalf("starts=%d restarts=%d, want one start and one migration restart", starts, restarts)
+	}
+	if autoSyncConfigNeedsMigration() {
+		t.Fatal("config still requires migration")
 	}
 }
 
