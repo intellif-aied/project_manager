@@ -21,7 +21,18 @@ func TestReleasedAdapterPolicyCannotBeClientPromoted(t *testing.T) {
 	if err := ValidateReleasedPrepare(request); err == nil {
 		t.Fatal("client must not self-promote exact usage")
 	}
+	request.Sessions[0].AgentType = "openclaw"
+	request.Sessions[0].Sources[0].IngestionMetadata.AdapterVersion = "openclaw-v1"
+	request.Sessions[0].Sources[0].IngestionMetadata.UsageCapability = "unavailable"
+	if err := ValidateReleasedPrepare(request); err != nil {
+		t.Fatal(err)
+	}
+	request.Sessions[0].Sources[0].IngestionMetadata.UsageCapability = "estimated"
+	if err := ValidateReleasedPrepare(request); err == nil {
+		t.Fatal("OpenClaw must remain usage unavailable")
+	}
 	request.Sessions[0].AgentType = "workbuddy"
+	request.Sessions[0].Sources[0].IngestionMetadata.AdapterVersion = "workbuddy-v1"
 	request.Sessions[0].Sources[0].IngestionMetadata.UsageCapability = "unavailable"
 	if err := ValidateReleasedPrepare(request); err == nil {
 		t.Fatal("WorkBuddy must remain unreleased")

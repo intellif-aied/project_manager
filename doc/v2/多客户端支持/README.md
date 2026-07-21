@@ -42,10 +42,11 @@ P0 已按以下顺序完成代码实现：
 当前实现状态：
 
 - 原 `aida upload`、Claude Code/Codex Prepare/Chunk/Finalize 和原生 Token parser 未迁移、未改写；legacy Golden 与数据库集成回归通过。
-- 新增 `aida clients` 与 `aida upload-client`，仅走独立 canonical Prepare；OpenCode/Kimi Code 已具备报告内容候选能力，等待真实版本人工验证。
-- Canonical Usage 的 exact 字段、服务端解析、owner 归属与跨父子 source claim 已通过合成父子 Session 数据库集成测试；OpenCode/Kimi Code 在真实逐调用对账前仍上报 `usage_capability=unavailable`，不会显示错误的 0 或估算值。
+- 新增 `aida clients` 与 `aida upload-client`，仅走独立 canonical Prepare；OpenCode、Kimi Code、OpenClaw 已具备报告内容候选能力，等待真实版本人工验证。
+- OpenClaw 只允许显式选择单个 Session；自动同步、`aida upload --all` 和 `aida upload-client openclaw --all` 均不包含 OpenClaw，优先保证 Claude Code/Codex 自动同步稳定性。
+- Canonical Usage 的 exact 字段、服务端解析、owner 归属与跨父子 source claim 已通过合成父子 Session 数据库集成测试；OpenCode、Kimi Code、OpenClaw 在真实逐调用对账前仍上报 `usage_capability=unavailable`，不会显示错误的 0 或估算值。
 - 腾讯 WorkBuddy 仅做发现与明确诊断，不读取未公开本地数据库，不允许 Materialize/Upload；等待官方机器可读导出契约。
-- 尚未提交、推送、合并、发布，也未在现有测试服务数据库执行 migration 026。
+- 功能分支已提交，且已将当前本地 `main` 新代码合入功能分支用于联合测试；尚未推送、合回 `main` 或发布，也未在现有测试服务数据库执行 migration 026。
 
 新增客户端默认能力为：
 
@@ -73,6 +74,7 @@ usage_capability = unavailable
 - [开发方案](./开发方案.md)：Adapter、Canonical Event 和服务端扩展设计。
 - [测试与验收方案](./测试与验收方案.md)：Fixture、协议、报告、Token 和安全验收。
 - [评审记录](./评审记录.md)：可行性、风险和历史评审结论。
+- [OpenClaw 接入调研](./OpenClaw接入调研.md)：官方 CLI/trajectory 契约、身份、隐私和 Token 能力结论。
 
 ## 5. 启动条件
 

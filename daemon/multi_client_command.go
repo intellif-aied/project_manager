@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/aidashboard/daemon/internal/adapters/kimicode"
+	"github.com/aidashboard/daemon/internal/adapters/openclaw"
 	"github.com/aidashboard/daemon/internal/adapters/opencode"
 	"github.com/aidashboard/daemon/internal/adapters/workbuddy"
 	"github.com/aidashboard/daemon/internal/canonicalupload"
@@ -21,7 +22,7 @@ func additionalAdapters() ([]sessionadapter.Adapter, error) {
 		return nil, err
 	}
 	spool := filepath.Join(home, ".aida", "canonical-spool")
-	return []sessionadapter.Adapter{opencode.New(spool), kimicode.New("", spool), workbuddy.New()}, nil
+	return []sessionadapter.Adapter{opencode.New(spool), kimicode.New("", spool), openclaw.New(spool), workbuddy.New()}, nil
 }
 
 func cmdClients() int {
@@ -51,13 +52,21 @@ func cmdClients() int {
 
 func cmdUploadClient(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: aida upload-client <opencode|kimi_code> [session-ref...] [--all]")
+		fmt.Fprintln(os.Stderr, "Usage: aida upload-client <opencode|kimi_code|openclaw> [session-ref...] [--all]")
 		return 2
 	}
 	clientType := sessionadapter.ClientType(strings.TrimSpace(args[0]))
 	if clientType == "workbuddy" {
 		fmt.Fprintln(os.Stderr, "WorkBuddy is detected-only until an official machine-readable export contract is available.")
 		return 2
+	}
+	if clientType == "openclaw" {
+		for _, arg := range args[1:] {
+			if arg == "--all" || arg == "-a" {
+				fmt.Fprintln(os.Stderr, "OpenClaw sessions may contain private or non-coding conversations; select session refs explicitly.")
+				return 2
+			}
+		}
 	}
 	cfg := loadConfig()
 	if err := requireAuth(cfg); err != nil {

@@ -110,6 +110,7 @@ func validUsageCapability(value string) bool {
 var releasedAdapters = map[string]map[string]string{
 	"opencode":  {"opencode-v1": "unavailable"},
 	"kimi_code": {"kimi-code-v1": "unavailable"},
+	"openclaw":  {"openclaw-v1": "unavailable"},
 }
 
 // ValidateReleasedPrepare is the server-owned rollout gate. A client cannot

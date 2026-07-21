@@ -203,7 +203,7 @@ func writeUsage(output io.Writer) {
   upload                选择并上传 Session
   upload --all          上传全部 Session
   clients               检测其他受支持客户端
-  upload-client         上传 OpenCode 或 Kimi Code Session
+  upload-client         显式选择并上传其他客户端 Session
   auto-sync enable      开启自动同步
   auto-sync set-time    修改同步时间
   auto-sync disable     关闭自动同步
