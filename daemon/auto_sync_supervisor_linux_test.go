@@ -65,3 +65,21 @@ func TestInstallSystemdUserUnitStartsAutoSyncDaemon(t *testing.T) {
 		t.Fatalf("systemctl calls = %#v, want %#v", calls, wantCalls)
 	}
 }
+
+func TestAutoSyncFileLockIsExclusiveAndReleasable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "daemon.lock")
+	releaseFirst, err := acquireAutoSyncFileLock(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := acquireAutoSyncFileLock(path); !errors.Is(err, errAutoSyncLockHeld) {
+		t.Fatalf("second lock error = %v, want lock held", err)
+	}
+	releaseFirst()
+
+	releaseAgain, err := acquireAutoSyncFileLock(path)
+	if err != nil {
+		t.Fatalf("lock after release: %v", err)
+	}
+	releaseAgain()
+}

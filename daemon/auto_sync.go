@@ -16,10 +16,12 @@ import (
 var autoSyncNow = time.Now
 
 var errAutoSyncSystemdUnavailable = errors.New("systemd user manager unavailable")
+var errAutoSyncLockHeld = errors.New("AutoSync lock already held")
 
 var autoSyncCheckBackgroundSupport = checkAutoSyncBackgroundSupport
 var autoSyncStartBackground = startAutoSyncBackground
 var autoSyncStopBackground = stopAutoSyncBackground
+var autoSyncRestartBackground = restartAutoSyncBackground
 var autoSyncRunDaemon = runAutoSyncDaemon
 var autoSyncExecute = executeAutoSync
 
@@ -77,6 +79,13 @@ func autoSyncConfigPath() string {
 
 func autoSyncSchedulePath() string {
 	return filepath.Join(autoSyncDir(), "schedule.json")
+}
+
+func acquireAutoSyncNamedLock(name string) (func(), error) {
+	if err := os.MkdirAll(autoSyncDir(), 0700); err != nil {
+		return nil, err
+	}
+	return acquireAutoSyncFileLock(filepath.Join(autoSyncDir(), name))
 }
 
 func loadAutoSyncConfig() (autoSyncConfig, error) {
@@ -240,6 +249,21 @@ func runAutoSyncDaemon() int {
 	if err := os.MkdirAll(autoSyncDir(), 0700); err != nil {
 		return 1
 	}
+	cfg, err := loadAutoSyncConfig()
+	if err != nil {
+		return 1
+	}
+	if !cfg.Enabled {
+		return 0
+	}
+	release, err := acquireAutoSyncNamedLock("daemon.lock")
+	if errors.Is(err, errAutoSyncLockHeld) {
+		return 0
+	}
+	if err != nil {
+		return 1
+	}
+	defer release()
 	run := func() {
 		if _, err := runAutoSyncOnce(autoSyncNow(), runAutoSyncExecuteProcess); err != nil {
 			if logFile, openErr := os.OpenFile(filepath.Join(autoSyncDir(), "daemon.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600); openErr == nil {
@@ -288,9 +312,19 @@ func runAutoSyncUploadAllProcess() int {
 }
 
 func executeAutoSync() int {
+	release, err := acquireAutoSyncNamedLock("run.lock")
+	if errors.Is(err, errAutoSyncLockHeld) {
+		fmt.Fprintln(os.Stderr, "已有自动 Session 同步正在执行，本次跳过")
+		return 75
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "获取自动 Session 同步执行锁失败：%v\n", err)
+		return 1
+	}
+	defer release()
 	update := func() error {
-		_, err := performSelfUpdate(loadConfig())
-		return err
+		_, updateErr := performSelfUpdate(loadConfig())
+		return updateErr
 	}
 	return runAutoSyncExecute(update, runAutoSyncUploadAllProcess, os.Stderr)
 }
@@ -319,6 +353,36 @@ func finishLoginAutoSync(input io.Reader, output io.Writer, interactive bool) {
 		return
 	}
 	_ = cmdAutoSync([]string{"enable"}, input, output)
+}
+
+func ensureAutoSyncBackground() error {
+	release, err := acquireAutoSyncNamedLock("start.lock")
+	if err != nil {
+		return err
+	}
+	defer release()
+	cfg, err := loadAutoSyncConfig()
+	if err != nil {
+		return err
+	}
+	if !cfg.Enabled {
+		return nil
+	}
+	if err := autoSyncCheckBackgroundSupport(); err != nil {
+		return err
+	}
+	return autoSyncStartBackground()
+}
+
+func restartAutoSyncAfterUpdate() error {
+	cfg, err := loadAutoSyncConfig()
+	if err != nil {
+		return err
+	}
+	if !cfg.Enabled {
+		return nil
+	}
+	return autoSyncRestartBackground()
 }
 
 func writeAutoSyncStatus(output io.Writer) int {
@@ -350,6 +414,12 @@ func cmdAutoSync(args []string, input io.Reader, output io.Writer) int {
 		return autoSyncExecute()
 	case "upload-all":
 		return cmdUpload([]string{"--all"})
+	case "ensure":
+		if err := ensureAutoSyncBackground(); err != nil {
+			fmt.Fprintf(output, "自动 Session 同步后台自检失败：%v\n", err)
+			return 1
+		}
+		return 0
 	case "status":
 		return writeAutoSyncStatus(output)
 	case "enable":
@@ -425,6 +495,22 @@ func cmdAutoSync(args []string, input io.Reader, output io.Writer) int {
 		cfg.Enabled = true
 		cfg.DailyTime = value
 		cfg.ScheduleEffectiveAt = effectiveAt.Format(time.RFC3339)
+		releaseStart, err := acquireAutoSyncNamedLock("start.lock")
+		if err != nil {
+			fmt.Fprintln(output, "另一项自动 Session 同步管理操作正在执行，请稍后重试")
+			return 1
+		}
+		defer releaseStart()
+		latestConfig, err := loadAutoSyncConfig()
+		if err != nil {
+			fmt.Fprintf(output, "读取自动 Session 同步状态失败：%v\n", err)
+			return 1
+		}
+		if latestConfig.Enabled {
+			fmt.Fprintln(output, "自动 Session 同步已经开启")
+			fmt.Fprintf(output, "每日同步时间：%s（本机时间）\n", latestConfig.DailyTime)
+			return 0
+		}
 		if err := saveAutoSyncConfig(cfg); err != nil {
 			fmt.Fprintf(output, "开启自动 Session 同步失败：%v\n", err)
 			return 1
@@ -448,6 +534,12 @@ func cmdAutoSync(args []string, input io.Reader, output io.Writer) int {
 		}
 		return 0
 	case "disable":
+		releaseStart, err := acquireAutoSyncNamedLock("start.lock")
+		if err != nil {
+			fmt.Fprintln(output, "另一项自动 Session 同步管理操作正在执行，请稍后重试")
+			return 1
+		}
+		defer releaseStart()
 		cfg, err := loadAutoSyncConfig()
 		if err != nil {
 			fmt.Fprintf(output, "读取自动 Session 同步状态失败：%v\n", err)
@@ -519,6 +611,24 @@ func cmdAutoSync(args []string, input io.Reader, output io.Writer) int {
 				effectiveAt = effectiveAt.AddDate(0, 0, 1)
 			}
 		}
+		cfg.DailyTime = value
+		cfg.ScheduleEffectiveAt = effectiveAt.Format(time.RFC3339)
+		releaseStart, err := acquireAutoSyncNamedLock("start.lock")
+		if err != nil {
+			fmt.Fprintln(output, "另一项自动 Session 同步管理操作正在执行，请稍后重试")
+			return 1
+		}
+		defer releaseStart()
+		latestConfig, err := loadAutoSyncConfig()
+		if err != nil {
+			fmt.Fprintf(output, "读取自动 Session 同步状态失败：%v\n", err)
+			return 1
+		}
+		if !latestConfig.Enabled {
+			fmt.Fprintln(output, "自动 Session 同步已关闭，本次时间修改未保存")
+			return 1
+		}
+		cfg = latestConfig
 		cfg.DailyTime = value
 		cfg.ScheduleEffectiveAt = effectiveAt.Format(time.RFC3339)
 		if err := saveAutoSyncConfig(cfg); err != nil {

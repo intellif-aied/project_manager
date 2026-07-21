@@ -406,6 +406,61 @@ func TestAutoSyncDaemonRunUsesHiddenSchedulerEntry(t *testing.T) {
 	}
 }
 
+func TestAutoSyncEnsureRespectsDisabledChoice(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	oldStarter := autoSyncStartBackground
+	starts := 0
+	autoSyncStartBackground = func() error {
+		starts++
+		return nil
+	}
+	t.Cleanup(func() { autoSyncStartBackground = oldStarter })
+
+	if err := ensureAutoSyncBackground(); err != nil {
+		t.Fatal(err)
+	}
+	if starts != 0 {
+		t.Fatalf("background starts = %d, want 0", starts)
+	}
+
+	if err := saveAutoSyncConfig(autoSyncConfig{SchemaVersion: 1, Enabled: true, DailyTime: "18:00"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureAutoSyncBackground(); err != nil {
+		t.Fatal(err)
+	}
+	if starts != 1 {
+		t.Fatalf("background starts = %d, want 1", starts)
+	}
+}
+
+func TestAutoSyncRestartAfterUpdateRespectsEnabledChoice(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	oldRestarter := autoSyncRestartBackground
+	restarts := 0
+	autoSyncRestartBackground = func() error {
+		restarts++
+		return nil
+	}
+	t.Cleanup(func() { autoSyncRestartBackground = oldRestarter })
+
+	if err := restartAutoSyncAfterUpdate(); err != nil {
+		t.Fatal(err)
+	}
+	if restarts != 0 {
+		t.Fatalf("disabled restarts = %d, want 0", restarts)
+	}
+	if err := saveAutoSyncConfig(autoSyncConfig{SchemaVersion: 1, Enabled: true, DailyTime: "18:00"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := restartAutoSyncAfterUpdate(); err != nil {
+		t.Fatal(err)
+	}
+	if restarts != 1 {
+		t.Fatalf("enabled restarts = %d, want 1", restarts)
+	}
+}
+
 func TestAutoSyncExecuteContinuesUploadWhenUpdateFails(t *testing.T) {
 	uploaded := false
 	var output bytes.Buffer

@@ -63,22 +63,27 @@ func maybeAutoUpdate(cfg *Config) error {
 }
 
 func cmdUpdate() int {
+	code, _ := cmdUpdateResult()
+	return code
+}
+
+func cmdUpdateResult() (int, bool) {
 	cfg := loadConfig()
 	if strings.TrimSpace(cfg.ReleaseURL) == "" {
 		fmt.Println("Update unavailable: release_url is not configured. Re-run the installer once to enable self-update.")
-		return 1
+		return 1, false
 	}
 	updated, err := performSelfUpdate(cfg)
 	if err != nil {
 		fmt.Printf("Update failed: %v\n", err)
-		return 1
+		return 1, false
 	}
 	if !updated {
 		fmt.Printf("aida v%s is already current.\n", Version)
-		return 0
+		return 0, false
 	}
 	fmt.Println("Update installed. The new version will be used on the next command.")
-	return 0
+	return 0, true
 }
 
 func performSelfUpdate(cfg *Config) (bool, error) {

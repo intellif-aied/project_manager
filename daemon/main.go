@@ -130,6 +130,12 @@ func run(args []string) int {
 		return true
 	}
 
+	if args[0] != "auto-sync" {
+		if err := ensureAutoSyncBackground(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: automatic Session sync background check failed: %v\n", err)
+		}
+	}
+
 	switch args[0] {
 	case "auto-sync":
 		return cmdAutoSyncCLI(args[1:], os.Stdin, os.Stdout, stdinIsInteractive())
@@ -157,7 +163,13 @@ func run(args []string) int {
 		}
 		return cmdStatus()
 	case "update":
-		return cmdUpdate()
+		code, updated := cmdUpdateResult()
+		if updated {
+			if err := restartAutoSyncAfterUpdate(); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: Aida updated but automatic Session sync background restart failed: %v\n", err)
+			}
+		}
+		return code
 	case "version", "--version", "-v":
 		fmt.Printf("aida %s\n", Version)
 		return 0

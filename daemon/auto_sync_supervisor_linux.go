@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 )
 
 func runAutoSyncSystemctl(args ...string) error {
@@ -44,7 +46,32 @@ func stopAutoSyncBackground() error {
 	return runAutoSyncSystemctl("--user", "disable", "--now", "aida-auto-sync.service")
 }
 
+func restartAutoSyncBackground() error {
+	return runAutoSyncSystemctl("--user", "restart", "aida-auto-sync.service")
+}
+
 type autoSyncSystemctlRunner func(args ...string) error
+
+func acquireAutoSyncFileLock(path string) (func(), error) {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		file.Close()
+		if err == syscall.EWOULDBLOCK || err == syscall.EAGAIN {
+			return nil, errAutoSyncLockHeld
+		}
+		return nil, err
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+			_ = file.Close()
+		})
+	}, nil
+}
 
 func checkSystemdUserManager(run autoSyncSystemctlRunner) error {
 	if err := run("--user", "show-environment"); err != nil {
