@@ -24,6 +24,42 @@ type autoSyncConfig struct {
 	ScheduleEffectiveAt string `json:"schedule_effective_at,omitempty"`
 }
 
+type autoSyncSchedule struct {
+	SchemaVersion   int    `json:"schema_version"`
+	LastSuccessDate string `json:"last_success_date,omitempty"`
+	LastAttemptAt   string `json:"last_attempt_at,omitempty"`
+}
+
+func autoSyncDue(now time.Time, cfg autoSyncConfig, schedule autoSyncSchedule) bool {
+	if !cfg.Enabled || cfg.DailyTime == "" {
+		return false
+	}
+	parsed, err := time.Parse("15:04", cfg.DailyTime)
+	if err != nil {
+		return false
+	}
+	target := time.Date(now.Year(), now.Month(), now.Day(), parsed.Hour(), parsed.Minute(), 0, 0, now.Location())
+	if now.Before(target) {
+		return false
+	}
+	if cfg.ScheduleEffectiveAt != "" {
+		effectiveAt, err := time.Parse(time.RFC3339, cfg.ScheduleEffectiveAt)
+		if err != nil || now.Before(effectiveAt) {
+			return false
+		}
+	}
+	if schedule.LastSuccessDate == now.Format("2006-01-02") {
+		return false
+	}
+	if schedule.LastAttemptAt != "" {
+		lastAttempt, err := time.Parse(time.RFC3339, schedule.LastAttemptAt)
+		if err != nil || now.Sub(lastAttempt) < time.Minute {
+			return false
+		}
+	}
+	return true
+}
+
 func autoSyncDir() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".aida", "auto-sync")

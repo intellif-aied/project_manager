@@ -197,3 +197,35 @@ func TestAutoSyncDisablePersistsUserChoice(t *testing.T) {
 		t.Fatalf("status output after disable = %q", output.String())
 	}
 }
+
+func TestAutoSyncDueFollowsDailySuccessAndRetryRules(t *testing.T) {
+	now := time.Date(2026, 7, 21, 18, 30, 0, 0, time.UTC)
+	baseConfig := autoSyncConfig{
+		SchemaVersion:       1,
+		Enabled:             true,
+		DailyTime:           "18:00",
+		ScheduleEffectiveAt: "2026-07-20T18:00:00Z",
+	}
+
+	tests := []struct {
+		name     string
+		now      time.Time
+		cfg      autoSyncConfig
+		schedule autoSyncSchedule
+		want     bool
+	}{
+		{name: "due after daily time", now: now, cfg: baseConfig, want: true},
+		{name: "not due before daily time", now: time.Date(2026, 7, 21, 17, 59, 0, 0, time.UTC), cfg: baseConfig, want: false},
+		{name: "not due after success today", now: now, cfg: baseConfig, schedule: autoSyncSchedule{LastSuccessDate: "2026-07-21"}, want: false},
+		{name: "not due within retry interval", now: now, cfg: baseConfig, schedule: autoSyncSchedule{LastAttemptAt: "2026-07-21T18:29:30Z"}, want: false},
+		{name: "not due before schedule becomes effective", now: now, cfg: autoSyncConfig{SchemaVersion: 1, Enabled: true, DailyTime: "18:00", ScheduleEffectiveAt: "2026-07-22T18:00:00Z"}, want: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := autoSyncDue(test.now, test.cfg, test.schedule); got != test.want {
+				t.Fatalf("autoSyncDue() = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
