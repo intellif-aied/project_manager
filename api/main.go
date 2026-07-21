@@ -206,17 +206,21 @@ func main() {
 		log.Fatalf("Failed to init session digest v2 processor: %v", err)
 	}
 	hostname, _ := os.Hostname()
-	digestWorker, err := sessiondigestv2.NewWorker(
-		jobRepository, digestProcessor, "api:"+hostname+":digest-v2", digestV2Config,
-	)
-	if err != nil {
-		log.Fatalf("Failed to init session digest v2 worker: %v", err)
-	}
 	reconciler.Start(schedulerCtx)
-	digestWorker.Start(schedulerCtx)
+	digestV2WorkerIDs := []string{"1", "2"}
+	for _, workerID := range digestV2WorkerIDs {
+		digestWorker, workerErr := sessiondigestv2.NewWorker(
+			jobRepository, digestProcessor,
+			"api:"+hostname+":digest-v2:"+workerID, digestV2Config,
+		)
+		if workerErr != nil {
+			log.Fatalf("Failed to init session digest v2 worker: %v", workerErr)
+		}
+		digestWorker.Start(schedulerCtx)
+	}
 	log.Printf(
-		"Session digest v2 services started (reconcile_batch=%d worker_batch=%d read_mode=%s)",
-		digestV2Config.ReconcileBatch, digestV2Config.WorkerBatch,
+		"Session digest v2 services started (reconcile_batch=%d worker_count=%d worker_batch=%d read_mode=%s)",
+		digestV2Config.ReconcileBatch, len(digestV2WorkerIDs), digestV2Config.WorkerBatch,
 		reportSourceConfig.SessionReadMode,
 	)
 	docH := handler.NewDocumentHandler(database)
