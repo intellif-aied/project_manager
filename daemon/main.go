@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -110,6 +111,11 @@ func main() {
 	os.Exit(run(os.Args[1:]))
 }
 
+func stdinIsInteractive() bool {
+	inputInfo, err := os.Stdin.Stat()
+	return err == nil && inputInfo.Mode()&os.ModeCharDevice != 0
+}
+
 func run(args []string) int {
 	if len(args) < 1 {
 		printUsage()
@@ -118,19 +124,28 @@ func run(args []string) int {
 
 	requireUpdate := func() bool {
 		if err := maybeAutoUpdate(loadConfig()); err != nil {
-			fmt.Fprintf(os.Stderr, "Aida update required but failed: %v\n", err)
-			fmt.Fprintln(os.Stderr, "Run 'aida update' or reinstall Aida, then retry this command.")
+			fmt.Fprintln(os.Stderr, "Aida 更新失败，请运行 aida update 后重试")
 			return false
 		}
 		return true
 	}
 
+	if args[0] != "auto-sync" {
+		_ = autoSyncEnsure()
+	}
+
 	switch args[0] {
+	case "auto-sync":
+		return cmdAutoSyncCLI(args[1:], os.Stdin, os.Stdout, stdinIsInteractive())
 	case "login":
 		if !requireUpdate() {
 			return 3
 		}
-		return cmdLogin(args[1:])
+		code := cmdLogin(args[1:])
+		if code == 0 {
+			finishLoginAutoSync(os.Stdin, os.Stdout, stdinIsInteractive())
+		}
+		return code
 	case "sessions", "ls":
 		fmt.Fprintln(os.Stderr, "aida sessions 已移除，请使用 aida upload 查看并选择本地 Session。")
 		return 2
@@ -147,12 +162,17 @@ func run(args []string) int {
 		}
 		return cmdUploadClient(args[1:])
 	case "status":
+		_ = writeAutoSyncStatus(os.Stdout)
 		if !requireUpdate() {
 			return 3
 		}
 		return cmdStatus()
 	case "update":
-		return cmdUpdate()
+		code, updated := cmdUpdateResult()
+		if updated {
+			_ = restartAutoSyncAfterUpdate()
+		}
+		return code
 	case "version", "--version", "-v":
 		fmt.Printf("aida %s\n", Version)
 		return 0
@@ -160,53 +180,37 @@ func run(args []string) int {
 		printUsage()
 		return 0
 	default:
-		fmt.Printf("Unknown command: %s\n\n", args[0])
+		fmt.Printf("未知命令：%s\n\n", args[0])
 		printUsage()
 		return 2
 	}
 }
 
 func printUsage() {
-	fmt.Print(`aida - CLI for uploading AI coding sessions to Aida
+	writeUsage(os.Stdout)
+}
 
-Usage:
-  aida <command> [options]
+func writeUsage(output io.Writer) {
+	fmt.Fprint(output, `Aida CLI
 
-Commands:
-  login                                      Enter your personal token interactively
-  upload   [numbers...] [--all] [--page-size N]
-                                            Upload sessions to server
-  clients                                   Detect additional supported clients
-  upload-client <client> [session-ref...] [--all]
-                                            Upload OpenCode or Kimi Code sessions
-  status                                     Show current login status
-  update                                     Check and install the latest version
-  version                                    Show CLI version
+登录并同步 AI 编程 Session。
 
-Examples:
-  # Login interactively using the service address installed with Aida
-  aida login
+用法：
+  aida <命令>
 
-  # Upload specific sessions by number
-  aida upload 1 3 5
-
-  # Upload all recent sessions
-  aida upload --all
-
-  # Interactive upload (supports paging and cross-page selection)
-  aida upload
-
-  # Check login status
-  aida status
-
-Session logs location:
-  ~/.claude/projects/
-  ~/.codex/sessions/
-
-Documentation:
-  PRD:        See PRD.md in the project repository
-  Prototype:  See prototype.html in the project repository
-  API:        http://<server>:18090/health  (health check)
+常用命令：
+  login                 登录 Aida
+  upload                选择并上传 Session
+  upload --all          上传全部 Session
+  clients               检测其他受支持客户端
+  upload-client         上传 OpenCode 或 Kimi Code Session
+  auto-sync enable      开启自动同步
+  auto-sync set-time    修改同步时间
+  auto-sync disable     关闭自动同步
+  status                检查登录、连接和自动同步状态
+  update                更新 Aida
+  version               查看当前版本
+  help                  查看帮助
 `)
 }
 

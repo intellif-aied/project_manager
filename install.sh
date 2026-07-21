@@ -196,6 +196,10 @@ if ! echo "$PATH" | tr ':' '\n' | grep -qx "$INSTALL_DIR"; then
     fi
 fi
 
+if ! AUTO_SYNC_ENSURE_ERROR="$("$TARGET_BINARY" auto-sync ensure 2>&1 >/dev/null)"; then
+    echo "warning: automatic Session sync background check failed: $AUTO_SYNC_ENSURE_ERROR" >&2
+fi
+
 echo ""
 echo "=== Installation complete ==="
 step=1

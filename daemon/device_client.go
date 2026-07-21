@@ -350,13 +350,8 @@ func cmdLogin(args []string) int {
 	}
 
 	if server == "" && cfg.APIURL == "" {
-		fmt.Print("Server URL [http://localhost:8080/api/v1]: ")
-		reader := bufio.NewReader(os.Stdin)
-		input, _ := reader.ReadString('\n')
-		server = strings.TrimSpace(input)
-		if server == "" {
-			server = "http://localhost:8080/api/v1"
-		}
+		fmt.Println("Aida 尚未完成连接配置，请重新运行安装程序")
+		return 1
 	}
 	if server != "" {
 		cfg.APIURL = strings.TrimRight(server, "/")
@@ -364,12 +359,12 @@ func cmdLogin(args []string) int {
 	}
 
 	if token == "" {
-		fmt.Print("请输入个人令牌（输入内容不会显示，粘贴后按 Enter）：")
+		fmt.Print("请输入 Aida 个人令牌（粘贴后按 Enter，输入不会显示）：")
 		if inputInfo, err := os.Stdin.Stat(); err == nil && inputInfo.Mode()&os.ModeCharDevice != 0 {
 			input, readErr := term.ReadPassword(os.Stdin.Fd())
 			fmt.Println()
 			if readErr != nil {
-				fmt.Printf("Error: failed to read token: %v\n", readErr)
+				fmt.Println("无法读取个人令牌，请重试")
 				return 1
 			}
 			token = strings.TrimSpace(string(input))
@@ -381,17 +376,16 @@ func cmdLogin(args []string) int {
 	}
 
 	if token == "" {
-		fmt.Println("Error: token is required")
+		fmt.Println("个人令牌不能为空")
 		return 1
 	}
-	fmt.Println("已接收令牌，正在验证...")
+	fmt.Println("正在登录...")
 	cfg.Token = token
 
 	// Verify
 	resp, err := apiGet(cfg, "/auth/me")
 	if err != nil {
-		fmt.Printf("Login failed: %v\n", err)
-		fmt.Println("Check your token and server URL")
+		fmt.Println("登录失败，请检查个人令牌后重试")
 		return 1
 	}
 
@@ -403,13 +397,16 @@ func cmdLogin(args []string) int {
 
 	cfg.ServerInfo = fmt.Sprintf("%s (%s)", user.Name, user.Role)
 	if err := saveConfig(cfg); err != nil {
-		fmt.Printf("Login failed: unable to save config: %v\n", err)
+		fmt.Println("登录信息保存失败，请运行 aida status 检查")
 		return 1
 	}
 
-	fmt.Printf("Logged in as %s (%s) at %s\n", user.Name, user.Role, cfg.APIURL)
-	fmt.Printf("Config saved to %s\n", configPath())
+	writeLoginSuccess(os.Stdout, user.Name)
 	return 0
+}
+
+func writeLoginSuccess(output io.Writer, userName string) {
+	fmt.Fprintf(output, "登录成功，%s\n", userName)
 }
 
 // ---- upload ----
@@ -417,7 +414,7 @@ func cmdLogin(args []string) int {
 func cmdUpload(args []string) int {
 	cfg := loadConfig()
 	if err := requireAuth(cfg); err != nil {
-		fmt.Printf("Error: %v\n", err)
+		fmt.Println("请先运行 aida login 登录")
 		return 1
 	}
 	resolveAPIEndpoint(cfg)
@@ -438,7 +435,7 @@ func cmdUpload(args []string) int {
 		}
 	}
 	if !allowedSessionPageSizes[pageSize] {
-		fmt.Println("Invalid page size: use 10, 20, 50, or 100")
+		fmt.Println("每页条数仅支持 10、20、50 或 100")
 		return 2
 	}
 
@@ -446,7 +443,7 @@ func cmdUpload(args []string) int {
 	sessions := scanSessionsForCommand(filepath.Join(home, ".claude", "projects"), filepath.Join(home, ".codex", "sessions"), true, true)
 
 	if len(sessions) == 0 {
-		fmt.Println("No sessions found to upload.")
+		fmt.Println("没有找到可上传的 Session")
 		return 0
 	}
 
@@ -457,7 +454,7 @@ func cmdUpload(args []string) int {
 	} else if len(selectedIdx) > 0 {
 		for _, idx := range selectedIdx {
 			if idx < 1 || idx > len(sessions) {
-				fmt.Printf("Invalid session number: %d (range 1-%d)\n", idx, len(sessions))
+				fmt.Printf("Session 编号无效，可选范围为 1-%d\n", len(sessions))
 				return 2
 			}
 			toUpload = append(toUpload, sessions[idx-1])
@@ -471,72 +468,55 @@ func cmdUpload(args []string) int {
 			toUpload, err = selectSessionsInteractively(sessions, pageSize, reader, os.Stdout)
 		}
 		if err != nil {
-			fmt.Printf("Session selection failed: %v\n", err)
+			fmt.Println("无法完成 Session 选择，请重试")
 			return 1
 		}
 	}
 
 	if uploadAll {
-		fmt.Printf("\n--all selected all %d locally discoverable sessions; unchanged sessions will be skipped.\n", len(toUpload))
+		fmt.Printf("\n已选择全部 %d 个 Session，未变化的内容会自动跳过。\n", len(toUpload))
 	}
 
 	if len(toUpload) == 0 {
-		fmt.Println("No sessions selected.")
+		fmt.Println("未选择 Session")
 		return 0
 	}
 
-	fmt.Printf("\nUploading %d session(s) to %s (%s) ...\n\n", len(toUpload), apiBaseURL(cfg), cfg.ActiveRoute)
+	releaseUpload, lockCode := beginSessionUpload(os.Stdout)
+	if lockCode != 0 {
+		return lockCode
+	}
+	defer releaseUpload()
 
-	totalReady := 0
-	totalProcessing := 0
+	fmt.Printf("\n正在上传 %d 个 Session...\n\n", len(toUpload))
+
 	totalFailed := 0
-	totalCurrentSnapshots := 0
-	totalUploaded := 0
-	totalSubs := 0
+	succeededSessions := 0
+	failedSessions := 0
 
-	for _, s := range toUpload {
+	for sessionIndex, s := range toUpload {
+		if sessionIndex > 0 {
+			fmt.Println()
+		}
 		allSessions := collectSessionsWithFiles(s)
 		incrementalResults, incrementalErr := uploadSessionGroupIncremental(cfg, allSessions, s.SessionRef)
 		if !errors.Is(incrementalErr, errSessionSyncNotEnabled) {
-			for index, result := range incrementalResults {
-				label := "PROCESSING"
-				switch {
-				case result.Status == "content_cleared":
-					label = "BLOCKED"
+			sessionFailed := false
+			for _, result := range incrementalResults {
+				if result.Status == "content_cleared" || result.ErrorCode != "" || result.Status == "failed" {
 					totalFailed++
-				case result.ErrorCode != "" || result.Status == "failed":
-					label = "FAILED"
-					totalFailed++
-				case result.PendingTail:
-					label = "CURRENT"
-					totalCurrentSnapshots++
-				case result.ReadyForReports:
-					label = "READY"
-					totalReady++
-				default:
-					totalProcessing++
-				}
-				fmt.Printf("  [%-10s] %-14s  incremental=%s chunks=%d content=%s",
-					label, shortRef(result.SessionRef), result.Status, result.UploadedChunks,
-					firstNonEmpty(result.ContentStatus, "processing"))
-				if result.PendingTail {
-					fmt.Print(" snapshot-only")
-				}
-				if result.ErrorCode != "" {
-					fmt.Printf(" error=%s", result.ErrorCode)
-				}
-				fmt.Println()
-				if result.UploadedChunks > 0 {
-					if index == 0 {
-						totalUploaded++
-					} else {
-						totalSubs++
-					}
+					sessionFailed = true
 				}
 			}
 			if incrementalErr != nil {
-				fmt.Printf("  [FAIL]  %-14s  %v\n", shortRef(s.SessionRef), incrementalErr)
 				totalFailed++
+				sessionFailed = true
+			}
+			printSessionUploadResult(os.Stdout, s, sessionFailed)
+			if sessionFailed {
+				failedSessions++
+			} else {
+				succeededSessions++
 			}
 			continue
 		}
@@ -568,8 +548,9 @@ func cmdUpload(args []string) int {
 
 		req, err := http.NewRequest("POST", apiBaseURL(cfg)+"/sessions/batch", &buf)
 		if err != nil {
-			fmt.Printf("  [FAIL]  %-14s  %s  %v\n", s.SessionRef[:12], formatLastActiveTime(s, "01-02 15:04"), err)
 			totalFailed++
+			printSessionUploadResult(os.Stdout, s, true)
+			failedSessions++
 			continue
 		}
 		req.Header.Set("Content-Type", writer.FormDataContentType())
@@ -577,8 +558,9 @@ func cmdUpload(args []string) int {
 
 		respBody, err := doRequestWithTimeout(req, sessionUploadRequestTimeout)
 		if err != nil {
-			fmt.Printf("  [FAIL]  %-14s  %s  %v\n", s.SessionRef[:12], formatLastActiveTime(s, "01-02 15:04"), err)
 			totalFailed++
+			printSessionUploadResult(os.Stdout, s, true)
+			failedSessions++
 			continue
 		}
 
@@ -591,78 +573,60 @@ func cmdUpload(args []string) int {
 			} `json:"results"`
 		}
 		if err := json.Unmarshal(respBody, &result); err != nil {
-			fmt.Printf("  [FAIL]  %-14s  %s  invalid response: %v\n", s.SessionRef[:12], formatLastActiveTime(s, "01-02 15:04"), err)
 			totalFailed++
+			printSessionUploadResult(os.Stdout, s, true)
+			failedSessions++
 			continue
 		}
 
 		mainStatus := "unknown"
-		subSuccess := 0
 		hadError := false
 		for _, r := range result.Results {
 			if r.SessionRef == s.SessionRef {
 				mainStatus = r.Status
-			} else if r.Status == "created" || r.Status == "updated" || r.Status == "duplicate" {
-				subSuccess++
 			}
 			if strings.HasPrefix(r.Status, "error:") {
 				hadError = true
-				ref := r.SessionRef
-				if len(ref) > 12 {
-					ref = ref[:12]
-				}
-				fmt.Printf("  [FAIL]  %-14s  %s\n", ref, r.Status)
 			}
 		}
 
-		switch mainStatus {
-		case "created":
-			fmt.Printf("  [OK]    %-14s  %s  %8s  %s\n",
-				s.SessionRef[:12], formatLastActiveTime(s, "01-02 15:04"), s.FormatTokens(), trunc(s.Summary, 40))
-			totalUploaded++
-			totalProcessing++
-		case "updated":
-			fmt.Printf("  [OK]    %-14s  %s  updated existing session\n",
-				s.SessionRef[:12], formatLastActiveTime(s, "01-02 15:04"))
-			totalUploaded++
-			totalProcessing++
-		case "duplicate":
-			fmt.Printf("  [SKIP]  %-14s  %s  (already uploaded)\n",
-				s.SessionRef[:12], formatLastActiveTime(s, "01-02 15:04"))
-			totalProcessing++
-		default:
-			fmt.Printf("  [%s]  %-14s  %s\n", mainStatus, s.SessionRef[:12], formatLastActiveTime(s, "01-02 15:04"))
+		if mainStatus != "created" && mainStatus != "updated" && mainStatus != "duplicate" {
 			totalFailed++
-		}
-
-		if subSuccess > 0 {
-			fmt.Printf("          └─ %d sub-agent(s) processed\n", subSuccess)
-			totalSubs += subSuccess
-			totalProcessing += subSuccess
+			hadError = true
 		}
 		if hadError {
-			fmt.Println("          └─ one or more batch items failed; see errors above")
 			totalFailed++
+		}
+		printSessionUploadResult(os.Stdout, s, hadError)
+		if hadError {
+			failedSessions++
+		} else {
+			succeededSessions++
 		}
 	}
 
 	switch {
 	case totalFailed > 0:
-		fmt.Printf("\nCompleted with errors. %d ready, %d processing, %d current snapshot, %d failed.\n",
-			totalReady, totalProcessing, totalCurrentSnapshots, totalFailed)
-	case totalProcessing > 0 || totalCurrentSnapshots > 0:
-		fmt.Printf("\nUpload accepted. %d ready, %d processing, %d current snapshot.\n",
-			totalReady, totalProcessing, totalCurrentSnapshots)
+		fmt.Printf("\n上传完成：成功 %d 个，失败 %d 个\n", succeededSessions, failedSessions)
 	default:
-		fmt.Printf("\nDone. %d Session(s) ready for reports.\n", totalReady)
-	}
-	if totalUploaded > 0 || totalSubs > 0 {
-		fmt.Printf("Dashboard: %s\n", strings.Replace(apiBaseURL(cfg), "/api/v1", "", 1))
+		fmt.Printf("\n上传完成：成功 %d 个\n", succeededSessions)
 	}
 	if totalFailed > 0 {
 		return 1
 	}
 	return 0
+}
+
+func printSessionUploadResult(output io.Writer, session *SessionInfo, failed bool) {
+	status := "完成"
+	if failed {
+		status = "失败"
+	}
+	summary := strings.TrimSpace(session.Summary)
+	if summary == "" {
+		summary = "Session"
+	}
+	fmt.Fprintf(output, "[%s] %s  %s\n", status, formatLastActiveTime(session, "01-02 15:04"), trunc(summary, 60))
 }
 
 // ---- consume ----

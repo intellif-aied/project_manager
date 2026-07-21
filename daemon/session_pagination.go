@@ -61,6 +61,9 @@ func writeSessionPage(output io.Writer, title string, page sessionListPage, sele
 			}
 		}
 		writeSessionSummaryRow(output, marker, globalIndex, session)
+		if index+1 < len(page.Items) {
+			fmt.Fprintln(output)
+		}
 	}
 }
 

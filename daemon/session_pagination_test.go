@@ -128,6 +128,20 @@ func TestNarrowSessionListKeepsSummaryRecentSummaryAndSessionID(t *testing.T) {
 	}
 }
 
+func TestSessionPageSeparatesSessionsWithBlankLine(t *testing.T) {
+	sessions := fakeSessionList(2)
+	sessions[0].RecentSummary = "first latest message"
+	page, err := paginateSessions(sessions, 1, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	writeSessionPage(&output, "Session 列表", page, nil)
+	if !strings.Contains(output.String(), "first latest message\n\n") {
+		t.Fatalf("first Session is not followed by a blank line:\n%s", output.String())
+	}
+}
+
 func TestSessionsJSONIncludesSummaryDiagnosticsAndPagination(t *testing.T) {
 	sessions := fakeSessionList(2)
 	sessions[0].SummaryStatus = "ok"

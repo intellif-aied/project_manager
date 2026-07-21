@@ -110,6 +110,12 @@ func NewSyncService(database *sql.DB) (*SyncService, error) {
 }
 
 func (s *SyncService) Prepare(ctx context.Context, userID string, request PrepareSessionRequest) ([]PrepareSourceResponse, error) {
+	return retryPrepareAfterDeadlock(ctx, func() ([]PrepareSourceResponse, error) {
+		return s.prepareOnce(ctx, userID, request)
+	})
+}
+
+func (s *SyncService) prepareOnce(ctx context.Context, userID string, request PrepareSessionRequest) ([]PrepareSourceResponse, error) {
 	request.SessionRef = strings.TrimSpace(request.SessionRef)
 	request.AgentType = strings.TrimSpace(request.AgentType)
 	request.Summary = strings.ReplaceAll(strings.TrimSpace(request.Summary), "\x00", "\uFFFD")

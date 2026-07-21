@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,6 +11,46 @@ import (
 	"testing"
 	"time"
 )
+
+func TestLoginOutputHidesRoleServerAndConfigPath(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/auth/me" {
+			http.NotFound(w, request)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"name":"测试02","role":"director"}`))
+	}))
+	defer server.Close()
+
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldStdout := os.Stdout
+	os.Stdout = writer
+	code := cmdLogin([]string{"--server", server.URL, "--token", "test-token"})
+	_ = writer.Close()
+	os.Stdout = oldStdout
+	output, err := io.ReadAll(reader)
+	_ = reader.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != 0 {
+		t.Fatalf("login exit code = %d; output=%q", code, string(output))
+	}
+	want := "正在登录...\n登录成功，测试02\n"
+	if string(output) != want {
+		t.Fatalf("login output = %q, want %q", string(output), want)
+	}
+	for _, forbidden := range []string{"director", server.URL, configPath(), "Logged in", "Config saved"} {
+		if strings.Contains(string(output), forbidden) {
+			t.Fatalf("login output exposed %q: %q", forbidden, string(output))
+		}
+	}
+}
 
 func TestParseClaudeJSONLContinuesAfterElevenMiBEvent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "large-event.jsonl")

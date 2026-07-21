@@ -156,6 +156,11 @@ func cmdUploadClient(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	releaseUpload, lockCode := beginSessionUpload(os.Stdout)
+	if lockCode != 0 {
+		return lockCode
+	}
+	defer releaseUpload()
 	results, err := uploader.UploadFamily(ctx, family)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Canonical upload failed: %v\n", err)
