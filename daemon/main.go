@@ -126,6 +126,10 @@ func run(args []string) int {
 	}
 
 	switch args[0] {
+	case "auto-sync":
+		inputInfo, err := os.Stdin.Stat()
+		interactive := err == nil && inputInfo.Mode()&os.ModeCharDevice != 0
+		return cmdAutoSyncCLI(args[1:], os.Stdin, os.Stdout, interactive)
 	case "login":
 		if !requireUpdate() {
 			return 3
@@ -167,6 +171,7 @@ Usage:
 
 Commands:
   login                                      Enter your personal token interactively
+  auto-sync <enable|status|set-time|disable> Manage automatic Session sync
   upload   [numbers...] [--all] [--page-size N]
                                             Upload sessions to server
   status                                     Show current login status
