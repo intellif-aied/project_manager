@@ -9,11 +9,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
 
 var autoSyncNow = time.Now
+var autoSyncPlatform = runtime.GOOS
 
 var errAutoSyncSystemdUnavailable = errors.New("systemd user manager unavailable")
 var errAutoSyncLockHeld = errors.New("AutoSync lock already held")
@@ -438,7 +440,11 @@ func cmdAutoSync(args []string, input io.Reader, output io.Writer) int {
 		}
 		if err := autoSyncCheckBackgroundSupport(); err != nil {
 			if errors.Is(err, errAutoSyncSystemdUnavailable) {
-				fmt.Fprintln(output, "当前 Linux 环境缺少可用的 systemd user manager，暂不支持自动 Session 同步")
+				if autoSyncPlatform != "linux" {
+					fmt.Fprintln(output, "当前平台暂不支持自动 Session 同步；首期仅支持具备 systemd user manager 的 Linux")
+				} else {
+					fmt.Fprintln(output, "当前 Linux 环境缺少可用的 systemd user manager，暂不支持自动 Session 同步")
+				}
 				return 2
 			}
 			fmt.Fprintf(output, "检测自动 Session 同步运行环境失败：%v\n", err)

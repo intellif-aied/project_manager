@@ -169,6 +169,26 @@ func TestAutoSyncEnableRejectsLinuxWithoutSystemdUserManager(t *testing.T) {
 	}
 }
 
+func TestAutoSyncEnableReportsUnsupportedNonLinuxPlatform(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	oldPlatform := autoSyncPlatform
+	autoSyncPlatform = "darwin"
+	t.Cleanup(func() { autoSyncPlatform = oldPlatform })
+	oldChecker := autoSyncCheckBackgroundSupport
+	autoSyncCheckBackgroundSupport = func() error { return errAutoSyncSystemdUnavailable }
+	t.Cleanup(func() { autoSyncCheckBackgroundSupport = oldChecker })
+
+	var output bytes.Buffer
+	code := cmdAutoSync([]string{"enable"}, strings.NewReader(""), &output)
+	if code != 2 {
+		t.Fatalf("unsupported platform exit code = %d, want 2", code)
+	}
+	want := "当前平台暂不支持自动 Session 同步；首期仅支持具备 systemd user manager 的 Linux\n"
+	if output.String() != want {
+		t.Fatalf("unsupported platform output = %q, want %q", output.String(), want)
+	}
+}
+
 func TestAutoSyncEnableShowsExistingStateBeforeSupportCheck(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	if err := saveAutoSyncConfig(autoSyncConfig{SchemaVersion: 1, Enabled: true, DailyTime: "18:00"}); err != nil {
