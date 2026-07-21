@@ -24,6 +24,7 @@ var autoSyncStopBackground = stopAutoSyncBackground
 var autoSyncRestartBackground = restartAutoSyncBackground
 var autoSyncRunDaemon = runAutoSyncDaemon
 var autoSyncExecute = executeAutoSync
+var autoSyncEnsure = ensureAutoSyncBackground
 
 type autoSyncConfig struct {
 	SchemaVersion       int    `json:"schema_version"`
@@ -423,14 +424,6 @@ func cmdAutoSync(args []string, input io.Reader, output io.Writer) int {
 	case "status":
 		return writeAutoSyncStatus(output)
 	case "enable":
-		if err := autoSyncCheckBackgroundSupport(); err != nil {
-			if errors.Is(err, errAutoSyncSystemdUnavailable) {
-				fmt.Fprintln(output, "当前 Linux 环境缺少可用的 systemd user manager，暂不支持自动 Session 同步")
-				return 2
-			}
-			fmt.Fprintf(output, "检测自动 Session 同步运行环境失败：%v\n", err)
-			return 1
-		}
 		cfg, err := loadAutoSyncConfig()
 		if err != nil {
 			fmt.Fprintf(output, "读取自动 Session 同步状态失败：%v\n", err)
@@ -442,6 +435,14 @@ func cmdAutoSync(args []string, input io.Reader, output io.Writer) int {
 			fmt.Fprintln(output, "修改时间：aida auto-sync set-time")
 			fmt.Fprintln(output, "关闭方式：aida auto-sync disable")
 			return 0
+		}
+		if err := autoSyncCheckBackgroundSupport(); err != nil {
+			if errors.Is(err, errAutoSyncSystemdUnavailable) {
+				fmt.Fprintln(output, "当前 Linux 环境缺少可用的 systemd user manager，暂不支持自动 Session 同步")
+				return 2
+			}
+			fmt.Fprintf(output, "检测自动 Session 同步运行环境失败：%v\n", err)
+			return 1
 		}
 
 		reader := bufio.NewReader(input)

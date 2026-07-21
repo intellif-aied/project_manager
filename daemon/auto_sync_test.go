@@ -169,6 +169,24 @@ func TestAutoSyncEnableRejectsLinuxWithoutSystemdUserManager(t *testing.T) {
 	}
 }
 
+func TestAutoSyncEnableShowsExistingStateBeforeSupportCheck(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if err := saveAutoSyncConfig(autoSyncConfig{SchemaVersion: 1, Enabled: true, DailyTime: "18:00"}); err != nil {
+		t.Fatal(err)
+	}
+	oldChecker := autoSyncCheckBackgroundSupport
+	autoSyncCheckBackgroundSupport = func() error { return errAutoSyncSystemdUnavailable }
+	t.Cleanup(func() { autoSyncCheckBackgroundSupport = oldChecker })
+
+	var output bytes.Buffer
+	if code := cmdAutoSync([]string{"enable"}, strings.NewReader(""), &output); code != 0 {
+		t.Fatalf("enable exit code = %d, want 0", code)
+	}
+	if !strings.Contains(output.String(), "自动 Session 同步已经开启") {
+		t.Fatalf("enable output = %q", output.String())
+	}
+}
+
 func TestAutoSyncEnableRejectsNonInteractiveInput(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
@@ -211,6 +229,9 @@ func TestRunRoutesAutoSyncStatus(t *testing.T) {
 
 func TestRunStatusPrintsAutoSyncBeforeRequiredUpdateFailure(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	oldEnsure := autoSyncEnsure
+	autoSyncEnsure = func() error { return nil }
+	t.Cleanup(func() { autoSyncEnsure = oldEnsure })
 	if err := saveAutoSyncConfig(autoSyncConfig{SchemaVersion: 1, Enabled: true, DailyTime: "18:00"}); err != nil {
 		t.Fatal(err)
 	}

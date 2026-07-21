@@ -91,6 +91,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStart=` + executableArg + ` auto-sync daemon-run
+KillMode=control-group
 Restart=on-failure
 RestartSec=10s
 

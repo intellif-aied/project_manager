@@ -49,6 +49,7 @@ func TestInstallSystemdUserUnitStartsAutoSyncDaemon(t *testing.T) {
 	unit := string(data)
 	for _, want := range []string{
 		`ExecStart="/opt/Aida CLI/aida" auto-sync daemon-run`,
+		"KillMode=control-group",
 		"Restart=on-failure",
 		"RestartSec=10s",
 		"WantedBy=default.target",

@@ -131,7 +131,7 @@ func run(args []string) int {
 	}
 
 	if args[0] != "auto-sync" {
-		if err := ensureAutoSyncBackground(); err != nil {
+		if err := autoSyncEnsure(); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: automatic Session sync background check failed: %v\n", err)
 		}
 	}
