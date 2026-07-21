@@ -115,6 +115,26 @@ type AdapterRelease struct {
 
 type ReleasePolicy map[string]AdapterRelease
 
+// ReportOnlyReleasePolicy enables the independently shipped report adapters.
+// Usage remains unavailable until each adapter passes exact token reconciliation.
+func ReportOnlyReleasePolicy(clientVersion string) ReleasePolicy {
+	clientVersion = strings.TrimSpace(clientVersion)
+	if clientVersion == "" {
+		return ReleasePolicy{}
+	}
+	return ReleasePolicy{
+		"opencode": {
+			ClientVersion: clientVersion, AdapterVersion: "opencode-v1", MaximumUsageCapability: "unavailable",
+		},
+		"kimi_code": {
+			ClientVersion: clientVersion, AdapterVersion: "kimi-code-v1", MaximumUsageCapability: "unavailable",
+		},
+		"openclaw": {
+			ClientVersion: clientVersion, AdapterVersion: "openclaw-v1", MaximumUsageCapability: "unavailable",
+		},
+	}
+}
+
 // ValidateReleasedPrepare is the server-owned rollout gate. A client cannot
 // enable an adapter or promote itself to estimated/exact by changing request
 // metadata. An empty policy intentionally disables every canonical adapter.

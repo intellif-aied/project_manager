@@ -73,9 +73,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to init session sync handler: %v", err)
 	}
-	// Canonical adapters stay disabled until each client passes its independent
-	// real-client acceptance gate and receives an explicit release policy.
-	canonicalSyncService, err := canonicalsync.NewService(database, canonicalsync.ReleasePolicy{})
+	// Keep the legacy Claude/Codex path unchanged while independently enabling
+	// the report-only adapters shipped by Aida CLI 0.1.17.
+	canonicalSyncService, err := canonicalsync.NewService(database, canonicalsync.ReportOnlyReleasePolicy("0.1.17"))
 	if err != nil {
 		log.Fatalf("Failed to init canonical session sync service: %v", err)
 	}

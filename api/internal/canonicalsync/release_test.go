@@ -46,3 +46,19 @@ func TestReleasedAdapterPolicyCannotBeClientPromoted(t *testing.T) {
 		t.Fatal("WorkBuddy must remain unreleased")
 	}
 }
+
+func TestReportOnlyReleasePolicyEnablesOnlyApprovedAdapters(t *testing.T) {
+	policy := ReportOnlyReleasePolicy(" 0.1.17 ")
+	for _, clientType := range []string{"opencode", "kimi_code", "openclaw"} {
+		release, ok := policy[clientType]
+		if !ok || release.ClientVersion != "0.1.17" || release.MaximumUsageCapability != "unavailable" {
+			t.Fatalf("release[%s]=%+v ok=%v", clientType, release, ok)
+		}
+	}
+	if _, ok := policy["workbuddy"]; ok {
+		t.Fatal("WorkBuddy must remain detected-only")
+	}
+	if policy := ReportOnlyReleasePolicy(" "); len(policy) != 0 {
+		t.Fatalf("empty client version must fail closed: %+v", policy)
+	}
+}
