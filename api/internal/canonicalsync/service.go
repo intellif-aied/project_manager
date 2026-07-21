@@ -15,13 +15,16 @@ import (
 
 const contentParserVersion = "session-content-v2"
 
-type Service struct{ db *sql.DB }
+type Service struct {
+	db            *sql.DB
+	releasePolicy ReleasePolicy
+}
 
-func NewService(database *sql.DB) (*Service, error) {
+func NewService(database *sql.DB, releasePolicy ReleasePolicy) (*Service, error) {
 	if database == nil {
 		return nil, errors.New("database is required")
 	}
-	return &Service{db: database}, nil
+	return &Service{db: database, releasePolicy: releasePolicy}, nil
 }
 
 func (s *Service) PrepareFamily(ctx context.Context, userID string, request PrepareRequest) ([]PrepareResult, error) {
@@ -31,7 +34,7 @@ func (s *Service) PrepareFamily(ctx context.Context, userID string, request Prep
 	if err := ValidatePrepare(request); err != nil {
 		return nil, err
 	}
-	if err := ValidateReleasedPrepare(request); err != nil {
+	if err := ValidateReleasedPrepare(request, s.releasePolicy); err != nil {
 		return nil, err
 	}
 	normalizePrepare(&request)

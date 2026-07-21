@@ -36,7 +36,9 @@ func TestPrepareFamilyRegistersParentAndCanonicalSourceAtomically(t *testing.T) 
 	if _, err = db.Exec(`INSERT INTO users(id,username) VALUES($1,'canonical-family-test')`, userID); err != nil {
 		t.Fatal(err)
 	}
-	service, err := NewService(db)
+	service, err := NewService(db, ReleasePolicy{"opencode": {
+		ClientVersion: "test", AdapterVersion: "opencode-v1", MaximumUsageCapability: "unavailable",
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}

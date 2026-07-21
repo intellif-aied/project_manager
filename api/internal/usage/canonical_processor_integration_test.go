@@ -68,7 +68,9 @@ func TestCanonicalExactUsageIsAttributedToDeclaredForkOwnerIntegration(t *testin
 	}
 	at := time.Date(2026, 7, 21, 3, 4, 5, 0, time.UTC)
 	body := []byte(`{"schema":"aida.session.event.v1","event_id":"usage-1","timestamp":"2026-07-21T03:04:05Z","type":"usage","payload":{"usage_fact_id":"opencode:req-1","owner_session_ref":"parent","identity_strategy":"native_request_id","occurred_at":"2026-07-21T03:04:05Z","model":"model-x","counter_mode":"delta","uncached_input_tokens":10,"cache_read_input_tokens":2,"cache_creation_5m_input_tokens":1,"cache_creation_1h_input_tokens":0,"output_tokens":4,"reasoning_output_tokens":1,"total_tokens":17,"quality":"exact"}}` + "\n")
-	canonicalService, err := canonicalsync.NewService(db)
+	canonicalService, err := canonicalsync.NewService(db, canonicalsync.ReleasePolicy{"opencode": {
+		ClientVersion: "test", AdapterVersion: "opencode-v1", MaximumUsageCapability: "unavailable",
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}

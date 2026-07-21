@@ -36,7 +36,7 @@ func (runner *fakeRunner) Run(_ context.Context, args ...string) ([]byte, error)
 	}
 	events := strings.Join([]string{
 		`{"traceSchema":"openclaw-trajectory","schemaVersion":1,"traceId":"trace-1","source":"runtime","type":"prompt.submitted","ts":"2026-07-21T01:00:00Z","sourceSeq":1,"sessionId":"native-1","data":{"prompt":"must-not-upload"}}`,
-		`{"traceSchema":"openclaw-trajectory","schemaVersion":1,"traceId":"trace-1","source":"transcript","type":"user.message","ts":"2026-07-21T01:00:01Z","sourceSeq":1,"sessionId":"native-1","entryId":"entry-1","data":{"message":{"role":"user","content":[{"type":"text","text":"fix the bug"}]}}}`,
+		`{"traceSchema":"openclaw-trajectory","schemaVersion":1,"traceId":"trace-1","source":"transcript","type":"message.user","ts":"2026-07-21T01:00:01Z","sourceSeq":1,"sessionId":"native-1","entryId":"entry-1","data":{"message":{"role":"user","content":[{"type":"text","text":"fix the bug"}]}}}`,
 		`{"traceSchema":"openclaw-trajectory","schemaVersion":1,"traceId":"trace-1","source":"transcript","type":"tool.call","ts":"2026-07-21T01:00:02Z","sourceSeq":2,"sessionId":"native-1","entryId":"entry-2","data":{"name":"Read","arguments":{"secret":"must-not-upload"}}}`,
 		`{"traceSchema":"openclaw-trajectory","schemaVersion":1,"traceId":"trace-1","source":"transcript","type":"session.compaction","ts":"2026-07-21T01:00:03Z","sourceSeq":3,"sessionId":"native-1","entryId":"entry-3","data":{"summary":"must-not-upload"}}`,
 	}, "\n") + "\n"

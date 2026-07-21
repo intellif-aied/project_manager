@@ -73,7 +73,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to init session sync handler: %v", err)
 	}
-	canonicalSyncService, err := canonicalsync.NewService(database)
+	// Canonical adapters stay disabled until each client passes its independent
+	// real-client acceptance gate and receives an explicit release policy.
+	canonicalSyncService, err := canonicalsync.NewService(database, canonicalsync.ReleasePolicy{})
 	if err != nil {
 		log.Fatalf("Failed to init canonical session sync service: %v", err)
 	}

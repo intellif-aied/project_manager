@@ -14,27 +14,35 @@ func TestReleasedAdapterPolicyCannotBeClientPromoted(t *testing.T) {
 			}},
 		}},
 	}
-	if err := ValidateReleasedPrepare(request); err != nil {
+	policy := ReleasePolicy{"opencode": {
+		ClientVersion: "test", AdapterVersion: "opencode-v1", MaximumUsageCapability: "unavailable",
+	}}
+	if err := ValidateReleasedPrepare(request, nil); err == nil {
+		t.Fatal("canonical adapters must be disabled by default")
+	}
+	if err := ValidateReleasedPrepare(request, ReleasePolicy{"opencode": {}}); err == nil {
+		t.Fatal("incomplete release policy must not enable an adapter")
+	}
+	if err := ValidateReleasedPrepare(request, policy); err != nil {
 		t.Fatal(err)
 	}
 	request.Sessions[0].Sources[0].IngestionMetadata.UsageCapability = "exact"
-	if err := ValidateReleasedPrepare(request); err == nil {
+	if err := ValidateReleasedPrepare(request, policy); err == nil {
 		t.Fatal("client must not self-promote exact usage")
 	}
-	request.Sessions[0].AgentType = "openclaw"
-	request.Sessions[0].Sources[0].IngestionMetadata.AdapterVersion = "openclaw-v1"
 	request.Sessions[0].Sources[0].IngestionMetadata.UsageCapability = "unavailable"
-	if err := ValidateReleasedPrepare(request); err != nil {
-		t.Fatal(err)
+	request.ClientVersion = "other"
+	if err := ValidateReleasedPrepare(request, policy); err == nil {
+		t.Fatal("unreleased Aida client version must be rejected")
 	}
-	request.Sessions[0].Sources[0].IngestionMetadata.UsageCapability = "estimated"
-	if err := ValidateReleasedPrepare(request); err == nil {
-		t.Fatal("OpenClaw must remain usage unavailable")
+	request.ClientVersion = "test"
+	request.Sessions[0].Sources[0].IngestionMetadata.AdapterVersion = "other"
+	if err := ValidateReleasedPrepare(request, policy); err == nil {
+		t.Fatal("unreleased adapter version must be rejected")
 	}
 	request.Sessions[0].AgentType = "workbuddy"
 	request.Sessions[0].Sources[0].IngestionMetadata.AdapterVersion = "workbuddy-v1"
-	request.Sessions[0].Sources[0].IngestionMetadata.UsageCapability = "unavailable"
-	if err := ValidateReleasedPrepare(request); err == nil {
+	if err := ValidateReleasedPrepare(request, policy); err == nil {
 		t.Fatal("WorkBuddy must remain unreleased")
 	}
 }

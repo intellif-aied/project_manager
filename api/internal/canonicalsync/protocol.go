@@ -107,23 +107,29 @@ func validUsageCapability(value string) bool {
 	}
 }
 
-var releasedAdapters = map[string]map[string]string{
-	"opencode":  {"opencode-v1": "unavailable"},
-	"kimi_code": {"kimi-code-v1": "unavailable"},
-	"openclaw":  {"openclaw-v1": "unavailable"},
+type AdapterRelease struct {
+	ClientVersion          string
+	AdapterVersion         string
+	MaximumUsageCapability string
 }
 
+type ReleasePolicy map[string]AdapterRelease
+
 // ValidateReleasedPrepare is the server-owned rollout gate. A client cannot
-// promote itself to estimated/exact by changing request metadata.
-func ValidateReleasedPrepare(request PrepareRequest) error {
+// enable an adapter or promote itself to estimated/exact by changing request
+// metadata. An empty policy intentionally disables every canonical adapter.
+func ValidateReleasedPrepare(request PrepareRequest, policy ReleasePolicy) error {
 	for _, session := range request.Sessions {
-		adapters, ok := releasedAdapters[strings.TrimSpace(session.AgentType)]
-		if !ok {
+		release, ok := policy[strings.TrimSpace(session.AgentType)]
+		if !ok || strings.TrimSpace(release.ClientVersion) == "" ||
+			strings.TrimSpace(request.ClientVersion) != release.ClientVersion ||
+			strings.TrimSpace(release.AdapterVersion) == "" ||
+			!validUsageCapability(release.MaximumUsageCapability) {
 			return fmt.Errorf("%w: client type is not released for canonical upload", ErrInvalidRequest)
 		}
 		for _, source := range session.Sources {
-			maximum, ok := adapters[strings.TrimSpace(source.IngestionMetadata.AdapterVersion)]
-			if !ok || usageCapabilityRank(source.IngestionMetadata.UsageCapability) > usageCapabilityRank(maximum) {
+			if strings.TrimSpace(source.IngestionMetadata.AdapterVersion) != release.AdapterVersion ||
+				usageCapabilityRank(source.IngestionMetadata.UsageCapability) > usageCapabilityRank(release.MaximumUsageCapability) {
 				return fmt.Errorf("%w: adapter version or usage capability is not released", ErrInvalidRequest)
 			}
 		}

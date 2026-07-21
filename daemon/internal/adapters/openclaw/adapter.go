@@ -245,7 +245,7 @@ func readTranscriptEvents(path, sessionRef, sessionID string) ([]canonical.Event
 
 func projectTranscriptEvent(event trajectoryEvent) (canonical.EventType, string, bool) {
 	switch event.Type {
-	case "user.message", "assistant.message":
+	case "message.user", "message.assistant":
 		summary := readableText(event.Data["message"])
 		return canonical.EventMessage, summary, summary != ""
 	case "tool.call":
