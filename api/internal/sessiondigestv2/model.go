@@ -254,7 +254,7 @@ func DefaultConfig() Config {
 		DigestVersion:    Version,
 		RedactionVersion: RedactionVersion,
 		ItemMaxBytes:     DefaultItemBytes,
-		ReconcileBatch:   1,
+		ReconcileBatch:   10,
 		WorkerBatch:      1,
 	}
 }
@@ -270,7 +270,7 @@ func (c Config) Normalized() (Config, error) {
 		c.ItemMaxBytes = DefaultItemBytes
 	}
 	if c.ReconcileBatch == 0 {
-		c.ReconcileBatch = 1
+		c.ReconcileBatch = 10
 	}
 	if c.WorkerBatch == 0 {
 		c.WorkerBatch = 1
