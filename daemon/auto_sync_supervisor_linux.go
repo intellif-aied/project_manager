@@ -28,9 +28,6 @@ func checkAutoSyncBackgroundSupport() error {
 }
 
 func startAutoSyncBackground() error {
-	if err := checkAutoSyncBackgroundSupport(); err != nil {
-		return err
-	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
@@ -39,7 +36,7 @@ func startAutoSyncBackground() error {
 	if err != nil {
 		return err
 	}
-	return installSystemdAutoSyncUnit(home, executable, runAutoSyncSystemctl)
+	return ensureSystemdAutoSyncUnit(home, executable, runAutoSyncSystemctl)
 }
 
 func stopAutoSyncBackground() error {
@@ -133,4 +130,11 @@ WantedBy=default.target
 		return fmt.Errorf("start systemd user unit: %w", err)
 	}
 	return nil
+}
+
+func ensureSystemdAutoSyncUnit(home, executable string, run autoSyncSystemctlRunner) error {
+	if err := run("--user", "is-active", "--quiet", "aida-auto-sync.service"); err == nil {
+		return nil
+	}
+	return installSystemdAutoSyncUnit(home, executable, run)
 }

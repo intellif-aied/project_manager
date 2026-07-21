@@ -475,7 +475,7 @@ func cmdAutoSync(args []string, input io.Reader, output io.Writer) int {
 		effectiveAt := time.Date(now.Year(), now.Month(), now.Day(), parsed.Hour(), parsed.Minute(), 0, 0, now.Location())
 		var pastChoice *autoSyncStartChoice
 		if effectiveAt.Before(now) {
-			choice, cancelled, chooseErr := autoSyncChoosePastTime(value, reader, output)
+			choice, cancelled, chooseErr := autoSyncChoosePastTime(value, input, output)
 			if chooseErr != nil {
 				fmt.Fprintf(output, "选择首次同步时间失败：%v\n", chooseErr)
 				return 1
@@ -595,7 +595,7 @@ func cmdAutoSync(args []string, input io.Reader, output io.Writer) int {
 		effectiveAt := time.Date(now.Year(), now.Month(), now.Day(), parsed.Hour(), parsed.Minute(), 0, 0, now.Location())
 		var pastChoice *autoSyncStartChoice
 		if effectiveAt.Before(now) {
-			choice, cancelled, err := autoSyncChoosePastTime(value, reader, output)
+			choice, cancelled, err := autoSyncChoosePastTime(value, input, output)
 			if err != nil {
 				fmt.Fprintf(output, "选择首次同步时间失败：%v\n", err)
 				return 1

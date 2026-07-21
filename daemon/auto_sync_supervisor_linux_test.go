@@ -83,3 +83,24 @@ func TestAutoSyncFileLockIsExclusiveAndReleasable(t *testing.T) {
 	}
 	releaseAgain()
 }
+
+func TestEnsureSystemdUnitLeavesActiveServiceRunning(t *testing.T) {
+	home := t.TempDir()
+	var calls [][]string
+	runner := func(args ...string) error {
+		calls = append(calls, append([]string(nil), args...))
+		return nil
+	}
+
+	if err := ensureSystemdAutoSyncUnit(home, "/opt/aida", runner); err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{{"--user", "is-active", "--quiet", "aida-auto-sync.service"}}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("systemctl calls = %#v, want %#v", calls, want)
+	}
+	unitPath := filepath.Join(home, ".config", "systemd", "user", "aida-auto-sync.service")
+	if _, err := os.Stat(unitPath); !os.IsNotExist(err) {
+		t.Fatalf("active ensure rewrote unit: %v", err)
+	}
+}
