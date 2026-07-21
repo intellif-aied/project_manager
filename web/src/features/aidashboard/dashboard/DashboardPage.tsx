@@ -3370,6 +3370,9 @@ function toSessionOption(session: Session): SessionOption {
 function getAgentLabel(agentType: string) {
   if (agentType === "codex") return "Codex session";
   if (agentType === "claude_code") return "Claude Code session";
+  if (agentType === "opencode") return "OpenCode session";
+  if (agentType === "kimi_code") return "Kimi Code session";
+  if (agentType === "workbuddy") return "WorkBuddy session";
   return `${agentType || "AI"} session`;
 }
 

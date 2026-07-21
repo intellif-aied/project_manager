@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -103,6 +104,61 @@ func TestIncrementalUploadRetriesResponseLossAndResumes(t *testing.T) {
 	if serverState.acceptedChunks != 2 || serverState.finalizeRequests != 2 || string(serverState.content) != string(append(content, newContent...)) {
 		t.Fatalf("incremental server state: accepted=%d finalize=%d content=%d",
 			serverState.acceptedChunks, serverState.finalizeRequests, len(serverState.content))
+	}
+}
+
+func TestLegacySessionPrepareRequestGolden(t *testing.T) {
+	var got prepareBatchRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/session-syncs/prepare" || r.Header.Get("Authorization") != "Bearer legacy-token" {
+			http.Error(w, "unexpected legacy request", http.StatusBadRequest)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeTestJSON(w, map[string]any{"results": []map[string]any{{
+			"session_ref": "legacy-codex", "source_key": "codex:legacy-codex:main",
+			"content_status": "cleared", "action": "content_cleared",
+		}}})
+	}))
+	defer server.Close()
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	sourcePath := filepath.Join(home, "legacy-codex.jsonl")
+	if err := os.WriteFile(sourcePath, []byte("{}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	startedAt := time.Date(2026, 7, 21, 1, 2, 3, 0, time.UTC)
+	lastActivityAt := startedAt.Add(2 * time.Minute)
+	session := &SessionInfo{
+		SessionRef: "legacy-codex", AgentType: "codex", FilePath: sourcePath,
+		StartedAt: startedAt, EndedAt: lastActivityAt, Cwd: "/workspace/project",
+		ProjectDir: "project", Summary: "legacy summary",
+	}
+	results, err := uploadSessionGroupIncremental(
+		&Config{APIURL: server.URL, Token: "legacy-token"},
+		[]sessionWithFile{{info: session, filePath: sourcePath}},
+		session.SessionRef,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].Status != "content_cleared" {
+		t.Fatalf("results=%+v", results)
+	}
+	want := prepareBatchRequest{ClientVersion: Version, Sessions: []prepareSessionRequest{{
+		SessionRef: "legacy-codex", AgentType: "codex", Summary: "legacy summary",
+		StartedAt: &startedAt, LastActivityAt: &lastActivityAt, CWD: "/workspace/project", ProjectName: "project",
+		Sources: []prepareSourceRequest{{
+			SourceRole: "main", SourceKey: "codex:legacy-codex:main", LocalSize: 3,
+			PrefixCheckpointAlgorithmVersion: prefixCheckpointAlgorithm,
+		}},
+	}}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("legacy Prepare contract changed\n got=%+v\nwant=%+v", got, want)
 	}
 }
 

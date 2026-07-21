@@ -53,6 +53,7 @@ type meteringGeneration struct {
 	ID             string
 	SessionID      string
 	Provider       string
+	SourceFormat   string
 	ExpectedCursor int64
 	PrefixHash     string
 	ContentStatus  string
@@ -129,13 +130,13 @@ func (p *MeteringProcessor) manifestAlreadyValidated(ctx context.Context, genera
 func (p *MeteringProcessor) scanGeneration(ctx context.Context, generationID string, epoch int64) (meteringScan, error) {
 	var scan meteringScan
 	err := p.db.QueryRowContext(ctx, `
-		SELECT g.id, s.id, s.agent_type, g.expected_cursor, g.prefix_checkpoint_hash,
+		SELECT g.id, s.id, s.agent_type, src.source_format, g.expected_cursor, g.prefix_checkpoint_hash,
 			s.content_status, s.content_epoch
 		FROM session_source_generations g
 		JOIN session_sources src ON src.id = g.source_id
 		JOIN sessions s ON s.id = src.session_id
 		WHERE g.id = $1`, generationID).Scan(
-		&scan.Generation.ID, &scan.Generation.SessionID, &scan.Generation.Provider,
+		&scan.Generation.ID, &scan.Generation.SessionID, &scan.Generation.Provider, &scan.Generation.SourceFormat,
 		&scan.Generation.ExpectedCursor, &scan.Generation.PrefixHash,
 		&scan.Generation.ContentStatus, &scan.Generation.ContentEpoch,
 	)
@@ -185,7 +186,12 @@ func (p *MeteringProcessor) scanGeneration(ctx context.Context, generationID str
 			return meteringScan{}, err
 		}
 		_, _ = sourceHasher.Write(content)
-		parsed, err := ParseProviderChunk(scan.Generation.Provider, bytes.NewReader(content), chunk.StartCursor, state)
+		var parsed ParseResult
+		if scan.Generation.SourceFormat == "aida_event_v1" {
+			parsed, err = ParseCanonicalChunk(scan.Generation.Provider, bytes.NewReader(content), chunk.StartCursor, state)
+		} else {
+			parsed, err = ParseProviderChunk(scan.Generation.Provider, bytes.NewReader(content), chunk.StartCursor, state)
+		}
 		if err != nil {
 			return meteringScan{}, fmt.Errorf("%w: %v", ErrMeteringEnvelopeUnsafe, err)
 		}
@@ -245,24 +251,26 @@ func (p *MeteringProcessor) readVerifiedChunk(ctx context.Context, chunk meterin
 func writeEnvelopeChecksum(hasher hash.Hash, entry meteringRecord) {
 	counters, _ := json.Marshal(entry.Record.Counters)
 	payload, _ := json.Marshal(struct {
-		ChunkID        string          `json:"chunk_id"`
-		Start          int64           `json:"start"`
-		End            int64           `json:"end"`
-		Provider       string          `json:"provider"`
-		EventKey       string          `json:"event_key"`
-		Fingerprint    string          `json:"fingerprint"`
-		OccurredAt     time.Time       `json:"occurred_at"`
-		Model          string          `json:"model"`
-		RawUsage       json.RawMessage `json:"raw_usage"`
-		Counters       json.RawMessage `json:"counters"`
-		RawUsageHash   string          `json:"raw_usage_hash"`
-		SourceLineHash string          `json:"source_line_hash"`
+		ChunkID         string          `json:"chunk_id"`
+		Start           int64           `json:"start"`
+		End             int64           `json:"end"`
+		Provider        string          `json:"provider"`
+		EventKey        string          `json:"event_key"`
+		Fingerprint     string          `json:"fingerprint"`
+		OccurredAt      time.Time       `json:"occurred_at"`
+		Model           string          `json:"model"`
+		RawUsage        json.RawMessage `json:"raw_usage"`
+		Counters        json.RawMessage `json:"counters"`
+		RawUsageHash    string          `json:"raw_usage_hash"`
+		OwnerSessionRef string          `json:"owner_session_ref,omitempty"`
+		SourceLineHash  string          `json:"source_line_hash"`
 	}{
 		ChunkID: entry.ChunkID, Start: entry.Record.SourceStartCursor, End: entry.Record.SourceEndCursor,
 		Provider: entry.Record.Provider, EventKey: entry.Record.EventKey,
 		Fingerprint: entry.Record.ProviderFingerprint, OccurredAt: entry.Record.OccurredAt,
 		Model: entry.Record.RawModel, RawUsage: entry.Record.RawUsage, Counters: counters,
-		RawUsageHash: entry.Record.RawUsageHash, SourceLineHash: entry.LineHash,
+		RawUsageHash: entry.Record.RawUsageHash, OwnerSessionRef: entry.Record.OwnerSessionRef,
+		SourceLineHash: entry.LineHash,
 	})
 	_, _ = hasher.Write(payload)
 	_, _ = hasher.Write([]byte{'\n'})
@@ -334,16 +342,18 @@ func (p *MeteringProcessor) persistEnvelope(ctx context.Context, job sessionsync
 				manifest_id, generation_id, chunk_id, source_start_cursor, source_end_cursor,
 				provider, usage_event_key, identity_strategy, provider_event_fingerprint,
 				occurred_at, raw_model, raw_usage_json, parsed_counters_json,
-				raw_usage_hash, source_record_hash, quality_status, quality_reason, envelope_version
+				raw_usage_hash, source_record_hash, quality_status, quality_reason, envelope_version,
+				owner_session_ref
 			) VALUES (
 				$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, ''),
-				$12, $13, $14, $15, $16, NULLIF($17, ''), $18
+				$12, $13, $14, $15, $16, NULLIF($17, ''), $18, NULLIF($19, '')
 			)`, manifestID, scan.Generation.ID, entry.ChunkID,
 			entry.Record.SourceStartCursor, entry.Record.SourceEndCursor,
 			entry.Record.Provider, entry.Record.EventKey, entry.Record.IdentityStrategy,
 			entry.Record.ProviderFingerprint, entry.Record.OccurredAt, entry.Record.RawModel,
 			[]byte(entry.Record.RawUsage), counters, entry.Record.RawUsageHash, entry.LineHash,
-			entry.Record.Quality, entry.Record.QualityReason, MeteringEnvelopeVersion); err != nil {
+			entry.Record.Quality, entry.Record.QualityReason, MeteringEnvelopeVersion,
+			entry.Record.OwnerSessionRef); err != nil {
 			return err
 		}
 	}

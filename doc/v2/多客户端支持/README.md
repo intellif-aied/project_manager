@@ -1,7 +1,7 @@
 # 多客户端支持
 
-> 文档状态：方案储备，尚未定稿、尚未开发
-> 更新时间：2026-07-17
+> 文档状态：P0 已实现，等待真实客户端人工验收；尚未发布
+> 更新时间：2026-07-21
 > 优先级：低于 Aida CLI 稳定性、升级通道和现有 Claude Code/Codex 链路
 
 ## 1. 目录边界
@@ -14,7 +14,8 @@
 - Kimi Code；
 - OpenClaw；
 - harness.lol；
-- ZCode 及后续经过评审的客户端。
+- ZCode；
+- 腾讯 WorkBuddy 及后续经过评审的客户端。
 
 以下内容不属于本目录：
 
@@ -30,13 +31,21 @@
 
 多客户端支持具备可行性，但不应影响已经验收的 Claude Code/Codex 上传、Token、成本和默认 Agent 流程。
 
-现阶段不进入正式开发。后续启动时遵循以下顺序：
+P0 已按以下顺序完成代码实现：
 
 1. 获取脱敏真实样本和稳定版本证据；
 2. 冻结 Adapter 与 Canonical Event 契约；
 3. 先提供报告内容能力；
-4. Token 与成本按客户端独立立项和对账；
+4. Token 按客户端独立解析和对账，但统一输出 Aida Usage 事实；
 5. 每个客户端使用独立开关、独立验收和独立回滚。
+
+当前实现状态：
+
+- 原 `aida upload`、Claude Code/Codex Prepare/Chunk/Finalize 和原生 Token parser 未迁移、未改写；legacy Golden 与数据库集成回归通过。
+- 新增 `aida clients` 与 `aida upload-client`，仅走独立 canonical Prepare；OpenCode/Kimi Code 已具备报告内容候选能力，等待真实版本人工验证。
+- Canonical Usage 的 exact 字段、服务端解析、owner 归属与跨父子 source claim 已通过合成父子 Session 数据库集成测试；OpenCode/Kimi Code 在真实逐调用对账前仍上报 `usage_capability=unavailable`，不会显示错误的 0 或估算值。
+- 腾讯 WorkBuddy 仅做发现与明确诊断，不读取未公开本地数据库，不允许 Materialize/Upload；等待官方机器可读导出契约。
+- 尚未提交、推送、合并、发布，也未在现有测试服务数据库执行 migration 026。
 
 新增客户端默认能力为：
 
@@ -45,12 +54,14 @@ content_capability = report
 usage_capability = unavailable
 ```
 
-没有逐事件真实对账证据时，不得把 Token 显示为 0，也不得进入成本统计。
+没有逐事件真实对账证据时，不得把 Token 显示为 0，也不得进入成本统计。对外称为“完整支持”的客户端必须达到 `report + exact`；只达到 `report` 的客户端必须明确标记为“仅报告内容”。
 
 ## 3. 不变约束
 
-- 不修改 Claude Code/Codex 已验证的原生上传和 Token 口径。
+- **最高约束：不得影响 Claude Code/Codex 现有统计。** 两者当前的扫描、Session 分组、Prepare/Chunk/Finalize、原生 parser、usage fingerprint、claim、contribution、family rollup、成本和展示结果全部冻结；新增客户端不得要求它们迁移到 Adapter、Canonical Event 或新的上传流程。
+- 新增客户端只能通过独立的 canonical seam 接入；任何 Claude Code/Codex 逐事实、Session、family 或成本回归都立即停止本期开发和发布。
 - 不把“能读取会话正文”等同于“能准确统计 Token”。
+- 主 Session、subagent 和 fork 共享的历史 usage 只能归属并计数一次；缺少稳定计费事实身份或 fork 基线时不得标记 `exact`。
 - 不读取第三方客户端凭据、全局诊断日志或未选择的私人会话。
 - 不以标题、时间或摘要代替稳定 Session ID。
 - 不因一个新增客户端失败而影响其他客户端上传。
@@ -71,5 +82,5 @@ usage_capability = unavailable
 2. 每个客户端至少有三份可合法使用的脱敏真实样本；
 3. 明确稳定 Session ID、增量边界和内容导出来源；
 4. 产品接受首期 Token 显示“暂不支持”；
-5. Claude Code/Codex 核心回归基线已冻结；
+5. Claude Code/Codex 核心回归基线已冻结，包含原始 fixture、上传协议结果、逐事实 Token、Session/family 汇总和成本 Golden；
 6. 完成新一轮产品、架构和测试一致性评审。

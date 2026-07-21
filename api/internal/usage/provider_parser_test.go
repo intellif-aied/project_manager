@@ -9,7 +9,59 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestLegacyProviderContractGolden(t *testing.T) {
+	type goldenRecord struct {
+		EventKey            string
+		ProviderFingerprint string
+		IdentityStrategy    string
+		OccurredAt          string
+		Model               string
+		Counters            TokenCounters
+		Delta               TokenCounters
+		Quality             QualityStatus
+		QualityReason       string
+	}
+	project := func(records []UsageRecord) []goldenRecord {
+		golden := make([]goldenRecord, 0, len(records))
+		for _, record := range records {
+			golden = append(golden, goldenRecord{
+				EventKey: record.EventKey, ProviderFingerprint: record.ProviderFingerprint,
+				IdentityStrategy: record.IdentityStrategy, OccurredAt: record.OccurredAt.Format(time.RFC3339),
+				Model: record.RawModel, Counters: record.Counters, Delta: record.Delta,
+				Quality: record.Quality, QualityReason: record.QualityReason,
+			})
+		}
+		return golden
+	}
+
+	t.Run("claude_code", func(t *testing.T) {
+		got := project(parseUsageFixture(t, "claude_monotonic.jsonl", "claude_code", ParseState{}).Records)
+		want := []goldenRecord{
+			{EventKey: "claude:message:msg-1", ProviderFingerprint: "claude:message:msg-1", IdentityStrategy: "message.id", OccurredAt: "2026-07-10T01:01:00Z", Model: "claude-test", Counters: TokenCounters{InputTokens: 100, CachedInputTokens: 30, CacheCreationTokens: 10, OutputTokens: 20, TotalTokens: 160}, Delta: TokenCounters{InputTokens: 100, CachedInputTokens: 30, CacheCreationTokens: 10, OutputTokens: 20, TotalTokens: 160}, Quality: QualityExact},
+			{EventKey: "claude:message:msg-1", ProviderFingerprint: "claude:message:msg-1", IdentityStrategy: "message.id", OccurredAt: "2026-07-10T01:02:00Z", Model: "claude-test", Counters: TokenCounters{InputTokens: 120, CachedInputTokens: 35, CacheCreationTokens: 10, OutputTokens: 25, TotalTokens: 190}, Delta: TokenCounters{InputTokens: 120, CachedInputTokens: 35, CacheCreationTokens: 10, OutputTokens: 25, TotalTokens: 190}, Quality: QualityExact},
+			{EventKey: "claude:message:msg-2", ProviderFingerprint: "claude:message:msg-2", IdentityStrategy: "message.id", OccurredAt: "2026-07-11T02:00:00Z", Model: "claude-test", Counters: TokenCounters{InputTokens: 50, OutputTokens: 10, TotalTokens: 60}, Delta: TokenCounters{InputTokens: 50, OutputTokens: 10, TotalTokens: 60}, Quality: QualityExact},
+			{EventKey: "claude:message:msg-2", ProviderFingerprint: "claude:message:msg-2", IdentityStrategy: "message.id", OccurredAt: "2026-07-11T02:01:00Z", Model: "claude-test", Counters: TokenCounters{InputTokens: 50, OutputTokens: 10, TotalTokens: 60}, Delta: TokenCounters{InputTokens: 50, OutputTokens: 10, TotalTokens: 60}, Quality: QualityExact},
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("legacy Claude contract changed\n got=%+v\nwant=%+v", got, want)
+		}
+	})
+
+	t.Run("codex", func(t *testing.T) {
+		got := project(parseUsageFixture(t, "codex_cumulative.jsonl", "codex", ParseState{}).Records)
+		const estimatedReason = "Codex token_count has no stable cross-source provider event id"
+		want := []goldenRecord{
+			{EventKey: "codex:segment:0:cursor:245:475", ProviderFingerprint: "codex:segment:0:cursor:245:475:cf284db17dc2cc0488af0f3120578a76acf9a51d0bc208384c658306564d7863", IdentityStrategy: "generation_cursor", OccurredAt: "2026-07-10T03:02:00Z", Model: "gpt-test", Counters: TokenCounters{InputTokens: 100, CachedInputTokens: 20, OutputTokens: 20, ReasoningTokens: 5, TotalTokens: 120}, Delta: TokenCounters{InputTokens: 100, CachedInputTokens: 20, OutputTokens: 20, ReasoningTokens: 5, TotalTokens: 120}, Quality: QualityEstimated, QualityReason: estimatedReason},
+			{EventKey: "codex:segment:0:cursor:475:706", ProviderFingerprint: "codex:segment:0:cursor:475:706:fd4683b3bc4f5ecd6fd3630ba758fb1a101c132f6bd344bc455db9b54588dfbf", IdentityStrategy: "generation_cursor", OccurredAt: "2026-07-11T04:00:00Z", Model: "gpt-test", Counters: TokenCounters{InputTokens: 180, CachedInputTokens: 50, OutputTokens: 40, ReasoningTokens: 10, TotalTokens: 220}, Delta: TokenCounters{InputTokens: 80, CachedInputTokens: 30, OutputTokens: 20, ReasoningTokens: 5, TotalTokens: 100}, Quality: QualityEstimated, QualityReason: estimatedReason},
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("legacy Codex contract changed\n got=%+v\nwant=%+v", got, want)
+		}
+	})
+}
 
 func TestClaudeMonotonicSnapshotsFoldToFinalObservation(t *testing.T) {
 	result := parseUsageFixture(t, "claude_monotonic.jsonl", "claude_code", ParseState{})

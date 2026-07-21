@@ -80,6 +80,8 @@ type UsageRecord struct {
 	Delta               TokenCounters
 	Quality             QualityStatus
 	QualityReason       string
+	OwnerSessionRef     string
+	OwnerSessionID      string
 }
 
 type ParseResult struct {

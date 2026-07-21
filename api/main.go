@@ -10,6 +10,7 @@ import (
 	"github.com/aidashboard/api/config"
 	"github.com/aidashboard/api/db"
 	"github.com/aidashboard/api/handler"
+	"github.com/aidashboard/api/internal/canonicalsync"
 	"github.com/aidashboard/api/internal/contentreader"
 	"github.com/aidashboard/api/internal/pricing"
 	"github.com/aidashboard/api/internal/reportcontext"
@@ -72,6 +73,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to init session sync handler: %v", err)
 	}
+	canonicalSyncService, err := canonicalsync.NewService(database)
+	if err != nil {
+		log.Fatalf("Failed to init canonical session sync service: %v", err)
+	}
+	canonicalSyncH := handler.NewCanonicalSyncHandler(canonicalSyncService)
 	reportH := handler.NewReportHandler(database)
 	reportSourceConfig, err := reportsource.ProductConfig().Normalized()
 	if err != nil {
@@ -242,6 +248,7 @@ func main() {
 	r.Post("/api/v1/auth/login", authH.Login)
 	r.Post("/api/v1/auth/register", authH.Register)
 	r.With(handler.CLIAuthMiddleware(database, cfg.AIHubSecret, aihubClient)).Post("/api/v1/session-syncs/prepare", sessionSyncH.Prepare)
+	r.With(handler.CLIAuthMiddleware(database, cfg.AIHubSecret, aihubClient)).Post("/api/v1/canonical-session-syncs/prepare", canonicalSyncH.Prepare)
 	r.With(handler.CLIAuthMiddleware(database, cfg.AIHubSecret, aihubClient)).Post("/api/v1/session-chunks/batch", sessionSyncH.UploadChunks)
 	r.With(handler.CLIAuthMiddleware(database, cfg.AIHubSecret, aihubClient)).Get("/api/v1/session-syncs/{generationId}/status", sessionSyncH.Status)
 	r.With(handler.CLIAuthMiddleware(database, cfg.AIHubSecret, aihubClient)).Post("/api/v1/session-syncs/{generationId}/finalize", sessionSyncH.Finalize)

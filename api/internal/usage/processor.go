@@ -92,6 +92,9 @@ type usageChunk struct {
 	SessionID           string
 	UserID              int64
 	Provider            string
+	SessionRef          string
+	SourceFormat        string
+	UsageCapability     string
 	GenerationStatus    string
 	GenerationHighWater int64
 }
@@ -162,12 +165,22 @@ func (p *Processor) processChunk(ctx context.Context, job sessionsync.Processing
 	}
 	var parsed ParseResult
 	if chunk.ObjectStatus == "available" {
-		parsed, err = ParseProviderChunk(chunk.Provider, bytes.NewReader(content), chunk.StartCursor, checkpoint.State)
+		if chunk.SourceFormat == "aida_event_v1" {
+			parsed, err = ParseCanonicalChunk(chunk.Provider, bytes.NewReader(content), chunk.StartCursor, checkpoint.State)
+		} else {
+			parsed, err = ParseProviderChunk(chunk.Provider, bytes.NewReader(content), chunk.StartCursor, checkpoint.State)
+		}
 	} else {
 		parsed, err = p.parseEnvelopeChunk(ctx, tx, chunk, checkpoint.State)
 	}
 	if err != nil {
 		return err
+	}
+	if chunk.SourceFormat == "aida_event_v1" {
+		if err := p.resolveCanonicalOwners(ctx, tx, chunk, &parsed); err != nil {
+			return err
+		}
+		applyCanonicalCapabilityGate(chunk.UsageCapability, &parsed)
 	}
 	if chunk.Provider == "codex" {
 		if err := p.applyCodexForkMetadata(ctx, tx, chunk.SessionID, &parsed); err != nil {
@@ -270,7 +283,9 @@ func (p *Processor) loadChunk(ctx context.Context, job sessionsync.ProcessingJob
 	err := p.db.QueryRowContext(ctx, `
 		SELECT c.id, c.generation_id, c.start_cursor, c.end_cursor, c.raw_object_key,
 			c.content_sha256, c.object_status,
-			src.id, s.id, s.user_id, s.agent_type, g.status, g.expected_cursor
+			src.id, s.id, s.user_id, s.agent_type, s.session_ref, src.source_format,
+			COALESCE(src.ingestion_metadata->>'usage_capability','unavailable'),
+			g.status, g.expected_cursor
 		FROM session_upload_chunks c
 		JOIN session_source_generations g ON g.id = c.generation_id
 		JOIN session_sources src ON src.id = g.source_id
@@ -278,12 +293,60 @@ func (p *Processor) loadChunk(ctx context.Context, job sessionsync.ProcessingJob
 		WHERE c.id = $1 AND c.generation_id = $2`, job.ChunkID.String, job.GenerationID.String).Scan(
 		&chunk.ID, &chunk.GenerationID, &chunk.StartCursor, &chunk.EndCursor,
 		&chunk.ObjectKey, &chunk.ContentHash, &chunk.ObjectStatus, &chunk.SourceID, &chunk.SessionID,
-		&chunk.UserID, &chunk.Provider, &chunk.GenerationStatus, &chunk.GenerationHighWater,
+		&chunk.UserID, &chunk.Provider, &chunk.SessionRef, &chunk.SourceFormat, &chunk.UsageCapability,
+		&chunk.GenerationStatus, &chunk.GenerationHighWater,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return usageChunk{}, ErrUsageUnavailable
 	}
 	return chunk, err
+}
+
+func applyCanonicalCapabilityGate(capability string, parsed *ParseResult) {
+	for index := range parsed.Records {
+		record := &parsed.Records[index]
+		switch capability {
+		case "exact":
+		case "estimated":
+			if record.Quality == QualityExact {
+				record.Quality = QualityEstimated
+				record.QualityReason = "adapter release is limited to estimated usage"
+			}
+		default:
+			record.Quality = QualityConflict
+			record.QualityReason = "adapter release does not permit usage accounting"
+		}
+	}
+}
+
+func (p *Processor) resolveCanonicalOwners(ctx context.Context, tx *sql.Tx, chunk usageChunk, parsed *ParseResult) error {
+	for index := range parsed.Records {
+		record := &parsed.Records[index]
+		var ownerID string
+		err := tx.QueryRowContext(ctx, `
+			WITH RECURSIVE ancestors AS (
+				SELECT id, session_ref, parent_session_ref, 0 AS depth
+				FROM sessions WHERE id = $1
+				UNION ALL
+				SELECT parent.id, parent.session_ref, parent.parent_session_ref, ancestors.depth + 1
+				FROM ancestors
+				JOIN sessions parent ON parent.user_id = $2 AND parent.agent_type = $3
+					AND parent.session_ref = ancestors.parent_session_ref
+				WHERE ancestors.depth < 100
+			)
+			SELECT id FROM ancestors WHERE session_ref = $4 LIMIT 1`,
+			chunk.SessionID, chunk.UserID, chunk.Provider, record.OwnerSessionRef).Scan(&ownerID)
+		if errors.Is(err, sql.ErrNoRows) {
+			record.Quality = QualityConflict
+			record.QualityReason = "canonical owner_session_ref is not the current session or an ancestor"
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		record.OwnerSessionID = ownerID
+	}
+	return nil
 }
 
 func (p *Processor) parseEnvelopeChunk(
@@ -315,7 +378,7 @@ func (p *Processor) parseEnvelopeChunk(
 		SELECT provider, usage_event_key, identity_strategy, provider_event_fingerprint,
 			source_start_cursor, source_end_cursor, occurred_at, COALESCE(raw_model, ''),
 			raw_usage_json, parsed_counters_json, raw_usage_hash,
-			quality_status, COALESCE(quality_reason, '')
+			quality_status, COALESCE(quality_reason, ''), COALESCE(owner_session_ref, '')
 		FROM session_metering_envelopes
 		WHERE manifest_id = $1 AND chunk_id = $2
 		ORDER BY source_start_cursor, source_end_cursor, id`, manifestID, chunk.ID)
@@ -334,6 +397,7 @@ func (p *Processor) parseEnvelopeChunk(
 			&record.Provider, &record.EventKey, &record.IdentityStrategy, &record.ProviderFingerprint,
 			&record.SourceStartCursor, &record.SourceEndCursor, &record.OccurredAt, &record.RawModel,
 			&rawUsage, &countersJSON, &record.RawUsageHash, &quality, &record.QualityReason,
+			&record.OwnerSessionRef,
 		); err != nil {
 			return ParseResult{}, err
 		}
@@ -415,6 +479,9 @@ type parserCheckpoint struct {
 
 func (p *Processor) lockParserCheckpoint(ctx context.Context, tx *sql.Tx, revisionID string, chunk usageChunk) (parserCheckpoint, error) {
 	provider := normalizeProvider(chunk.Provider)
+	if chunk.SourceFormat == "aida_event_v1" {
+		provider = "canonical"
+	}
 	if provider == "" {
 		return parserCheckpoint{}, ErrUsageUnavailable
 	}
@@ -635,6 +702,12 @@ func (p *Processor) applyRecord(ctx context.Context, tx *sql.Tx, revisionID stri
 	fold := FoldClaudeObservation(current, record)
 	if record.Provider == "codex" {
 		fold = FoldResult{Action: FoldConflict, Reason: "Codex generation_cursor event key unexpectedly repeated"}
+	} else if record.Provider == "canonical" {
+		if current.RawUsageHash == record.RawUsageHash {
+			fold = FoldResult{Action: FoldDuplicate, Reason: "same canonical usage fact"}
+		} else {
+			fold = FoldResult{Action: FoldConflict, Reason: "canonical usage_fact_id changed payload"}
+		}
 	}
 	switch fold.Action {
 	case FoldDuplicate:
@@ -700,6 +773,10 @@ func (p *Processor) replaceComponent(
 	if normalized.IsEstimated && componentQuality == QualityExact {
 		componentQuality = QualityEstimated
 	}
+	memberSessionID := chunk.SessionID
+	if record.OwnerSessionID != "" {
+		memberSessionID = record.OwnerSessionID
+	}
 	assumptions, _ := json.Marshal(map[string]any{
 		"quality_reason":       record.QualityReason,
 		"request_input_tokens": record.Delta.RequestInputTokens,
@@ -716,7 +793,7 @@ func (p *Processor) replaceComponent(
 			$1, $2, $3, $4, $5, $6, $7::date, $8, $9,
 			NULLIF($10, ''), NULLIF($10, ''), $11,
 			$12, $13, $14, $15, $16, $17, $18, $19, $20, $21
-		)`, revisionID, logicalID, observationID, chunk.ID, chunk.SessionID, chunk.UserID,
+		)`, revisionID, logicalID, observationID, chunk.ID, memberSessionID, chunk.UserID,
 		biztime.Date(record.OccurredAt), record.OccurredAt, record.Provider, record.RawModel, billingVariant,
 		normalized.UncachedInputTokens, normalized.CacheReadTokens, normalized.CacheWrite5mTokens,
 		normalized.CacheWrite1hTokens, normalized.OutputTokens, normalized.TotalTokens,

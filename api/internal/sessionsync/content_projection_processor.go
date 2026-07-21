@@ -52,6 +52,7 @@ type projectionChunk struct {
 	ObjectKey    string
 	ObjectStatus string
 	EventStartAt sql.NullTime
+	SourceFormat string
 }
 
 func (p *ContentProjectionProcessor) processChunk(ctx context.Context, job ProcessingJob) error {
@@ -60,12 +61,14 @@ func (p *ContentProjectionProcessor) processChunk(ctx context.Context, job Proce
 	}
 	var chunk projectionChunk
 	err := p.db.QueryRowContext(ctx, `
-		SELECT id, generation_id, start_cursor, end_cursor, raw_object_key,
-			object_status, event_start_at
-		FROM session_upload_chunks
-		WHERE id = $1 AND generation_id = $2`, job.ChunkID.String, job.GenerationID.String).Scan(
+		SELECT c.id, c.generation_id, c.start_cursor, c.end_cursor, c.raw_object_key,
+			c.object_status, c.event_start_at, src.source_format
+		FROM session_upload_chunks c
+		JOIN session_source_generations g ON g.id = c.generation_id
+		JOIN session_sources src ON src.id = g.source_id
+		WHERE c.id = $1 AND c.generation_id = $2`, job.ChunkID.String, job.GenerationID.String).Scan(
 		&chunk.ID, &chunk.GenerationID, &chunk.StartCursor, &chunk.EndCursor,
-		&chunk.ObjectKey, &chunk.ObjectStatus, &chunk.EventStartAt,
+		&chunk.ObjectKey, &chunk.ObjectStatus, &chunk.EventStartAt, &chunk.SourceFormat,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrProjectionUnavailable
@@ -84,7 +87,13 @@ func (p *ContentProjectionProcessor) processChunk(ctx context.Context, job Proce
 	if chunk.EventStartAt.Valid {
 		fallback = &chunk.EventStartAt.Time
 	}
-	parsed, parseErr := ParseContentChunk(object, chunk.StartCursor, fallback)
+	var parsed ContentParseResult
+	var parseErr error
+	if chunk.SourceFormat == "aida_event_v1" {
+		parsed, parseErr = ParseCanonicalContentChunk(object, chunk.StartCursor)
+	} else {
+		parsed, parseErr = ParseContentChunk(object, chunk.StartCursor, fallback)
+	}
 	closeErr := object.Close()
 	if parseErr != nil {
 		return parseErr

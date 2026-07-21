@@ -139,6 +139,13 @@ func run(args []string) int {
 			return 3
 		}
 		return cmdUpload(args[1:])
+	case "clients":
+		return cmdClients()
+	case "upload-client":
+		if !requireUpdate() {
+			return 3
+		}
+		return cmdUploadClient(args[1:])
 	case "status":
 		if !requireUpdate() {
 			return 3
@@ -169,6 +176,9 @@ Commands:
   login                                      Enter your personal token interactively
   upload   [numbers...] [--all] [--page-size N]
                                             Upload sessions to server
+  clients                                   Detect additional supported clients
+  upload-client <client> [session-ref...] [--all]
+                                            Upload OpenCode or Kimi Code sessions
   status                                     Show current login status
   update                                     Check and install the latest version
   version                                    Show CLI version

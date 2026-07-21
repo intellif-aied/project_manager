@@ -46,6 +46,10 @@ func (p *Processor) insertContribution(
 	if normalized.TotalTokens == 0 {
 		return nil
 	}
+	memberSessionID := chunk.SessionID
+	if record.OwnerSessionID != "" {
+		memberSessionID = record.OwnerSessionID
+	}
 
 	billingVariant := billingVariantForRecord(record, p.claudeCacheWriteVariant)
 	quality := record.Quality
@@ -92,7 +96,7 @@ func (p *Processor) insertContribution(
 			canonical_model, billing_variant
 		) DO NOTHING`,
 		revisionID, chunk.GenerationID, logicalID, fromObservationID, toObservationID, kind,
-		chunk.SessionID, chunk.UserID, chunk.ID, biztime.Date(record.OccurredAt), record.OccurredAt,
+		memberSessionID, chunk.UserID, chunk.ID, biztime.Date(record.OccurredAt), record.OccurredAt,
 		record.Provider, record.RawModel, billingVariant,
 		normalized.UncachedInputTokens, normalized.CacheReadTokens,
 		normalized.CacheWrite5mTokens, normalized.CacheWrite1hTokens,

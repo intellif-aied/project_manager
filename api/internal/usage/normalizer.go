@@ -53,6 +53,16 @@ func NormalizeWithOptions(record UsageRecord, options NormalizerOptions) (Normal
 			Strategy:            "codex_cumulative_delta_v1",
 			IsEstimated:         record.Quality != QualityExact,
 		}
+	case "canonical":
+		result = NormalizedUsage{
+			UncachedInputTokens: record.Delta.InputTokens,
+			CacheReadTokens:     record.Delta.CachedInputTokens,
+			CacheWrite5mTokens:  record.Delta.CacheCreationTokens,
+			CacheWrite1hTokens:  record.Delta.RequestInputTokens,
+			OutputTokens:        record.Delta.OutputTokens,
+			Strategy:            "canonical_usage_components_v1",
+			IsEstimated:         record.Quality != QualityExact,
+		}
 	default:
 		return NormalizedUsage{}, errors.New("unsupported provider")
 	}
@@ -60,8 +70,8 @@ func NormalizeWithOptions(record UsageRecord, options NormalizerOptions) (Normal
 	if result.UncachedInputTokens < 0 || result.CacheReadTokens < 0 || result.CacheWrite5mTokens < 0 || result.CacheWrite1hTokens < 0 || result.OutputTokens < 0 {
 		return NormalizedUsage{}, errors.New("normalized token component is negative")
 	}
-	if record.Provider == "codex" && result.TotalTokens != record.Delta.TotalTokens {
-		return NormalizedUsage{}, errors.New("normalized Codex total does not match provider delta")
+	if (record.Provider == "codex" || record.Provider == "canonical") && result.TotalTokens != record.Delta.TotalTokens {
+		return NormalizedUsage{}, errors.New("normalized total does not match provider delta")
 	}
 	return result, nil
 }
