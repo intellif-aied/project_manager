@@ -449,6 +449,9 @@ func TestAutoSyncDaemonRunUsesHiddenSchedulerEntry(t *testing.T) {
 
 func TestAutoSyncEnsureRespectsDisabledChoice(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	oldChecker := autoSyncCheckBackgroundSupport
+	autoSyncCheckBackgroundSupport = func() error { return nil }
+	t.Cleanup(func() { autoSyncCheckBackgroundSupport = oldChecker })
 	oldStarter := autoSyncStartBackground
 	starts := 0
 	autoSyncStartBackground = func() error {
