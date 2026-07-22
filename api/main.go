@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -12,8 +14,10 @@ import (
 	"github.com/aidashboard/api/handler"
 	"github.com/aidashboard/api/internal/canonicalsync"
 	"github.com/aidashboard/api/internal/contentreader"
+	"github.com/aidashboard/api/internal/observability"
 	"github.com/aidashboard/api/internal/pricing"
 	"github.com/aidashboard/api/internal/reportcontext"
+	"github.com/aidashboard/api/internal/reportrun"
 	"github.com/aidashboard/api/internal/reportsource"
 	"github.com/aidashboard/api/internal/reportsourcecatalog"
 	"github.com/aidashboard/api/internal/sessiondigest"
@@ -30,6 +34,17 @@ import (
 
 func main() {
 	cfg := config.Load()
+	workerCounts, err := config.LoadWorkerCounts()
+	if err != nil {
+		log.Fatalf("Invalid worker configuration: %v", err)
+	}
+	cfg.ReportRunProcessorCount = workerCounts.ReportRun
+	cfg.DigestBackgroundWorkerCount = workerCounts.DigestBackground
+	cfg.DigestInteractiveWorkerCount = workerCounts.DigestInteractive
+	hostname, err := os.Hostname()
+	if err != nil || strings.TrimSpace(hostname) == "" {
+		log.Fatalf("Failed to determine worker hostname: %v", err)
+	}
 
 	database, err := db.Connect(cfg.DatabaseURL)
 	if err != nil {
@@ -93,7 +108,7 @@ func main() {
 	}
 	reportSourceH := handler.NewReportSourceHandler(reportSourceService)
 	reportContextService := reportcontext.NewService(database, reportSourceService)
-	managedAgentH := handler.NewManagedAgentHandlerWithDefaults(database, managedAgentClient, handler.ManagedAgentDefaults{
+	managedAgentDefaults := handler.ManagedAgentDefaults{
 		Engine:             cfg.ManagedAgentDefaultEngine,
 		ModelID:            cfg.ManagedAgentDefaultModelID,
 		ReportSkillOwner:   cfg.ManagedAgentReportSkillOwner,
@@ -101,7 +116,8 @@ func main() {
 		ReportMCPURL:       cfg.ManagedAgentReportMCPURL,
 		AIDAPublicBaseURL:  cfg.AIDAPublicBaseURL,
 		AIHubSecret:        cfg.AIHubSecret,
-	})
+	}
+	managedAgentH := handler.NewManagedAgentHandlerWithDefaults(database, managedAgentClient, managedAgentDefaults)
 	managedAgentH.ConfigureReportSourceSelection(reportSourceService)
 	managedAgentH.ConfigureReportContext(reportContextService)
 	dailyReportMCPH := handler.NewReportMCPHandler(database)
@@ -109,6 +125,27 @@ func main() {
 	dailyReportMCPH.ConfigureReportContext(reportContextService)
 	schedulerCtx, stopScheduler := context.WithCancel(context.Background())
 	defer stopScheduler()
+	metrics, err := observability.New(database, observability.WorkerCounts{
+		ReportRun: workerCounts.ReportRun, DigestBackground: workerCounts.DigestBackground,
+		DigestInteractive: workerCounts.DigestInteractive,
+	})
+	if err != nil {
+		log.Fatalf("Failed to init internal metrics: %v", err)
+	}
+	metricsListener, err := net.Listen("tcp", cfg.AIDAInternalMetricsAddr)
+	if err != nil {
+		log.Fatalf("Failed to listen for internal metrics on %s: %v", cfg.AIDAInternalMetricsAddr, err)
+	}
+	defer metricsListener.Close()
+	metricsMux := http.NewServeMux()
+	metricsMux.Handle("/internal/metrics", metrics.Handler())
+	observability.SetDefault(metrics)
+	go func() {
+		if serveErr := http.Serve(metricsListener, metricsMux); serveErr != nil && serveErr != http.ErrServerClosed {
+			log.Printf("internal metrics server stopped: %v", serveErr)
+		}
+	}()
+	log.Printf("Internal metrics listening on %s", cfg.AIDAInternalMetricsAddr)
 	handler.NewManagedAgentScheduleRunner(managedAgentH).Start(schedulerCtx)
 	service.NewManagedAgentRunStatusSyncer(database, managedAgentClient).Start(schedulerCtx)
 	reportSourceCatalogReconciler, err := reportsourcecatalog.NewReconciler(database)
@@ -137,7 +174,6 @@ func main() {
 		if err != nil {
 			log.Fatalf("Failed to init session content processor: %v", err)
 		}
-		hostname, _ := os.Hostname()
 		contentWorker, err := sessionsync.NewContentProjectionWorker(jobRepository, contentProcessor, "api:"+hostname)
 		if err != nil {
 			log.Fatalf("Failed to init session content worker: %v", err)
@@ -157,7 +193,6 @@ func main() {
 		if err != nil {
 			log.Fatalf("Failed to init session usage processor: %v", err)
 		}
-		hostname, _ := os.Hostname()
 		usageWorker, err := usage.NewWorker(jobRepository, usageProcessor, "api:"+hostname+":usage")
 		if err != nil {
 			log.Fatalf("Failed to init session usage worker: %v", err)
@@ -191,7 +226,6 @@ func main() {
 		if err != nil {
 			log.Fatalf("Failed to init session digest processor: %v", err)
 		}
-		hostname, _ := os.Hostname()
 		digestWorker, err := sessiondigest.NewWorker(jobRepository, digestProcessor, "api:"+hostname+":digest")
 		if err != nil {
 			log.Fatalf("Failed to init session digest worker: %v", err)
@@ -213,24 +247,64 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to init session digest v2 processor: %v", err)
 	}
-	hostname, _ := os.Hostname()
 	reconciler.Start(schedulerCtx)
-	digestV2WorkerIDs := []string{"1", "2"}
-	for _, workerID := range digestV2WorkerIDs {
+	for workerIndex := 1; workerIndex <= cfg.DigestBackgroundWorkerCount; workerIndex++ {
 		digestWorker, workerErr := sessiondigestv2.NewWorker(
 			jobRepository, digestProcessor,
-			"api:"+hostname+":digest-v2:"+workerID, digestV2Config,
+			fmt.Sprintf("%s:digest-background:%d", hostname, workerIndex),
+			sessiondigestv2.UrgencyBackground, digestV2Config,
 		)
 		if workerErr != nil {
 			log.Fatalf("Failed to init session digest v2 worker: %v", workerErr)
 		}
 		digestWorker.Start(schedulerCtx)
 	}
+	for workerIndex := 1; workerIndex <= cfg.DigestInteractiveWorkerCount; workerIndex++ {
+		digestWorker, workerErr := sessiondigestv2.NewWorker(
+			jobRepository, digestProcessor,
+			fmt.Sprintf("%s:digest-interactive:%d", hostname, workerIndex),
+			sessiondigestv2.UrgencyInteractive, digestV2Config,
+		)
+		if workerErr != nil {
+			log.Fatalf("Failed to init interactive session digest worker: %v", workerErr)
+		}
+		digestWorker.Start(schedulerCtx)
+	}
 	log.Printf(
-		"Session digest v2 services started (reconcile_batch=%d worker_count=%d worker_batch=%d read_mode=%s)",
-		digestV2Config.ReconcileBatch, len(digestV2WorkerIDs), digestV2Config.WorkerBatch,
+		"Session digest v2 services started (reconcile_batch=%d background_workers=%d interactive_workers=%d worker_batch=%d read_mode=%s)",
+		digestV2Config.ReconcileBatch, cfg.DigestBackgroundWorkerCount,
+		cfg.DigestInteractiveWorkerCount, digestV2Config.WorkerBatch,
 		reportSourceConfig.SessionReadMode,
 	)
+	digestCoordinator, err := sessiondigestv2.NewCoordinator(database, digestV2Config)
+	if err != nil {
+		log.Fatalf("Failed to init session digest coordinator: %v", err)
+	}
+	reportRunRepository, err := reportrun.NewRepository(database)
+	if err != nil {
+		log.Fatalf("Failed to init report run repository: %v", err)
+	}
+	reportRunSubmitter, err := handler.NewReportRunSubmitter(database, managedAgentClient, managedAgentDefaults)
+	if err != nil {
+		log.Fatalf("Failed to init report run Agent submitter: %v", err)
+	}
+	for workerIndex := 1; workerIndex <= cfg.ReportRunProcessorCount; workerIndex++ {
+		processor, processorErr := reportrun.NewProcessor(
+			reportRunRepository, digestCoordinator, reportSourceService,
+			reportContextService, reportRunSubmitter,
+			fmt.Sprintf("%s:report-run:%d", hostname, workerIndex),
+		)
+		if processorErr != nil {
+			log.Fatalf("Failed to init report run processor: %v", processorErr)
+		}
+		processor.Start(schedulerCtx)
+	}
+	reportRunReconciler, err := reportrun.NewReconciler(database)
+	if err != nil {
+		log.Fatalf("Failed to init report run reconciler: %v", err)
+	}
+	reportRunReconciler.Start(schedulerCtx)
+	log.Printf("Report run services started (processor_count=%d)", cfg.ReportRunProcessorCount)
 	docH := handler.NewDocumentHandler(database)
 	tokenH := handler.NewTokenHandler(database)
 	pricingService := pricing.NewService(database)

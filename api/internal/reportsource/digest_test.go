@@ -57,8 +57,8 @@ func TestProductConfigUsesCurrentDigestV2ForAllUsers(t *testing.T) {
 	if config.SessionReadMode != ReadModeDigestV2 ||
 		config.DigestVersion != sessiondigestv2.Version ||
 		config.RedactionVersion != sessiondigestv2.RedactionVersion ||
-		config.DigestTargetBytes != productDigestEnvelopeBytes ||
-		config.DigestHardLimit != productDigestEnvelopeBytes ||
+		config.DigestTargetBytes != 0 ||
+		config.DigestHardLimit != 0 ||
 		config.RequiredReadMode("42") != ReadModeDigestV2 ||
 		len(config.DigestCanaryUserIDs) != 0 {
 		t.Fatalf("unexpected product report-source policy: %#v", config)
@@ -98,7 +98,7 @@ func TestReportSourceConfigRejectsUnsafeValues(t *testing.T) {
 	}
 }
 
-func TestAssembleDigestV2PayloadCompactsAndKeepsResultShape(t *testing.T) {
+func TestAssembleDigestV2PayloadKeepsCompleteResultShape(t *testing.T) {
 	now := time.Date(2026, 7, 16, 1, 2, 3, 0, time.UTC)
 	digest := sessiondigestv2.EmptyDigest()
 	for index := 0; index < 8; index++ {
@@ -172,12 +172,9 @@ func TestAssembleDigestV2PayloadCompactsAndKeepsResultShape(t *testing.T) {
 			SourceEventCount: 100, IncludedEventCount: 20, OmittedEventCount: 80,
 		},
 	}
-	payload, compaction, err := assembleDigestV2Payload(page, 4096, 128<<10)
+	payload, err := assembleDigestV2Payload(page)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if compaction != "compact" {
-		t.Fatalf("expected compact v2 payload, got %q (%d bytes)", compaction, len(payload))
 	}
 	var decoded digestV2ContentPage
 	if err := json.Unmarshal(payload, &decoded); err != nil {
@@ -187,8 +184,9 @@ func TestAssembleDigestV2PayloadCompactsAndKeepsResultShape(t *testing.T) {
 		decoded.ReportPeriod == nil ||
 		len(decoded.ReportPeriod.Days) != 1 ||
 		decoded.Items[0].Digest.SchemaVersion != sessiondigestv2.Version ||
-		len(decoded.Items[0].Digest.WorkUnits) == 0 ||
-		decoded.Budget.ActualBytes != len(payload) {
+		len(decoded.Items[0].Digest.WorkUnits) != len(digest.WorkUnits) ||
+		decoded.Size.ActualBytes != len(payload) ||
+		decoded.Size.WarningThresholdBytes != digestPayloadWarningBytes {
 		t.Fatalf("invalid v2 payload: %+v bytes=%d", decoded, len(payload))
 	}
 }

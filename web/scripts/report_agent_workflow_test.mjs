@@ -48,23 +48,28 @@ assert.match(
 );
 assert.match(
   controls,
+  /idempotency_key:\s*idempotencyKey/,
+  "each click must submit one idempotent Run request"
+);
+assert.match(
+  controls,
+  /crypto\.randomUUID\(\)/,
+  "manual Report Run idempotency keys must be UUID v4 values"
+);
+assert.match(
+  controls,
+  /selected_session_slice_keys:[\s\S]*selectedSessionSources\.map/,
+  "the Run request must carry the actual selected slice identities directly"
+);
+assert.doesNotMatch(
+  controls,
   /createReportSourceSelection\(/,
-  "personal reports must create an immutable source selection"
+  "the frontend must not prepare a Selection before creating a Run"
 );
-assert.match(
+assert.doesNotMatch(
   controls,
-  /所选会话内容较多，可能消耗较多 Token，部分模型可能无法完整处理/,
-  "large report context must use a user-facing advisory confirmation"
-);
-assert.match(
-  controls,
-  /payload\.large_context_confirmed = true/,
-  "users must be able to continue after the large-context warning"
-);
-assert.match(
-  controls,
-  /isReportAgentConfirmationRequired[\s\S]*confirmLargeReportContext\(\)[\s\S]*payload\.large_context_confirmed = true/,
-  "confirmation_required responses must prompt and retry the real Agent run"
+  /large_context_confirmed|confirmLargeReportContext|confirmation_required/,
+  "large context must not add a second frontend-driven workflow"
 );
 assert.doesNotMatch(controls, /mock_large_report_context|largeReportContextMockEnabled/);
 assert.doesNotMatch(
@@ -74,8 +79,8 @@ assert.doesNotMatch(
 );
 assert.doesNotMatch(
   controls,
-  /reportSourceSelectionEnabled|selected_session_slice_keys/,
-  "current report controls must not branch back to legacy session slices"
+  /reportSourceSelectionEnabled/,
+  "source handling must not depend on a rollout branch"
 );
 assert.doesNotMatch(
   `${dailyReportModal}\n${weeklyReportsPage}`,

@@ -546,9 +546,12 @@ func TestReportMCPWriteReportResultAcceptsSkillAuthoredContent(t *testing.T) {
 	inputRef := []byte(`{"report_type":"personal_weekly","period":{"week_start":"2026-06-08","week_end":"2026-06-14"},"target":{"type":"self","user_id":"310"}}`)
 	mock.ExpectQuery("SELECT id::text, business_type").
 		WithArgs("run-1", "310").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "business_type", "agent_id", "model_id", "status", "input_ref_json", "output_ref_json", "created_at"}).
-			AddRow("run-1", reportAgentRunBusinessType, "agent-1", "MiniMax-M2.5", "running", inputRef, []byte(`{}`), now))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "business_type", "agent_id", "model_id", "status", "execution_stage", "input_ref_json", "output_ref_json", "created_at"}).
+			AddRow("run-1", reportAgentRunBusinessType, "agent-1", "MiniMax-M2.5", "running", "agent_running", inputRef, []byte(`{}`), now))
 	mock.ExpectBegin()
+	mock.ExpectExec("(?s)UPDATE ai_runs.*execution_stage = 'writing_result'").
+		WithArgs("run-1", "310").
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery("SELECT id::text, edited, updated_at FROM personal_weekly_reports").
 		WithArgs("310", "2026-06-08", "2026-06-14").
 		WillReturnError(sql.ErrNoRows)
@@ -604,8 +607,8 @@ func TestReportMCPWriteDepartmentDailyPersistsFrozenTeamReportSources(t *testing
 	inputRef := []byte(`{"report_type":"department_daily","period":{"date":"2026-07-16"},"target":{"type":"department","department_id":"department-1"},"report_context_hash":"context-hash"}`)
 	mock.ExpectQuery("SELECT id::text, business_type").
 		WithArgs("run-1", "304").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "business_type", "agent_id", "model_id", "status", "input_ref_json", "output_ref_json", "created_at"}).
-			AddRow("run-1", reportAgentRunBusinessType, "agent-1", "MiniMax-M2.5", "running", inputRef, []byte(`{}`), now))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "business_type", "agent_id", "model_id", "status", "execution_stage", "input_ref_json", "output_ref_json", "created_at"}).
+			AddRow("run-1", reportAgentRunBusinessType, "agent-1", "MiniMax-M2.5", "running", "agent_running", inputRef, []byte(`{}`), now))
 
 	contextPayload := []byte(`{
 		"schema_version":"report-context/v1",
@@ -620,6 +623,9 @@ func TestReportMCPWriteDepartmentDailyPersistsFrozenTeamReportSources(t *testing
 		WillReturnRows(sqlmock.NewRows([]string{"context_payload", "context_hash", "context_bytes"}).
 			AddRow(contextPayload, "context-hash", len(contextPayload)))
 	mock.ExpectBegin()
+	mock.ExpectExec("(?s)UPDATE ai_runs.*execution_stage = 'writing_result'").
+		WithArgs("run-1", "304").
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery("SELECT id::text, edited, updated_at FROM department_reports").
 		WithArgs("department-1", "2026-07-16").
 		WillReturnError(sql.ErrNoRows)

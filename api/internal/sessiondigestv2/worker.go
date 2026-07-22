@@ -7,11 +7,12 @@ import (
 	"log"
 	"time"
 
+	"github.com/aidashboard/api/internal/observability"
 	"github.com/aidashboard/api/internal/sessionsync"
 )
 
 type JobQueue interface {
-	ClaimTypes(context.Context, string, time.Time, time.Duration, int, []string) ([]sessionsync.ProcessingJob, error)
+	ClaimDigest(context.Context, string, string, time.Time, time.Duration, int, string) ([]sessionsync.ProcessingJob, error)
 	Heartbeat(context.Context, string, string, time.Time, time.Duration) (bool, error)
 	Complete(context.Context, string, string, time.Time) (bool, error)
 	Fail(context.Context, string, string, time.Time, time.Duration, bool, string) (bool, error)
@@ -25,21 +26,23 @@ type Worker struct {
 	queue      JobQueue
 	processor  JobProcessor
 	owner      string
+	urgency    string
 	interval   time.Duration
 	leaseTTL   time.Duration
 	batchLimit int
 }
 
-func NewWorker(queue JobQueue, processor JobProcessor, owner string, config Config) (*Worker, error) {
-	if queue == nil || processor == nil || owner == "" {
-		return nil, errors.New("digest v2 job queue, processor, and owner are required")
+func NewWorker(queue JobQueue, processor JobProcessor, owner, urgency string, config Config) (*Worker, error) {
+	if queue == nil || processor == nil || owner == "" ||
+		(urgency != "background" && urgency != "interactive") {
+		return nil, errors.New("digest v2 job queue, processor, owner, and urgency are required")
 	}
 	normalized, err := config.Normalized()
 	if err != nil {
 		return nil, err
 	}
 	return &Worker{
-		queue: queue, processor: processor, owner: owner,
+		queue: queue, processor: processor, owner: owner, urgency: urgency,
 		interval: 2 * time.Second, leaseTTL: 5 * time.Minute,
 		batchLimit: normalized.WorkerBatch,
 	}, nil
@@ -66,17 +69,20 @@ func (w *Worker) Start(ctx context.Context) {
 }
 
 func (w *Worker) RunOnce(ctx context.Context, now time.Time) error {
-	jobs, err := w.queue.ClaimTypes(
-		ctx, w.owner, now, w.leaseTTL, w.batchLimit, []string{JobType},
+	jobs, err := w.queue.ClaimDigest(
+		ctx, w.owner, w.urgency, now, w.leaseTTL, w.batchLimit, JobType,
 	)
 	if err != nil {
 		return err
 	}
 	var firstError error
 	for _, job := range jobs {
+		observability.ObserveDigestClaim(w.urgency, job.EligibleAt, now)
+		startedAt := time.Now()
 		processErr := w.processWithHeartbeat(ctx, job)
 		finishedAt := time.Now().UTC()
 		if processErr == nil || errors.Is(processErr, ErrStaleDigestSource) {
+			observability.ObserveDigestBuild(w.urgency, "completed", "none", time.Since(startedAt))
 			ok, completeErr := w.queue.Complete(ctx, job.ID, w.owner, finishedAt)
 			if completeErr != nil && firstError == nil {
 				firstError = completeErr
@@ -86,6 +92,13 @@ func (w *Worker) RunOnce(ctx context.Context, now time.Time) error {
 			continue
 		}
 		preserveAttempt := errors.Is(processErr, ErrDigestStatePersistence)
+		result := "retry_wait"
+		if !preserveAttempt && job.Attempts >= job.MaxAttempts {
+			result = "dead"
+		}
+		observability.ObserveDigestBuild(
+			w.urgency, result, FailureClass(processErr), time.Since(startedAt),
+		)
 		ok, failErr := w.queue.Fail(
 			ctx, job.ID, w.owner, finishedAt, digestRetryDelay(job.Attempts),
 			preserveAttempt, FailureCode(processErr),

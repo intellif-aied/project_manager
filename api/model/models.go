@@ -1013,6 +1013,7 @@ type ManagedReportRunTarget struct {
 }
 
 type ManagedReportAgentRunRequest struct {
+	IdempotencyKey           string                 `json:"idempotency_key"`
 	ReportType               string                 `json:"report_type"`
 	Period                   ManagedReportRunPeriod `json:"period"`
 	Target                   ManagedReportRunTarget `json:"target,omitempty"`

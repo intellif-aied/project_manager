@@ -5,7 +5,6 @@ import (
 	"path"
 	"regexp"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/aidashboard/api/internal/sessiondigest"
 )
@@ -127,32 +126,11 @@ func messageTexts(message map[string]any) []string {
 	return texts
 }
 
-func normalizeText(value string, maxBytes int) (string, bool) {
+func normalizeText(value string) string {
 	value = sessiondigest.Redact(value)
 	value = strings.ReplaceAll(value, "\x00", "\uFFFD")
 	value = strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
-	if value == "" {
-		return "", false
-	}
-	return truncateUTF8Bytes(value, maxBytes)
-}
-
-func truncateUTF8Bytes(value string, limit int) (string, bool) {
-	if limit <= 0 || len(value) <= limit {
-		return value, false
-	}
-	if limit <= 3 {
-		end := min(limit, len(value))
-		for end > 0 && !utf8.ValidString(value[:end]) {
-			end--
-		}
-		return value[:end], true
-	}
-	end := limit - 3
-	for end > 0 && !utf8.ValidString(value[:end]) {
-		end--
-	}
-	return value[:end] + "...", true
+	return value
 }
 
 func normalizeFilePath(value string) string {
@@ -187,7 +165,6 @@ func normalizeFilePath(value string) string {
 		}
 		cleaned = strings.Join(parts, "/")
 	}
-	cleaned, _ = truncateUTF8Bytes(cleaned, 256)
 	return cleaned
 }
 

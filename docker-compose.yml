@@ -38,6 +38,8 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8080:8080"
+    expose:
+      - "9091"
     environment:
       DATABASE_URL: "postgres://aidashboard:devpassword@db:5432/aidashboard?sslmode=disable"
       JWT_SECRET: "dev-jwt-secret-change-in-prod"
@@ -64,7 +66,11 @@ services:
       MANAGED_AGENT_REPORT_SKILL_VERSION: "${MANAGED_AGENT_REPORT_SKILL_VERSION:-1.0.0}"
       MANAGED_AGENT_REPORT_MCP_URL: "${MANAGED_AGENT_REPORT_MCP_URL:-}"
       AIDA_PUBLIC_BASE_URL: "${AIDA_PUBLIC_BASE_URL:-}"
+      AIDA_INTERNAL_METRICS_ADDR: "${AIDA_INTERNAL_METRICS_ADDR:-:9091}"
       AIDA_CLAUDE_CACHE_WRITE_VARIANT: "${AIDA_CLAUDE_CACHE_WRITE_VARIANT:-}"
+      REPORT_RUN_PROCESSOR_COUNT: "${REPORT_RUN_PROCESSOR_COUNT:-20}"
+      DIGEST_BACKGROUND_WORKER_COUNT: "${DIGEST_BACKGROUND_WORKER_COUNT:-20}"
+      DIGEST_INTERACTIVE_WORKER_COUNT: "${DIGEST_INTERACTIVE_WORKER_COUNT:-20}"
       TZ: "${TZ:-Asia/Shanghai}"
     depends_on:
       db:

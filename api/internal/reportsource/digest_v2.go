@@ -11,6 +11,8 @@ import (
 	"github.com/lib/pq"
 )
 
+const digestPayloadWarningBytes = 1 << 20
+
 type DigestV2ContentItem struct {
 	SourceItemRef string                 `json:"source_item_ref"`
 	SessionRef    string                 `json:"session_ref"`
@@ -25,6 +27,29 @@ type DigestV2ContentItem struct {
 }
 
 type digestV2ContentPage struct {
+	SourceMode       string                               `json:"source_mode"`
+	ContentMode      string                               `json:"content_mode"`
+	Timezone         string                               `json:"timezone,omitempty"`
+	DigestVersion    string                               `json:"digest_version"`
+	RedactionVersion string                               `json:"redaction_version"`
+	ContentSnapshot  string                               `json:"content_snapshot_at"`
+	Completeness     string                               `json:"completeness"`
+	ReturnedCount    int                                  `json:"returned_item_count"`
+	HasMore          bool                                 `json:"has_more"`
+	NextCursor       *string                              `json:"next_cursor"`
+	Coverage         DigestCoverage                       `json:"coverage"`
+	Size             DigestV2Size                         `json:"size"`
+	ReportPeriod     *sessiondigestv2.ReportPeriodSummary `json:"report_period_summary"`
+	Items            []DigestV2ContentItem                `json:"items"`
+}
+
+type DigestV2Size struct {
+	ActualBytes           int  `json:"actual_bytes"`
+	WarningThresholdBytes int  `json:"warning_threshold_bytes"`
+	Warning               bool `json:"warning"`
+}
+
+type legacyDigestV2ContentPage struct {
 	SourceMode       string                               `json:"source_mode"`
 	ContentMode      string                               `json:"content_mode"`
 	Timezone         string                               `json:"timezone,omitempty"`
@@ -116,7 +141,6 @@ func (s *Service) freezeSelectionV2ForRun(
 			periodStart,
 			periodEnd,
 			biztime.Location(),
-			sessiondigestv2.DefaultPeriodItemBytes,
 		)
 		periodSummaries = append(
 			periodSummaries,
@@ -196,9 +220,7 @@ func (s *Service) freezeSelectionV2ForRun(
 	if !sessiondigestv2.ReportPeriodOutcomeCoverageComplete(page.ReportPeriod) {
 		return ErrDigestCorrupt
 	}
-	payload, compaction, err := assembleDigestV2Payload(
-		page, s.config.DigestTargetBytes, s.config.DigestHardLimit,
-	)
+	payload, err := assembleDigestV2Payload(page)
 	if err != nil {
 		return err
 	}
@@ -207,13 +229,13 @@ func (s *Service) freezeSelectionV2ForRun(
 		UPDATE report_source_selections
 		SET required_read_mode = 'digest_v2', read_completed_mode = NULL,
 			selection_digest_payload = $2, selection_digest_sha256 = $3,
-			selection_digest_bytes = $4, selection_digest_compaction = $5,
-			digest_version_snapshot = $6, redaction_version_snapshot = $7,
-			digest_target_bytes_snapshot = $8, digest_hard_limit_bytes_snapshot = $9
-		WHERE id = $1 AND status = 'prepared'`,
-		selection.ID, payload, hash, len(payload), compaction,
+			selection_digest_bytes = $4, selection_digest_compaction = 'none',
+			digest_version_snapshot = $5, redaction_version_snapshot = $6,
+			digest_target_bytes_snapshot = NULL, digest_hard_limit_bytes_snapshot = NULL,
+			digest_frozen_at = now()
+		WHERE id = $1 AND status IN ('prepared', 'attached') AND digest_frozen_at IS NULL`,
+		selection.ID, payload, hash, len(payload),
 		s.config.DigestVersion, s.config.RedactionVersion,
-		s.config.DigestTargetBytes, s.config.DigestHardLimit,
 	)
 	if err != nil {
 		return err
@@ -228,45 +250,9 @@ func (s *Service) freezeSelectionV2ForRun(
 	return nil
 }
 
-func assembleDigestV2Payload(
-	page digestV2ContentPage,
-	targetBytes, hardLimit int,
-) ([]byte, string, error) {
-	page.Budget = DigestBudget{
-		TargetBytes: targetBytes, HardLimitBytes: hardLimit, Compaction: "detailed",
-	}
-	payload, err := marshalStableV2ActualBytes(&page)
-	if err != nil {
-		return nil, "", err
-	}
-	if len(payload) > targetBytes {
-		page.Budget.Compaction = "compact"
-		sessiondigestv2.CompactReportPeriodSummary(page.ReportPeriod, false)
-		for index := range page.Items {
-			page.Items[index].Digest = sessiondigestv2.CompactDigest(page.Items[index].Digest)
-			page.Items[index].Coverage.Representation = "compact"
-			if !page.Items[index].Coverage.Truncated {
-				page.Items[index].Coverage.Truncated = true
-				page.Coverage.TruncatedItemCount++
-			}
-		}
-		payload, err = marshalStableV2ActualBytes(&page)
-		if err != nil {
-			return nil, "", err
-		}
-	}
-	if len(payload) > hardLimit {
-		page.Budget.Compaction = "compact_minimal"
-		sessiondigestv2.CompactReportPeriodSummary(page.ReportPeriod, true)
-		payload, err = marshalStableV2ActualBytes(&page)
-		if err != nil {
-			return nil, "", err
-		}
-	}
-	if len(payload) > hardLimit {
-		return nil, "", ErrDigestLimitExceeded
-	}
-	return payload, page.Budget.Compaction, nil
+func assembleDigestV2Payload(page digestV2ContentPage) ([]byte, error) {
+	page.Size.WarningThresholdBytes = digestPayloadWarningBytes
+	return marshalStableV2ActualBytes(&page)
 }
 
 func marshalStableV2ActualBytes(page *digestV2ContentPage) ([]byte, error) {
@@ -277,11 +263,13 @@ func marshalStableV2ActualBytes(page *digestV2ContentPage) ([]byte, error) {
 			return nil, err
 		}
 		actual := len(encoded)
-		if actual == last && page.Budget.ActualBytes == actual {
+		warning := actual > page.Size.WarningThresholdBytes
+		if actual == last && page.Size.ActualBytes == actual && page.Size.Warning == warning {
 			return encoded, nil
 		}
 		last = actual
-		page.Budget.ActualBytes = actual
+		page.Size.ActualBytes = actual
+		page.Size.Warning = warning
 	}
 	return nil, ErrDigestCorrupt
 }
@@ -314,7 +302,8 @@ func (s *Service) readFrozenDigestV2Selection(
 	}
 	var payload []byte
 	var hash, digestVersion, redactionVersion string
-	var payloadBytes, targetBytes, hardLimitBytes int
+	var payloadBytes int
+	var targetBytes, hardLimitBytes sql.NullInt64
 	err := tx.QueryRowContext(ctx, `
 		SELECT selection_digest_payload, selection_digest_sha256,
 			selection_digest_bytes, digest_version_snapshot, redaction_version_snapshot,
@@ -333,38 +322,17 @@ func (s *Service) readFrozenDigestV2Selection(
 	if err != nil {
 		return ContentPage{}, err
 	}
-	if digestVersion != s.config.DigestVersion ||
-		redactionVersion != s.config.RedactionVersion {
+	if redactionVersion != sessiondigestv2.RedactionVersion ||
+		(digestVersion != sessiondigestv2.Version && digestVersion != sessiondigestv2.LegacyVersion) {
 		return ContentPage{}, ErrDigestVersionMismatch
 	}
-	if payloadBytes != len(payload) || len(payload) > hardLimitBytes ||
-		targetBytes <= 0 || hardLimitBytes < targetBytes ||
-		sessiondigestv2.HashBytes(payload) != hash || !json.Valid(payload) {
+	if payloadBytes != len(payload) || sessiondigestv2.HashBytes(payload) != hash || !json.Valid(payload) {
 		return ContentPage{}, ErrDigestCorrupt
 	}
-	var page digestV2ContentPage
-	if err := json.Unmarshal(payload, &page); err != nil ||
-		page.ContentMode != ReadModeDigestV2 ||
-		page.DigestVersion != digestVersion ||
-		page.RedactionVersion != redactionVersion ||
-		!page.Coverage.Complete || page.HasMore ||
-		page.ReturnedCount != len(page.Items) ||
-		page.Coverage.SourceItemCount != page.Coverage.RepresentedItemCount ||
-		page.Coverage.RepresentedItemCount != len(page.Items) ||
-		page.ReportPeriod == nil ||
-		!sessiondigestv2.ReportPeriodOutcomeCoverageComplete(page.ReportPeriod) ||
-		page.Budget.ActualBytes != len(payload) ||
-		page.Budget.TargetBytes != targetBytes ||
-		page.Budget.HardLimitBytes != hardLimitBytes {
+	if err := validateDigestV2Payload(
+		payload, digestVersion, redactionVersion, targetBytes, hardLimitBytes,
+	); err != nil {
 		return ContentPage{}, ErrDigestCorrupt
-	}
-	for _, item := range page.Items {
-		if item.Digest.SchemaVersion != sessiondigestv2.Version ||
-			item.Digest.DailySummaries == nil ||
-			item.Digest.ReportPeriodSummary != nil ||
-			item.Digest.WorkUnits == nil || item.Digest.DiscussionAggregates == nil {
-			return ContentPage{}, ErrDigestCorrupt
-		}
 	}
 	result, err := tx.ExecContext(ctx, `
 		UPDATE report_source_selections
@@ -413,20 +381,26 @@ func (s *Service) validateFrozenDigestV2SelectionTx(
 	if err != nil {
 		return err
 	}
-	if digestVersion != s.config.DigestVersion ||
-		redactionVersion != s.config.RedactionVersion {
+	if redactionVersion != sessiondigestv2.RedactionVersion ||
+		(digestVersion != sessiondigestv2.Version && digestVersion != sessiondigestv2.LegacyVersion) {
 		return ErrDigestVersionMismatch
 	}
 	if payloadBytes != len(payload) || !json.Valid(payload) ||
 		sessiondigestv2.HashBytes(payload) != hash {
 		return ErrDigestCorrupt
 	}
-	var page digestV2ContentPage
-	if err := json.Unmarshal(payload, &page); err != nil ||
-		page.ContentMode != ReadModeDigestV2 ||
-		page.DigestVersion != sessiondigestv2.Version ||
-		page.ReportPeriod == nil ||
-		!sessiondigestv2.ReportPeriodOutcomeCoverageComplete(page.ReportPeriod) {
+	var targetBytes, hardLimitBytes sql.NullInt64
+	if err := tx.QueryRowContext(ctx, `
+		SELECT digest_target_bytes_snapshot, digest_hard_limit_bytes_snapshot
+		FROM report_source_selections
+		WHERE id = $1 AND user_id = $2 AND attached_run_id = $3`,
+		selectionID, userID, runID,
+	).Scan(&targetBytes, &hardLimitBytes); err != nil {
+		return err
+	}
+	if err := validateDigestV2Payload(
+		payload, digestVersion, redactionVersion, targetBytes, hardLimitBytes,
+	); err != nil {
 		return ErrDigestCorrupt
 	}
 	var sourceItems, validDigestItems int
@@ -447,4 +421,70 @@ func (s *Service) validateFrozenDigestV2SelectionTx(
 		return ErrDigestCorrupt
 	}
 	return nil
+}
+
+func validateDigestV2Payload(
+	payload []byte,
+	digestVersion, redactionVersion string,
+	targetBytes, hardLimitBytes sql.NullInt64,
+) error {
+	if digestVersion == sessiondigestv2.LegacyVersion {
+		if !targetBytes.Valid || !hardLimitBytes.Valid || targetBytes.Int64 <= 0 ||
+			hardLimitBytes.Int64 < targetBytes.Int64 || int64(len(payload)) > hardLimitBytes.Int64 {
+			return ErrDigestCorrupt
+		}
+		var page legacyDigestV2ContentPage
+		if err := json.Unmarshal(payload, &page); err != nil ||
+			!validDigestV2Page(
+				digestVersion, page.ContentMode, page.DigestVersion, page.RedactionVersion,
+				page.Coverage, page.HasMore, page.ReturnedCount, page.Items, page.ReportPeriod,
+			) ||
+			page.Budget.ActualBytes != len(payload) ||
+			int64(page.Budget.TargetBytes) != targetBytes.Int64 ||
+			int64(page.Budget.HardLimitBytes) != hardLimitBytes.Int64 {
+			return ErrDigestCorrupt
+		}
+		return nil
+	}
+	if digestVersion != sessiondigestv2.Version || targetBytes.Valid || hardLimitBytes.Valid {
+		return ErrDigestCorrupt
+	}
+	var page digestV2ContentPage
+	if err := json.Unmarshal(payload, &page); err != nil ||
+		!validDigestV2Page(
+			digestVersion, page.ContentMode, page.DigestVersion, page.RedactionVersion,
+			page.Coverage, page.HasMore, page.ReturnedCount, page.Items, page.ReportPeriod,
+		) ||
+		page.Size.ActualBytes != len(payload) ||
+		page.Size.WarningThresholdBytes != digestPayloadWarningBytes ||
+		page.Size.Warning != (len(payload) > digestPayloadWarningBytes) {
+		return ErrDigestCorrupt
+	}
+	return nil
+}
+
+func validDigestV2Page(
+	expectedVersion, contentMode, digestVersion, redactionVersion string,
+	coverage DigestCoverage,
+	hasMore bool,
+	returnedCount int,
+	items []DigestV2ContentItem,
+	period *sessiondigestv2.ReportPeriodSummary,
+) bool {
+	if contentMode != ReadModeDigestV2 || digestVersion != expectedVersion ||
+		redactionVersion != sessiondigestv2.RedactionVersion ||
+		!coverage.Complete || hasMore || returnedCount != len(items) ||
+		coverage.SourceItemCount != coverage.RepresentedItemCount ||
+		coverage.RepresentedItemCount != len(items) || period == nil ||
+		!sessiondigestv2.ReportPeriodOutcomeCoverageComplete(period) {
+		return false
+	}
+	for _, item := range items {
+		if item.Digest.SchemaVersion != digestVersion ||
+			item.Digest.DailySummaries == nil || item.Digest.ReportPeriodSummary != nil ||
+			item.Digest.WorkUnits == nil || item.Digest.DiscussionAggregates == nil {
+			return false
+		}
+	}
+	return true
 }

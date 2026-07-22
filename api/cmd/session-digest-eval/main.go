@@ -26,8 +26,8 @@ type evaluation struct {
 	IncludedEventCount      int64                   `json:"included_event_count"`
 	OmittedEventCount       int64                   `json:"omitted_event_count"`
 	DigestBytes             int                     `json:"digest_bytes"`
-	DigestTargetBytes       int                     `json:"digest_target_bytes"`
-	DigestOverTarget        bool                    `json:"digest_over_target"`
+	DigestWarningBytes      int                     `json:"digest_warning_bytes"`
+	DigestOverWarning       bool                    `json:"digest_over_warning"`
 	DigestToRawBasisPoints  int64                   `json:"digest_to_raw_basis_points"`
 	Truncated               bool                    `json:"truncated"`
 	WorkUnitCount           int                     `json:"work_unit_count"`
@@ -49,7 +49,7 @@ type evaluation struct {
 }
 
 func main() {
-	maxBytes := flag.Int("max-bytes", sessiondigestv2.DefaultItemBytes, "maximum bytes for one digest")
+	warningBytes := flag.Int("warning-bytes", 1<<20, "advisory digest size warning threshold")
 	periodStart := flag.String("period-start", "", "inclusive business date, YYYY-MM-DD")
 	periodEnd := flag.String("period-end", "", "inclusive business date, YYYY-MM-DD")
 	summaryOnly := flag.Bool("summary-only", false, "omit the full digest")
@@ -76,7 +76,7 @@ func main() {
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetEscapeHTML(false)
 	for _, path := range flag.Args() {
-		result, err := evaluate(path, *maxBytes, start, end, annotate, *summaryOnly)
+		result, err := evaluate(path, *warningBytes, start, end, annotate, *summaryOnly)
 		if err != nil {
 			fatalf("%s: %v", path, err)
 		}
@@ -88,7 +88,7 @@ func main() {
 
 func evaluate(
 	path string,
-	maxBytes int,
+	warningBytes int,
 	periodStart, periodEnd time.Time,
 	annotate, summaryOnly bool,
 ) (evaluation, error) {
@@ -122,14 +122,13 @@ func evaluate(
 		})
 	}
 	digest, sourceEvents, includedEvents, omittedEvents, truncated, encoded :=
-		extractor.Result(maxBytes)
+		extractor.Result()
 	if annotate {
 		digest, encoded, truncated = sessiondigestv2.PrepareForPeriod(
 			digest,
 			periodStart,
 			periodEnd,
 			biztime.Location(),
-			maxBytes,
 		)
 	}
 	result := evaluation{
@@ -142,8 +141,8 @@ func evaluate(
 		IncludedEventCount:      includedEvents,
 		OmittedEventCount:       omittedEvents,
 		DigestBytes:             len(encoded),
-		DigestTargetBytes:       maxBytes,
-		DigestOverTarget:        len(encoded) > maxBytes,
+		DigestWarningBytes:      warningBytes,
+		DigestOverWarning:       len(encoded) > warningBytes,
 		Truncated:               truncated,
 		WorkUnitCount:           len(digest.WorkUnits),
 		DailySummaryCount:       len(digest.DailySummaries),

@@ -99,7 +99,6 @@ func TestDigestV2SelectionFreezeReadAndWriteGuardIntegration(t *testing.T) {
 		})
 		digest.DailySummaries = sessiondigestv2.BuildDailySummaries(
 			digest.WorkUnits, time.FixedZone("Asia/Shanghai", 8*60*60),
-			0,
 		)
 		digest.Coverage = sessiondigestv2.Coverage{
 			SourceEventCount: 2, IncludedEventCount: 1, OmittedEventCount: 1,
@@ -164,7 +163,8 @@ func TestDigestV2SelectionFreezeReadAndWriteGuardIntegration(t *testing.T) {
 	}
 	if payload.ContentMode != ReadModeDigestV2 || !payload.Coverage.Complete ||
 		payload.HasMore || payload.ReturnedCount != 2 ||
-		payload.Budget.ActualBytes != len(page.FrozenPayload) {
+		payload.Size.ActualBytes != len(page.FrozenPayload) ||
+		payload.Size.WarningThresholdBytes != digestPayloadWarningBytes {
 		t.Fatalf("invalid v2 payload: %+v bytes=%d", payload, len(page.FrozenPayload))
 	}
 	for _, item := range payload.Items {

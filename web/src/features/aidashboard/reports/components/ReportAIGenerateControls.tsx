@@ -24,14 +24,12 @@ import { useEffect, useMemo, useState } from "react";
 
 import {
   createDefaultReportAgent,
-  createReportSourceSelection,
   fetchManagedAgentRun,
   fetchReportSourceCandidates,
   startReportAgentRun
 } from "../../api/client";
 import type {
   AIRun,
-  ManagedReportAgentConfirmationRequired,
   ManagedReportAgentUnavailable,
   ManagedReportAgentRunResponse,
   ManagedReportAgentRunPayload,
@@ -130,26 +128,6 @@ function confirmDefaultReportInitialization() {
   });
 }
 
-function confirmLargeReportContext() {
-  return new Promise<boolean>((resolve) => {
-    Modal.confirm({
-      title: "所选会话内容较多",
-      content:
-        "所选会话内容较多，可能消耗较多 Token，部分模型可能无法完整处理。你可以更换模型、减少所选会话，或继续生成。",
-      okText: "继续生成",
-      cancelText: "返回调整",
-      onOk: () => resolve(true),
-      onCancel: () => resolve(false)
-    });
-  });
-}
-
-function isReportAgentConfirmationRequired(
-  response: ManagedReportAgentRunResponse
-): response is ManagedReportAgentConfirmationRequired {
-  return "status" in response && response.status === "confirmation_required";
-}
-
 export function ReportAIGenerateControls(props: ReportAIGenerateControlsProps) {
   const { user } = useAuth();
   const currentUserId = user?.id ?? "anonymous";
@@ -231,42 +209,19 @@ function ReportAIGenerateControlsState({
           throw new Error("__AIDA_REPORT_AI_CANCELLED__");
         }
       }
-      let reportSourceSelectionId: string | undefined;
-      let largeContextConfirmed = false;
-      if (allowSessionSelection && selectedSessionSources.length > 0) {
-        const selection = await createReportSourceSelection({
-          report_type: reportType as "personal_daily" | "personal_weekly",
-          period,
-          selected_slice_keys: selectedSessionSources.map((source) => source.slice_key)
-        });
-        reportSourceSelectionId = selection.selection_id;
-        if (selection.warning_required && !largeContextConfirmed) {
-          const confirmed = await confirmLargeReportContext();
-          if (!confirmed) throw new Error("__AIDA_REPORT_AI_CANCELLED__");
-          largeContextConfirmed = true;
-        }
-      }
+      const idempotencyKey = crypto.randomUUID();
       const payload: ManagedReportAgentRunPayload = {
         report_type: reportType,
         period,
         target,
-        report_source_selection_id: reportSourceSelectionId,
-        large_context_confirmed: largeContextConfirmed || undefined
+        idempotency_key: idempotencyKey,
+        selected_session_slice_keys:
+          allowSessionSelection && selectedSessionSources.length > 0
+            ? selectedSessionSources.map((source) => source.slice_key)
+            : undefined
       };
       const startRun = async () => {
-        const response = await startReportAgentRun("default", payload, { skipErrorHandler: true });
-        if (isReportAgentConfirmationRequired(response)) {
-          const confirmed = await confirmLargeReportContext();
-          if (!confirmed) throw new Error("__AIDA_REPORT_AI_CANCELLED__");
-          payload.report_source_selection_id = response.report_source_selection_id;
-          payload.large_context_confirmed = true;
-          const retry = await startReportAgentRun("default", payload, { skipErrorHandler: true });
-          if (isReportAgentConfirmationRequired(retry)) {
-            throw new Error("大上下文确认未生效，请重试");
-          }
-          return retry;
-        }
-        return response;
+        return startReportAgentRun("default", payload, { skipErrorHandler: true });
       };
       let run = await startRun();
       if (!isReportAgentUnavailable(run)) return run;

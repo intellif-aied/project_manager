@@ -36,6 +36,11 @@ func isValidUUID(value string) bool {
 	return err == nil
 }
 
+func isValidUUIDV4(value string) bool {
+	parsed, err := uuid.Parse(value)
+	return err == nil && parsed.Version() == 4
+}
+
 func nullString(s *string) sql.NullString {
 	if s == nil || *s == "" {
 		return sql.NullString{}

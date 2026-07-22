@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-func TestDailySummariesPreserveLaterPeriodBeforeRevisionCompaction(t *testing.T) {
+func TestDailySummariesPreserveLaterPeriodWithoutSizeCompaction(t *testing.T) {
 	location := time.FixedZone("Asia/Shanghai", 8*60*60)
 	digest := EmptyDigest()
 	for index := 0; index < 80; index++ {
@@ -45,7 +45,7 @@ func TestDailySummariesPreserveLaterPeriodBeforeRevisionCompaction(t *testing.T)
 		digest.WorkUnits = append(digest.WorkUnits, unit)
 	}
 	digest.DailySummaries = BuildDailySummaries(
-		digest.WorkUnits, location, 0,
+		digest.WorkUnits, location,
 	)
 	digest.Coverage = Coverage{
 		SourceWorkUnitCount:   len(digest.WorkUnits),
@@ -54,9 +54,10 @@ func TestDailySummariesPreserveLaterPeriodBeforeRevisionCompaction(t *testing.T)
 	}
 	recalculateSummary(&digest)
 
-	revision, encoded, truncated := EnforceItemBudget(digest, 20<<10)
-	if !truncated || !json.Valid(encoded) {
-		t.Fatalf("revision compaction failed: truncated=%v bytes=%d", truncated, len(encoded))
+	revision := digest
+	encoded, err := json.Marshal(revision)
+	if err != nil || !json.Valid(encoded) {
+		t.Fatalf("revision serialization failed: err=%v bytes=%d", err, len(encoded))
 	}
 	if len(revision.DailySummaries) != 2 {
 		t.Fatalf("daily summaries were lost: %#v", revision.DailySummaries)
@@ -70,7 +71,7 @@ func TestDailySummariesPreserveLaterPeriodBeforeRevisionCompaction(t *testing.T)
 
 	period := time.Date(2026, 7, 16, 0, 0, 0, 0, location)
 	selected, selectedJSON, _ := PrepareForPeriod(
-		revision, period, period, location, DefaultPeriodItemBytes,
+		revision, period, period, location,
 	)
 	if !json.Valid(selectedJSON) {
 		t.Fatalf("period payload is invalid: %d", len(selectedJSON))
@@ -141,10 +142,10 @@ func TestDailySummaryHidesEngineeringEvidenceFromReportView(t *testing.T) {
 	}
 	digest := EmptyDigest()
 	digest.WorkUnits = []WorkUnit{unit}
-	digest.DailySummaries = BuildDailySummaries(digest.WorkUnits, location, 6)
+	digest.DailySummaries = BuildDailySummaries(digest.WorkUnits, location)
 	recalculateSummary(&digest)
 	period := time.Date(2026, 7, 16, 0, 0, 0, 0, location)
-	_, encoded, _ := PrepareForPeriod(digest, period, period, location, DefaultPeriodItemBytes)
+	_, encoded, _ := PrepareForPeriod(digest, period, period, location)
 	text := string(encoded)
 	for _, forbidden := range []string{
 		"change_count", "changed_files", "validation_count", "validations",
@@ -183,7 +184,7 @@ func TestDailySummaryPreservesEveryResultAndDoesNotRewriteArtifactMentions(t *te
 		})
 	}
 
-	days := BuildDailySummaries(units, location, 5)
+	days := BuildDailySummaries(units, location)
 	if len(days) != 1 || len(days[0].Highlights) != count {
 		t.Fatalf("result-bearing Work Units were capped: %#v", days)
 	}
@@ -209,7 +210,7 @@ func TestDailySummaryKeepsMeaningfulPendingUserGoal(t *testing.T) {
 		Goal:            Goal{Text: "继续定位尚未解决的上传故障", Source: "user_message"},
 		Category:        "investigation", Status: "pending", EvidenceGrade: "D",
 	}}
-	days := BuildDailySummaries(units, location, 0)
+	days := BuildDailySummaries(units, location)
 	if len(days) != 1 || len(days[0].Highlights) != 1 ||
 		days[0].Highlights[0].Goal != units[0].Goal.Text {
 		t.Fatalf("pending user work was omitted: %+v", days)
@@ -239,7 +240,7 @@ func TestDailySummaryPreservesSameTopicVersionHistory(t *testing.T) {
 		},
 	}
 
-	days := BuildDailySummaries(units, location, 0)
+	days := BuildDailySummaries(units, location)
 	if len(days) != 1 || len(days[0].Highlights) != 2 {
 		t.Fatalf("version history was consolidated: %#v", days)
 	}

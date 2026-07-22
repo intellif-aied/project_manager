@@ -11,12 +11,10 @@ import (
 )
 
 const (
-	Version                = "session-digest/v2.9.0"
-	RedactionVersion       = "report-redaction/v1"
-	JobType                = sessionsync.JobBuildContentSliceDigestV2
-	DefaultItemBytes       = 1 << 20
-	DefaultPeriodItemBytes = 1 << 20
-	minimumItemBytes       = 16 << 10
+	Version          = "session-digest/v2.10.0"
+	LegacyVersion    = "session-digest/v2.9.0"
+	RedactionVersion = "report-redaction/v1"
+	JobType          = sessionsync.JobBuildContentSliceDigestV2
 )
 
 var (
@@ -125,9 +123,8 @@ type DailyHighlight struct {
 	Unresolved       []Unresolved      `json:"unresolved"`
 }
 
-// OutcomeCoverage makes result preservation explicit. Text and evidence may be
-// compacted to fit a bounded Digest, but a complete report view must retain one
-// entry for every distinct result-bearing Work Unit.
+// OutcomeCoverage makes result preservation explicit. A complete report view
+// retains one entry for every distinct result-bearing Work Unit.
 type OutcomeCoverage struct {
 	SourceCount      int  `json:"source_count"`
 	RepresentedCount int  `json:"represented_count"`
@@ -244,7 +241,6 @@ type ProcessingTarget struct {
 type Config struct {
 	DigestVersion    string
 	RedactionVersion string
-	ItemMaxBytes     int
 	ReconcileBatch   int
 	WorkerBatch      int
 }
@@ -253,7 +249,6 @@ func DefaultConfig() Config {
 	return Config{
 		DigestVersion:    Version,
 		RedactionVersion: RedactionVersion,
-		ItemMaxBytes:     DefaultItemBytes,
 		ReconcileBatch:   10,
 		WorkerBatch:      1,
 	}
@@ -266,9 +261,6 @@ func (c Config) Normalized() (Config, error) {
 	if c.RedactionVersion == "" {
 		c.RedactionVersion = RedactionVersion
 	}
-	if c.ItemMaxBytes == 0 {
-		c.ItemMaxBytes = DefaultItemBytes
-	}
 	if c.ReconcileBatch == 0 {
 		c.ReconcileBatch = 10
 	}
@@ -278,8 +270,7 @@ func (c Config) Normalized() (Config, error) {
 	if c.DigestVersion != Version || c.RedactionVersion != RedactionVersion {
 		return Config{}, errors.New("unsupported session digest v2 or redaction version")
 	}
-	if c.ItemMaxBytes < minimumItemBytes || c.ItemMaxBytes > DefaultItemBytes ||
-		c.ReconcileBatch < 1 || c.ReconcileBatch > 25 || c.WorkerBatch != 1 {
+	if c.ReconcileBatch < 1 || c.ReconcileBatch > 25 || c.WorkerBatch != 1 {
 		return Config{}, errors.New("invalid session digest v2 limits")
 	}
 	return c, nil

@@ -631,6 +631,7 @@ export type ReportType =
   | "department_weekly";
 
 export interface ManagedReportAgentRunPayload {
+  idempotency_key: string;
   report_type: ReportType;
   period: {
     date?: string;
@@ -646,7 +647,6 @@ export interface ManagedReportAgentRunPayload {
   model_id?: string;
   selected_session_slice_keys?: string[];
   report_source_selection_id?: string;
-  large_context_confirmed?: boolean;
   start_prompt_values?: Record<string, string>;
   message?: string;
   credential_overrides?: Record<string, string>;
@@ -707,20 +707,7 @@ export interface ManagedReportAgentUnavailable {
   message: string;
 }
 
-export interface ManagedReportAgentConfirmationRequired {
-  status: "confirmation_required";
-  code: "LARGE_REPORT_CONTEXT_CONFIRMATION_REQUIRED";
-  message: string;
-  report_source_selection_id: string;
-  context_bytes: number;
-  warning_required: true;
-  warning_code: "LARGE_REPORT_CONTEXT";
-}
-
-export type ManagedReportAgentRunResponse =
-  | AIRun
-  | ManagedReportAgentUnavailable
-  | ManagedReportAgentConfirmationRequired;
+export type ManagedReportAgentRunResponse = AIRun | ManagedReportAgentUnavailable;
 
 export interface ManagedAgentSchedule {
   id: string;
