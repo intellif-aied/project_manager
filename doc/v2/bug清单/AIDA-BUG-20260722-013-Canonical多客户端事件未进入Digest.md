@@ -2,7 +2,7 @@
 
 > 优先级：P0
 >
-> 状态：代码已完成，待提交、发布与真实 Session 验收
+> 状态：测试服已验证至 Report Context，待外部模型恢复后完成最终日报验收
 >
 > 影响范围：OpenCode、Kimi Code、OpenClaw；ZCode 不在本次范围
 
@@ -265,12 +265,16 @@ OpenClaw 真实数据已证明：原始结构化事件共有 18 条，Digest 的
 
 已验证：
 
-- API Digest、Session Sync、Report Source、Report Run、Handler、Service 测试通过。
-- daemon 全包测试通过，覆盖 OpenCode、Kimi Code、OpenClaw Adapter contract。
+- 修复已提交并部署到 14.157 测试服；测试 CLI 已发布为 `0.1.21`。
+- API 全量测试通过；daemon 全包测试与 `go vet` 通过，覆盖 OpenCode、Kimi Code、OpenClaw Adapter contract。
 - `git diff --check` 通过；Digest 版本仍为 `session-digest/v2.10.0`，未修改 Coordinator、Report Agent Prompt、数据库表或 Web。
+- OpenClaw `2026.6.33` 真实 Session 重新上传成功；v2.10 Digest 从旧版 `included=0/omitted=18` 修复为 `included=4/omitted=9`，形成 4 个 Atomic Work Unit。
+- 测试句已进入第 3 个 Work Unit，并进入 6153 字节的不可变 Report Context。
+- 真实链路额外发现并修复 Canonical 建索引与回读 Parser 不一致，以及 Report Context 转阶段 SQL 参数缺少显式类型两个问题。
 
 尚未完成：
 
-- 尚未提交、推送或部署测试服。
-- 尚未用三个客户端的真实 Session 做上传到 Report Context/日报的黑盒验收。
+- 最终 Report Agent 连续两次被外部模型配置阻断：AIHub 返回 `MiniMax-M2.5` 不存在或当前账号无权限；这发生在 Digest 和 Report Context 成功之后。
+- 尚未用 OpenCode、Kimi Code 的真实 Session 完成同等黑盒验收。
 - 尚未执行 v2.10 后台重建容量验证，因此本缺陷不能标记为已修复。
+- 当前提交尚未推送远端。
