@@ -13,8 +13,8 @@
 - Canonical Content Reader 一致性修复提交：`443717d`；
 - Report Run Context SQL 类型修复提交：`066e9ef`、`52271d8`；
 - CLI 版本：`0.1.21`；
-- 部署组件：API、测试 CLI；
-- 未部署 Web，未重启 DB、MinIO 或 Web，未涉及生产环境。
+- 部署组件：API、Web、测试 CLI；
+- 未重启 DB、MinIO，未涉及生产环境。
 
 ## 2. 构建与发布结果
 
@@ -23,6 +23,9 @@
 - `cd daemon && go vet ./...`：通过；
 - 最终 API 镜像：`sha256:941ba34a9c143716710c5f8d4e31193df7bf409a82fcc5dda3324b48802513ef`；
 - API `/health`：通过；
+- Web 工作流测试、typecheck 和生产 build：通过；全局 lint 被既有 HelpCenter `react-hooks/set-state-in-effect` 错误阻断，未顺带修改；
+- 最终 Web 镜像：`sha256:17ede2a2cb02c78f4ed6c722fdc75e2db7fe5918c3bb65d1f702026a526df87e`；
+- 测试 Web `http://192.168.14.157:13000/`：HTTP 200；线上 bundle `index-CfjNwXeD.js` 已确认包含 `idempotency_key`；
 - 测试 CLI 分发版本：`0.1.21`；
 - 三个平台二进制、两个安装脚本、`SHA256SUMS.txt` 和 `aida-latest.txt`：远端下载校验全部通过；
 - 最终复验目录：`/home/intellif/aida-release-verifications/20260722-0.1.21-final-Fhe5kf`。
@@ -37,6 +40,7 @@
 - Report Context 成功冻结，大小为 6153 字节，并确认包含测试句；
 - 真实运行额外暴露 Report Run 从 `building_context` 转入 `submitting_agent` 时 PostgreSQL 无法推断 JSON 参数类型；已为 hash 和 bytes 增加显式类型并补充回归测试；
 - 修复后 Run 成功进入 `agent_running`，但连续两次被 AIHub 外部模型配置阻断：`MiniMax-M2.5` 不存在或当前账号无权限；未将该独立问题归因于 Session/Digest。
+- 首轮发布只更新 API 和 CLI，漏部署了并发提交中已增加 `idempotency_key` 的 Web，造成新 API 与旧页面契约不兼容，页面点击稳定返回 `400 INVALID_IDEMPOTENCY_KEY`；补部署当前 `main` Web 后，线上 bundle 已包含该字段。
 
 ## 4. 发布边界
 
