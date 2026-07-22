@@ -87,7 +87,7 @@ function defaultRange(): TokenAnalyticsDateRange {
   return getTokenAnalyticsPresetRange("today", businessDateKey());
 }
 
-function formatTokenValue(raw: string | undefined) {
+function formatTokenValue(raw: string | null | undefined) {
   if (!raw) return "0";
   let value: bigint;
   try {
@@ -106,7 +106,7 @@ function formatTokenValue(raw: string | undefined) {
   return value.toString();
 }
 
-function formatCost(raw: string | undefined) {
+function formatCost(raw: string | null | undefined) {
   if (!raw) return "--";
   const [integer, decimal = ""] = raw.split(".");
   return `¥${integer}.${decimal.padEnd(2, "0").slice(0, 2)}`;
@@ -1104,7 +1104,8 @@ export function TokenAnalyticsPage({
               className: "token-analytics-session-column token-analytics-session-column--tokens",
               width: 110,
               align: "right",
-              render: (value: string) => formatTokenValue(value)
+              render: (value: string | null, record) =>
+                record.usage_status === "unavailable" ? "Token 暂不支持" : formatTokenValue(value)
             },
             {
               title: "API 等价成本",
@@ -1112,14 +1113,18 @@ export function TokenAnalyticsPage({
               className: "token-analytics-session-column token-analytics-session-column--cost",
               width: 130,
               align: "right",
-              render: (value?: string) => formatCost(value)
+              render: (value: string | null | undefined, record) =>
+                record.usage_status === "unavailable" ? "--" : formatCost(value)
             },
             {
               title: "状态",
               dataIndex: "pricing_status",
               className: "token-analytics-session-column token-analytics-session-column--status",
               width: 100,
-              render: (value: string) => statusTag(value)
+              render: (value: string, record) =>
+                record.usage_status === "unavailable"
+                  ? <Tag>Token 暂不支持</Tag>
+                  : statusTag(value)
             }
           ]}
         />

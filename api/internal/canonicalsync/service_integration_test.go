@@ -37,14 +37,14 @@ func TestPrepareFamilyRegistersParentAndCanonicalSourceAtomically(t *testing.T) 
 		t.Fatal(err)
 	}
 	service, err := NewService(db, ReleasePolicy{"opencode": {
-		ClientVersion: "test", AdapterVersion: "opencode-v1", MaximumUsageCapability: "unavailable",
+		MinimumClientVersion: "0.1.17", AdapterVersion: "opencode-v1", MaximumUsageCapability: "unavailable",
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	at := time.Date(2026, 7, 21, 1, 2, 3, 0, time.UTC)
 	body := []byte("{\"schema\":\"aida.session.event.v1\"}\n")
-	result, err := service.PrepareFamily(context.Background(), fmt.Sprint(userID), PrepareRequest{ClientVersion: "test", Sessions: []PrepareSession{
+	result, err := service.PrepareFamily(context.Background(), fmt.Sprint(userID), PrepareRequest{ClientVersion: "0.1.17", Sessions: []PrepareSession{
 		{SessionRef: "child", AgentType: "opencode", ParentSessionRef: "parent", StartedAt: &at, Sources: []PrepareSource{{SourceRole: "main", SourceKey: "opencode:child:main", LocalSize: int64(len(body)), PrefixCheckpointHash: sessionsync.HashBytes(nil), PrefixCheckpointAlgorithmVersion: sessionsync.PrefixCheckpointAlgorithm, SourceFormat: "aida_event_v1", IngestionMetadata: IngestionMetadata{AdapterVersion: "opencode-v1", NativeClientVersion: "1.0", UsageCapability: "unavailable"}}}},
 		{SessionRef: "parent", AgentType: "opencode", StartedAt: &at},
 	}})
@@ -62,7 +62,7 @@ func TestPrepareFamilyRegistersParentAndCanonicalSourceAtomically(t *testing.T) 
 	if err = db.QueryRow(`SELECT source_format,ingestion_metadata->>'usage_capability' FROM session_sources src JOIN sessions s ON s.id=src.session_id WHERE s.user_id=$1`, userID).Scan(&format, &capability); err != nil || format != "aida_event_v1" || capability != "unavailable" {
 		t.Fatalf("format=%s capability=%s err=%v", format, capability, err)
 	}
-	if _, err = service.PrepareFamily(context.Background(), fmt.Sprint(userID), PrepareRequest{ClientVersion: "test", Sessions: []PrepareSession{{SessionRef: "child", AgentType: "opencode", StartedAt: &at}}}); err == nil {
+	if _, err = service.PrepareFamily(context.Background(), fmt.Sprint(userID), PrepareRequest{ClientVersion: "0.1.17", Sessions: []PrepareSession{{SessionRef: "child", AgentType: "opencode", StartedAt: &at}}}); err == nil {
 		t.Fatal("expected an existing session family reparent attempt to fail")
 	}
 	var storedParent string

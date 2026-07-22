@@ -4,7 +4,7 @@ import "testing"
 
 func TestReleasedAdapterPolicyCannotBeClientPromoted(t *testing.T) {
 	request := PrepareRequest{
-		ClientVersion: "test",
+		ClientVersion: "0.1.17",
 		Sessions: []PrepareSession{{
 			SessionRef: "s", AgentType: "opencode",
 			Sources: []PrepareSource{{
@@ -15,7 +15,7 @@ func TestReleasedAdapterPolicyCannotBeClientPromoted(t *testing.T) {
 		}},
 	}
 	policy := ReleasePolicy{"opencode": {
-		ClientVersion: "test", AdapterVersion: "opencode-v1", MaximumUsageCapability: "unavailable",
+		MinimumClientVersion: "0.1.17", AdapterVersion: "opencode-v1", MaximumUsageCapability: "unavailable",
 	}}
 	if err := ValidateReleasedPrepare(request, nil); err == nil {
 		t.Fatal("canonical adapters must be disabled by default")
@@ -33,9 +33,17 @@ func TestReleasedAdapterPolicyCannotBeClientPromoted(t *testing.T) {
 	request.Sessions[0].Sources[0].IngestionMetadata.UsageCapability = "unavailable"
 	request.ClientVersion = "other"
 	if err := ValidateReleasedPrepare(request, policy); err == nil {
-		t.Fatal("unreleased Aida client version must be rejected")
+		t.Fatal("invalid Aida client version must be rejected")
 	}
-	request.ClientVersion = "test"
+	request.ClientVersion = "0.1.16"
+	policy = ReportOnlyReleasePolicy("0.1.17")
+	if err := ValidateReleasedPrepare(request, policy); err == nil {
+		t.Fatal("Aida client below the minimum release must be rejected")
+	}
+	request.ClientVersion = "0.1.19"
+	if err := ValidateReleasedPrepare(request, policy); err != nil {
+		t.Fatalf("compatible Aida patch release was rejected: %v", err)
+	}
 	request.Sessions[0].Sources[0].IngestionMetadata.AdapterVersion = "other"
 	if err := ValidateReleasedPrepare(request, policy); err == nil {
 		t.Fatal("unreleased adapter version must be rejected")
@@ -51,7 +59,7 @@ func TestReportOnlyReleasePolicyEnablesOnlyApprovedAdapters(t *testing.T) {
 	policy := ReportOnlyReleasePolicy(" 0.1.17 ")
 	for _, clientType := range []string{"opencode", "kimi_code", "openclaw"} {
 		release, ok := policy[clientType]
-		if !ok || release.ClientVersion != "0.1.17" || release.MaximumUsageCapability != "unavailable" {
+		if !ok || release.MinimumClientVersion != "0.1.17" || release.MaximumUsageCapability != "unavailable" {
 			t.Fatalf("release[%s]=%+v ok=%v", clientType, release, ok)
 		}
 	}

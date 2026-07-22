@@ -1,6 +1,7 @@
 package tokenanalytics
 
 import (
+	"encoding/json"
 	"errors"
 	"time"
 )
@@ -110,6 +111,7 @@ type SessionItem struct {
 	UserID                  string   `json:"user_id"`
 	UserName                string   `json:"user_name"`
 	AgentType               string   `json:"agent_type"`
+	UsageStatus             string   `json:"usage_status"`
 	Summary                 *string  `json:"summary"`
 	StartedAt               string   `json:"started_at"`
 	ActivityFrom            string   `json:"activity_from"`
@@ -133,6 +135,27 @@ type SessionItem struct {
 	EstimatedCostCNY        *string  `json:"estimated_cost_cny"`
 	PricingStatus           string   `json:"pricing_status"`
 	QualityStatus           string   `json:"quality_status"`
+}
+
+func (item SessionItem) MarshalJSON() ([]byte, error) {
+	type sessionItemAlias SessionItem
+	if item.UsageStatus != "unavailable" {
+		return json.Marshal(sessionItemAlias(item))
+	}
+	return json.Marshal(struct {
+		sessionItemAlias
+		TotalTokens         *string `json:"total_tokens"`
+		UncachedInputTokens *string `json:"uncached_input_tokens"`
+		CacheReadTokens     *string `json:"cache_read_tokens"`
+		CacheWrite5mTokens  *string `json:"cache_write_5m_tokens"`
+		CacheWrite1hTokens  *string `json:"cache_write_1h_tokens"`
+		OutputTokens        *string `json:"output_tokens"`
+		SelfTotalTokens     *string `json:"self_total_tokens"`
+		SubagentTotalTokens *string `json:"subagent_total_tokens"`
+		FamilyTotalTokens   *string `json:"family_total_tokens"`
+		LifetimeTotalTokens *string `json:"lifetime_total_tokens"`
+		RangeTotalTokens    *string `json:"range_total_tokens"`
+	}{sessionItemAlias: sessionItemAlias(item)})
 }
 
 type Sessions struct {

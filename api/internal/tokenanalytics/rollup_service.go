@@ -548,6 +548,10 @@ func (s *Service) rollupSessions(ctx context.Context, actor Actor, snapshot Snap
 	if err != nil {
 		return Sessions{}, err
 	}
+	unavailableWhere, args, err := s.unavailableSessionPredicates(ctx, actor, snapshot, args)
+	if err != nil {
+		return Sessions{}, err
+	}
 	args = append(args, pageSize, (page-1)*pageSize)
 	limitPlaceholder := "$" + strconv.Itoa(len(args)-1)
 	offsetPlaceholder := "$" + strconv.Itoa(len(args))
@@ -581,10 +585,10 @@ func (s *Service) rollupSessions(ctx context.Context, actor Actor, snapshot Snap
 			JOIN session_family_token_totals lifetime ON lifetime.rollup_version_id = reference.rollup_version_id
 			WHERE `+strings.Join(lifetimeWhere, " AND ")+`
 			GROUP BY reference.rollup_version_id
-		)
-		SELECT reference.root_session_id::text, reference.root_session_ref,
+		), available_sessions AS (
+		SELECT reference.root_session_id::text AS session_id, reference.root_session_ref AS session_ref,
 			reference.user_id::text, reference.user_display_name, reference.agent_type,
-			reference.summary_snapshot, root.started_at,
+			'available'::text AS usage_status, reference.summary_snapshot, root.started_at,
 			range_usage.activity_from, range_usage.activity_to, range_usage.activity_dates,
 			range_usage.models, range_usage.range_total_tokens::text,
 			range_usage.uncached_input_tokens::text, range_usage.cache_read_tokens::text,
@@ -595,15 +599,37 @@ func (s *Service) rollupSessions(ctx context.Context, actor Actor, snapshot Snap
 			range_usage.estimated_cost_cny::text, range_usage.pricing_status,
 			range_usage.quality_status, family.member_count,
 			reference.matched_member_session_id::text,
-			reference.matched_member_session_ref,
-			COUNT(*) OVER()::int
+			reference.matched_member_session_ref
 		FROM token_query_snapshot_rollups reference
 		JOIN range_usage ON range_usage.rollup_version_id = reference.rollup_version_id
 		LEFT JOIN lifetime_usage ON lifetime_usage.rollup_version_id = reference.rollup_version_id
 		JOIN session_family_versions family ON family.id = reference.family_version_id
 		JOIN sessions root ON root.id = reference.root_session_id
 		WHERE reference.snapshot_id = $1
-		ORDER BY range_usage.activity_to DESC, reference.root_session_ref
+		), unavailable_sessions AS (
+			SELECT session.id::text AS session_id, session.session_ref,
+				session.user_id::text, COALESCE(NULLIF(user_row.nickname, ''),
+					NULLIF(user_row.name, ''), user_row.username, session.user_id::text),
+				session.agent_type, 'unavailable'::text AS usage_status, session.summary,
+				session.started_at, COALESCE(session.last_activity_at, session.started_at)::date::text,
+				COALESCE(session.last_activity_at, session.started_at)::date::text,
+				ARRAY[COALESCE(session.last_activity_at, session.started_at)::date::text],
+				'unknown'::text, ''::text, ''::text, ''::text, ''::text, ''::text,
+				''::text, ''::text, ''::text, ''::text, NULL::text,
+				'unavailable'::text, 'unavailable'::text, 1,
+				NULL::text, NULL::text
+			FROM sessions session
+			JOIN users user_row ON user_row.id = session.user_id
+			LEFT JOIN teams current_team ON current_team.id = user_row.team_id
+			WHERE `+strings.Join(unavailableWhere, " AND ")+`
+		), combined_sessions AS (
+			SELECT * FROM available_sessions
+			UNION ALL
+			SELECT * FROM unavailable_sessions
+		)
+		SELECT combined_sessions.*, COUNT(*) OVER()::int
+		FROM combined_sessions
+		ORDER BY activity_to DESC, session_ref
 		LIMIT `+limitPlaceholder+` OFFSET `+offsetPlaceholder, args...)
 	if err != nil {
 		return Sessions{}, err
@@ -618,7 +644,7 @@ func (s *Service) rollupSessions(ctx context.Context, actor Actor, snapshot Snap
 		var startedAt time.Time
 		var total int
 		if err := rows.Scan(&item.SessionID, &item.SessionRef, &item.UserID, &item.UserName,
-			&item.AgentType, &summary, &startedAt, &item.ActivityFrom, &item.ActivityTo,
+			&item.AgentType, &item.UsageStatus, &summary, &startedAt, &item.ActivityFrom, &item.ActivityTo,
 			&activityDates, &item.Model, &item.RangeTotalTokens,
 			&item.UncachedInputTokens, &item.CacheReadTokens, &item.CacheWrite5mTokens,
 			&item.CacheWrite1hTokens, &item.OutputTokens,
@@ -642,6 +668,98 @@ func (s *Service) rollupSessions(ctx context.Context, actor Actor, snapshot Snap
 		result.Items = append(result.Items, item)
 	}
 	return result, rows.Err()
+}
+
+func (s *Service) unavailableSessionPredicates(
+	ctx context.Context,
+	actor Actor,
+	snapshot Snapshot,
+	args []any,
+) ([]string, []any, error) {
+	where := []string{
+		`session.content_status = 'available'`,
+		`NOT EXISTS (
+			SELECT 1 FROM token_query_snapshot_rollups existing
+			WHERE existing.snapshot_id = $1 AND existing.root_session_id = session.id
+		)`,
+	}
+	appendArg := func(value any) string {
+		args = append(args, value)
+		return "$" + strconv.Itoa(len(args))
+	}
+	snapshotAt := appendArg(snapshot.MetricsSnapshotAt)
+	where = append(where, `EXISTS (
+		SELECT 1 FROM session_sources source
+		JOIN session_source_generations generation ON generation.id = source.active_generation_id
+		WHERE source.session_id = session.id
+			AND source.ingestion_metadata->>'usage_capability' = 'unavailable'
+			AND generation.status = 'active'
+			AND generation.finalized_at IS NOT NULL
+			AND generation.finalized_at <= `+snapshotAt+`
+	)`)
+	switch snapshot.Scope {
+	case "mine":
+		where = append(where, "session.user_id = "+appendArg(actor.ID))
+	case "management":
+		switch actor.Role {
+		case "team_leader":
+			if actor.TeamID == nil {
+				where = append(where, "false")
+			} else {
+				where = append(where, "user_row.team_id::text = "+appendArg(*actor.TeamID))
+			}
+		case "director":
+			rows, err := s.db.QueryContext(ctx, `SELECT id::text FROM departments WHERE director_user_id = $1 ORDER BY id`, actor.ID)
+			if err != nil {
+				return nil, nil, err
+			}
+			departments := []string{}
+			for rows.Next() {
+				var id string
+				if err := rows.Scan(&id); err != nil {
+					rows.Close()
+					return nil, nil, err
+				}
+				departments = append(departments, id)
+			}
+			if err := rows.Close(); err != nil {
+				return nil, nil, err
+			}
+			if len(departments) == 0 {
+				where = append(where, "false")
+			} else {
+				where = append(where, "COALESCE(user_row.department_id, current_team.department_id) = ANY("+
+					appendArg(pq.Array(departments))+"::uuid[])")
+			}
+		case "admin":
+		default:
+			return nil, nil, ErrForbidden
+		}
+	default:
+		return nil, nil, ErrInvalidFilter
+	}
+	if snapshot.Filters.TeamID != "" {
+		where = append(where, "user_row.team_id::text = "+appendArg(snapshot.Filters.TeamID))
+	}
+	if snapshot.Filters.DepartmentID != "" {
+		where = append(where, "COALESCE(user_row.department_id, current_team.department_id)::text = "+appendArg(snapshot.Filters.DepartmentID))
+	}
+	if snapshot.Filters.UserID != "" {
+		where = append(where, "session.user_id::text = "+appendArg(snapshot.Filters.UserID))
+	}
+	if snapshot.SearchMode != "exact_session_ref" {
+		where = append(where,
+			"COALESCE(session.last_activity_at, session.started_at)::date >= "+appendArg(snapshot.Filters.From)+"::date",
+			"COALESCE(session.last_activity_at, session.started_at)::date <= "+appendArg(snapshot.Filters.To)+"::date")
+	}
+	if snapshot.Filters.Model != "" {
+		where = append(where, "false")
+	}
+	if snapshot.Filters.Query != "" {
+		query := appendArg("%" + snapshot.Filters.Query + "%")
+		where = append(where, "(session.session_ref ILIKE "+query+" OR COALESCE(session.summary, '') ILIKE "+query+")")
+	}
+	return where, args, nil
 }
 
 func (s *Service) rollupPredicates(

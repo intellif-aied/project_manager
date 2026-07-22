@@ -234,6 +234,7 @@ func (s *Service) Sessions(ctx context.Context, actor Actor, filters Filters, to
 		}
 		item.Summary = stringPtr(summary)
 		item.EstimatedCostCNY = stringPtr(cost)
+		item.UsageStatus = "available"
 		result.Items = append(result.Items, item)
 	}
 	return result, rows.Err()

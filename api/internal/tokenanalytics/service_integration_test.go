@@ -1,8 +1,10 @@
 package tokenanalytics
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -56,6 +58,7 @@ func TestTokenAnalyticsOrganizationPricingAndSnapshotIntegration(t *testing.T) {
 	}
 	assertActiveCost(t, database, firstComponentID, "3.000000000000", "21.000000000000")
 	fixture.insertPendingSource(t)
+	fixture.insertUnavailableCanonicalSession(t)
 
 	analyticsService := NewService(database)
 	filters := Filters{Scope: "management", From: fixture.activityDate, To: fixture.activityDate}
@@ -115,13 +118,32 @@ func TestTokenAnalyticsOrganizationPricingAndSnapshotIntegration(t *testing.T) {
 		t.Fatalf("rankings=%+v err=%v", rankings, err)
 	}
 	sessions, err := analyticsService.Sessions(context.Background(), director, filters, firstSummary.QuerySnapshotToken, 1, 20)
-	if err != nil || sessions.Total != 1 || len(sessions.Items) != 1 || sessions.Items[0].SessionRef != "stage3-token-session" ||
-		sessions.Items[0].RangeTotalTokens != "1000000" || sessions.Items[0].LifetimeTotalTokens != "1000000" ||
-		sessions.Items[0].SelfTotalTokens != "1000000" || sessions.Items[0].SubagentTotalTokens != "0" {
+	if err != nil || sessions.Total != 2 || len(sessions.Items) != 2 {
 		t.Fatalf("sessions=%+v err=%v", sessions, err)
 	}
-	if _, err := time.Parse(time.RFC3339Nano, sessions.Items[0].StartedAt); err != nil {
-		t.Fatalf("session started_at=%q is not RFC3339: %v", sessions.Items[0].StartedAt, err)
+	byRef := map[string]SessionItem{}
+	for _, item := range sessions.Items {
+		byRef[item.SessionRef] = item
+	}
+	available := byRef["stage3-token-session"]
+	if available.UsageStatus != "available" || available.RangeTotalTokens != "1000000" ||
+		available.LifetimeTotalTokens != "1000000" || available.SelfTotalTokens != "1000000" ||
+		available.SubagentTotalTokens != "0" {
+		t.Fatalf("available session=%+v", available)
+	}
+	unavailable := byRef["stage3-openclaw-unavailable"]
+	if unavailable.UsageStatus != "unavailable" || unavailable.EstimatedCostCNY != nil {
+		t.Fatalf("unavailable OpenClaw session=%+v", unavailable)
+	}
+	payload, err := json.Marshal(unavailable)
+	if err != nil || !bytes.Contains(payload, []byte(`"total_tokens":null`)) ||
+		!bytes.Contains(payload, []byte(`"estimated_cost_cny":null`)) {
+		t.Fatalf("unavailable JSON must expose null metrics: %s err=%v", payload, err)
+	}
+	for _, item := range sessions.Items {
+		if _, err := time.Parse(time.RFC3339Nano, item.StartedAt); err != nil {
+			t.Fatalf("session started_at=%q is not RFC3339: %v", item.StartedAt, err)
+		}
 	}
 
 	if _, err := analyticsService.Trends(context.Background(), director,
@@ -556,6 +578,33 @@ func (fixture *analyticsFixture) insertPendingSource(t *testing.T) {
 			source_id, target_generation_id, status,
 			active_usage_parsed_cursor, source_high_water_cursor
 		) VALUES($1, $2, 'pending', 0, 10)`, sourceID, generationID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (fixture *analyticsFixture) insertUnavailableCanonicalSession(t *testing.T) {
+	t.Helper()
+	var sessionID, sourceID, generationID string
+	if err := fixture.db.QueryRow(`
+		INSERT INTO sessions(session_ref, user_id, agent_type, started_at, last_activity_at, summary)
+		VALUES('stage3-openclaw-unavailable', $1, 'openclaw', now(), now(), 'uploaded without token capability')
+		RETURNING id::text`, analyticsEmployeeID).Scan(&sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.db.QueryRow(`
+		INSERT INTO session_sources(session_id, source_role, source_key, source_format, ingestion_metadata)
+		VALUES($1, 'primary', 'stage3-openclaw-source', 'aida_event_v1',
+			'{"adapter_version":"openclaw-v1","usage_capability":"unavailable"}'::jsonb)
+		RETURNING id::text`, sessionID).Scan(&sourceID); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.db.QueryRow(`
+		INSERT INTO session_source_generations(
+			source_id, status, expected_cursor, source_size, finalized_at
+		) VALUES($1, 'active', 0, 0, now()) RETURNING id::text`, sourceID).Scan(&generationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.db.Exec(`UPDATE session_sources SET active_generation_id=$1 WHERE id=$2`, generationID, sourceID); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -9,6 +9,7 @@ import ts from "typescript";
 const root = process.cwd();
 const viewPath = resolve(root, "src/features/aidashboard/tokens/tokenAnalyticsView.ts");
 const pagePath = resolve(root, "src/features/aidashboard/tokens/pages/TokenAnalyticsPage.tsx");
+const apiTypesPath = resolve(root, "src/features/aidashboard/api/types.ts");
 const memberPagePath = resolve(
   root,
   "src/features/aidashboard/tokens/pages/TokenMemberAnalyticsPage.tsx"
@@ -20,6 +21,7 @@ const pageCssPath = resolve(
 
 const viewSource = readFileSync(viewPath, "utf8");
 const pageSource = readFileSync(pagePath, "utf8");
+const apiTypesSource = readFileSync(apiTypesPath, "utf8");
 const memberPageSource = readFileSync(memberPagePath, "utf8");
 const pageCssSource = readFileSync(pageCssPath, "utf8");
 
@@ -133,5 +135,20 @@ assert.match(pageCssSource, /translateX\(/, "drilldown should use horizontal sha
 assert.doesNotMatch(pageCssSource, /translateY\(|scale\(/, "drilldown must not jump vertically or scale");
 assert.doesNotMatch(pageCssSource, /cubic-bezier\(0\.2, 0\.82, 0\.24, 1\.08\)/, "drilldown must not use an overshooting easing curve");
 assert.match(pageCssSource, /prefers-reduced-motion:[\s\S]*transition: none/, "drilldown should honor reduced-motion preferences");
+assert.match(
+  apiTypesSource,
+  /usage_status: "available" \| "unavailable"/,
+  "session rows should expose whether Token usage is available"
+);
+assert.match(
+  apiTypesSource,
+  /total_tokens: string \| null/,
+  "unavailable session Token values should remain null"
+);
+assert.match(
+  pageSource,
+  /record\.usage_status === "unavailable"[\s\S]*Token \u6682\u4e0d\u652f\u6301/,
+  "unavailable session rows should explain why Token values are absent"
+);
 
 console.log("token analytics workflow contract checks passed");

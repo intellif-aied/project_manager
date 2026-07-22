@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -24,6 +26,8 @@ func additionalAdapters() ([]sessionadapter.Adapter, error) {
 	spool := filepath.Join(home, ".aida", "canonical-spool")
 	return []sessionadapter.Adapter{opencode.New(spool), kimicode.New("", spool), openclaw.New(spool), workbuddy.New()}, nil
 }
+
+var additionalUploadAdaptersFactory = additionalAdapters
 
 func cmdClients() int {
 	adapters, err := additionalAdapters()
@@ -51,6 +55,10 @@ func cmdClients() int {
 }
 
 func cmdUploadClient(args []string) int {
+	if uploadClientHelpRequested(args) {
+		writeUploadClientUsage(os.Stdout)
+		return 0
+	}
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "Usage: aida upload-client <opencode|kimi_code|openclaw> [session-ref...] [--all]")
 		return 2
@@ -74,7 +82,7 @@ func cmdUploadClient(args []string) int {
 		return 1
 	}
 	resolveAPIEndpoint(cfg)
-	adapters, err := additionalAdapters()
+	adapters, err := additionalUploadAdaptersFactory()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -113,17 +121,22 @@ func cmdUploadClient(args []string) int {
 			wanted[arg] = true
 		}
 	}
-	if !all && len(wanted) == 0 {
-		printAdditionalSessions(clientType, sessions)
-		fmt.Printf("\nRun: aida upload-client %s <session-ref>\n", clientType)
-		return 0
-	}
 	byRef := map[string]sessionadapter.Descriptor{}
 	for _, session := range sessions {
 		byRef[session.NativeSessionRef] = session
 	}
 	selected := make([]sessionadapter.Descriptor, 0)
-	if all {
+	if !all && len(wanted) == 0 {
+		selected, err = selectAdditionalSessionsForCurrentTerminal(clientType, sessions)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "无法完成 Session 选择，请重试")
+			return 1
+		}
+		if len(selected) == 0 {
+			fmt.Println("未选择 Session")
+			return 0
+		}
+	} else if all {
 		selected = append(selected, sessions...)
 	} else {
 		for ref := range wanted {
@@ -175,20 +188,120 @@ func cmdUploadClient(args []string) int {
 		fmt.Fprintf(os.Stderr, "Canonical upload failed: %v\n", err)
 		return 1
 	}
-	for _, result := range results {
-		fmt.Printf("[UPLOADED] %s generation=%s chunks=%d finalized=%t\n", result.SessionRef, result.GenerationID, result.UploadedChunks, result.Finalized)
-	}
-	fmt.Printf("Uploaded %d %s session(s). Token capability remains unavailable until exact fixture reconciliation passes.\n", len(results), clientType)
+	writeAdditionalUploadSuccess(os.Stdout, clientType, results)
 	return 0
 }
 
-func printAdditionalSessions(clientType sessionadapter.ClientType, sessions []sessionadapter.Descriptor) {
-	fmt.Printf("%s sessions:\n", clientType)
-	for _, session := range sessions {
-		fmt.Printf("  %s  %s", session.NativeSessionRef, session.Summary)
-		if session.ParentRef != "" {
-			fmt.Printf(" parent=%s", session.ParentRef)
-		}
-		fmt.Println()
+func writeAdditionalUploadSuccess(output io.Writer, clientType sessionadapter.ClientType, results []canonicalupload.UploadedSource) {
+	for _, result := range results {
+		fmt.Fprintf(output, "同步完成：%s %s\n", clientType, result.SessionRef)
 	}
+	fmt.Fprintf(output, "共 %d 个 %s Session 同步完成。\n", len(results), clientType)
+}
+
+func uploadClientHelpRequested(args []string) bool {
+	for _, arg := range args {
+		if arg == "--help" || arg == "-h" {
+			return true
+		}
+	}
+	return false
+}
+
+func writeUploadClientUsage(output io.Writer) {
+	fmt.Fprint(output, `Aida additional client upload
+
+Usage:
+  aida upload-client <opencode|kimi_code|openclaw>
+  aida upload-client <opencode|kimi_code> --all
+  aida upload-client <client> <session-ref...>
+
+Without session refs, Aida opens the same Session picker used by aida upload.
+OpenClaw requires explicit per-Session selection and does not support --all.
+`)
+}
+
+func selectAdditionalSessionsForCurrentTerminal(
+	clientType sessionadapter.ClientType,
+	sessions []sessionadapter.Descriptor,
+) ([]sessionadapter.Descriptor, error) {
+	if !terminalSupportsTUI(os.Stdin, os.Stdout) {
+		return selectAdditionalSessionsInteractively(clientType, sessions, bufio.NewReader(os.Stdin), os.Stdout)
+	}
+	pickerSessions, byRef := additionalSessionsForPicker(clientType, sessions)
+	selected, err := selectSessionsWithTUIOptions(pickerSessions, additionalSessionSelectionOptions(clientType))
+	if err != nil {
+		return nil, err
+	}
+	return selectedAdditionalDescriptors(selected, byRef), nil
+}
+
+func selectAdditionalSessionsInteractively(
+	clientType sessionadapter.ClientType,
+	sessions []sessionadapter.Descriptor,
+	reader *bufio.Reader,
+	output io.Writer,
+) ([]sessionadapter.Descriptor, error) {
+	pickerSessions, byRef := additionalSessionsForPicker(clientType, sessions)
+	selected, err := selectSessionsInteractivelyWithOptions(
+		pickerSessions,
+		defaultSessionPageSize,
+		reader,
+		output,
+		additionalSessionSelectionOptions(clientType),
+	)
+	if err != nil {
+		return nil, err
+	}
+	return selectedAdditionalDescriptors(selected, byRef), nil
+}
+
+func additionalSessionSelectionOptions(clientType sessionadapter.ClientType) sessionSelectionOptions {
+	options := defaultSessionSelectionOptions()
+	if clientType == "openclaw" {
+		options.AllowSelectAll = false
+		options.SelectAllDisabledNotice = "OpenClaw 不支持全选，请逐项选择 Session"
+	}
+	return options
+}
+
+func additionalSessionsForPicker(
+	clientType sessionadapter.ClientType,
+	sessions []sessionadapter.Descriptor,
+) ([]*SessionInfo, map[string]sessionadapter.Descriptor) {
+	pickerSessions := make([]*SessionInfo, 0, len(sessions))
+	byRef := make(map[string]sessionadapter.Descriptor, len(sessions))
+	for _, descriptor := range sessions {
+		byRef[descriptor.NativeSessionRef] = descriptor
+		pickerSessions = append(pickerSessions, &SessionInfo{
+			SessionRef:        descriptor.NativeSessionRef,
+			ParentSessionRef:  descriptor.ParentRef,
+			ForkedAt:          descriptor.ForkedAt,
+			ForkSource:        descriptor.ForkSource,
+			AgentType:         string(clientType),
+			ProjectDir:        descriptor.ProjectName,
+			Cwd:               descriptor.CWD,
+			StartedAt:         descriptor.StartedAt,
+			EndedAt:           descriptor.LastActivityAt,
+			Summary:           descriptor.Summary,
+			SelectionActiveAt: descriptor.LastActivityAt,
+		})
+	}
+	return pickerSessions, byRef
+}
+
+func selectedAdditionalDescriptors(
+	selected []*SessionInfo,
+	byRef map[string]sessionadapter.Descriptor,
+) []sessionadapter.Descriptor {
+	result := make([]sessionadapter.Descriptor, 0, len(selected))
+	for _, session := range selected {
+		if session == nil {
+			continue
+		}
+		if descriptor, ok := byRef[session.SessionRef]; ok {
+			result = append(result, descriptor)
+		}
+	}
+	return result
 }

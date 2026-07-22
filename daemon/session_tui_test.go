@@ -5,8 +5,29 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aidashboard/daemon/internal/sessionadapter"
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+func TestOpenClawUsesSharedTUIPickerWithoutSelectAll(t *testing.T) {
+	descriptors := []sessionadapter.Descriptor{
+		{ClientType: "openclaw", NativeSessionRef: "openclaw-session-1", Summary: "first"},
+		{ClientType: "openclaw", NativeSessionRef: "openclaw-session-2", Summary: "second"},
+	}
+	sessions, _ := additionalSessionsForPicker("openclaw", descriptors)
+	model := newSessionPickerModelWithOptions(sessions, additionalSessionSelectionOptions("openclaw"))
+	model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+
+	if len(model.selected) != 0 {
+		t.Fatalf("OpenClaw select-all selected=%d", len(model.selected))
+	}
+	view := model.View()
+	if !strings.Contains(view, "Aida Session 上传") ||
+		!strings.Contains(view, "openclaw openclaw-session-1") ||
+		!strings.Contains(view, "不支持全选，请逐项选择") {
+		t.Fatalf("view=%q", view)
+	}
+}
 
 func TestSessionPickerSelectsAcrossFilteredResults(t *testing.T) {
 	model := newSessionPickerModel(fakeSessionList(20))

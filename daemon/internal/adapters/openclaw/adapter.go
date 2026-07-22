@@ -160,7 +160,7 @@ func (a *Adapter) Materialize(ctx context.Context, descriptor sessionadapter.Des
 		SessionID     string `json:"sessionId"`
 		SessionKey    string `json:"sessionKey"`
 	}
-	if json.Unmarshal(manifestContent, &manifest) != nil || manifest.TraceSchema != "openclaw-trajectory" || manifest.SchemaVersion != 1 || manifest.SessionKey != locator.SessionKey || manifest.SessionID != locator.SessionID || (exported.SessionID != "" && exported.SessionID != manifest.SessionID) {
+	if json.Unmarshal(manifestContent, &manifest) != nil || manifest.TraceSchema != "openclaw-trajectory" || manifest.SchemaVersion < 1 || manifest.SessionKey != locator.SessionKey || manifest.SessionID != locator.SessionID || (exported.SessionID != "" && exported.SessionID != manifest.SessionID) {
 		return sessionadapter.MaterializedSession{}, errors.New("OpenClaw trajectory manifest identity or schema is invalid")
 	}
 	eventsPath, err := trustedRegularFile(exportDir, filepath.Join(exportDir, "events.jsonl"))
@@ -218,10 +218,10 @@ func readTranscriptEvents(path, sessionRef, sessionID string) ([]canonical.Event
 	scanner.Buffer(make([]byte, 64<<10), canonical.MaxEventLineBytes)
 	for scanner.Scan() {
 		var event trajectoryEvent
-		if json.Unmarshal(scanner.Bytes(), &event) != nil || event.TraceSchema != "openclaw-trajectory" || event.SchemaVersion != 1 || event.SessionID != sessionID || event.TraceID == "" || event.SourceSeq <= 0 {
+		if json.Unmarshal(scanner.Bytes(), &event) != nil || event.TraceSchema != "openclaw-trajectory" || event.SchemaVersion < 1 || event.SessionID != sessionID || event.TraceID == "" || event.SourceSeq <= 0 {
 			return nil, errors.New("OpenClaw trajectory contains an invalid event")
 		}
-		if event.Source != "transcript" {
+		if !transcriptSource(event.Source) {
 			continue
 		}
 		at, err := time.Parse(time.RFC3339Nano, event.Timestamp)
@@ -244,19 +244,54 @@ func readTranscriptEvents(path, sessionRef, sessionID string) ([]canonical.Event
 }
 
 func projectTranscriptEvent(event trajectoryEvent) (canonical.EventType, string, bool) {
-	switch event.Type {
-	case "message.user", "message.assistant":
-		summary := readableText(event.Data["message"])
+	message := event.Data["message"]
+	if role := messageRole(message); role == "user" || role == "assistant" {
+		summary := readableText(message)
 		return canonical.EventMessage, summary, summary != ""
-	case "tool.call":
-		summary := text(event.Data, "name")
+	}
+
+	normalizedType := normalizeEventType(event.Type)
+	switch {
+	case normalizedType == "message.user", normalizedType == "user.message", normalizedType == "message.assistant", normalizedType == "assistant.message":
+		summary := readableText(message)
+		return canonical.EventMessage, summary, summary != ""
+	case normalizedType == "tool.call" || strings.HasSuffix(normalizedType, ".tool.call"):
+		summary := text(event.Data, "name", "toolName")
 		return canonical.EventToolCall, summary, summary != ""
-	case "tool.result":
-		summary := readableText(event.Data["message"])
+	case normalizedType == "tool.result" || strings.HasSuffix(normalizedType, ".tool.result"):
+		summary := readableText(message)
+		if summary == "" {
+			summary = readableText(event.Data["result"])
+		}
+		if summary == "" {
+			summary = readableText(event.Data["error"])
+		}
 		return canonical.EventToolResult, summary, summary != ""
 	default:
 		return "", "", false
 	}
+}
+
+func transcriptSource(value string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	return normalized == "transcript" || strings.HasPrefix(normalized, "transcript.") || strings.HasPrefix(normalized, "transcript-")
+}
+
+func messageRole(value any) string {
+	message, ok := value.(map[string]any)
+	if !ok {
+		return ""
+	}
+	return strings.ToLower(text(message, "role"))
+}
+
+func normalizeEventType(value string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	normalized = strings.NewReplacer("_", ".", "-", ".").Replace(normalized)
+	for strings.Contains(normalized, "..") {
+		normalized = strings.ReplaceAll(normalized, "..", ".")
+	}
+	return strings.Trim(normalized, ".")
 }
 
 func trustedExportPath(workspace, value string) (string, error) {

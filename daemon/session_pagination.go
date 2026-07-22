@@ -17,6 +17,15 @@ const defaultSessionPageSize = 10
 
 var allowedSessionPageSizes = map[int]bool{10: true, 20: true, 50: true, 100: true}
 
+type sessionSelectionOptions struct {
+	AllowSelectAll          bool
+	SelectAllDisabledNotice string
+}
+
+func defaultSessionSelectionOptions() sessionSelectionOptions {
+	return sessionSelectionOptions{AllowSelectAll: true}
+}
+
 type sessionListPage struct {
 	Items      []*SessionInfo
 	Page       int
@@ -83,8 +92,10 @@ func writeSessionSummaryRow(output io.Writer, marker string, index int, session 
 	pathWidth := max(16, min(36, width/4))
 	firstPrefix := fmt.Sprintf("%s %-4d %-11s %-*s  ", marker, index, activeAt,
 		pathWidth, truncateMiddle(sessionPathDisplay(session), pathWidth))
-	lastPrefix := fmt.Sprintf("    %-7s %s  最新消息：",
-		truncate(firstNonEmpty(session.AgentType, "claude"), 7), firstNonEmpty(session.SessionRef, "-"))
+	agentLabel := truncateToDisplayWidth(firstNonEmpty(session.AgentType, "claude"), 12)
+	agentWidth := max(7, displayWidth(agentLabel))
+	lastPrefix := fmt.Sprintf("    %s %s  最新消息：",
+		padToDisplayWidth(agentLabel, agentWidth), firstNonEmpty(session.SessionRef, "-"))
 	contentColumn := max(displayWidth(firstPrefix), displayWidth(lastPrefix))
 	firstPrefix = padToDisplayWidth(firstPrefix, contentColumn)
 	lastPrefix = padToDisplayWidth(lastPrefix, contentColumn)
@@ -159,6 +170,16 @@ func selectSessionsInteractively(
 	reader *bufio.Reader,
 	output io.Writer,
 ) ([]*SessionInfo, error) {
+	return selectSessionsInteractivelyWithOptions(sessions, pageSize, reader, output, defaultSessionSelectionOptions())
+}
+
+func selectSessionsInteractivelyWithOptions(
+	sessions []*SessionInfo,
+	pageSize int,
+	reader *bufio.Reader,
+	output io.Writer,
+	options sessionSelectionOptions,
+) ([]*SessionInfo, error) {
 	if reader == nil || output == nil {
 		return nil, errors.New("interactive input and output are required")
 	}
@@ -177,7 +198,11 @@ func selectSessionsInteractively(
 		}
 		writeSessionPage(output, "选择要上传的 Session", page, selected)
 		pageRendered = true
-		fmt.Fprintf(output, "命令：编号切换选择，n 下一页，p 上一页，g <页码> 跳转，s <10|20|50|100> 每页条数，all 选择全部 %d 条，d 完成，q 取消\n> ", len(sessions))
+		if options.AllowSelectAll {
+			fmt.Fprintf(output, "命令：编号切换选择，n 下一页，p 上一页，g <页码> 跳转，s <10|20|50|100> 每页条数，all 选择全部 %d 条，d 完成，q 取消\n> ", len(sessions))
+		} else {
+			fmt.Fprint(output, "命令：编号切换选择，n 下一页，p 上一页，g <页码> 跳转，s <10|20|50|100> 每页条数，d 完成，q 取消\n> ")
+		}
 		input, readErr := reader.ReadString('\n')
 		input = strings.TrimSpace(input)
 		if readErr != nil && input == "" {
@@ -199,6 +224,10 @@ func selectSessionsInteractively(
 			}
 			return result, nil
 		case lower == "all" || lower == "a":
+			if !options.AllowSelectAll {
+				fmt.Fprintln(output, firstNonEmpty(options.SelectAllDisabledNotice, "当前客户端不支持全选，请逐项选择 Session"))
+				continue
+			}
 			for index := range sessions {
 				selected[index+1] = true
 			}

@@ -11,21 +11,26 @@ import (
 )
 
 type sessionPickerModel struct {
-	sessions  []*SessionInfo
-	filtered  []int
-	selected  map[int]bool
-	cursor    int
-	width     int
-	height    int
-	query     string
-	searching bool
-	cancelled bool
-	done      bool
+	sessions         []*SessionInfo
+	filtered         []int
+	selected         map[int]bool
+	cursor           int
+	width            int
+	height           int
+	query            string
+	searching        bool
+	cancelled        bool
+	done             bool
+	selectionOptions sessionSelectionOptions
 }
 
 func newSessionPickerModel(sessions []*SessionInfo) *sessionPickerModel {
+	return newSessionPickerModelWithOptions(sessions, defaultSessionSelectionOptions())
+}
+
+func newSessionPickerModelWithOptions(sessions []*SessionInfo, options sessionSelectionOptions) *sessionPickerModel {
 	model := &sessionPickerModel{
-		sessions: sessions, selected: map[int]bool{}, width: 120, height: 28,
+		sessions: sessions, selected: map[int]bool{}, width: 120, height: 28, selectionOptions: options,
 	}
 	model.applyFilter()
 	return model
@@ -96,6 +101,9 @@ func (m *sessionPickerModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		case "a":
+			if !m.selectionOptions.AllowSelectAll {
+				break
+			}
 			allSelected := len(m.filtered) > 0
 			for _, index := range m.filtered {
 				if !m.selected[index] {
@@ -150,8 +158,10 @@ func (m *sessionPickerModel) View() string {
 			pathWidth := max(16, min(36, lineWidth/4))
 			firstPrefix := fmt.Sprintf("%s %s %s  %-*s  ", cursor, check, activeAt,
 				pathWidth, truncateMiddle(sessionPathDisplay(session), pathWidth))
-			lastPrefix := fmt.Sprintf("      %-7s %s  最新消息：",
-				truncate(firstNonEmpty(session.AgentType, "claude"), 7), firstNonEmpty(session.SessionRef, "-"))
+			agentLabel := truncateToDisplayWidth(firstNonEmpty(session.AgentType, "claude"), 12)
+			agentWidth := max(7, displayWidth(agentLabel))
+			lastPrefix := fmt.Sprintf("      %s %s  最新消息：",
+				padToDisplayWidth(agentLabel, agentWidth), firstNonEmpty(session.SessionRef, "-"))
 			contentColumn := max(displayWidth(firstPrefix), displayWidth(lastPrefix))
 			firstPrefix = padToDisplayWidth(firstPrefix, contentColumn)
 			lastPrefix = padToDisplayWidth(lastPrefix, contentColumn)
@@ -166,7 +176,12 @@ func (m *sessionPickerModel) View() string {
 		}
 	}
 	builder.WriteString(strings.Repeat("-", sessionPickerLineWidth(m.width)) + "\n")
-	builder.WriteString("↑↓/j k 移动  Space 选择  / 搜索  a 全选结果  Enter 上传  q 取消\n")
+	if m.selectionOptions.AllowSelectAll {
+		builder.WriteString("↑↓/j k 移动  Space 选择  / 搜索  a 全选结果  Enter 上传  q 取消\n")
+	} else {
+		builder.WriteString("↑↓/j k 移动  Space 选择  / 搜索  Enter 上传  q 取消\n")
+		fmt.Fprintf(&builder, "%s\n", firstNonEmpty(m.selectionOptions.SelectAllDisabledNotice, "当前客户端不支持全选，请逐项选择 Session"))
+	}
 	return builder.String()
 }
 
@@ -255,7 +270,11 @@ func terminalSupportsTUI(input, output *os.File) bool {
 }
 
 func selectSessionsWithTUI(sessions []*SessionInfo) ([]*SessionInfo, error) {
-	model := newSessionPickerModel(sessions)
+	return selectSessionsWithTUIOptions(sessions, defaultSessionSelectionOptions())
+}
+
+func selectSessionsWithTUIOptions(sessions []*SessionInfo, options sessionSelectionOptions) ([]*SessionInfo, error) {
+	model := newSessionPickerModelWithOptions(sessions, options)
 	finalModel, err := tea.NewProgram(model, tea.WithAltScreen()).Run()
 	if err != nil {
 		return nil, err

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -108,7 +109,7 @@ func validUsageCapability(value string) bool {
 }
 
 type AdapterRelease struct {
-	ClientVersion          string
+	MinimumClientVersion   string
 	AdapterVersion         string
 	MaximumUsageCapability string
 }
@@ -124,13 +125,13 @@ func ReportOnlyReleasePolicy(clientVersion string) ReleasePolicy {
 	}
 	return ReleasePolicy{
 		"opencode": {
-			ClientVersion: clientVersion, AdapterVersion: "opencode-v1", MaximumUsageCapability: "unavailable",
+			MinimumClientVersion: clientVersion, AdapterVersion: "opencode-v1", MaximumUsageCapability: "unavailable",
 		},
 		"kimi_code": {
-			ClientVersion: clientVersion, AdapterVersion: "kimi-code-v1", MaximumUsageCapability: "unavailable",
+			MinimumClientVersion: clientVersion, AdapterVersion: "kimi-code-v1", MaximumUsageCapability: "unavailable",
 		},
 		"openclaw": {
-			ClientVersion: clientVersion, AdapterVersion: "openclaw-v1", MaximumUsageCapability: "unavailable",
+			MinimumClientVersion: clientVersion, AdapterVersion: "openclaw-v1", MaximumUsageCapability: "unavailable",
 		},
 	}
 }
@@ -141,8 +142,7 @@ func ReportOnlyReleasePolicy(clientVersion string) ReleasePolicy {
 func ValidateReleasedPrepare(request PrepareRequest, policy ReleasePolicy) error {
 	for _, session := range request.Sessions {
 		release, ok := policy[strings.TrimSpace(session.AgentType)]
-		if !ok || strings.TrimSpace(release.ClientVersion) == "" ||
-			strings.TrimSpace(request.ClientVersion) != release.ClientVersion ||
+		if !ok || !versionAtLeast(request.ClientVersion, release.MinimumClientVersion) ||
 			strings.TrimSpace(release.AdapterVersion) == "" ||
 			!validUsageCapability(release.MaximumUsageCapability) {
 			return fmt.Errorf("%w: client type is not released for canonical upload", ErrInvalidRequest)
@@ -155,6 +155,43 @@ func ValidateReleasedPrepare(request PrepareRequest, policy ReleasePolicy) error
 		}
 	}
 	return nil
+}
+
+func versionAtLeast(candidate, minimum string) bool {
+	left, leftOK := numericVersion(candidate)
+	right, rightOK := numericVersion(minimum)
+	if !leftOK || !rightOK {
+		return false
+	}
+	for index := 0; index < len(left) || index < len(right); index++ {
+		var candidatePart, minimumPart int
+		if index < len(left) {
+			candidatePart = left[index]
+		}
+		if index < len(right) {
+			minimumPart = right[index]
+		}
+		if candidatePart != minimumPart {
+			return candidatePart > minimumPart
+		}
+	}
+	return true
+}
+
+func numericVersion(value string) ([]int, bool) {
+	parts := strings.Split(strings.TrimPrefix(strings.TrimSpace(value), "v"), ".")
+	if len(parts) == 0 {
+		return nil, false
+	}
+	result := make([]int, 0, len(parts))
+	for _, part := range parts {
+		parsed, err := strconv.Atoi(part)
+		if err != nil || parsed < 0 {
+			return nil, false
+		}
+		result = append(result, parsed)
+	}
+	return result, true
 }
 
 func usageCapabilityRank(value string) int {

@@ -110,3 +110,75 @@ func TestMaterializeRejectsExportOutsidePrivateWorkspace(t *testing.T) {
 		t.Fatal("expected escaped export path to fail")
 	}
 }
+
+func TestReadTranscriptEventsAcceptsCurrentOpenClawMessageNames(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	events := strings.Join([]string{
+		`{"traceSchema":"openclaw-trajectory","schemaVersion":1,"traceId":"trace-1","source":"transcript","type":"user.message","ts":"2026-07-22T01:00:01Z","sourceSeq":1,"sessionId":"native-1","entryId":"entry-1","data":{"message":{"role":"user","content":[{"type":"text","text":"current user message"}]}}}`,
+		`{"traceSchema":"openclaw-trajectory","schemaVersion":1,"traceId":"trace-1","source":"transcript","type":"assistant.message","ts":"2026-07-22T01:00:02Z","sourceSeq":2,"sessionId":"native-1","entryId":"entry-2","data":{"message":{"role":"assistant","content":[{"type":"text","text":"current assistant message"}]}}}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(events), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := readTranscriptEvents(path, "openclaw-ref", "native-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result) != 2 {
+		t.Fatalf("events=%+v", result)
+	}
+	if !bytes.Contains(result[0].Payload, []byte("current user message")) || !bytes.Contains(result[1].Payload, []byte("current assistant message")) {
+		t.Fatalf("events=%+v", result)
+	}
+}
+
+func TestReadTranscriptEventsUsesCompatibleStructureForNewEventNames(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	events := strings.Join([]string{
+		`{"traceSchema":"openclaw-trajectory","schemaVersion":2,"traceId":"trace-2","source":"transcript.v2","type":"conversation.input","ts":"2026-07-22T02:00:01Z","sourceSeq":1,"sessionId":"native-2","entryId":"entry-1","data":{"message":{"role":"user","content":[{"type":"text","text":"future compatible message"}]}}}`,
+		`{"traceSchema":"openclaw-trajectory","schemaVersion":2,"traceId":"trace-2","source":"transcript.v2","type":"conversation.metadata","ts":"2026-07-22T02:00:02Z","sourceSeq":2,"sessionId":"native-2","entryId":"entry-2","data":{"summary":"ignored metadata"}}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(events), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := readTranscriptEvents(path, "openclaw-ref", "native-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result) != 1 || !bytes.Contains(result[0].Payload, []byte("future compatible message")) {
+		t.Fatalf("events=%+v", result)
+	}
+}
+
+func TestRealOpenClawMaterialize(t *testing.T) {
+	ref := strings.TrimSpace(os.Getenv("AIDA_TEST_OPENCLAW_SESSION_REF"))
+	if ref == "" {
+		t.Skip("set AIDA_TEST_OPENCLAW_SESSION_REF to run the local OpenClaw integration test")
+	}
+
+	adapter := New(t.TempDir())
+	sessions, diagnostics := adapter.Discover(context.Background(), sessionadapter.DiscoverOptions{All: true})
+	if len(diagnostics) != 0 {
+		t.Fatalf("diagnostics=%+v", diagnostics)
+	}
+	for _, descriptor := range sessions {
+		if descriptor.NativeSessionRef != ref {
+			continue
+		}
+		materialized, err := adapter.Materialize(context.Background(), descriptor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		content, err := os.ReadFile(materialized.CanonicalPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(bytes.TrimSpace(content)) == 0 {
+			t.Fatal("materialized canonical session is empty")
+		}
+		return
+	}
+	t.Fatalf("OpenClaw session %s was not discovered", ref)
+}
