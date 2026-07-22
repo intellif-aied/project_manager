@@ -71,6 +71,7 @@ func ScanContentChunk(
 	}
 	buffered := bufio.NewReaderSize(reader, 64<<10)
 	result := ContentScanResult{EndCursor: startCursor}
+	canonicalSeen := map[string]struct{}{}
 	for {
 		line, err := readCompleteJSONLLine(buffered)
 		if errors.Is(err, io.EOF) {
@@ -81,6 +82,25 @@ func ScanContentChunk(
 		}
 		lineStart := result.EndCursor
 		result.EndCursor += int64(len(line))
+		if isCanonicalContentLine(line) {
+			event, project, malformed, projectionErr := projectCanonicalContentLine(
+				line, lineStart, result.EndCursor, canonicalSeen,
+			)
+			if projectionErr != nil {
+				return ContentScanResult{}, projectionErr
+			}
+			if malformed {
+				result.MalformedEventCount++
+				continue
+			}
+			if !project {
+				continue
+			}
+			if err := visit(event); err != nil {
+				return ContentScanResult{}, err
+			}
+			continue
+		}
 		event, ok := projectContentLine(line, lineStart, result.EndCursor, fallbackTime)
 		if !ok {
 			result.MalformedEventCount++
@@ -90,6 +110,15 @@ func ScanContentChunk(
 			return ContentScanResult{}, err
 		}
 	}
+}
+
+func isCanonicalContentLine(rawLine []byte) bool {
+	trimmed := bytes.TrimSuffix(rawLine, []byte{'\n'})
+	trimmed = bytes.TrimSuffix(trimmed, []byte{'\r'})
+	var envelope struct {
+		Schema string `json:"schema"`
+	}
+	return json.Unmarshal(trimmed, &envelope) == nil && envelope.Schema == canonicalContentSchemaV1
 }
 
 func readCompleteJSONLLine(reader *bufio.Reader) ([]byte, error) {

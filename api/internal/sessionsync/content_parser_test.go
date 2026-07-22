@@ -91,6 +91,33 @@ func TestScanContentChunkMatchesParseContentChunk(t *testing.T) {
 	}
 }
 
+func TestScanContentChunkMatchesCanonicalIndexProjection(t *testing.T) {
+	content := []byte(
+		`{"schema":"aida.session.event.v1","event_id":"message-1","timestamp":"2026-07-22T01:00:00Z","type":"message","payload":{"role":"user","phase":"unknown","message":"这条消息是为了测试日报生成"}}` + "\n" +
+			`{"schema":"aida.session.event.v1","event_id":"result-1","timestamp":"2026-07-22T01:00:01Z","type":"tool_result","payload":{"call_id":"","status":"unknown","output_summary":""}}` + "\n",
+	)
+	indexed, err := ParseCanonicalContentChunk(bytes.NewReader(content), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var streamed []ProjectedContentEvent
+	result, err := ScanContentChunk(bytes.NewReader(content), 0, nil, func(event ProjectedContentEvent) error {
+		streamed = append(streamed, event)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.EndCursor != indexed.EndCursor || result.MalformedEventCount != indexed.MalformedEventCount ||
+		len(streamed) != len(indexed.Events) {
+		t.Fatalf("canonical stream/index mismatch: stream=%+v index=%+v", result, indexed)
+	}
+	if len(streamed) != 1 || streamed[0].EventType != "canonical.message" ||
+		!bytes.Contains(streamed[0].Payload, []byte(`"role":"user"`)) {
+		t.Fatalf("canonical stream projection=%+v", streamed)
+	}
+}
+
 func TestScanContentChunkStopsOnVisitorError(t *testing.T) {
 	content := []byte(
 		"{\"type\":\"user\",\"timestamp\":\"2026-07-14T00:00:00Z\"}\n" +
