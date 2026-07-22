@@ -90,6 +90,75 @@ func TestExtractorBuildsResultFocusedWorkUnits(t *testing.T) {
 	}
 }
 
+func TestExtractorBuildsWorkUnitFromCanonicalMessages(t *testing.T) {
+	extractor := NewExtractor()
+	events := []Event{
+		testEvent(1, "canonical.message", map[string]any{"payload": map[string]any{
+			"role": "user", "message": "这条消息是为了测试日报生成", "phase": "unknown",
+		}}),
+		testEvent(2, "canonical.message", map[string]any{"payload": map[string]any{
+			"role": "assistant", "message": "已经记录这条测试消息。", "phase": "final",
+		}}),
+		testEvent(3, "canonical.message", map[string]any{"payload": map[string]any{
+			"role": "unknown", "message": "不能猜测这是谁说的", "phase": "unknown",
+		}}),
+	}
+	for _, event := range events {
+		extractor.Consume(event)
+	}
+
+	digest, source, included, omitted, _, encoded := extractor.Result()
+	if source != 3 || included != 2 || omitted != 1 {
+		t.Fatalf("canonical coverage source=%d included=%d omitted=%d", source, included, omitted)
+	}
+	if len(digest.WorkUnits) != 1 || digest.WorkUnits[0].Goal.Text != "这条消息是为了测试日报生成" {
+		t.Fatalf("canonical user message did not create the expected work unit: %+v", digest.WorkUnits)
+	}
+	if len(digest.WorkUnits[0].AgentClaims) != 1 ||
+		digest.WorkUnits[0].AgentClaims[0].Text != "已经记录这条测试消息。" {
+		t.Fatalf("canonical final assistant message was not retained as a claim: %+v", digest.WorkUnits[0])
+	}
+	if strings.Contains(string(encoded), "不能猜测") {
+		t.Fatalf("unknown canonical role leaked into digest: %s", encoded)
+	}
+}
+
+func TestExtractorUsesOnlyCorrelatedCanonicalToolEvidence(t *testing.T) {
+	extractor := NewExtractor()
+	events := []Event{
+		testEvent(1, "canonical.message", map[string]any{"payload": map[string]any{
+			"role": "user", "message": "运行服务端测试", "phase": "unknown",
+		}}),
+		testEvent(2, "canonical.tool_call", map[string]any{"payload": map[string]any{
+			"call_id": "call-1", "name": "Bash", "command": "go test ./...",
+		}}),
+		testEvent(3, "canonical.tool_result", map[string]any{"payload": map[string]any{
+			"call_id": "call-1", "status": "failure", "output_summary": "tests failed",
+		}}),
+		testEvent(4, "canonical.tool_result", map[string]any{"payload": map[string]any{
+			"call_id": "missing", "status": "success", "output_summary": "must not attach",
+		}}),
+	}
+	for _, event := range events {
+		extractor.Consume(event)
+	}
+
+	digest, source, included, omitted, _, encoded := extractor.Result()
+	if source != 4 || included != 3 || omitted != 1 {
+		t.Fatalf("canonical tool coverage source=%d included=%d omitted=%d", source, included, omitted)
+	}
+	if len(digest.WorkUnits) != 1 || len(digest.WorkUnits[0].Validations) != 1 {
+		t.Fatalf("canonical validation evidence is missing: %+v", digest.WorkUnits)
+	}
+	validation := digest.WorkUnits[0].Validations[0]
+	if validation.Name != "go test" || validation.LastStatus != "failed" || validation.Attempts != 1 {
+		t.Fatalf("canonical validation is incorrect: %+v", validation)
+	}
+	if !strings.Contains(string(encoded), "tests failed") || strings.Contains(string(encoded), "must not attach") {
+		t.Fatalf("canonical result correlation is incorrect: %s", encoded)
+	}
+}
+
 func TestExtractorDoesNotTurnSubagentNotificationIntoUserGoal(t *testing.T) {
 	extractor := NewExtractor()
 	extractor.Consume(testEvent(1, "event_msg.user_message", map[string]any{

@@ -127,10 +127,24 @@ func canonicalExportEvents(exported any, fallback time.Time) ([]canonical.Event,
 		if at.IsZero() {
 			at = fallback
 		}
-		payload, _ := json.Marshal(map[string]any{"message": extractText(message), "native": message})
+		payload, _ := json.Marshal(map[string]any{
+			"role": canonicalMessageRole(nestedText(message, "role")), "phase": "unknown",
+			"message": extractText(message), "native": message,
+		})
 		events = append(events, canonical.Event{Schema: canonical.SchemaV1, EventID: "opencode-message-" + id, Timestamp: at.UTC(), Type: canonical.EventMessage, Payload: payload})
 	}
 	return events, nil
+}
+
+func canonicalMessageRole(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "user":
+		return "user"
+	case "assistant":
+		return "assistant"
+	default:
+		return "unknown"
+	}
 }
 
 func nestedText(value any, key string) string {

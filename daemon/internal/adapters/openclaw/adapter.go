@@ -228,11 +228,28 @@ func readTranscriptEvents(path, sessionRef, sessionID string) ([]canonical.Event
 		if err != nil {
 			return nil, errors.New("OpenClaw transcript event has no stable timestamp")
 		}
-		eventType, summary, include := projectTranscriptEvent(event)
+		eventType, role, summary, include := projectTranscriptEvent(event)
 		if !include {
 			continue
 		}
-		payload, _ := json.Marshal(map[string]any{"message": summary, "source_event_type": event.Type, "entry_id": event.EntryID})
+		canonicalPayload := map[string]any{"source_event_type": event.Type, "entry_id": event.EntryID}
+		switch eventType {
+		case canonical.EventMessage:
+			canonicalPayload["message"] = summary
+			canonicalPayload["role"] = role
+			canonicalPayload["phase"] = "unknown"
+		case canonical.EventToolCall:
+			canonicalPayload["call_id"] = canonicalToolCallID(event.Data)
+			canonicalPayload["name"] = summary
+			canonicalPayload["command"] = text(event.Data, "commandSummary", "command_summary")
+		case canonical.EventToolResult:
+			canonicalPayload["call_id"] = canonicalToolCallID(event.Data)
+			canonicalPayload["status"] = canonicalToolStatus(event.Data)
+			canonicalPayload["output_summary"] = summary
+		default:
+			canonicalPayload["message"] = summary
+		}
+		payload, _ := json.Marshal(canonicalPayload)
 		identity := fmt.Sprintf("%s|%s|%d|%s", sessionRef, event.EntryID, event.SourceSeq, event.Type)
 		sum := sha256.Sum256([]byte(identity))
 		result = append(result, canonical.Event{Schema: canonical.SchemaV1, EventID: "openclaw-" + hex.EncodeToString(sum[:]), Timestamp: at.UTC(), Type: eventType, Payload: payload})
@@ -243,21 +260,42 @@ func readTranscriptEvents(path, sessionRef, sessionID string) ([]canonical.Event
 	return result, nil
 }
 
-func projectTranscriptEvent(event trajectoryEvent) (canonical.EventType, string, bool) {
+func canonicalToolCallID(data map[string]any) string {
+	return text(data, "callId", "call_id", "toolCallId", "tool_call_id")
+}
+
+func canonicalToolStatus(data map[string]any) string {
+	if readableText(data["error"]) != "" {
+		return "failure"
+	}
+	switch strings.ToLower(text(data, "status")) {
+	case "success", "succeeded", "passed", "ok":
+		return "success"
+	case "failure", "failed", "error":
+		return "failure"
+	default:
+		return "unknown"
+	}
+}
+
+func projectTranscriptEvent(event trajectoryEvent) (canonical.EventType, string, string, bool) {
 	message := event.Data["message"]
 	if role := messageRole(message); role == "user" || role == "assistant" {
 		summary := readableText(message)
-		return canonical.EventMessage, summary, summary != ""
+		return canonical.EventMessage, role, summary, summary != ""
 	}
 
 	normalizedType := normalizeEventType(event.Type)
 	switch {
-	case normalizedType == "message.user", normalizedType == "user.message", normalizedType == "message.assistant", normalizedType == "assistant.message":
+	case normalizedType == "message.user", normalizedType == "user.message":
 		summary := readableText(message)
-		return canonical.EventMessage, summary, summary != ""
+		return canonical.EventMessage, "user", summary, summary != ""
+	case normalizedType == "message.assistant", normalizedType == "assistant.message":
+		summary := readableText(message)
+		return canonical.EventMessage, "assistant", summary, summary != ""
 	case normalizedType == "tool.call" || strings.HasSuffix(normalizedType, ".tool.call"):
 		summary := text(event.Data, "name", "toolName")
-		return canonical.EventToolCall, summary, summary != ""
+		return canonical.EventToolCall, "", summary, summary != ""
 	case normalizedType == "tool.result" || strings.HasSuffix(normalizedType, ".tool.result"):
 		summary := readableText(message)
 		if summary == "" {
@@ -266,9 +304,9 @@ func projectTranscriptEvent(event trajectoryEvent) (canonical.EventType, string,
 		if summary == "" {
 			summary = readableText(event.Data["error"])
 		}
-		return canonical.EventToolResult, summary, summary != ""
+		return canonical.EventToolResult, "", summary, summary != ""
 	default:
-		return "", "", false
+		return "", "", "", false
 	}
 }
 

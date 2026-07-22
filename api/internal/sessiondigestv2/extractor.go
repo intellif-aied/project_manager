@@ -63,6 +63,24 @@ func (e *Extractor) Consume(event Event) {
 	switch event.EventType {
 	case "event_msg.user_message":
 		contributed = e.consumeGoal(event, stringValue(payload["message"])) || contributed
+	case "canonical.message":
+		role := strings.ToLower(stringValue(payload["role"]))
+		phase := strings.ToLower(stringValue(payload["phase"]))
+		text := stringValue(payload["message"])
+		if role == "user" {
+			contributed = e.consumeGoal(event, text) || contributed
+		} else if role == "assistant" && (phase == "final" || phase == "final_answer") {
+			contributed = e.addAgentClaim(event, text) || contributed
+		}
+	case "canonical.tool_call":
+		contributed = e.addCommandCall(
+			event, stringValue(payload["call_id"]), stringValue(payload["command"]),
+		) || contributed
+	case "canonical.tool_result":
+		contributed = e.completeCanonicalCommand(
+			event, stringValue(payload["call_id"]), stringValue(payload["status"]),
+			stringValue(payload["output_summary"]),
+		) || contributed
 	case "response_item.message":
 		role := strings.ToLower(stringValue(payload["role"]))
 		phase := strings.ToLower(stringValue(payload["phase"]))
@@ -451,6 +469,38 @@ func (e *Extractor) completeCommand(event Event, callID, output string) bool {
 	})
 	if call.Kind == "validation" {
 		e.addValidationAttempt(unit, call.Family, reduced.Status, event.OccurredAt, summary, ref)
+	}
+	return true
+}
+
+func (e *Extractor) completeCanonicalCommand(event Event, callID, status, summary string) bool {
+	call, exists := e.pendingCalls[callID]
+	if !exists || call.UnitIndex < 0 || call.UnitIndex >= len(e.units) {
+		return false
+	}
+	delete(e.pendingCalls, callID)
+
+	normalizedStatus := "unknown"
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "success", "passed":
+		normalizedStatus = "passed"
+	case "failure", "failed", "error":
+		normalizedStatus = "failed"
+	}
+	normalizedSummary := normalizeText(summary)
+	if normalizedSummary == "" {
+		normalizedSummary = "工具结果状态无法可靠判断"
+	}
+
+	unit := &e.units[call.UnitIndex]
+	e.touchUnit(call.UnitIndex, event)
+	ref := stableRef(call.Kind, event, callID+":"+call.Family)
+	unit.unit.Evidence = append(unit.unit.Evidence, Evidence{
+		Ref: ref, Kind: call.Kind, Status: normalizedStatus,
+		Summary: normalizedSummary, CommandFamily: call.Family,
+	})
+	if call.Kind == "validation" {
+		e.addValidationAttempt(unit, call.Family, normalizedStatus, event.OccurredAt, normalizedSummary, ref)
 	}
 	return true
 }

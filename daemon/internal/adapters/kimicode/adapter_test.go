@@ -1,8 +1,10 @@
 package kimicode
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"github.com/aidashboard/daemon/internal/sessionadapter"
 	"os"
 	"path/filepath"
@@ -16,7 +18,11 @@ func TestDiscoverAndMaterializeDocumentedSessionFiles(t *testing.T) {
 		if err := os.MkdirAll(filepath.Join(session, "agents", agent), 0700); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(session, "agents", agent, "wire.jsonl"), []byte(`{"timestamp":"2026-07-21T01:30:00Z","type":"message","content":"hello"}`+"\n"), 0600); err != nil {
+		wire := []byte(
+			`{"timestamp":"2026-07-21T01:30:00Z","type":"message","role":"user","content":"fix the bug"}` + "\n" +
+				`{"timestamp":"2026-07-21T01:31:00Z","type":"message","role":"assistant","content":"fixed"}` + "\n",
+		)
+		if err := os.WriteFile(filepath.Join(session, "agents", agent, "wire.jsonl"), wire, 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -54,6 +60,10 @@ func TestDiscoverAndMaterializeDocumentedSessionFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	roles := canonicalTopLevelRoles(t, first)
+	if !roles["user"] || !roles["assistant"] {
+		t.Fatalf("canonical roles are missing: %s", first)
+	}
 	for run := 0; run < 2; run++ {
 		again, materializeErr := adapter.Materialize(context.Background(), child)
 		if materializeErr != nil {
@@ -67,6 +77,29 @@ func TestDiscoverAndMaterializeDocumentedSessionFiles(t *testing.T) {
 			t.Fatalf("materialize run %d produced different bytes", run+2)
 		}
 	}
+}
+
+func canonicalTopLevelRoles(t *testing.T, content []byte) map[string]bool {
+	t.Helper()
+	roles := map[string]bool{}
+	scanner := bufio.NewScanner(bytes.NewReader(content))
+	for scanner.Scan() {
+		var event struct {
+			Type    string         `json:"type"`
+			Payload map[string]any `json:"payload"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			t.Fatal(err)
+		}
+		if event.Type == "message" {
+			role, _ := event.Payload["role"].(string)
+			roles[role] = true
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return roles
 }
 
 func TestDiscoverRejectsStateSymlinkOutsideRoot(t *testing.T) {

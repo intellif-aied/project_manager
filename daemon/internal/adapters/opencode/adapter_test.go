@@ -1,7 +1,10 @@
 package opencode
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"github.com/aidashboard/daemon/internal/sessionadapter"
 	"os"
 	"testing"
@@ -14,7 +17,7 @@ func (f *fakeRunner) Run(_ context.Context, args ...string) ([]byte, error) {
 	if args[0] == "session" {
 		return []byte(`[{"id":"s1","title":"Fix bug","directory":"/tmp/p","createdAt":"2026-07-21T01:00:00Z","updatedAt":"2026-07-21T02:00:00Z"}]`), nil
 	}
-	return []byte(`{"info":{"id":"s1"},"messages":[{"id":"m1","text":"hello"}]}`), nil
+	return []byte(`{"info":{"id":"s1"},"messages":[{"id":"m1","role":"user","text":"fix the bug"},{"id":"m2","role":"assistant","text":"fixed"}]}`), nil
 }
 func TestDiscoverAndMaterializeOfficialCommands(t *testing.T) {
 	runner := new(fakeRunner)
@@ -34,9 +37,36 @@ func TestDiscoverAndMaterializeOfficialCommands(t *testing.T) {
 	if len(content) == 0 || materialized.UsageCapability != sessionadapter.UsageUnavailable {
 		t.Fatalf("materialized=%+v", materialized)
 	}
+	roles := canonicalTopLevelRoles(t, content)
+	if !roles["user"] || !roles["assistant"] {
+		t.Fatalf("canonical roles are missing: %s", content)
+	}
 	if len(runner.calls) != 2 || runner.calls[1][0] != "export" {
 		t.Fatalf("calls=%v", runner.calls)
 	}
+}
+
+func canonicalTopLevelRoles(t *testing.T, content []byte) map[string]bool {
+	t.Helper()
+	roles := map[string]bool{}
+	scanner := bufio.NewScanner(bytes.NewReader(content))
+	for scanner.Scan() {
+		var event struct {
+			Type    string         `json:"type"`
+			Payload map[string]any `json:"payload"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			t.Fatal(err)
+		}
+		if event.Type == "message" {
+			role, _ := event.Payload["role"].(string)
+			roles[role] = true
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return roles
 }
 
 func TestMaterializeRejectsMissingStableTime(t *testing.T) {

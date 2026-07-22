@@ -46,6 +46,24 @@ func projectSafeEvent(source contentreader.Event) (Event, error) {
 		projected = payloadEnvelope(map[string]any{
 			"message": safeLeft(safeText(payload["message"]), safeTextCharacters),
 		})
+	case "canonical.message":
+		projected = payloadEnvelope(map[string]any{
+			"role":    safeText(payload["role"]),
+			"phase":   safeText(payload["phase"]),
+			"message": safeLeft(safeText(payload["message"]), safeTextCharacters),
+		})
+	case "canonical.tool_call":
+		projected = payloadEnvelope(map[string]any{
+			"call_id": safeText(payload["call_id"]),
+			"name":    safeLeft(safeText(payload["name"]), safeFilePathCharacters),
+			"command": safeLeft(safeText(payload["command"]), safeTextCharacters),
+		})
+	case "canonical.tool_result":
+		projected = payloadEnvelope(map[string]any{
+			"call_id":        safeText(payload["call_id"]),
+			"status":         safeText(payload["status"]),
+			"output_summary": safeLeft(safeText(payload["output_summary"]), safeOutputHeadCharacters),
+		})
 	case "event_msg.agent_message":
 		projected = payloadEnvelope(map[string]any{
 			"phase":   safeText(payload["phase"]),

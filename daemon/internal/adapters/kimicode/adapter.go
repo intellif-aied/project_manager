@@ -140,7 +140,10 @@ func (a *Adapter) Materialize(_ context.Context, d sessionadapter.Descriptor) (s
 				_ = file.Close()
 				return sessionadapter.MaterializedSession{}, errors.New("Kimi Code wire event has no stable timestamp")
 			}
-			payload, _ := json.Marshal(map[string]any{"agent": filepath.Base(filepath.Dir(path)), "message": wireText(native), "native": native})
+			payload, _ := json.Marshal(map[string]any{
+				"agent": filepath.Base(filepath.Dir(path)), "role": wireRole(native), "phase": "unknown",
+				"message": wireText(native), "native": native,
+			})
 			identity := fmt.Sprintf("%s:%d:", filepath.Base(filepath.Dir(path)), cursor)
 			sum := sha256.Sum256(append([]byte(identity), raw...))
 			events = append(events, canonical.Event{Schema: canonical.SchemaV1, EventID: "kimi-wire-" + hex.EncodeToString(sum[:]), Timestamp: at.UTC(), Type: canonical.EventMessage, Payload: payload})
@@ -215,6 +218,23 @@ func wireText(value any) string {
 	}
 	content, _ := json.Marshal(value)
 	return string(content)
+}
+func wireRole(value any) string {
+	row, _ := value.(map[string]any)
+	role := stringField(row, "role")
+	if role == "" {
+		if message, ok := row["message"].(map[string]any); ok {
+			role = stringField(message, "role")
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "user":
+		return "user"
+	case "assistant":
+		return "assistant"
+	default:
+		return "unknown"
+	}
 }
 func safeName(value string) string {
 	sum := sha256.Sum256([]byte(value))

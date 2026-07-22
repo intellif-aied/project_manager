@@ -26,6 +26,36 @@ func TestProjectSafeEventMatchesLegacyProjectionShapes(t *testing.T) {
 			expected: map[string]any{"payload": map[string]any{"message": "build reader"}},
 		},
 		{
+			name: "canonical user message", eventType: "canonical.message",
+			source: map[string]any{"payload": map[string]any{
+				"role": "user", "message": "build canonical reader", "phase": "unknown",
+				"native": map[string]any{"credential": "must-not-project"},
+			}},
+			expected: map[string]any{"payload": map[string]any{
+				"role": "user", "message": "build canonical reader", "phase": "unknown",
+			}},
+		},
+		{
+			name: "canonical tool call", eventType: "canonical.tool_call",
+			source: map[string]any{"payload": map[string]any{
+				"call_id": "call-1", "name": "Bash", "command": "go test ./...",
+				"native": map[string]any{"arguments": "must-not-project"},
+			}},
+			expected: map[string]any{"payload": map[string]any{
+				"call_id": "call-1", "name": "Bash", "command": "go test ./...",
+			}},
+		},
+		{
+			name: "canonical tool result", eventType: "canonical.tool_result",
+			source: map[string]any{"payload": map[string]any{
+				"call_id": "call-1", "status": "failure", "output_summary": "tests failed",
+				"native": map[string]any{"output": "must-not-project"},
+			}},
+			expected: map[string]any{"payload": map[string]any{
+				"call_id": "call-1", "status": "failure", "output_summary": "tests failed",
+			}},
+		},
+		{
 			name: "codex agent message", eventType: "event_msg.agent_message",
 			source: map[string]any{"payload": map[string]any{
 				"phase": "final_answer", "message": "done",

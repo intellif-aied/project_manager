@@ -1,6 +1,7 @@
 package openclaw
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -37,8 +38,10 @@ func (runner *fakeRunner) Run(_ context.Context, args ...string) ([]byte, error)
 	events := strings.Join([]string{
 		`{"traceSchema":"openclaw-trajectory","schemaVersion":1,"traceId":"trace-1","source":"runtime","type":"prompt.submitted","ts":"2026-07-21T01:00:00Z","sourceSeq":1,"sessionId":"native-1","data":{"prompt":"must-not-upload"}}`,
 		`{"traceSchema":"openclaw-trajectory","schemaVersion":1,"traceId":"trace-1","source":"transcript","type":"message.user","ts":"2026-07-21T01:00:01Z","sourceSeq":1,"sessionId":"native-1","entryId":"entry-1","data":{"message":{"role":"user","content":[{"type":"text","text":"fix the bug"}]}}}`,
-		`{"traceSchema":"openclaw-trajectory","schemaVersion":1,"traceId":"trace-1","source":"transcript","type":"tool.call","ts":"2026-07-21T01:00:02Z","sourceSeq":2,"sessionId":"native-1","entryId":"entry-2","data":{"name":"Read","arguments":{"secret":"must-not-upload"}}}`,
-		`{"traceSchema":"openclaw-trajectory","schemaVersion":1,"traceId":"trace-1","source":"transcript","type":"session.compaction","ts":"2026-07-21T01:00:03Z","sourceSeq":3,"sessionId":"native-1","entryId":"entry-3","data":{"summary":"must-not-upload"}}`,
+		`{"traceSchema":"openclaw-trajectory","schemaVersion":1,"traceId":"trace-1","source":"transcript","type":"message.assistant","ts":"2026-07-21T01:00:01.500Z","sourceSeq":2,"sessionId":"native-1","entryId":"entry-assistant","data":{"message":{"role":"assistant","content":[{"type":"text","text":"working on it"}]}}}`,
+		`{"traceSchema":"openclaw-trajectory","schemaVersion":1,"traceId":"trace-1","source":"transcript","type":"tool.call","ts":"2026-07-21T01:00:02Z","sourceSeq":3,"sessionId":"native-1","entryId":"entry-2","data":{"callId":"call-1","name":"Read","arguments":{"secret":"must-not-upload"}}}`,
+		`{"traceSchema":"openclaw-trajectory","schemaVersion":1,"traceId":"trace-1","source":"transcript","type":"tool.result","ts":"2026-07-21T01:00:02.500Z","sourceSeq":4,"sessionId":"native-1","entryId":"entry-result","data":{"callId":"call-1","result":{"content":[{"type":"text","text":"read complete"}]},"status":"success"}}`,
+		`{"traceSchema":"openclaw-trajectory","schemaVersion":1,"traceId":"trace-1","source":"transcript","type":"session.compaction","ts":"2026-07-21T01:00:03Z","sourceSeq":5,"sessionId":"native-1","entryId":"entry-3","data":{"summary":"must-not-upload"}}`,
 	}, "\n") + "\n"
 	if err := os.WriteFile(filepath.Join(dir, "events.jsonl"), []byte(events), 0600); err != nil {
 		return nil, err
@@ -89,8 +92,17 @@ func TestDiscoverAndMaterializeOfficialTrajectoryContract(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if bytes.Contains(content, []byte("must-not-upload")) || !bytes.Contains(content, []byte("fix the bug")) || !bytes.Contains(content, []byte("Read")) {
+		roles := canonicalTopLevelRoles(t, content)
+		toolCall := canonicalPayloadForType(t, content, "tool_call")
+		toolResult := canonicalPayloadForType(t, content, "tool_result")
+		if bytes.Contains(content, []byte("must-not-upload")) || !bytes.Contains(content, []byte("fix the bug")) || !bytes.Contains(content, []byte("Read")) ||
+			!roles["user"] || !roles["assistant"] {
 			t.Fatalf("canonical content=%s", content)
+		}
+		if toolCall["call_id"] != "call-1" || toolCall["name"] != "Read" ||
+			toolResult["call_id"] != "call-1" || toolResult["status"] != "success" ||
+			toolResult["output_summary"] != "read complete" {
+			t.Fatalf("canonical tool fields are missing: call=%v result=%v", toolCall, toolResult)
 		}
 		if run == 0 {
 			first = content
@@ -98,6 +110,50 @@ func TestDiscoverAndMaterializeOfficialTrajectoryContract(t *testing.T) {
 			t.Fatalf("materialize run %d changed bytes", run+1)
 		}
 	}
+}
+
+func canonicalTopLevelRoles(t *testing.T, content []byte) map[string]bool {
+	t.Helper()
+	roles := map[string]bool{}
+	scanner := bufio.NewScanner(bytes.NewReader(content))
+	for scanner.Scan() {
+		var event struct {
+			Type    string         `json:"type"`
+			Payload map[string]any `json:"payload"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			t.Fatal(err)
+		}
+		if event.Type == "message" {
+			role, _ := event.Payload["role"].(string)
+			roles[role] = true
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return roles
+}
+
+func canonicalPayloadForType(t *testing.T, content []byte, eventType string) map[string]any {
+	t.Helper()
+	scanner := bufio.NewScanner(bytes.NewReader(content))
+	for scanner.Scan() {
+		var event struct {
+			Type    string         `json:"type"`
+			Payload map[string]any `json:"payload"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			t.Fatal(err)
+		}
+		if event.Type == eventType {
+			return event.Payload
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return map[string]any{}
 }
 
 func TestMaterializeRejectsExportOutsidePrivateWorkspace(t *testing.T) {
