@@ -413,7 +413,7 @@ func (s *Service) CreateAttachedRun(
 	}
 	inputRef["report_source_selection_id"] = selection.ID
 	inputRef["report_source_read_mode"] = requiredReadMode
-	if requiredReadMode == ReadModeDigestV1 || requiredReadMode == ReadModeDigestV2 {
+	if requiredReadMode == ReadModeDigestV2 {
 		inputRef["report_source_digest_version"] = s.config.DigestVersion
 		inputRef["report_source_redaction_version"] = s.config.RedactionVersion
 	}
@@ -544,6 +544,11 @@ func (s *Service) ReadAttachedSelection(
 	}
 	if runReportType != reportType || !sameDate(storedStart, periodStart) || !sameDate(storedEnd, periodEnd) {
 		return ContentPage{}, ErrSelectionMismatch
+	}
+	if requiredReadMode == ReadModeDigestV2 {
+		if err := s.requireDigestFrozenTx(ctx, tx, selectionID, runID); err != nil {
+			return ContentPage{}, err
+		}
 	}
 	if err := validateSelectionSourcesAvailable(ctx, tx, selectionID); err != nil {
 		return ContentPage{}, err
@@ -1142,6 +1147,11 @@ func (s *Service) ValidateAttachedSelectionTx(
 	}
 	if !readCompletedAt.Valid || !readCompletedMode.Valid || readCompletedMode.String != requiredReadMode {
 		return ErrSourceIncomplete
+	}
+	if requiredReadMode == ReadModeDigestV1 || requiredReadMode == ReadModeDigestV2 {
+		if err := s.requireDigestFrozenTx(ctx, tx, selectionID, runID); err != nil {
+			return err
+		}
 	}
 	if requiredReadMode == ReadModeDigestV1 {
 		if err := s.validateFrozenDigestSelectionTx(ctx, tx, userID, selectionID, runID); err != nil {

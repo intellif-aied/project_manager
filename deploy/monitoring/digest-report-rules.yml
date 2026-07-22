@@ -1,0 +1,66 @@
+groups:
+  - name: aida-digest-report
+    rules:
+      - alert: DigestInteractiveEligibleStuck
+        expr: aida_digest_oldest_eligible_wait_seconds{urgency="interactive"} > 30
+        for: 5m
+        labels: { severity: critical }
+        annotations: { runbook: "doc/v2/Digest按需构建与报告等待/架构设计.md#93-告警运行手册" }
+      - alert: DigestInteractiveClaimLatencyHigh
+        expr: histogram_quantile(0.95, sum by (le) (rate(aida_digest_claim_latency_seconds_bucket{urgency="interactive"}[10m]))) > 10
+        for: 10m
+        labels: { severity: critical }
+        annotations: { runbook: "doc/v2/Digest按需构建与报告等待/架构设计.md#93-告警运行手册" }
+      - alert: DigestBackgroundBacklogOld
+        expr: aida_digest_oldest_eligible_wait_seconds{urgency="background"} > 1800
+        for: 15m
+        labels: { severity: warning }
+        annotations: { runbook: "doc/v2/Digest按需构建与报告等待/架构设计.md#93-告警运行手册" }
+      - alert: DigestBuildFailureRateHigh
+        expr: |
+          sum(increase(aida_digest_build_total{result=~"retry_wait|dead"}[15m]))
+          /
+          sum(increase(aida_digest_build_total[15m])) > 0.10
+          and sum(increase(aida_digest_build_total[15m])) >= 20
+        labels: { severity: critical }
+        annotations: { runbook: "doc/v2/Digest按需构建与报告等待/架构设计.md#93-告警运行手册" }
+      - alert: DigestInteractiveJobDied
+        expr: increase(aida_digest_build_total{urgency="interactive",result="dead"}[5m]) > 0
+        labels: { severity: critical }
+        annotations: { runbook: "doc/v2/Digest按需构建与报告等待/架构设计.md#93-告警运行手册" }
+      - alert: DigestRebuildExhausted
+        expr: increase(aida_digest_rebuild_total{reason="exhausted"}[10m]) > 0
+        labels: { severity: critical }
+        annotations: { runbook: "doc/v2/Digest按需构建与报告等待/架构设计.md#93-告警运行手册" }
+      - alert: ReportWaitingDigestOld
+        expr: aida_report_run_oldest_stage_seconds{stage="waiting_digest"} > 900
+        for: 10m
+        labels: { severity: warning }
+        annotations: { runbook: "doc/v2/Digest按需构建与报告等待/架构设计.md#93-告警运行手册" }
+      - alert: ReportBuildingContextStuck
+        expr: aida_report_run_oldest_stage_seconds{stage="building_context"} > 600
+        for: 5m
+        labels: { severity: critical }
+        annotations: { runbook: "doc/v2/Digest按需构建与报告等待/架构设计.md#93-告警运行手册" }
+      - alert: ReportSubmittingAgentStuck
+        expr: aida_report_run_oldest_stage_seconds{stage="submitting_agent"} > 300
+        for: 5m
+        labels: { severity: critical }
+        annotations: { runbook: "doc/v2/Digest按需构建与报告等待/架构设计.md#93-告警运行手册" }
+      - alert: ReportRunLeaseExpired
+        expr: increase(aida_report_run_lease_expired_total[10m]) > 0
+        labels: { severity: warning }
+        annotations: { runbook: "doc/v2/Digest按需构建与报告等待/架构设计.md#93-告警运行手册" }
+      - alert: ReportRunReconcileFailure
+        expr: increase(aida_report_run_reconcile_total{result="failure"}[5m]) > 0
+        labels: { severity: critical }
+        annotations: { runbook: "doc/v2/Digest按需构建与报告等待/架构设计.md#93-告警运行手册" }
+      - alert: ReportDigestWakeupFailure
+        expr: increase(aida_report_run_digest_wakeup_total{result="failure"}[5m]) > 0
+        labels: { severity: critical }
+        annotations: { runbook: "doc/v2/Digest按需构建与报告等待/架构设计.md#93-告警运行手册" }
+      - alert: DigestReportMetricsMissing
+        expr: absent(up{job="aida-digest-report"}) or up{job="aida-digest-report"} == 0
+        for: 5m
+        labels: { severity: critical }
+        annotations: { runbook: "doc/v2/Digest按需构建与报告等待/架构设计.md#93-告警运行手册" }

@@ -12,22 +12,26 @@ import (
 type queueStub struct {
 	jobs         []sessionsync.ProcessingJob
 	claimedTypes []string
+	urgency      string
 	claimLimit   int
 	completed    []string
 	failed       []string
 	failures     []string
+	failureClass []string
 }
 
-func (q *queueStub) ClaimTypes(
+func (q *queueStub) ClaimDigest(
 	_ context.Context,
 	_ string,
+	urgency string,
 	_ time.Time,
 	_ time.Duration,
 	limit int,
-	types []string,
+	jobType string,
 ) ([]sessionsync.ProcessingJob, error) {
 	q.claimLimit = limit
-	q.claimedTypes = append([]string(nil), types...)
+	q.claimedTypes = []string{jobType}
+	q.urgency = urgency
 	return q.jobs, nil
 }
 
@@ -44,17 +48,18 @@ func (q *queueStub) Complete(
 	return true, nil
 }
 
-func (q *queueStub) Fail(
+func (q *queueStub) FailDigest(
 	_ context.Context,
 	id, _ string,
 	_ time.Time,
 	_ time.Duration,
 	_ bool,
-	failure string,
-) (bool, error) {
+	failure, failureClass string,
+) (sessionsync.DigestFailureResult, error) {
 	q.failed = append(q.failed, id)
 	q.failures = append(q.failures, failure)
-	return true, nil
+	q.failureClass = append(q.failureClass, failureClass)
+	return sessionsync.DigestFailureResult{Changed: true}, nil
 }
 
 type processorStub struct {
@@ -77,14 +82,14 @@ func TestWorkerClaimsOnlyOneDigestV2Job(t *testing.T) {
 	worker, err := NewWorker(queue, processorStub{failures: map[string]error{
 		"stale":  ErrStaleDigestSource,
 		"failed": errors.New("Authorization: Bearer should-not-leak"),
-	}}, "test-v2-worker", DefaultConfig())
+	}}, "test-v2-worker", "interactive", DefaultConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := worker.RunOnce(context.Background(), time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
-	if queue.claimLimit != 1 ||
+	if queue.claimLimit != 1 || queue.urgency != "interactive" ||
 		len(queue.claimedTypes) != 1 || queue.claimedTypes[0] != JobType {
 		t.Fatalf("unexpected claim: limit=%d types=%v", queue.claimLimit, queue.claimedTypes)
 	}
@@ -93,8 +98,10 @@ func TestWorkerClaimsOnlyOneDigestV2Job(t *testing.T) {
 		t.Fatalf("unexpected completions: %v", queue.completed)
 	}
 	if len(queue.failed) != 1 || queue.failed[0] != "failed" ||
-		len(queue.failures) != 1 || queue.failures[0] != "digest_v2_build_failed" {
-		t.Fatalf("failure was not sanitized: ids=%v values=%v", queue.failed, queue.failures)
+		len(queue.failures) != 1 || queue.failures[0] != "digest_v2_build_failed" ||
+		len(queue.failureClass) != 1 || queue.failureClass[0] != "retryable" {
+		t.Fatalf("failure was not sanitized: ids=%v values=%v classes=%v",
+			queue.failed, queue.failures, queue.failureClass)
 	}
 }
 
@@ -102,7 +109,7 @@ func TestWorkerRejectsBatchLargerThanOne(t *testing.T) {
 	config := DefaultConfig()
 	config.WorkerBatch = 2
 	if _, err := NewWorker(
-		&queueStub{}, processorStub{}, "test-v2-worker", config,
+		&queueStub{}, processorStub{}, "test-v2-worker", "background", config,
 	); err == nil {
 		t.Fatal("worker batch larger than one must be rejected")
 	}

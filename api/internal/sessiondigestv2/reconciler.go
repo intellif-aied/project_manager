@@ -132,8 +132,8 @@ func (r *Reconciler) RunOnce(ctx context.Context) (int, error) {
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO session_processing_jobs (
 				job_type, session_id, generation_id, target_digest_revision_id,
-				content_epoch, max_attempts
-			) VALUES ($1, $2, $3, $4, $5, 5)
+				content_epoch, max_attempts, urgency
+			) VALUES ($1, $2, $3, $4, $5, 5, 'background')
 			ON CONFLICT DO NOTHING`,
 			JobType, item.sessionID, item.generationID, digestRevisionID, item.contentEpoch,
 		); err != nil {

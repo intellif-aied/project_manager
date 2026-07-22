@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/url"
@@ -13,6 +14,16 @@ import (
 
 type ReportSourceHandler struct {
 	service *reportsource.Service
+}
+
+type reportSourceSelectionCreator interface {
+	CreateExplicit(
+		context.Context,
+		string,
+		string,
+		reportsource.Period,
+		[]reportsource.SourceInput,
+	) (reportsource.Selection, error)
 }
 
 func NewReportSourceHandler(service *reportsource.Service) *ReportSourceHandler {
@@ -113,19 +124,24 @@ func (h *ReportSourceHandler) CreateSelection(w http.ResponseWriter, r *http.Req
 		}
 		inputs = append(inputs, reportsource.SourceInput{SliceKey: sliceKey})
 	}
-	selection, err := h.service.CreateExplicit(r.Context(), u.ID, request.ReportType, period, inputs)
-	if err != nil {
-		writeReportSourceError(w, err)
-		return
-	}
-	selection, err = h.service.PrepareExplicitSelection(
-		r.Context(), u.ID, request.ReportType, period, selection.ID,
+	selection, err := createReportSourceSelection(
+		r.Context(), h.service, u.ID, request.ReportType, period, inputs,
 	)
 	if err != nil {
 		writeReportSourceError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, selection)
+}
+
+func createReportSourceSelection(
+	ctx context.Context,
+	creator reportSourceSelectionCreator,
+	userID, reportType string,
+	period reportsource.Period,
+	inputs []reportsource.SourceInput,
+) (reportsource.Selection, error) {
+	return creator.CreateExplicit(ctx, userID, reportType, period, inputs)
 }
 
 func parseOptionalActivityTime(value string, endOfDay bool) (*time.Time, error) {

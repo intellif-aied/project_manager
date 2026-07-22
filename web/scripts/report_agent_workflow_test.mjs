@@ -9,6 +9,10 @@ const controls = readFileSync(
   resolve(root, "src/features/aidashboard/reports/components/ReportAIGenerateControls.tsx"),
   "utf8"
 );
+const runTracking = readFileSync(
+  resolve(root, "src/features/aidashboard/reports/reportAIRunTracking.ts"),
+  "utf8"
+);
 const client = readFileSync(resolve(root, "src/features/aidashboard/api/client.ts"), "utf8");
 const agentAssets = readFileSync(
   resolve(root, "src/features/aidashboard/ai-assets/utils/agentAssets.ts"),
@@ -48,23 +52,48 @@ assert.match(
 );
 assert.match(
   controls,
+  /idempotency_key:\s*idempotencyKey/,
+  "each click must submit one idempotent Run request"
+);
+assert.match(
+  controls,
+  /crypto\.randomUUID\(\)/,
+  "manual Report Run idempotency keys must be UUID v4 values"
+);
+assert.match(
+  controls,
+  /selected_session_slice_keys:[\s\S]*selectedSessionSources\.map/,
+  "the Run request must carry the actual selected slice identities directly"
+);
+assert.doesNotMatch(
+  controls,
   /createReportSourceSelection\(/,
-  "personal reports must create an immutable source selection"
+  "the frontend must not prepare a Selection before creating a Run"
+);
+assert.doesNotMatch(
+  controls,
+  /large_context_confirmed|confirmLargeReportContext|confirmation_required/,
+  "large context must not add a second frontend-driven workflow"
 );
 assert.match(
   controls,
-  /所选会话内容较多，可能消耗较多 Token，部分模型可能无法完整处理/,
-  "large report context must use a user-facing advisory confirmation"
+  /input_ref_json\?\.large_context_warning\s*!==\s*true/,
+  "large context warning must be read from the existing Run response"
 );
 assert.match(
   controls,
-  /payload\.large_context_confirmed = true/,
-  "users must be able to continue after the large-context warning"
+  /markReportAIRunLargeContextWarningShown/,
+  "large context warning must be marked once per Run"
 );
 assert.match(
   controls,
-  /isReportAgentConfirmationRequired[\s\S]*confirmLargeReportContext\(\)[\s\S]*payload\.large_context_confirmed = true/,
-  "confirmation_required responses must prompt and retry the real Agent run"
+  /报告上下文较大，可能消耗较多 Token，请确认所选模型支持足够的上下文长度。/,
+  "large context warning must be advisory and must not expose Digest state"
+);
+assert.match(
+  runTracking,
+  /largeContextWarningShown/,
+  "large context warning marker must survive a page refresh"
 );
 assert.doesNotMatch(controls, /mock_large_report_context|largeReportContextMockEnabled/);
 assert.doesNotMatch(
@@ -74,8 +103,8 @@ assert.doesNotMatch(
 );
 assert.doesNotMatch(
   controls,
-  /reportSourceSelectionEnabled|selected_session_slice_keys/,
-  "current report controls must not branch back to legacy session slices"
+  /reportSourceSelectionEnabled/,
+  "source handling must not depend on a rollout branch"
 );
 assert.doesNotMatch(
   `${dailyReportModal}\n${weeklyReportsPage}`,

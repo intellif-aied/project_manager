@@ -16,6 +16,7 @@ import (
 	"github.com/aidashboard/api/internal/biztime"
 	"github.com/aidashboard/api/internal/reportcontext"
 	"github.com/aidashboard/api/internal/reportsource"
+	"github.com/aidashboard/api/internal/sessiondigestv2"
 	"github.com/aidashboard/api/model"
 	"github.com/aidashboard/api/service"
 	"github.com/go-chi/chi/v5"
@@ -2410,8 +2411,7 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return
 	}
-	token := bearerTokenFromRequest(r)
-	if token == "" {
+	if bearerTokenFromRequest(r) == "" {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "current user token is required"})
 		return
 	}
@@ -2556,6 +2556,9 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 		(req.ReportType == reportTypePersonalWeekly && (reportSourceSelectionID != "" || len(selectedSessionSliceKeys) > 0))
 
 	modelID := strings.TrimSpace(req.ModelID)
+	if modelID == "" {
+		modelID = strings.TrimSpace(agent.DefaultModelID)
+	}
 	inputRef := map[string]any{
 		"trigger_source":  "manual",
 		"report_type":     req.ReportType,
@@ -2572,119 +2575,106 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 		inputRef["credential_override_slots"] = sortedStringMapKeys(runtimeOverrides)
 		inputRef["credential_override"] = "redacted"
 	}
-	contextPeriod := reportContextPeriod(req.ReportType, date, weekStart, weekEnd)
-	var runID string
-	if needsReportSourceSelection && h.reportSource != nil {
-		if len(selectedSessionSliceKeys) > 0 {
-			inputs := make([]reportsource.SourceInput, 0, len(selectedSessionSliceKeys))
-			for _, sliceKey := range selectedSessionSliceKeys {
-				inputs = append(inputs, reportsource.SourceInput{SliceKey: sliceKey})
-			}
-			prepared, prepareErr := h.reportSource.CreateExplicit(
-				r.Context(), u.ID, req.ReportType, contextPeriod, inputs,
-			)
-			if prepareErr != nil {
-				writeReportSourceError(w, prepareErr)
-				return
-			}
-			reportSourceSelectionID = prepared.ID
-		}
-		var attached reportsource.Selection
-		runID, attached, err = h.reportSource.CreateAttachedRun(
-			r.Context(), u.ID, req.ReportType, contextPeriod, reportSourceSelectionID,
-			reportAgentRunBusinessType, agentID, modelID, req.LargeContextConfirmed, inputRef,
-		)
-		if err != nil {
-			writeReportSourceError(w, err)
-			return
-		}
-		reportSourceSelectionID = attached.ID
-	} else {
-		runID, err = h.insertPendingManagedSessionAIRun(u.ID, reportAgentRunBusinessType, agentID, modelID, inputRef)
-	}
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	var preparedContext reportcontext.StoredContext
-	if h.reportContext == nil {
-		err = fmt.Errorf("report context service is not configured")
-	} else {
-		preparedContext, err = h.reportContext.Build(r.Context(), reportContextBuildRequest(
-			u.ID, runID, req.ReportType, contextPeriod, biztime.Zone, "manual", modelID, target, reportSourceSelectionID,
-		))
-	}
-	if err != nil {
-		_ = h.markAIRunSubmitFailedContext(r.Context(), runID, u.ID, err.Error())
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "REPORT_CONTEXT_BUILD_FAILED", "error": "failed to prepare report context"})
-		return
-	}
-	inputRef["report_context_schema_version"] = reportcontext.SchemaVersion
-	inputRef["report_context_hash"] = preparedContext.Hash
-	inputRef["report_context_bytes"] = preparedContext.Bytes
-
-	credential, err := client.CreateCredential(r.Context(), service.CreateManagedCredentialRequest{
-		Name:  "Aida Report MCP Auth " + runID,
-		Kind:  "secret",
-		Value: token,
-		Metadata: map[string]string{
-			"aida_user_id": u.ID,
-			"ai_run_id":    runID,
-			"purpose":      "report_mcp_auth",
-		},
-	})
-	if err != nil {
-		_ = h.markAIRunSubmitFailed(r, runID, u.ID, err.Error())
-		writeManagedAgentError(w, err)
-		return
-	}
-
-	systemPromptValues := reportAgentStartPromptValues(runID, req.ReportType, date, weekStart, weekEnd, target, nil, reportSourceSelectionID, h.reportMCPURL())
 	userMessage := strings.TrimSpace(req.Message)
 	if userMessage == "" {
 		userMessage = fallbackReportRunMessage(req.ReportType, date, weekStart, weekEnd, target)
 	}
-	startPromptValues, reservedKey, ok := mergeReportStartPromptValues(systemPromptValues, req.StartPromptValues, userMessage, h.defaults.ReportMCPCredentialSlot)
-	if !ok {
-		_ = h.markAIRunSubmitFailed(r, runID, u.ID, reservedKey+" is managed by Aida")
-		writeJSON(w, http.StatusBadRequest, map[string]string{"code": reservedPromptValueCode, "error": reservedKey + " is managed by Aida"})
+	idempotencyKey := strings.TrimSpace(req.IdempotencyKey)
+	if !isValidUUIDV4(idempotencyKey) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"code": "INVALID_IDEMPOTENCY_KEY", "error": "idempotency_key must be a UUID v4",
+		})
 		return
 	}
-	sessionMessage := buildReportRunMessage(startPromptValues, userMessage, h.defaults.ReportMCPCredentialSlot)
-	overrides := copyStringMap(runtimeOverrides)
-	for slot := range reportSlots {
-		overrides[slot] = credential.CredentialID
+	if h.reportSource == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "report source service is not configured"})
+		return
 	}
-	sessionResp, err := client.CreateSession(r.Context(), service.CreateManagedSessionRequest{
-		AgentID:             agentID,
-		ModelID:             modelID,
-		StartPromptValues:   startPromptValues,
-		Message:             sessionMessage,
-		CredentialOverrides: overrides,
+	contextPeriod := reportContextPeriod(req.ReportType, date, weekStart, weekEnd)
+	sources := make([]reportsource.SourceInput, 0, len(selectedSessionSliceKeys))
+	for _, sliceKey := range selectedSessionSliceKeys {
+		sources = append(sources, reportsource.SourceInput{SliceKey: sliceKey})
+	}
+	var fingerprintSliceKeys any
+	if len(selectedSessionSliceKeys) > 0 {
+		fingerprintSliceKeys = selectedSessionSliceKeys
+	}
+	frozenScope := map[string]any{
+		"user_id": u.ID, "business_type": reportAgentRunBusinessType,
+		"report_type": req.ReportType, "target": target,
+		"period": inputRef["period"], "timezone": biztime.Zone,
+		"agent_id": agentID, "model_id": modelID,
+		"initial_message":               userMessage,
+		"start_prompt_values":           copyStringMap(req.StartPromptValues),
+		"trigger_source":                "manual",
+		"digest_version":                sessiondigestv2.Version,
+		"redaction_version":             sessiondigestv2.RedactionVersion,
+		"report_context_schema_version": reportcontext.SchemaVersion,
+	}
+	dedupeScope := reportRunDedupeScope(
+		frozenScope, runtimeOverrides, sortedStringKeys(reportSlots),
+	)
+	requestFingerprint := copyAnyMap(dedupeScope)
+	requestFingerprint["selected_session_slice_keys"] = fingerprintSliceKeys
+	requestFingerprint["report_source_selection_id"] = nullableStringValue(reportSourceSelectionID)
+	executionInput := map[string]any{
+		"timezone":             biztime.Zone,
+		"initial_message":      userMessage,
+		"start_prompt_values":  copyStringMap(req.StartPromptValues),
+		"credential_overrides": copyStringMap(runtimeOverrides),
+		"report_mcp_slots":     sortedStringKeys(reportSlots),
+	}
+	result, err := h.reportSource.CreateReportRun(r.Context(), reportsource.RunSubmissionRequest{
+		UserID: u.ID, ReportType: req.ReportType, Period: contextPeriod,
+		SelectionID: reportSourceSelectionID, Sources: sources,
+		RequireSources: needsReportSourceSelection,
+		BusinessType:   reportAgentRunBusinessType, AgentID: agentID, ModelID: modelID,
+		IdempotencyKey:          idempotencyKey,
+		RequestFingerprintInput: requestFingerprint, ActiveDedupeInput: dedupeScope,
+		InputRef: inputRef, ExecutionInput: executionInput,
 	})
+	if errors.Is(err, reportsource.ErrIdempotencyKeyReused) {
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"code": "IDEMPOTENCY_KEY_REUSED", "error": "idempotency_key was already used for a different request",
+		})
+		return
+	}
 	if err != nil {
-		_ = h.markAIRunSubmitFailed(r, runID, u.ID, err.Error())
-		writeManagedAgentError(w, err)
+		writeReportSourceError(w, err)
 		return
 	}
-	if modelID == "" && sessionResp.ModelID != "" {
-		modelID = sessionResp.ModelID
-	}
-	inputRef["start_prompt_values"] = copyStringMap(startPromptValues)
-	if sessionMessage != "" {
-		inputRef["message"] = sessionMessage
-	}
-	inputRef["credential_override"] = "redacted"
-	if err := h.attachSessionAIRun(runID, u.ID, sessionResp, modelID, inputRef); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	run, err := h.loadAIRun(runID, u.ID)
+	run, err := h.loadAIRun(result.RunID, u.ID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, run)
+}
+
+func copyAnyMap(input map[string]any) map[string]any {
+	output := make(map[string]any, len(input)+2)
+	for key, value := range input {
+		output[key] = value
+	}
+	return output
+}
+
+func reportRunDedupeScope(
+	base map[string]any,
+	credentialOverrides map[string]string,
+	reportMCPSlots []string,
+) map[string]any {
+	scope := copyAnyMap(base)
+	scope["credential_overrides"] = copyStringMap(credentialOverrides)
+	scope["report_mcp_slots"] = append([]string(nil), reportMCPSlots...)
+	return scope
+}
+
+func nullableStringValue(value string) any {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	return strings.TrimSpace(value)
 }
 
 type reportSourceRunInputError struct {
@@ -4069,7 +4059,7 @@ func (h *ManagedAgentHandler) ensureScheduleAgentRunnable(ctx context.Context, c
 	return fmt.Errorf("agent not found")
 }
 
-func (h *ManagedAgentHandler) executeReportAgentScheduleRun(ctx context.Context, client *service.ManagedAgentClient, schedule model.ManagedAgentSchedule, u *model.User, userToken, modelID string, inputRef map[string]any, scheduledAt time.Time, advanceNext bool) (*model.AIRun, error) {
+func (h *ManagedAgentHandler) executeReportAgentScheduleRun(ctx context.Context, _ *service.ManagedAgentClient, schedule model.ManagedAgentSchedule, u *model.User, _ string, modelID string, inputRef map[string]any, scheduledAt time.Time, advanceNext bool) (*model.AIRun, error) {
 	if h.defaults.AIDAPublicBaseURL == "" {
 		return nil, fmt.Errorf("AIDA_PUBLIC_BASE_URL is required for Report Agent")
 	}
@@ -4094,97 +4084,45 @@ func (h *ManagedAgentHandler) executeReportAgentScheduleRun(ctx context.Context,
 	inputRef["period_display"] = period.Display
 	inputRef["mcp_server"] = h.defaults.ReportMCPSlug
 	inputRef["credential_slot"] = h.defaults.ReportMCPCredentialSlot
-	reportSourceSelectionID := ""
 	contextPeriod := reportContextPeriod(reportType, period.Date, period.WeekStart, period.WeekEnd)
-	var runID string
-	if reportType == reportTypePersonalDaily && h.reportSource != nil {
-		var attached reportsource.Selection
-		runID, attached, err = h.reportSource.CreateAttachedRun(
-			ctx, u.ID, reportType, contextPeriod, "", reportAgentRunBusinessType,
-			schedule.AgentID, modelID, true, inputRef,
-		)
-		if err != nil {
-			return nil, err
-		}
-		reportSourceSelectionID = attached.ID
-	} else {
-		runID, err = h.insertPendingManagedSessionAIRun(u.ID, reportAgentRunBusinessType, schedule.AgentID, modelID, inputRef)
-	}
-	if err != nil {
-		return nil, err
-	}
-	var preparedContext reportcontext.StoredContext
-	if h.reportContext == nil {
-		err = fmt.Errorf("report context service is not configured")
-	} else {
-		triggerSource, _ := inputRef["trigger_source"].(string)
-		preparedContext, err = h.reportContext.Build(ctx, reportContextBuildRequest(
-			u.ID, runID, reportType, contextPeriod, schedule.Timezone, triggerSource, modelID, target, reportSourceSelectionID,
-		))
-	}
-	if err != nil {
-		_ = h.markAIRunSubmitFailedContext(ctx, runID, u.ID, err.Error())
-		_ = h.updateManagedScheduleAfterRun(ctx, schedule.ID, u.ID, runID, scheduledAt, err.Error(), advanceNext, schedule)
-		return h.loadAIRun(runID, u.ID)
-	}
-	inputRef["report_context_schema_version"] = reportcontext.SchemaVersion
-	inputRef["report_context_hash"] = preparedContext.Hash
-	inputRef["report_context_bytes"] = preparedContext.Bytes
-	credential, err := client.CreateCredential(ctx, service.CreateManagedCredentialRequest{
-		Name:  "Aida Report MCP Auth " + runID,
-		Kind:  "secret",
-		Value: userToken,
-		Metadata: map[string]string{
-			"aida_user_id": u.ID,
-			"ai_run_id":    runID,
-			"purpose":      "report_mcp_auth",
-		},
-	})
-	if err != nil {
-		_ = h.markAIRunSubmitFailedContext(ctx, runID, u.ID, err.Error())
-		_ = h.updateManagedScheduleAfterRun(ctx, schedule.ID, u.ID, runID, scheduledAt, err.Error(), advanceNext, schedule)
-		return h.loadAIRun(runID, u.ID)
-	}
-	systemPromptValues := reportAgentStartPromptValues(runID, reportType, period.Date, period.WeekStart, period.WeekEnd, target, nil, reportSourceSelectionID, h.reportMCPURL())
 	userMessage := strings.TrimSpace(schedule.InitialMessage)
 	if userMessage == "" {
 		userMessage = fallbackReportRunMessage(reportType, period.Date, period.WeekStart, period.WeekEnd, target)
 	}
-	startPromptValues, reservedKey, ok := mergeReportStartPromptValues(systemPromptValues, schedule.StartPromptValues, userMessage, h.defaults.ReportMCPCredentialSlot)
-	if !ok {
-		err := fmt.Errorf("%s is managed by Aida", reservedKey)
-		_ = h.markAIRunSubmitFailedContext(ctx, runID, u.ID, err.Error())
-		_ = h.updateManagedScheduleAfterRun(ctx, schedule.ID, u.ID, runID, scheduledAt, err.Error(), advanceNext, schedule)
-		return h.loadAIRun(runID, u.ID)
+	if h.reportSource == nil {
+		return nil, fmt.Errorf("report source service is not configured")
 	}
-	sessionMessage := buildReportRunMessage(startPromptValues, userMessage, h.defaults.ReportMCPCredentialSlot)
-	sessionResp, err := client.CreateSession(ctx, service.CreateManagedSessionRequest{
-		AgentID:           schedule.AgentID,
-		ModelID:           modelID,
-		StartPromptValues: startPromptValues,
-		Message:           sessionMessage,
-		CredentialOverrides: map[string]string{
-			h.defaults.ReportMCPCredentialSlot: credential.CredentialID,
+	frozenScope := map[string]any{
+		"user_id": u.ID, "business_type": reportAgentRunBusinessType,
+		"report_type": reportType, "target": target, "period": periodRef,
+		"timezone": schedule.Timezone, "agent_id": schedule.AgentID, "model_id": modelID,
+		"initial_message": userMessage, "start_prompt_values": copyStringMap(schedule.StartPromptValues),
+		"trigger_source": inputRef["trigger_source"], "schedule_id": schedule.ID,
+		"scheduled_trigger_at": inputRef["scheduled_trigger_at"],
+		"digest_version":       sessiondigestv2.Version, "redaction_version": sessiondigestv2.RedactionVersion,
+		"report_context_schema_version": reportcontext.SchemaVersion,
+	}
+	result, err := h.reportSource.CreateReportRun(ctx, reportsource.RunSubmissionRequest{
+		UserID: u.ID, ReportType: reportType, Period: contextPeriod,
+		RequireSources: reportType == reportTypePersonalDaily,
+		BusinessType:   reportAgentRunBusinessType, AgentID: schedule.AgentID, ModelID: modelID,
+		IdempotencyKey:          schedule.ID + ":" + scheduledAt.UTC().Format(time.RFC3339Nano),
+		RequestFingerprintInput: frozenScope, ActiveDedupeInput: frozenScope,
+		InputRef: inputRef,
+		ExecutionInput: map[string]any{
+			"timezone": schedule.Timezone, "initial_message": userMessage,
+			"start_prompt_values":  copyStringMap(schedule.StartPromptValues),
+			"credential_overrides": map[string]string{},
+			"report_mcp_slots":     []string{h.defaults.ReportMCPCredentialSlot},
 		},
 	})
 	if err != nil {
-		_ = h.markAIRunSubmitFailedContext(ctx, runID, u.ID, err.Error())
-		_ = h.updateManagedScheduleAfterRun(ctx, schedule.ID, u.ID, runID, scheduledAt, err.Error(), advanceNext, schedule)
-		return h.loadAIRun(runID, u.ID)
-	}
-	if modelID == "" && sessionResp.ModelID != "" {
-		modelID = sessionResp.ModelID
-	}
-	inputRef["start_prompt_values"] = copyStringMap(startPromptValues)
-	inputRef["message"] = sessionMessage
-	inputRef["credential_override"] = "redacted"
-	inputRef["external_session_id"] = sessionResp.SessionID
-	inputRef["external_status"] = sessionResp.Status
-	if err := h.attachSessionAIRun(runID, u.ID, sessionResp, modelID, inputRef); err != nil {
 		return nil, err
 	}
-	_ = h.updateManagedScheduleAfterRun(ctx, schedule.ID, u.ID, runID, scheduledAt, "", advanceNext, schedule)
-	return h.loadAIRun(runID, u.ID)
+	if err := h.updateManagedScheduleAfterRun(ctx, schedule.ID, u.ID, result.RunID, scheduledAt, "", advanceNext, schedule); err != nil {
+		return nil, err
+	}
+	return h.loadAIRun(result.RunID, u.ID)
 }
 
 func (h *ManagedAgentHandler) markAIRunSubmitFailedContext(ctx context.Context, runID, userID, message string) error {

@@ -1803,7 +1803,7 @@ func TestSelectReportAgentPrefersProfileBusinessType(t *testing.T) {
 	}
 }
 
-func TestStartReportAgentRunUsesSessionCredentialOverrides(t *testing.T) {
+func TestStartReportAgentRunCreatesPendingRunWithoutExternalSubmission(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
@@ -1811,277 +1811,182 @@ func TestStartReportAgentRunUsesSessionCredentialOverrides(t *testing.T) {
 	defer db.Close()
 
 	reportAgent := model.ManagedAgent{
-		AgentID:             "agent-report",
-		Name:                defaultReportAgentName,
-		Description:         defaultReportAgentMarker + "\n" + defaultReportAgentTypesPrefix + strings.Join(supportedReportTypes, ",") + "\n" + defaultManagedAgentMarker,
-		Engine:              "claude-code",
-		DefaultModelID:      "MiniMax-M2.5",
-		Instructions:        defaultReportAgentInstructions(reportMCPCredentialSlot),
-		StartPromptTemplate: defaultReportAgentStartPromptTemplate(reportMCPCredentialSlot),
-		CredentialSlots:     []model.ManagedCredentialSlot{{Name: "mcp-custom", Required: true}},
-		Skills:              []model.ManagedSkillRef{{Slug: service.ReportSkillSlug, Version: service.ReportSkillVersion}},
-		MCPBindings: []model.ManagedMCPBinding{
-			{Slug: "aida-report-mcp", Version: "report-v1"},
-			{Owner: "alice", Slug: "custom-mcp", Version: "1.0.0", CredentialSlot: "mcp-custom"},
-		},
+		AgentID: "agent-report", Name: "自定义报告 Agent", Engine: "claude-code",
+		DefaultModelID: "MiniMax-M2.5", BusinessType: managedAgentBusinessReport,
+		ReportTypes:     []string{reportTypePersonalWeekly},
+		CredentialSlots: []model.ManagedCredentialSlot{{Name: reportMCPCredentialSlot, Required: true}},
+		Skills:          []model.ManagedSkillRef{{Owner: "100866", Slug: service.ReportSkillSlug, Version: service.ReportSkillVersion}},
+		MCPServers:      []model.ManagedMCPServer{{Name: service.ReportMCPSlug, URL: "https://aida.example.com/api/v1/mcp/reports", CredentialSlot: reportMCPCredentialSlot}},
 	}
-	var createdCredential service.CreateManagedCredentialRequest
-	var createdSession service.CreateManagedSessionRequest
-	var updatedAgent model.UpsertManagedAgentRequest
+	externalSubmissionCalled := false
 	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/my/agents":
 			writeJSON(w, http.StatusOK, model.ListManagedAgentsResponse{Agents: []model.ManagedAgent{reportAgent}})
 		case r.Method == http.MethodGet && r.URL.Path == "/api/skill/list":
-			if r.URL.Query().Get("scope") != "public" {
-				t.Fatalf("unexpected skill scope %q", r.URL.Query().Get("scope"))
-			}
-			writeJSON(w, http.StatusOK, model.ListManagedSkillsResponse{Skills: []model.ManagedSkill{{
-				SkillID: "skill-1",
-				Owner:   "100866",
-				Slug:    service.ReportSkillSlug,
-				Version: service.ReportSkillVersion,
-				Name:    service.ReportSkillName,
-			}}})
+			writeJSON(w, http.StatusOK, model.ListManagedSkillsResponse{Skills: []model.ManagedSkill{{SkillID: "skill-1", Owner: "100866", Slug: service.ReportSkillSlug, Version: service.ReportSkillVersion}}})
 		case r.Method == http.MethodGet && r.URL.Path == "/api/mcp/list":
-			writeJSON(w, http.StatusOK, model.ListManagedMCPEntriesResponse{Entries: []model.ManagedMCPEntry{{
-				EntryID: "mcp-1",
-				Slug:    "aida-report-mcp",
-				Version: "report-v1",
-				URL:     "https://aida.example.com/api/v1/mcp/reports",
-			}}})
+			writeJSON(w, http.StatusOK, model.ListManagedMCPEntriesResponse{Entries: []model.ManagedMCPEntry{{EntryID: "mcp-1", Slug: service.ReportMCPSlug, Version: service.ReportMCPVersion, URL: "https://aida.example.com/api/v1/mcp/reports"}}})
 		case r.Method == http.MethodPut && r.URL.Path == "/api/my/agents/agent-report":
-			if err := json.NewDecoder(r.Body).Decode(&updatedAgent); err != nil {
-				t.Fatal(err)
-			}
 			writeJSON(w, http.StatusOK, model.UpsertManagedAgentResponse{AgentID: "agent-report", ManagedVersion: 2})
-		case r.Method == http.MethodPost && r.URL.Path == "/api/credential":
-			if err := json.NewDecoder(r.Body).Decode(&createdCredential); err != nil {
-				t.Fatal(err)
-			}
-			writeJSON(w, http.StatusOK, service.CreateManagedCredentialResponse{CredentialID: "cred-1"})
-		case r.Method == http.MethodPost && r.URL.Path == "/api/session":
-			if err := json.NewDecoder(r.Body).Decode(&createdSession); err != nil {
-				t.Fatal(err)
-			}
-			writeJSON(w, http.StatusOK, service.CreateManagedSessionResponse{
-				SessionID: "session-1",
-				Status:    "running",
-				ModelID:   "MiniMax-M2.5",
-			})
+		case r.URL.Path == "/api/credential" || r.URL.Path == "/api/session":
+			externalSubmissionCalled = true
+			t.Fatalf("HTTP Run creation must not submit externally: %s %s", r.Method, r.URL.Path)
 		default:
 			t.Fatalf("unexpected platform request: %s %s", r.Method, r.URL.Path)
 		}
 	}))
 	defer platform.Close()
 
-	now := time.Date(2026, 6, 30, 10, 0, 0, 0, time.UTC)
-	safeInputRef := jsonStringArg{
-		require: []string{"personal_daily", "2026-06-30", "aida-report-mcp", reportMCPCredentialSlot, "credential_override_slots", "mcp-custom"},
-		forbid:  []string{"user-token", "cred-1", "cred-custom", "mcp_" + "authorization"},
-	}
-	mock.ExpectQuery("SELECT agent_id, business_type, report_types").
-		WithArgs("user-1", "agent-report").
-		WillReturnError(sql.ErrNoRows)
-	mock.ExpectQuery("INSERT INTO ai_runs").
-		WithArgs("user-1", reportAgentRunBusinessType, "agent-report", "MiniMax-M2.5", safeInputRef).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("run-report"))
-	mock.ExpectExec("UPDATE ai_runs").
-		WithArgs("session-1", "MiniMax-M2.5", "running", safeInputRef, "run-report", "user-1").
-		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery("SELECT id::text").
-		WithArgs("run-report", "user-1").
-		WillReturnRows(sqlmock.NewRows(aiRunColumns()).
-			AddRow("run-report", "user-1", reportAgentRunBusinessType, nil, "managed_session", "agent-report", nil, nil, "session-1", "MiniMax-M2.5", "running", []byte(`{"trigger_source":"manual","report_type":"personal_daily","period":{"date":"2026-06-30"},"target":{"type":"self","user_id":"user-1"},"model_id":"MiniMax-M2.5","mcp_url":"https://aida.example.com/api/v1/mcp/reports","credential_slot":"AIDA_REPORT_MCP_AUTH","start_prompt_values":{"report_type":"personal_daily","run_id":"run-report"},"credential_override":"redacted"}`), []byte(`{}`), nil, now, nil, now))
-
-	h := NewManagedAgentHandlerWithDefaults(db, service.NewManagedAgentClient(platform.URL, "platform-token"), testManagedAgentDefaults())
-	h.reportContext = reportContextBuilderStub{}
-	req := httptest.NewRequest(http.MethodPost, "/ai-assets/report-agents/agent-report/runs", bytes.NewBufferString(`{"report_type":"personal_daily","period":{"date":"2026-06-30"},"target":{"type":"self"},"model_id":"MiniMax-M2.5","credential_overrides":{"mcp-custom":"cred-custom"}}`))
-	req.Host = "aida.example.com"
-	req.Header.Set("X-Forwarded-Proto", "https")
-	req.Header.Set("Authorization", "Bearer user-token")
-	req = requestWithUser(req, &model.User{ID: "user-1", Name: "张三", Role: "employee"})
-	req = requestWithURLParam(req, "agentId", "agent-report")
-	rec := httptest.NewRecorder()
-
-	h.StartReportAgentRun(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
-	}
-	if createdCredential.Value != "user-token" {
-		t.Fatalf("credential value should be current user token without Bearer prefix, got %q", createdCredential.Value)
-	}
-	if createdSession.AgentID != "agent-report" || createdSession.ModelID != "MiniMax-M2.5" {
-		t.Fatalf("session request = %#v", createdSession)
-	}
-	if createdSession.CredentialOverrides[reportMCPCredentialSlot] != "cred-1" {
-		t.Fatalf("credential overrides = %#v", createdSession.CredentialOverrides)
-	}
-	if createdSession.CredentialOverrides["mcp-custom"] != "cred-custom" {
-		t.Fatalf("custom credential overrides = %#v", createdSession.CredentialOverrides)
-	}
-	if !hasCredentialSlot(updatedAgent.CredentialSlots, reportMCPCredentialSlot) || len(updatedAgent.MCPServers) != 1 || updatedAgent.MCPServers[0].CredentialSlot != reportMCPCredentialSlot {
-		t.Fatalf("report dependency repair = %#v", updatedAgent)
-	}
-	if len(updatedAgent.MCPBindings) != 1 || updatedAgent.MCPBindings[0].Slug != "custom-mcp" {
-		t.Fatalf("custom mcp binding should be preserved, got %#v", updatedAgent.MCPBindings)
-	}
-	if _, ok := createdSession.StartPromptValues["mcp_"+"authorization"]; ok {
-		t.Fatalf("start prompt values should not contain authorization field: %#v", createdSession.StartPromptValues)
-	}
-	if createdSession.StartPromptValues["run_id"] != "run-report" {
-		t.Fatalf("start prompt values = %#v", createdSession.StartPromptValues)
-	}
-	if _, ok := createdSession.StartPromptValues["mcp_url"]; ok {
-		t.Fatalf("start prompt values should not expose mcp_url: %#v", createdSession.StartPromptValues)
-	}
-	requireContainsAll(t, createdSession.Message,
-		"report_type=personal_daily",
-		"run_id=run-report",
-		"period=",
-		"target=",
-		reportMCPCredentialSlot,
-	)
-	if strings.Contains(createdSession.Message, "mcp_url=") {
-		t.Fatalf("session message should not expose mcp_url: %q", createdSession.Message)
-	}
-	if strings.Contains(createdSession.Message, "user-token") || strings.Contains(createdSession.Message, "cred-1") {
-		t.Fatalf("session message leaked credential material: %q", createdSession.Message)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("sql expectations: %v", err)
-	}
-}
-
-func TestStartReportAgentRunFallsBackToMessageWhenTemplateMissing(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-
-	reportAgent := model.ManagedAgent{
-		AgentID:        "agent-report",
-		Name:           "自定义报告 Agent",
-		Description:    "汇报用的",
-		Engine:         "claude-code",
-		DefaultModelID: "MiniMax-M2.5",
-		CredentialSlots: []model.ManagedCredentialSlot{{
-			Name:     reportMCPCredentialSlot,
-			Required: true,
-		}},
-		Skills:     []model.ManagedSkillRef{{Owner: "100866", Slug: service.ReportSkillSlug, Version: service.ReportSkillVersion}},
-		MCPServers: []model.ManagedMCPServer{{Name: service.ReportMCPSlug, URL: "https://aida.example.com/api/v1/mcp/reports", CredentialSlot: reportMCPCredentialSlot, AuthHeader: "Authorization", AuthScheme: "Bearer"}},
-	}
-	var createdSession service.CreateManagedSessionRequest
-	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/my/agents":
-			writeJSON(w, http.StatusOK, model.ListManagedAgentsResponse{Agents: []model.ManagedAgent{reportAgent}})
-		case r.Method == http.MethodGet && r.URL.Path == "/api/skill/list":
-			if r.URL.Query().Get("scope") != "public" {
-				t.Fatalf("unexpected skill scope %q", r.URL.Query().Get("scope"))
-			}
-			writeJSON(w, http.StatusOK, model.ListManagedSkillsResponse{Skills: []model.ManagedSkill{{
-				SkillID: "skill-1",
-				Owner:   "100866",
-				Slug:    service.ReportSkillSlug,
-				Version: service.ReportSkillVersion,
-				Name:    service.ReportSkillName,
-			}}})
-		case r.Method == http.MethodGet && r.URL.Path == "/api/mcp/list":
-			writeJSON(w, http.StatusOK, model.ListManagedMCPEntriesResponse{Entries: []model.ManagedMCPEntry{{
-				EntryID:            "mcp-1",
-				Slug:               "aida-report-mcp",
-				Version:            "report-v1",
-				URL:                "https://aida.example.com/api/v1/mcp/reports",
-				RequiresCredential: true,
-				CredentialEnv:      reportMCPCredentialSlot,
-				AuthHeader:         "Authorization",
-				AuthScheme:         "Bearer",
-			}}})
-		case r.Method == http.MethodPost && r.URL.Path == "/api/credential":
-			writeJSON(w, http.StatusOK, service.CreateManagedCredentialResponse{CredentialID: "cred-1"})
-		case r.Method == http.MethodPost && r.URL.Path == "/api/session":
-			if err := json.NewDecoder(r.Body).Decode(&createdSession); err != nil {
-				t.Fatal(err)
-			}
-			writeJSON(w, http.StatusOK, service.CreateManagedSessionResponse{
-				SessionID: "session-1",
-				Status:    "running",
-				ModelID:   "MiniMax-M2.5",
-			})
-		default:
-			t.Fatalf("unexpected platform request: %s %s", r.Method, r.URL.Path)
-		}
-	}))
-	defer platform.Close()
-
-	now := time.Date(2026, 7, 1, 8, 0, 0, 0, time.UTC)
-	safeInputRef := jsonStringArg{
-		require: []string{"personal_daily", "2026-07-01"},
-		forbid:  []string{"cred-1"},
-	}
+	const idempotencyKey = "5f2db8be-a737-4d42-a77a-f6d69cbe2252"
 	mock.ExpectQuery("SELECT agent_id, business_type, report_types").
 		WithArgs("305", "agent-report").
 		WillReturnRows(sqlmock.NewRows([]string{"agent_id", "business_type", "report_types", "is_default_report"}).
-			AddRow("agent-report", managedAgentBusinessReport, []byte(`["personal_daily"]`), false))
-	mock.ExpectQuery("INSERT INTO ai_runs").
-		WithArgs("305", reportAgentRunBusinessType, "agent-report", "MiniMax-M2.5", safeInputRef).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("run-report"))
-	mock.ExpectExec("UPDATE ai_runs SET external_session_id").
-		WithArgs("session-1", "MiniMax-M2.5", "running", jsonStringArg{
-			require: []string{"personal_daily", "2026-07-01", "请生成 Aida 报告。", "report_type=personal_daily", "run_id=run-report", "period=", "target="},
-			forbid:  []string{"mcp_url=https://aida.example.com/api/v1/mcp/reports", "cred-1"},
-		}, "run-report", "305").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectQuery("SELECT id::text").
-		WithArgs("run-report", "305").
-		WillReturnRows(sqlmock.NewRows(aiRunColumns()).
-			AddRow("run-report", "305", reportAgentRunBusinessType, nil, "managed_session", "agent-report", nil, nil, "session-1", "MiniMax-M2.5", "running", []byte(`{"trigger_source":"manual","report_type":"personal_daily","period":{"date":"2026-07-01"},"target":{"type":"self","user_id":"305"},"model_id":"MiniMax-M2.5","mcp_url":"https://aida.example.com/api/v1/mcp/reports","credential_slot":"AIDA_REPORT_MCP_AUTH","start_prompt_values":{"report_type":"personal_daily","report_date":"2026-07-01"},"message":"请生成 Aida 报告。\nreport_type=personal_daily\ndate=2026-07-01\ntarget_type=self\ntarget_user_id=305","credential_override":"redacted"}`), []byte(`{}`), nil, now, nil, now))
+			AddRow("agent-report", managedAgentBusinessReport, []byte(`["personal_weekly"]`), false))
+	expectReportRunSubmission(mock, "305", "agent-report", "MiniMax-M2.5", idempotencyKey, "run-report")
+	now := time.Date(2026, 7, 1, 8, 0, 0, 0, time.UTC)
+	mock.ExpectQuery("SELECT id::text").WithArgs("run-report", "305").
+		WillReturnRows(sqlmock.NewRows(aiRunColumns()).AddRow(
+			"run-report", "305", reportAgentRunBusinessType, nil, "managed_session", "agent-report",
+			nil, nil, nil, "MiniMax-M2.5", "pending",
+			[]byte(`{"report_type":"personal_weekly","period":{"week_start":"2026-06-29","week_end":"2026-07-05"}}`),
+			[]byte(`{}`), nil, nil, nil, now,
+		))
 
+	reportSource, err := reportsource.NewService(db)
+	if err != nil {
+		t.Fatal(err)
+	}
 	h := NewManagedAgentHandlerWithDefaults(db, service.NewManagedAgentClient(platform.URL, "platform-token"), testManagedAgentDefaults())
-	h.reportContext = reportContextBuilderStub{}
-	req := httptest.NewRequest(http.MethodPost, "/ai-assets/report-agents/agent-report/runs", bytes.NewBufferString(`{"report_type":"personal_daily","period":{"date":"2026-07-01"},"target":{"type":"self"},"model_id":"MiniMax-M2.5"}`))
+	h.ConfigureReportSourceSelection(reportSource)
+	req := httptest.NewRequest(http.MethodPost, "/ai-assets/report-agents/agent-report/runs", bytes.NewBufferString(`{
+		"idempotency_key":"`+idempotencyKey+`",
+		"report_type":"personal_weekly",
+		"period":{"week_start":"2026-06-29","week_end":"2026-07-05"},
+		"target":{"type":"self"},
+		"model_id":"MiniMax-M2.5"
+	}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer user-token")
 	req = requestWithURLParam(req, "agentId", "agent-report")
 	req = requestWithUser(req, &model.User{ID: "305", Username: "t03"})
 	rec := httptest.NewRecorder()
-
 	h.StartReportAgentRun(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
 	}
-	if strings.TrimSpace(createdSession.Message) == "" {
-		t.Fatalf("expected fallback message, got session=%#v", createdSession)
+	if externalSubmissionCalled {
+		t.Fatal("external submission occurred in HTTP request")
 	}
-	if !strings.Contains(createdSession.Message, "report_type=personal_daily") {
-		t.Fatalf("unexpected fallback message: %q", createdSession.Message)
+	var run model.AIRun
+	if err := json.Unmarshal(rec.Body.Bytes(), &run); err != nil {
+		t.Fatal(err)
 	}
-	requireContainsAll(t, createdSession.Message,
-		"run_id=run-report",
-		"period=",
-		"target=",
-		reportMCPCredentialSlot,
-	)
-	if strings.Contains(createdSession.Message, "mcp_url=") {
-		t.Fatalf("fallback message should not expose mcp_url: %q", createdSession.Message)
-	}
-	if createdSession.StartPromptValues["report_type"] != "personal_daily" {
-		t.Fatalf("start prompt values = %#v", createdSession.StartPromptValues)
-	}
-	if !strings.Contains(createdSession.StartPromptValues["calendar_context_json"], `"weekday":"周三"`) {
-		t.Fatalf("calendar context missing from start prompt values = %#v", createdSession.StartPromptValues)
+	if run.ID != "run-report" || run.Status != "pending" || run.ExternalSessionID != nil {
+		t.Fatalf("run = %#v", run)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("sql expectations: %v", err)
+		t.Fatal(err)
 	}
 }
 
-func TestExecuteManagedAgentScheduleRunUsesUserScopedClient(t *testing.T) {
+func TestStartReportAgentRunRejectsMissingIdempotencyKey(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	reportAgent := model.ManagedAgent{
+		AgentID: "agent-report", BusinessType: managedAgentBusinessReport,
+		ReportTypes:     []string{reportTypePersonalWeekly},
+		CredentialSlots: []model.ManagedCredentialSlot{{Name: reportMCPCredentialSlot, Required: true}},
+		Skills:          []model.ManagedSkillRef{{Owner: "100866", Slug: service.ReportSkillSlug, Version: service.ReportSkillVersion}},
+		MCPServers:      []model.ManagedMCPServer{{Name: service.ReportMCPSlug, URL: "https://aida.example.com/api/v1/mcp/reports", CredentialSlot: reportMCPCredentialSlot}},
+	}
+	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/my/agents":
+			writeJSON(w, http.StatusOK, model.ListManagedAgentsResponse{Agents: []model.ManagedAgent{reportAgent}})
+		case "/api/skill/list":
+			writeJSON(w, http.StatusOK, model.ListManagedSkillsResponse{Skills: []model.ManagedSkill{{SkillID: "skill-1", Owner: "100866", Slug: service.ReportSkillSlug, Version: service.ReportSkillVersion}}})
+		case "/api/mcp/list":
+			writeJSON(w, http.StatusOK, model.ListManagedMCPEntriesResponse{Entries: []model.ManagedMCPEntry{{EntryID: "mcp-1", Slug: service.ReportMCPSlug, Version: service.ReportMCPVersion, URL: "https://aida.example.com/api/v1/mcp/reports"}}})
+		case "/api/my/agents/agent-report":
+			writeJSON(w, http.StatusOK, model.UpsertManagedAgentResponse{AgentID: "agent-report", ManagedVersion: 2})
+		default:
+			t.Fatalf("unexpected platform request: %s", r.URL.Path)
+		}
+	}))
+	defer platform.Close()
+	mock.ExpectQuery("SELECT agent_id, business_type, report_types").
+		WithArgs("305", "agent-report").
+		WillReturnRows(sqlmock.NewRows([]string{"agent_id", "business_type", "report_types", "is_default_report"}).
+			AddRow("agent-report", managedAgentBusinessReport, []byte(`["personal_weekly"]`), false))
+	h := NewManagedAgentHandlerWithDefaults(db, service.NewManagedAgentClient(platform.URL, "token"), testManagedAgentDefaults())
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(`{
+		"report_type":"personal_weekly",
+		"period":{"week_start":"2026-06-29","week_end":"2026-07-05"},
+		"target":{"type":"self"}
+	}`))
+	req = requestWithURLParam(req, "agentId", "agent-report")
+	req.Header.Set("Authorization", "Bearer user-token")
+	req = requestWithUser(req, &model.User{ID: "305", Username: "t03"})
+	rec := httptest.NewRecorder()
+	h.StartReportAgentRun(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "INVALID_IDEMPOTENCY_KEY") {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReportRunDedupeScopeIncludesPrivateExecutionIdentity(t *testing.T) {
+	base := map[string]any{"agent_id": "agent-report", "model_id": "model-1"}
+	first := reportRunDedupeScope(
+		base,
+		map[string]string{"mcp-github": "credential-1"},
+		[]string{"aida-report-mcp"},
+	)
+	second := reportRunDedupeScope(
+		base,
+		map[string]string{"mcp-github": "credential-2"},
+		[]string{"aida-report-mcp"},
+	)
+	firstJSON, err := json.Marshal(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondJSON, err := json.Marshal(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(firstJSON, secondJSON) {
+		t.Fatalf("different credential bindings produced the same dedupe scope: %s", firstJSON)
+	}
+	if strings.Contains(string(firstJSON), "user-token") {
+		t.Fatalf("dedupe scope contains a bearer token: %s", firstJSON)
+	}
+}
+
+func expectReportRunSubmission(mock sqlmock.Sqlmock, userID, agentID, modelID, idempotencyKey, runID string) {
+	mock.ExpectQuery("(?s)SELECT r.id::text.*FROM ai_runs.*idempotency_key").
+		WithArgs(userID, reportAgentRunBusinessType, idempotencyKey).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectBegin()
+	mock.ExpectQuery("(?s)SELECT r.id::text.*FROM ai_runs.*FOR UPDATE OF r").
+		WithArgs(userID, reportAgentRunBusinessType, idempotencyKey).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("(?s)INSERT INTO ai_runs.*RETURNING id::text").
+		WithArgs(userID, reportAgentRunBusinessType, agentID, modelID,
+			sqlmock.AnyArg(), sqlmock.AnyArg(), 3600, idempotencyKey,
+			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(runID))
+	mock.ExpectCommit()
+}
+
+func TestExecuteManagedAgentScheduleRunCreatesPendingRunWithoutExternalSubmission(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
@@ -2089,53 +1994,36 @@ func TestExecuteManagedAgentScheduleRunUsesUserScopedClient(t *testing.T) {
 	defer db.Close()
 
 	reportAgent := model.ManagedAgent{
-		AgentID:             "agent-report",
-		Name:                defaultReportAgentName,
-		Engine:              "claude-code",
-		Instructions:        defaultReportAgentInstructions(reportMCPCredentialSlot),
-		StartPromptTemplate: defaultReportAgentStartPromptTemplate(reportMCPCredentialSlot),
-		DefaultModelID:      "MiniMax-M2.5",
-		BusinessType:        managedAgentBusinessReport,
-		CredentialSlots:     []model.ManagedCredentialSlot{{Name: reportMCPCredentialSlot, Required: true}},
-		Skills:              []model.ManagedSkillRef{{Owner: "100866", Slug: service.ReportSkillSlug, Version: service.ReportSkillVersion}},
-		MCPServers:          []model.ManagedMCPServer{{Name: service.ReportMCPSlug, URL: "https://aida.example.com/api/v1/mcp/reports", CredentialSlot: reportMCPCredentialSlot, AuthHeader: "Authorization", AuthScheme: "Bearer"}},
+		AgentID: "agent-report", Name: "scheduled report", Engine: "claude-code",
+		DefaultModelID: "MiniMax-M2.5", BusinessType: managedAgentBusinessReport,
+		ReportTypes:     []string{reportTypePersonalWeekly},
+		CredentialSlots: []model.ManagedCredentialSlot{{Name: reportMCPCredentialSlot, Required: true}},
+		Skills:          []model.ManagedSkillRef{{Owner: "100866", Slug: service.ReportSkillSlug, Version: service.ReportSkillVersion}},
+		MCPServers:      []model.ManagedMCPServer{{Name: service.ReportMCPSlug, URL: "https://aida.example.com/api/v1/mcp/reports", CredentialSlot: reportMCPCredentialSlot}},
 	}
 	schedule := model.ManagedAgentSchedule{
-		ID:                "schedule-1",
-		UserID:            "305",
-		Name:              "daily report",
-		AgentID:           "agent-report",
-		RunKind:           scheduleRunKindReport,
-		ModelID:           strPtr("MiniMax-M2.5"),
-		ReportConfig:      map[string]string{"report_type": "personal_daily"},
-		ScheduleType:      "daily",
-		TimeOfDay:         "19:00",
-		Timezone:          "Asia/Shanghai",
+		ID: "schedule-1", UserID: "305", Name: "weekly report", AgentID: "agent-report",
+		RunKind: scheduleRunKindReport, ModelID: strPtr("MiniMax-M2.5"),
+		ReportConfig: map[string]string{"report_type": reportTypePersonalWeekly},
+		ScheduleType: "weekly", Weekdays: []int{1}, TimeOfDay: "19:00", Timezone: "Asia/Shanghai",
 		StartPromptValues: map[string]string{},
 	}
-
 	var auths []string
-	var createdSession service.CreateManagedSessionRequest
+	externalSubmissionCalled := false
 	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		auths = append(auths, r.Header.Get("Authorization"))
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/my/agents":
 			writeJSON(w, http.StatusOK, model.ListManagedAgentsResponse{Agents: []model.ManagedAgent{reportAgent}})
 		case r.Method == http.MethodGet && r.URL.Path == "/api/skill/list":
-			writeJSON(w, http.StatusOK, model.ListManagedSkillsResponse{Skills: []model.ManagedSkill{{
-				SkillID: "system-skill", Owner: "100866", Slug: service.ReportSkillSlug, Version: service.ReportSkillVersion,
-			}}})
-		case r.Method == http.MethodPost && r.URL.Path == "/api/credential":
-			writeJSON(w, http.StatusOK, service.CreateManagedCredentialResponse{CredentialID: "cred-1"})
-		case r.Method == http.MethodPost && r.URL.Path == "/api/session":
-			if err := json.NewDecoder(r.Body).Decode(&createdSession); err != nil {
-				t.Fatal(err)
-			}
-			writeJSON(w, http.StatusOK, service.CreateManagedSessionResponse{
-				SessionID: "session-1",
-				Status:    "running",
-				ModelID:   "MiniMax-M2.5",
-			})
+			writeJSON(w, http.StatusOK, model.ListManagedSkillsResponse{Skills: []model.ManagedSkill{{SkillID: "skill-1", Owner: "100866", Slug: service.ReportSkillSlug, Version: service.ReportSkillVersion}}})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/mcp/list":
+			writeJSON(w, http.StatusOK, model.ListManagedMCPEntriesResponse{Entries: []model.ManagedMCPEntry{{EntryID: "mcp-1", Slug: service.ReportMCPSlug, Version: service.ReportMCPVersion, URL: "https://aida.example.com/api/v1/mcp/reports"}}})
+		case r.Method == http.MethodPut && r.URL.Path == "/api/my/agents/agent-report":
+			writeJSON(w, http.StatusOK, model.UpsertManagedAgentResponse{AgentID: "agent-report", ManagedVersion: 2})
+		case r.URL.Path == "/api/credential" || r.URL.Path == "/api/session":
+			externalSubmissionCalled = true
+			t.Fatalf("schedule creation must not submit externally: %s %s", r.Method, r.URL.Path)
 		default:
 			t.Fatalf("unexpected platform request: %s %s", r.Method, r.URL.Path)
 		}
@@ -2143,61 +2031,51 @@ func TestExecuteManagedAgentScheduleRunUsesUserScopedClient(t *testing.T) {
 	defer platform.Close()
 
 	now := time.Date(2026, 7, 1, 10, 54, 7, 0, time.UTC)
+	idempotencyKey := schedule.ID + ":" + now.UTC().Format(time.RFC3339Nano)
 	mock.ExpectQuery("SELECT agent_id, business_type, report_types").
 		WithArgs("305", "agent-report").
 		WillReturnRows(sqlmock.NewRows([]string{"agent_id", "business_type", "report_types", "is_default_report"}).
-			AddRow("agent-report", managedAgentBusinessReport, []byte(`["personal_daily"]`), false))
-	mock.ExpectQuery("INSERT INTO ai_runs").
-		WithArgs("305", reportAgentRunBusinessType, "agent-report", "MiniMax-M2.5", sqlmock.AnyArg()).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("run-report"))
-	mock.ExpectExec("UPDATE ai_runs SET external_session_id").
-		WithArgs("session-1", "MiniMax-M2.5", "running", sqlmock.AnyArg(), "run-report", "305").
-		WillReturnResult(sqlmock.NewResult(1, 1))
+			AddRow("agent-report", managedAgentBusinessReport, []byte(`["personal_weekly"]`), false))
+	expectReportRunSubmission(mock, "305", "agent-report", "MiniMax-M2.5", idempotencyKey, "run-report")
 	mock.ExpectExec("UPDATE managed_agent_schedules").
 		WithArgs(now, "run-report", "", "schedule-1", "305").
 		WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectQuery("SELECT id::text").
-		WithArgs("run-report", "305").
-		WillReturnRows(sqlmock.NewRows(aiRunColumns()).
-			AddRow("run-report", "305", reportAgentRunBusinessType, nil, "managed_session", "agent-report", nil, nil, "session-1", "MiniMax-M2.5", "running", []byte(`{"trigger_source":"save_and_run"}`), []byte(`{}`), nil, now, nil, now))
+	mock.ExpectQuery("SELECT id::text").WithArgs("run-report", "305").
+		WillReturnRows(sqlmock.NewRows(aiRunColumns()).AddRow(
+			"run-report", "305", reportAgentRunBusinessType, nil, "managed_session", "agent-report",
+			nil, nil, nil, "MiniMax-M2.5", "pending", []byte(`{"trigger_source":"save_and_run"}`),
+			[]byte(`{}`), nil, nil, nil, now,
+		))
 
-	h := NewManagedAgentHandlerWithDefaults(db, service.NewManagedAgentClient(platform.URL, "platform-token"), testManagedAgentDefaults())
-	h.reportContext = reportContextBuilderStub{}
-	run, err := h.executeManagedAgentScheduleRun(context.Background(), schedule, &model.User{ID: "305", Username: "t03"}, "user-token", "save_and_run", now, false)
+	reportSource, err := reportsource.NewService(db)
 	if err != nil {
-		t.Fatalf("executeManagedAgentScheduleRun error = %v", err)
+		t.Fatal(err)
 	}
-	if run == nil || run.ID != "run-report" {
+	h := NewManagedAgentHandlerWithDefaults(db, service.NewManagedAgentClient(platform.URL, "platform-token"), testManagedAgentDefaults())
+	h.ConfigureReportSourceSelection(reportSource)
+	run, err := h.executeManagedAgentScheduleRun(
+		context.Background(), schedule, &model.User{ID: "305", Username: "t03"},
+		"user-token", "save_and_run", now, false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run == nil || run.ID != "run-report" || run.Status != "pending" {
 		t.Fatalf("run = %#v", run)
 	}
-	if len(auths) != 4 {
-		t.Fatalf("auths = %#v", auths)
+	if externalSubmissionCalled {
+		t.Fatal("external submission occurred in schedule runner")
+	}
+	if len(auths) == 0 {
+		t.Fatal("expected user-scoped platform validation calls")
 	}
 	for _, auth := range auths {
 		if auth != "Bearer user-token" {
-			t.Fatalf("expected user-scoped auth header, got %#v", auths)
+			t.Fatalf("auths = %#v", auths)
 		}
 	}
-	if createdSession.AgentID != "agent-report" {
-		t.Fatalf("createdSession = %#v", createdSession)
-	}
-	if strings.TrimSpace(createdSession.Message) == "" {
-		t.Fatalf("expected fallback message, got session=%#v", createdSession)
-	}
-	if !strings.Contains(createdSession.Message, "report_type=personal_daily") {
-		t.Fatalf("unexpected fallback message: %q", createdSession.Message)
-	}
-	requireContainsAll(t, createdSession.Message,
-		"run_id=run-report",
-		"period=",
-		"target=",
-		reportMCPCredentialSlot,
-	)
-	if strings.Contains(createdSession.Message, "mcp_url=") {
-		t.Fatalf("fallback message should not expose mcp_url: %q", createdSession.Message)
-	}
 	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("sql expectations: %v", err)
+		t.Fatal(err)
 	}
 }
 

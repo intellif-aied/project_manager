@@ -53,7 +53,7 @@ func TestExtractorBuildsResultFocusedWorkUnits(t *testing.T) {
 		extractor.Consume(event)
 	}
 
-	digest, source, included, omitted, _, encoded := extractor.Result(DefaultItemBytes)
+	digest, source, included, omitted, _, encoded := extractor.Result()
 	if source != int64(len(events)) || included == 0 || omitted == 0 {
 		t.Fatalf("unexpected coverage: source=%d included=%d omitted=%d", source, included, omitted)
 	}
@@ -100,7 +100,7 @@ func TestExtractorDoesNotTurnSubagentNotificationIntoUserGoal(t *testing.T) {
 			"message": `<subagent_notification>{"status":{"completed":"review result"}}</subagent_notification>`,
 		},
 	}))
-	digest, _, _, _, _, _ := extractor.Result(DefaultItemBytes)
+	digest, _, _, _, _, _ := extractor.Result()
 	if len(digest.WorkUnits) != 1 ||
 		digest.WorkUnits[0].Goal.Text != "实现结果优先的摘要" {
 		t.Fatalf("subagent notification became a goal: %+v", digest.WorkUnits)
@@ -121,7 +121,7 @@ name: herdr`,
 	extractor.Consume(testEvent(2, "event_msg.user_message", map[string]any{
 		"payload": map[string]any{"message": "优化日报结果质量"},
 	}))
-	digest, _, _, _, _, _ := extractor.Result(DefaultItemBytes)
+	digest, _, _, _, _, _ := extractor.Result()
 	if len(digest.WorkUnits) != 1 ||
 		digest.WorkUnits[0].Goal.Text != "优化日报结果质量" {
 		t.Fatalf("serialized skill injection became a goal: %+v", digest.WorkUnits)
@@ -138,7 +138,7 @@ func TestExtractorRecoversTextFromTruncatedMultimodalPayload(t *testing.T) {
 	extractor.Consume(testEvent(2, "event_msg.task_complete", map[string]any{
 		"payload": map[string]any{"last_agent_message": "问题是循环边界多执行了一次。"},
 	}))
-	digest, _, _, _, _, encoded := extractor.Result(DefaultItemBytes)
+	digest, _, _, _, _, encoded := extractor.Result()
 	if len(digest.WorkUnits) != 1 ||
 		digest.WorkUnits[0].Goal.Text != "这个代码错误在哪" {
 		t.Fatalf("multimodal text was not recovered: %+v", digest.WorkUnits)
@@ -157,7 +157,7 @@ func TestExtractorDropsTurnAbortedWrapper(t *testing.T) {
 	extractor.Consume(testEvent(2, "event_msg.user_message", map[string]any{
 		"payload": map[string]any{"message": "继续分析真实问题"},
 	}))
-	digest, _, _, _, _, _ := extractor.Result(DefaultItemBytes)
+	digest, _, _, _, _, _ := extractor.Result()
 	if len(digest.WorkUnits) != 1 || digest.WorkUnits[0].Goal.Text != "继续分析真实问题" {
 		t.Fatalf("turn wrapper became work: %+v", digest.WorkUnits)
 	}
@@ -176,7 +176,7 @@ func TestExtractorDropsImageTransportWrapper(t *testing.T) {
 	extractor.Consume(testEvent(3, "event_msg.user_message", map[string]any{
 		"payload": map[string]any{"message": "分析这张图里的错误"},
 	}))
-	digest, _, _, _, _, _ := extractor.Result(DefaultItemBytes)
+	digest, _, _, _, _, _ := extractor.Result()
 	if len(digest.WorkUnits) != 1 || digest.WorkUnits[0].Goal.Text != "分析这张图里的错误" {
 		t.Fatalf("image transport wrapper became work: %+v", digest.WorkUnits)
 	}
@@ -192,7 +192,7 @@ func TestExtractorKeepsFinalAnswerWithoutToolEvidence(t *testing.T) {
 			"last_agent_message": "可以，已完成只读远端检查，当前 remote 可访问。",
 		},
 	}))
-	digest, _, _, _, _, _ := extractor.Result(DefaultItemBytes)
+	digest, _, _, _, _, _ := extractor.Result()
 	if len(digest.WorkUnits) != 1 || len(digest.WorkUnits[0].ResultStatements) != 1 ||
 		digest.WorkUnits[0].ResultStatements[0].Source != "agent_claim" {
 		t.Fatalf("unsupported final answer was not retained as a result: %+v", digest.WorkUnits)
@@ -213,7 +213,7 @@ func TestExtractorAttachesCompletionConfirmationToPreviousUnit(t *testing.T) {
 	extractor.Consume(testEvent(3, "event_msg.user_message", map[string]any{
 		"payload": map[string]any{"message": "Agree"},
 	}))
-	digest, _, _, _, _, encoded := extractor.Result(DefaultItemBytes)
+	digest, _, _, _, _, encoded := extractor.Result()
 	if len(digest.WorkUnits) != 1 || digest.WorkUnits[0].Status != "completed" {
 		t.Fatalf("confirmation did not complete previous unit: %+v", digest.WorkUnits)
 	}
@@ -242,7 +242,7 @@ func TestResolveUnitPreservesDeliveredAnalysisWhenValidationFails(t *testing.T) 
 			"last_agent_message": "审计已完成：产品化主体部分完成，仍有关键模块未落地。",
 		},
 	}))
-	digest, _, _, _, _, _ := extractor.Result(DefaultItemBytes)
+	digest, _, _, _, _, _ := extractor.Result()
 	unit := digest.WorkUnits[0]
 	if unit.Status != "partial" || len(unit.ResultStatements) != 1 || len(unit.Unresolved) != 1 {
 		t.Fatalf("delivered analysis was overwritten by validation failure: %+v", unit)
@@ -276,7 +276,7 @@ func TestExtractorExcludesApprovalAssessmentTranscript(t *testing.T) {
 			"message": "I need to assess whether this action is allowed.",
 		},
 	}))
-	digest, _, _, _, _, _ := extractor.Result(DefaultItemBytes)
+	digest, _, _, _, _, _ := extractor.Result()
 	if len(digest.WorkUnits) != 0 {
 		t.Fatalf("approval assessment metadata became work: %+v", digest.WorkUnits)
 	}
@@ -331,7 +331,7 @@ func TestDiscussionAboutBlockersDoesNotBecomeRuntimeBlocker(t *testing.T) {
 	extractor.Consume(testEvent(100, "event_msg.task_complete", map[string]any{"payload": map[string]any{
 		"last_agent_message": "已明确阻塞项展示方案，后续再实现",
 	}}))
-	digest, _, _, _, _, _ := extractor.Result(DefaultItemBytes)
+	digest, _, _, _, _, _ := extractor.Result()
 	if len(digest.WorkUnits) != 1 || digest.WorkUnits[0].Status != "unknown" ||
 		len(digest.WorkUnits[0].Unresolved) != 0 {
 		t.Fatalf("discussion was treated as a blocker: %#v", digest.WorkUnits)

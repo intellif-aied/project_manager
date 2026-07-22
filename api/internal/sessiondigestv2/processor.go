@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/aidashboard/api/internal/contentreader"
+	"github.com/aidashboard/api/internal/observability"
 	"github.com/aidashboard/api/internal/sessionsync"
 )
 
@@ -23,9 +24,10 @@ type ContentReader interface {
 }
 
 type Processor struct {
-	db     *sql.DB
-	reader ContentReader
-	config Config
+	db          *sql.DB
+	reader      ContentReader
+	config      Config
+	coordinator *Coordinator
 }
 
 func NewProcessor(database *sql.DB, reader ContentReader, config Config) (*Processor, error) {
@@ -36,7 +38,11 @@ func NewProcessor(database *sql.DB, reader ContentReader, config Config) (*Proce
 	if err != nil {
 		return nil, err
 	}
-	return &Processor{db: database, reader: reader, config: normalized}, nil
+	coordinator, err := NewCoordinator(database, normalized)
+	if err != nil {
+		return nil, err
+	}
+	return &Processor{db: database, reader: reader, config: normalized, coordinator: coordinator}, nil
 }
 
 func (p *Processor) Process(ctx context.Context, job sessionsync.ProcessingJob) error {
@@ -55,7 +61,7 @@ func (p *Processor) Process(ctx context.Context, job sessionsync.ProcessingJob) 
 		return p.recordFailure(ctx, job, err)
 	}
 	if target.Ready {
-		return nil
+		return p.wakeRevision(ctx, target.Revision.ID)
 	}
 	if err := p.ensureCurrent(ctx, target.Revision); err != nil {
 		if errors.Is(err, ErrStaleDigestSource) {
@@ -87,7 +93,7 @@ func (p *Processor) Process(ctx context.Context, job sessionsync.ProcessingJob) 
 	}
 
 	digest, sourceCount, includedCount, omittedCount, truncated, encoded :=
-		extractor.Result(p.config.ItemMaxBytes)
+		extractor.Result()
 	result := BuildResult{
 		Digest:             digest,
 		SourceEventCount:   sourceCount,
@@ -100,6 +106,7 @@ func (p *Processor) Process(ctx context.Context, job sessionsync.ProcessingJob) 
 		DigestSHA256:       HashBytes(encoded),
 		DigestJSON:         encoded,
 	}
+	observability.ObservePayload("item", result.DigestBytes)
 	if err := p.commitReady(ctx, target.Revision, result); err != nil {
 		if errors.Is(err, ErrStaleDigestSource) {
 			if markErr := p.markSuperseded(ctx, target.Revision.ID); markErr != nil {
@@ -109,7 +116,7 @@ func (p *Processor) Process(ctx context.Context, job sessionsync.ProcessingJob) 
 		}
 		return p.recordFailure(ctx, job, err)
 	}
-	return nil
+	return p.wakeRevision(ctx, target.Revision.ID)
 }
 
 func (p *Processor) loadTarget(
@@ -191,11 +198,20 @@ func (p *Processor) ensureCurrent(ctx context.Context, revision Revision) error 
 	if err != nil {
 		return err
 	}
+	pinned, err := isPinnedByActiveRun(ctx, p.db, revision)
+	if err != nil {
+		return err
+	}
 	if contentStatus != "available" || contentEpoch != revision.ContentEpoch ||
-		!activeGenerationID.Valid || activeGenerationID.String != revision.GenerationID ||
-		!activeProjectionID.Valid || activeProjectionID.String != revision.ProjectionRevisionID ||
-		generationStatus != "active" || projectionStatus != "active" ||
 		indexedCursor < revision.EndCursor {
+		if pinned {
+			return ErrDigestUnavailable
+		}
+		return ErrStaleDigestSource
+	}
+	if !pinned && (!activeGenerationID.Valid || activeGenerationID.String != revision.GenerationID ||
+		!activeProjectionID.Valid || activeProjectionID.String != revision.ProjectionRevisionID ||
+		generationStatus != "active" || projectionStatus != "active") {
 		return ErrStaleDigestSource
 	}
 	return nil
@@ -208,23 +224,26 @@ func (p *Processor) commitReady(ctx context.Context, revision Revision, result B
 	}
 	defer tx.Rollback()
 
-	var contentStatus string
+	var contentStatus, generationStatus, projectionStatus string
 	var contentEpoch, indexedCursor int64
 	var activeGenerationID, activeProjectionID sql.NullString
 	err = tx.QueryRowContext(ctx, `
 		SELECT s.content_status, s.content_epoch, src.active_generation_id,
-			src.active_content_projection_revision_id, rev.content_indexed_cursor
+			src.active_content_projection_revision_id, g.status, rev.status,
+			rev.content_indexed_cursor
 		FROM session_content_slices sl
 		JOIN sessions s ON s.id = sl.session_id
 		JOIN session_sources src ON src.id = sl.source_id
-		JOIN session_content_projection_revisions rev ON rev.id = $2 AND rev.status = 'active'
+		JOIN session_source_generations g ON g.id = sl.generation_id
+		JOIN session_content_projection_revisions rev ON rev.id = $2
 		WHERE sl.id = $1 AND sl.session_id = $3 AND sl.generation_id = $4
+			AND sl.start_cursor = $5 AND sl.end_cursor = $6
 		FOR SHARE OF s, src, sl, rev`,
 		revision.SliceID, revision.ProjectionRevisionID,
-		revision.SessionID, revision.GenerationID,
+		revision.SessionID, revision.GenerationID, revision.StartCursor, revision.EndCursor,
 	).Scan(
 		&contentStatus, &contentEpoch, &activeGenerationID,
-		&activeProjectionID, &indexedCursor,
+		&activeProjectionID, &generationStatus, &projectionStatus, &indexedCursor,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrStaleDigestSource
@@ -232,10 +251,19 @@ func (p *Processor) commitReady(ctx context.Context, revision Revision, result B
 	if err != nil {
 		return err
 	}
-	if contentStatus != "available" || contentEpoch != revision.ContentEpoch ||
-		!activeGenerationID.Valid || activeGenerationID.String != revision.GenerationID ||
+	pinned, err := isPinnedByActiveRun(ctx, tx, revision)
+	if err != nil {
+		return err
+	}
+	if contentStatus != "available" || contentEpoch != revision.ContentEpoch || indexedCursor < revision.EndCursor {
+		if pinned {
+			return ErrDigestUnavailable
+		}
+		return ErrStaleDigestSource
+	}
+	if !pinned && (!activeGenerationID.Valid || activeGenerationID.String != revision.GenerationID ||
 		!activeProjectionID.Valid || activeProjectionID.String != revision.ProjectionRevisionID ||
-		indexedCursor < revision.EndCursor {
+		generationStatus != "active" || projectionStatus != "active") {
 		return ErrStaleDigestSource
 	}
 	resultSQL, err := tx.ExecContext(ctx, `
@@ -243,7 +271,8 @@ func (p *Processor) commitReady(ctx context.Context, revision Revision, result B
 		SET status = 'ready', digest_json = $2::jsonb,
 			source_event_count = $3, included_event_count = $4, omitted_event_count = $5,
 			source_bytes = $6, digest_bytes = $7, truncated = $8,
-			source_sha256 = $9, digest_sha256 = $10, error_code = NULL, ready_at = now()
+			source_sha256 = $9, digest_sha256 = $10, error_code = NULL,
+			failure_class = NULL, failed_at = NULL, ready_at = now()
 		WHERE id = $1 AND status IN ('pending', 'building')
 			AND content_projection_revision_id = $11 AND generation_id = $12
 			AND content_epoch = $13 AND digest_version = $14 AND redaction_version = $15`,
@@ -285,27 +314,49 @@ func (p *Processor) markSuperseded(ctx context.Context, revisionID string) error
 }
 
 func (p *Processor) recordFailure(
-	ctx context.Context,
-	job sessionsync.ProcessingJob,
+	_ context.Context,
+	_ sessionsync.ProcessingJob,
 	cause error,
 ) error {
-	if !job.TargetDigestRevisionID.Valid || job.Attempts < job.MaxAttempts {
-		return cause
-	}
-	result, err := p.db.ExecContext(ctx, `
-		UPDATE session_slice_digest_revisions
-		SET status = 'failed', error_code = $2
-		WHERE id = $1 AND status IN ('pending', 'building')`,
-		job.TargetDigestRevisionID.String, FailureCode(cause),
-	)
-	if err != nil {
-		return ErrDigestStatePersistence
-	}
-	changed, err := result.RowsAffected()
-	if err != nil || changed != 1 {
-		return ErrDigestStatePersistence
-	}
 	return cause
+}
+
+func (p *Processor) wakeRevision(ctx context.Context, revisionID string) error {
+	count, err := p.coordinator.WakeRevision(ctx, revisionID)
+	if err != nil {
+		observability.ObserveDigestWakeup("failure")
+		return err
+	}
+	if count == 0 {
+		observability.ObserveDigestWakeup("noop")
+	} else {
+		observability.ObserveDigestWakeup("success")
+	}
+	return nil
+}
+
+type rowQueryer interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func isPinnedByActiveRun(ctx context.Context, queryer rowQueryer, revision Revision) (bool, error) {
+	var pinned bool
+	err := queryer.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM report_source_selection_items i
+			JOIN report_source_selections sel ON sel.id = i.selection_id
+			JOIN ai_runs r ON r.id = sel.attached_run_id
+			WHERE i.session_content_slice_id = $1
+				AND i.source_generation_id = $2
+				AND i.content_projection_revision_id = $3
+				AND i.content_epoch_snapshot = $4
+				AND r.business_type = 'report_agent_run'
+				AND r.status IN ('pending', 'running')
+		)`, revision.SliceID, revision.GenerationID,
+		revision.ProjectionRevisionID, revision.ContentEpoch,
+	).Scan(&pinned)
+	return pinned, err
 }
 
 func FailureCode(err error) string {
@@ -318,6 +369,16 @@ func FailureCode(err error) string {
 		return "digest_v2_build_cancelled"
 	default:
 		return "digest_v2_build_failed"
+	}
+}
+
+func FailureClass(err error) string {
+	switch FailureCode(err) {
+	case "digest_v2_source_unavailable", "digest_v2_identity_mismatch",
+		"digest_v2_version_unsupported", "digest_v2_payload_corrupt":
+		return "permanent"
+	default:
+		return "retryable"
 	}
 }
 

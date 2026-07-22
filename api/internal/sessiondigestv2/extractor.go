@@ -40,7 +40,6 @@ type Extractor struct {
 	sourceEventCount   int64
 	includedEventCount int64
 	sourceBytes        int64
-	fieldWasTruncated  bool
 	ignoreSession      bool
 }
 
@@ -129,7 +128,7 @@ func (e *Extractor) Consume(event Event) {
 	}
 }
 
-func (e *Extractor) Result(itemMaxBytes int) (Digest, int64, int64, int64, bool, []byte) {
+func (e *Extractor) Result() (Digest, int64, int64, int64, bool, []byte) {
 	e.finishPendingCalls()
 	units := make([]WorkUnit, 0, len(e.units))
 	for index := range e.units {
@@ -138,9 +137,7 @@ func (e *Extractor) Result(itemMaxBytes int) (Digest, int64, int64, int64, bool,
 	}
 	digest := EmptyDigest()
 	digest.WorkUnits = units
-	digest.DailySummaries = BuildDailySummaries(
-		units, defaultBusinessLocation, 0,
-	)
+	digest.DailySummaries = BuildDailySummaries(units, defaultBusinessLocation)
 	digest.Coverage = Coverage{
 		SourceEventCount:        e.sourceEventCount,
 		IncludedEventCount:      e.includedEventCount,
@@ -148,13 +145,13 @@ func (e *Extractor) Result(itemMaxBytes int) (Digest, int64, int64, int64, bool,
 		SourceWorkUnitCount:     len(units),
 		DetailedWorkUnitCount:   len(units),
 		AggregatedWorkUnitCount: 0,
-		Truncated:               e.fieldWasTruncated,
+		Truncated:               false,
 		Representation:          "result_focused",
 	}
 	recalculateSummary(&digest)
-	digest, encoded, truncated := EnforceItemBudget(digest, itemMaxBytes)
+	encoded, _ := json.Marshal(digest)
 	return digest, e.sourceEventCount, e.includedEventCount,
-		e.sourceEventCount - e.includedEventCount, truncated || e.fieldWasTruncated, encoded
+		e.sourceEventCount - e.includedEventCount, false, encoded
 }
 
 func (e *Extractor) SourceBytes() int64 { return e.sourceBytes }
@@ -172,19 +169,17 @@ func (e *Extractor) consumeGoal(event Event, raw string) bool {
 		return false
 	}
 	for _, text := range contentTexts(raw) {
-		normalized, truncated := normalizeText(text, 2048)
+		normalized := normalizeText(text)
 		if normalized == "" || isNoiseGoal(normalized) {
 			continue
 		}
 		if isUserCompletionConfirmation(normalized) && e.currentUnit >= 0 {
-			e.fieldWasTruncated = e.fieldWasTruncated || truncated
 			return e.addUserCompletionConfirmation(event, normalized)
 		}
 		key := canonicalKey(normalized)
 		if key == e.lastGoalKey && duplicateGoalEvent(event, e.lastGoalCursor, e.lastGoalTime) {
 			return false
 		}
-		e.fieldWasTruncated = e.fieldWasTruncated || truncated
 		e.finalizeCurrentUnit()
 		ref := stableRef("wu", event, key)
 		unit := WorkUnit{
@@ -319,7 +314,7 @@ func (e *Extractor) touchUnit(index int, event Event) {
 }
 
 func (e *Extractor) addAgentClaim(event Event, raw string) bool {
-	text, truncated := normalizeText(raw, 4096)
+	text := normalizeText(raw)
 	if text == "" || isNoiseGoal(text) || isNoiseAgentClaim(text) {
 		return false
 	}
@@ -339,19 +334,17 @@ func (e *Extractor) addAgentClaim(event Event, raw string) bool {
 		Support: "unsupported",
 	})
 	unit.lastAgentText = text
-	e.fieldWasTruncated = e.fieldWasTruncated || truncated
 	return true
 }
 
 func (e *Extractor) rememberAgentText(event Event, raw string) {
-	text, truncated := normalizeText(raw, 4096)
+	text := normalizeText(raw)
 	if text == "" || isNoiseAgentClaim(text) || e.currentUnit < 0 {
 		return
 	}
 	index := e.currentUnit
 	e.touchUnit(index, event)
 	e.units[index].lastAgentText = text
-	e.fieldWasTruncated = e.fieldWasTruncated || truncated
 }
 
 func (e *Extractor) consumeClaudeAssistant(event Event, message map[string]any) bool {
@@ -447,8 +440,7 @@ func (e *Extractor) completeCommand(event Event, callID, output string) bool {
 	unit := &e.units[call.UnitIndex]
 	e.touchUnit(call.UnitIndex, event)
 	ref := stableRef(reduced.Kind, event, callID+":"+call.Family)
-	summary, truncated := normalizeText(reduced.Summary, 256)
-	e.fieldWasTruncated = e.fieldWasTruncated || truncated
+	summary := normalizeText(reduced.Summary)
 	unit.unit.Evidence = append(unit.unit.Evidence, Evidence{
 		Ref:           ref,
 		Kind:          reduced.Kind,
@@ -797,7 +789,7 @@ func addResultStatementWithSource(
 	refs []string,
 	source string,
 ) {
-	text, _ = normalizeText(text, 512)
+	text = normalizeText(text)
 	key := canonicalKey(text)
 	if key == "" {
 		return

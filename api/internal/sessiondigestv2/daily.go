@@ -1,6 +1,7 @@
 package sessiondigestv2
 
 import (
+	"encoding/json"
 	"sort"
 	"strings"
 	"time"
@@ -16,7 +17,6 @@ type dailySummaryBuilder struct {
 func BuildDailySummaries(
 	units []WorkUnit,
 	location *time.Location,
-	_ int,
 ) []DailySummary {
 	if location == nil {
 		location = defaultBusinessLocation
@@ -57,7 +57,7 @@ func BuildDailySummaries(
 		for _, unit := range builder.candidates {
 			builder.summary.Highlights = append(
 				builder.summary.Highlights,
-				makeDailyHighlight(unit, false),
+				makeDailyHighlight(unit),
 			)
 		}
 		builder.summary.OutcomeCoverage = OutcomeCoverage{
@@ -75,7 +75,6 @@ func PrepareForPeriod(
 	input Digest,
 	periodStart, periodEnd time.Time,
 	location *time.Location,
-	maxBytes int,
 ) (Digest, []byte, bool) {
 	if location == nil {
 		location = defaultBusinessLocation
@@ -107,7 +106,8 @@ func PrepareForPeriod(
 	digest.Coverage.AggregatedWorkUnitCount = digest.Coverage.SourceWorkUnitCount
 	digest.Coverage.Representation = "period_result_focused"
 	clearReportPeriodMetrics(digest.ReportPeriodSummary)
-	return EnforceItemBudget(digest, maxBytes)
+	encoded, _ := json.Marshal(digest)
+	return digest, encoded, false
 }
 
 func reportDayView(day DailySummary) DailySummary {
@@ -216,17 +216,7 @@ func isReportRelevantWorkUnit(unit WorkUnit) bool {
 	return unit.Goal.Source == "user_message" && !isLowInformationGoal(unit.Goal.Text)
 }
 
-func makeDailyHighlight(unit WorkUnit, aggressive bool) DailyHighlight {
-	resultBytes := 4096
-	evidenceRefLimit := 8
-	unresolvedBytes := 512
-	goalBytes := 2048
-	if aggressive {
-		resultBytes = 384
-		evidenceRefLimit = 2
-		unresolvedBytes = 192
-		goalBytes = 192
-	}
+func makeDailyHighlight(unit WorkUnit) DailyHighlight {
 	results := make([]ResultStatement, 0, len(unit.ResultStatements))
 	seenResults := map[string]struct{}{}
 	for _, statement := range unit.ResultStatements {
@@ -239,19 +229,15 @@ func makeDailyHighlight(unit WorkUnit, aggressive bool) DailyHighlight {
 			continue
 		}
 		seenResults[key] = struct{}{}
-		text, _ = truncateUTF8Bytes(text, resultBytes)
 		refs := append([]string(nil), statement.EvidenceRefs...)
-		if len(refs) > evidenceRefLimit {
-			refs = refs[:evidenceRefLimit]
-		}
 		results = append(results, ResultStatement{
 			Text: text, Source: statement.Source, EvidenceRefs: refs,
 		})
 	}
-	goal, _ := truncateUTF8Bytes(strings.TrimSpace(unit.Goal.Text), goalBytes)
+	goal := strings.TrimSpace(unit.Goal.Text)
 	unresolved := make([]Unresolved, 0, len(unit.Unresolved))
 	for _, item := range unit.Unresolved {
-		item.Text, _ = truncateUTF8Bytes(strings.TrimSpace(item.Text), unresolvedBytes)
+		item.Text = strings.TrimSpace(item.Text)
 		if item.Text == "" {
 			continue
 		}
@@ -307,55 +293,6 @@ func resultFocusedClaim(value string) string {
 	return value
 }
 
-func compactDailySummaries(summaries []DailySummary, aggressive bool) {
-	for dayIndex := range summaries {
-		day := &summaries[dayIndex]
-		for highlightIndex := range day.Highlights {
-			highlight := &day.Highlights[highlightIndex]
-			goalBytes := 384
-			resultBytes := 768
-			evidenceRefLimit := 4
-			unresolvedBytes := 384
-			if aggressive {
-				goalBytes = 160
-				resultBytes = 256
-				evidenceRefLimit = 2
-				unresolvedBytes = 160
-			}
-			highlight.Goal, _ = truncateUTF8Bytes(highlight.Goal, goalBytes)
-			highlight.ResultStatements = compactResultsPreservingCount(
-				highlight.ResultStatements,
-				resultBytes,
-				evidenceRefLimit,
-			)
-			for index := range highlight.Unresolved {
-				highlight.Unresolved[index].Text, _ = truncateUTF8Bytes(
-					highlight.Unresolved[index].Text, unresolvedBytes,
-				)
-				if aggressive {
-					highlight.Unresolved[index].EvidenceRef = ""
-				}
-			}
-		}
-		day.OutcomeCoverage.RepresentedCount = len(day.Highlights)
-		day.OutcomeCoverage.Complete =
-			day.OutcomeCoverage.SourceCount == len(day.Highlights) &&
-				!day.HighlightsTruncated
-		day.OutcomeCoverage.TextCompacted = true
-	}
-}
-
-func compactReportPeriodSummary(summary *ReportPeriodSummary, aggressive bool) {
-	if summary == nil {
-		return
-	}
-	compactDailySummaries(summary.Days, aggressive)
-}
-
-func CompactReportPeriodSummary(summary *ReportPeriodSummary, aggressive bool) {
-	compactReportPeriodSummary(summary, aggressive)
-}
-
 func ReportPeriodOutcomeCoverageComplete(summary *ReportPeriodSummary) bool {
 	if summary == nil {
 		return false
@@ -368,4 +305,20 @@ func ReportPeriodOutcomeCoverageComplete(summary *ReportPeriodSummary) bool {
 		}
 	}
 	return true
+}
+
+func cloneDigest(input Digest) Digest {
+	encoded, _ := json.Marshal(input)
+	var output Digest
+	_ = json.Unmarshal(encoded, &output)
+	if output.WorkUnits == nil {
+		output.WorkUnits = []WorkUnit{}
+	}
+	if output.DailySummaries == nil {
+		output.DailySummaries = []DailySummary{}
+	}
+	if output.DiscussionAggregates == nil {
+		output.DiscussionAggregates = []DiscussionAggregate{}
+	}
+	return output
 }

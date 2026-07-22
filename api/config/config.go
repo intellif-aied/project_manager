@@ -1,8 +1,15 @@
 package config
 
 import (
+	"fmt"
 	"os"
+	"strconv"
 	"strings"
+)
+
+const (
+	DefaultWorkerCount = 20
+	MaxWorkerCount     = 256
 )
 
 type Config struct {
@@ -26,8 +33,12 @@ type Config struct {
 	ManagedAgentReportSkillVersion string
 	ManagedAgentReportMCPURL       string
 	AIDAPublicBaseURL              string
+	AIDAInternalMetricsAddr        string
 	EnablePublicRegister           bool
 	ClaudeCacheWriteVariant        string
+	ReportRunProcessorCount        int
+	DigestBackgroundWorkerCount    int
+	DigestInteractiveWorkerCount   int
 
 	MinioEndpoint         string
 	MinioAccessKey        string
@@ -37,8 +48,14 @@ type Config struct {
 	MinioExternalEndpoint string
 }
 
+type WorkerCounts struct {
+	ReportRun         int
+	DigestBackground  int
+	DigestInteractive int
+}
+
 func Load() *Config {
-	return &Config{
+	cfg := &Config{
 		DatabaseURL:                    getEnv("DATABASE_URL", "postgres://aidashboard:devpassword@localhost:5432/aidashboard?sslmode=disable"),
 		JWTSecret:                      getEnv("JWT_SECRET", "dev-jwt-secret"),
 		AIHubHost:                      getEnv("AIHUB_HOST", ""),
@@ -59,6 +76,7 @@ func Load() *Config {
 		ManagedAgentReportSkillVersion: getEnv("MANAGED_AGENT_REPORT_SKILL_VERSION", "1.0.0"),
 		ManagedAgentReportMCPURL:       getEnv("MANAGED_AGENT_REPORT_MCP_URL", ""),
 		AIDAPublicBaseURL:              getEnv("AIDA_PUBLIC_BASE_URL", ""),
+		AIDAInternalMetricsAddr:        getEnv("AIDA_INTERNAL_METRICS_ADDR", ":9091"),
 		EnablePublicRegister:           getEnv("ENABLE_PUBLIC_REGISTER", "false") == "true",
 		ClaudeCacheWriteVariant:        strings.TrimSpace(strings.ToLower(getEnv("AIDA_CLAUDE_CACHE_WRITE_VARIANT", ""))),
 
@@ -69,6 +87,22 @@ func Load() *Config {
 		MinioUseSSL:           getEnv("MINIO_USE_SSL", "false") == "true",
 		MinioExternalEndpoint: getEnv("MINIO_EXTERNAL_ENDPOINT", ""),
 	}
+	return cfg
+}
+
+func LoadWorkerCounts() (WorkerCounts, error) {
+	var counts WorkerCounts
+	var err error
+	if counts.ReportRun, err = getWorkerCount("REPORT_RUN_PROCESSOR_COUNT"); err != nil {
+		return WorkerCounts{}, err
+	}
+	if counts.DigestBackground, err = getWorkerCount("DIGEST_BACKGROUND_WORKER_COUNT"); err != nil {
+		return WorkerCounts{}, err
+	}
+	if counts.DigestInteractive, err = getWorkerCount("DIGEST_INTERACTIVE_WORKER_COUNT"); err != nil {
+		return WorkerCounts{}, err
+	}
+	return counts, nil
 }
 
 func (c *Config) MinioConfigured() bool {
@@ -80,4 +114,17 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func getWorkerCount(key string) (int, error) {
+	raw, present := os.LookupEnv(key)
+	if !present {
+		return DefaultWorkerCount, nil
+	}
+	raw = strings.TrimSpace(raw)
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 1 || value > MaxWorkerCount {
+		return 0, fmt.Errorf("%s must be an integer between 1 and %d", key, MaxWorkerCount)
+	}
+	return value, nil
 }

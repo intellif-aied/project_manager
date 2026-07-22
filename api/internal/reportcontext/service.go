@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/aidashboard/api/internal/biztime"
+	"github.com/aidashboard/api/internal/observability"
 	"github.com/aidashboard/api/internal/reportsource"
 )
 
@@ -110,6 +111,7 @@ func (s *Service) Build(ctx context.Context, request BuildRequest) (StoredContex
 	if written == 0 {
 		return s.Get(ctx, request.UserID, request.RunID)
 	}
+	observability.ObservePayload("context", len(payload))
 	return StoredContext{Payload: payload, Hash: hash, Bytes: len(payload)}, nil
 }
 

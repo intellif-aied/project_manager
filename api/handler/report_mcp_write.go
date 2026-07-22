@@ -23,6 +23,7 @@ type reportAIRun struct {
 	AgentID      string
 	ModelID      *string
 	Status       string
+	Stage        string
 	InputRef     map[string]any
 	OutputRef    map[string]any
 	CreatedAt    time.Time
@@ -132,6 +133,17 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 			}
 		}
 	}
+	stageResult, err := tx.ExecContext(ctx, `
+		UPDATE ai_runs
+		SET execution_stage = 'writing_result', stage_updated_at = now()
+		WHERE id = $1 AND user_id = $2 AND status = 'running'
+		  AND (execution_stage = 'agent_running' OR execution_stage IS NULL)`, run.ID, u.ID)
+	if err != nil {
+		return nil, errMCPInternal
+	}
+	if changed, countErr := stageResult.RowsAffected(); countErr != nil || changed != 1 {
+		return nil, mcpErr("RUN_NOT_WRITABLE", "run is not in the report writeback stage")
+	}
 
 	existing, err := selectReportForUpdate(ctx, tx, args.ReportType, date, ws, we, target)
 	if err != nil {
@@ -165,14 +177,22 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 	}
 	copyReportRunMetadata(outputPayload, run.InputRef)
 	outputRef, _ := json.Marshal(outputPayload)
-	if _, err := tx.ExecContext(ctx, `
+	finalizeResult, err := tx.ExecContext(ctx, `
 		UPDATE ai_runs
 		SET status = 'succeeded',
+		    execution_stage = 'completed',
+		    stage_updated_at = now(),
+		    failure_stage = NULL,
+		    error_code = NULL,
 		    business_id = $1,
 		    output_ref_json = $2,
 		    error_message = NULL,
 		    finished_at = now()
-		WHERE id = $3 AND user_id = $4`, reportID, outputRef, run.ID, u.ID); err != nil {
+		WHERE id = $3 AND user_id = $4 AND execution_stage = 'writing_result'`, reportID, outputRef, run.ID, u.ID)
+	if err != nil {
+		return nil, errMCPInternal
+	}
+	if changed, countErr := finalizeResult.RowsAffected(); countErr != nil || changed != 1 {
 		return nil, errMCPInternal
 	}
 	if err := tx.Commit(); err != nil {
@@ -290,17 +310,29 @@ func (h *ReportMCPHandler) toolWriteReportFailure(r *http.Request, rawArgs json.
 		errorMessage = "Agent 生成失败"
 	}
 	errorCode := strings.TrimSpace(args.ErrorCode)
-	formatted := errorMessage
-	if errorCode != "" {
-		formatted = errorCode + ": " + errorMessage
+	if errorCode == "" {
+		errorCode = "AGENT_REPORTED_FAILURE"
 	}
-	if _, err := h.db.ExecContext(r.Context(), `
+	formatted := errorMessage
+	formatted = errorCode + ": " + errorMessage
+	failureResult, err := h.db.ExecContext(r.Context(), `
 		UPDATE ai_runs
 		SET status = 'failed',
+		    execution_stage = 'completed',
+		    stage_updated_at = now(),
+		    failure_stage = COALESCE(execution_stage, 'agent_running'),
+		    error_code = $2,
 		    error_message = $1,
 		    finished_at = now()
-		WHERE id::text = $2 AND user_id = $3`, formatted, strings.TrimSpace(args.RunID), u.ID); err != nil {
+		WHERE id::text = $3 AND user_id = $4
+		  AND status = 'running'
+		  AND (execution_stage = 'agent_running' OR execution_stage IS NULL)`,
+		formatted, errorCode, strings.TrimSpace(args.RunID), u.ID)
+	if err != nil {
 		return nil, errMCPInternal
+	}
+	if changed, countErr := failureResult.RowsAffected(); countErr != nil || changed != 1 {
+		return nil, mcpErr("RUN_NOT_WRITABLE", "run is not in the Agent execution stage")
 	}
 	return mcpTextResult(map[string]any{
 		"run_id":    args.RunID,
@@ -320,10 +352,11 @@ func (h *ReportMCPHandler) aiRunGuard(r *http.Request, runID, userID string) (*r
 	var createdAt sql.NullTime
 	var inputRaw, outputRaw []byte
 	err := h.db.QueryRowContext(r.Context(), `
-		SELECT id::text, business_type, COALESCE(agent_id, ''), model_id, status, input_ref_json, output_ref_json, created_at
+		SELECT id::text, business_type, COALESCE(agent_id, ''), model_id, status,
+		       COALESCE(execution_stage, ''), input_ref_json, output_ref_json, created_at
 		FROM ai_runs
 		WHERE id::text = $1 AND user_id = $2`, runID, userID).
-		Scan(&run.ID, &run.BusinessType, &run.AgentID, &modelID, &run.Status, &inputRaw, &outputRaw, &createdAt)
+		Scan(&run.ID, &run.BusinessType, &run.AgentID, &modelID, &run.Status, &run.Stage, &inputRaw, &outputRaw, &createdAt)
 	if err == sql.ErrNoRows {
 		return nil, errRunNotFound
 	}
@@ -619,9 +652,13 @@ func markAIRunFailedTx(ctx context.Context, tx *sql.Tx, runID, userID, code, mes
 	_, err := tx.ExecContext(ctx, `
 		UPDATE ai_runs
 		SET status = 'failed',
+		    execution_stage = 'completed',
+		    stage_updated_at = now(),
+		    failure_stage = COALESCE(execution_stage, 'writing_result'),
+		    error_code = NULLIF($2, ''),
 		    error_message = $1,
 		    finished_at = now()
-		WHERE id::text = $2 AND user_id = $3`, formatted, runID, userID)
+		WHERE id::text = $3 AND user_id = $4`, formatted, code, runID, userID)
 	return err
 }
 

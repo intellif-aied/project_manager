@@ -286,14 +286,17 @@ func TestDigestV2ReconcilerAndProcessorIntegration(t *testing.T) {
 			status, sourceEvents, includedEvents, omittedEvents, sourceBytes,
 		)
 	}
-	if digestBytes > DefaultItemBytes {
-		t.Fatalf("v2 digest exceeded item budget: %d", digestBytes)
+	if digestBytes <= 0 {
+		t.Fatalf("v2 digest bytes were not persisted: %d", digestBytes)
 	}
 	var digest Digest
 	if err := json.Unmarshal([]byte(digestText), &digest); err != nil {
 		t.Fatal(err)
 	}
 	canonical, _ := json.Marshal(digest)
+	if int64(len(canonical)) != digestBytes {
+		t.Fatalf("stored v2 digest bytes=%d want=%d", digestBytes, len(canonical))
+	}
 	if HashBytes(canonical) != digestHash {
 		t.Fatal("stored v2 digest hash does not match canonical JSON")
 	}
