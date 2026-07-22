@@ -186,8 +186,8 @@ func (r *Repository) StoreContextAndTransition(
 		SET input_ref_json = input_ref_json || jsonb_build_object(
 				'report_context_schema_version', 'report-context/v1',
 				'report_context_hash', $4,
-				'report_context_bytes', $5
-			) || CASE WHEN $5 > 1048576
+				'report_context_bytes', $5::integer
+			) || CASE WHEN $5::integer > 1048576
 				THEN jsonb_build_object('large_context_warning', true)
 				ELSE '{}'::jsonb END,
 			execution_stage = 'submitting_agent', stage_updated_at = now(),

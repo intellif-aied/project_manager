@@ -3,6 +3,7 @@ package reportrun
 import (
 	"context"
 	"errors"
+	"regexp"
 	"testing"
 	"time"
 
@@ -10,6 +11,30 @@ import (
 	"github.com/aidashboard/api/internal/reportcontext"
 	"github.com/aidashboard/api/internal/sessiondigestv2"
 )
+
+func TestStoreContextAndTransitionCastsContextBytes(t *testing.T) {
+	database, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	repository, err := NewRepository(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := Run{ID: "run-1", LeaseOwner: "worker-1", Stage: StageBuildingContext}
+	query := regexp.QuoteMeta("'report_context_bytes', $5::integer") +
+		"(?s).*" + regexp.QuoteMeta("CASE WHEN $5::integer > 1048576")
+	mock.ExpectExec(query).
+		WithArgs(run.ID, run.LeaseOwner, run.Stage, "context-hash", 6153).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	if err := repository.StoreContextAndTransition(t.Context(), run, "context-hash", 6153); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
 
 type coordinatorStub struct {
 	result sessiondigestv2.EnsureResult
