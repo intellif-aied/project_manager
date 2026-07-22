@@ -13,6 +13,7 @@ export interface ReportAIRunEntry {
   period: ReportPeriodPayload;
   target: ReportTargetPayload;
   startedAt: number;
+  largeContextWarningShown?: boolean;
 }
 
 interface ReportAIRunStore {
@@ -25,6 +26,7 @@ interface ReportAIRunStore {
 interface StoredReportAIRunValue {
   runId: string;
   startedAt: number;
+  largeContextWarningShown?: boolean;
 }
 
 interface ReportAIRunCriteria {
@@ -80,7 +82,8 @@ function parseStoredValue(value: string): StoredReportAIRunValue | undefined {
         startedAt:
           typeof parsed.startedAt === "number" && Number.isFinite(parsed.startedAt)
             ? parsed.startedAt
-            : Date.now()
+            : Date.now(),
+        largeContextWarningShown: parsed.largeContextWarningShown === true
       };
     }
   } catch {
@@ -125,7 +128,11 @@ function persistReportAIRun(entry: ReportAIRunEntry) {
   try {
     window.localStorage.setItem(
       entry.storageKey,
-      JSON.stringify({ runId: entry.runId, startedAt: entry.startedAt })
+      JSON.stringify({
+        runId: entry.runId,
+        startedAt: entry.startedAt,
+        largeContextWarningShown: entry.largeContextWarningShown === true
+      })
     );
   } catch {
     // Storage failures must not block report generation.
@@ -169,6 +176,18 @@ export function registerReportAIRun(entry: ReportAIRunEntry) {
 
 export function clearReportAIRun(storageKey: string, runId?: string) {
   useReportAIRunStore.getState().clear(storageKey, runId);
+}
+
+export function markReportAIRunLargeContextWarningShown(storageKey: string, runId: string) {
+  const current =
+    useReportAIRunStore.getState().runs[storageKey] ?? readStoredReportAIRun(storageKey);
+  if (!current || current.runId !== runId || current.largeContextWarningShown) return false;
+  const next = { ...current, largeContextWarningShown: true };
+  persistReportAIRun(next);
+  useReportAIRunStore.setState((state) => ({
+    runs: { ...state.runs, [storageKey]: next }
+  }));
+  return true;
 }
 
 export function hasActiveReportAIRun(

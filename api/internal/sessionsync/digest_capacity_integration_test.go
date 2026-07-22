@@ -27,7 +27,6 @@ func TestClaimDigestInteractiveIsolatedFromFiveThousandBackgroundJobs(t *testing
 	if _, err := database.ExecContext(ctx, `INSERT INTO users (id, username) VALUES ($1, $2)`, userID, "digest-capacity"); err != nil {
 		t.Fatal(err)
 	}
-	defer database.ExecContext(ctx, `DELETE FROM users WHERE id = $1`, userID)
 	var sessionID string
 	if err := database.QueryRowContext(ctx, `
 		INSERT INTO sessions (session_ref, user_id, agent_type, started_at)
@@ -36,6 +35,11 @@ func TestClaimDigestInteractiveIsolatedFromFiveThousandBackgroundJobs(t *testing
 	).Scan(&sessionID); err != nil {
 		t.Fatal(err)
 	}
+	defer func() {
+		_, _ = database.ExecContext(ctx, `DELETE FROM session_processing_jobs WHERE session_id = $1`, sessionID)
+		_, _ = database.ExecContext(ctx, `DELETE FROM sessions WHERE id = $1`, sessionID)
+		_, _ = database.ExecContext(ctx, `DELETE FROM users WHERE id = $1`, userID)
+	}()
 	if _, err := database.ExecContext(ctx, `
 		INSERT INTO session_processing_jobs (
 			job_type, session_id, content_epoch, urgency, created_at

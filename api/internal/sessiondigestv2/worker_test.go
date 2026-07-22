@@ -17,6 +17,7 @@ type queueStub struct {
 	completed    []string
 	failed       []string
 	failures     []string
+	failureClass []string
 }
 
 func (q *queueStub) ClaimDigest(
@@ -47,17 +48,18 @@ func (q *queueStub) Complete(
 	return true, nil
 }
 
-func (q *queueStub) Fail(
+func (q *queueStub) FailDigest(
 	_ context.Context,
 	id, _ string,
 	_ time.Time,
 	_ time.Duration,
 	_ bool,
-	failure string,
-) (bool, error) {
+	failure, failureClass string,
+) (sessionsync.DigestFailureResult, error) {
 	q.failed = append(q.failed, id)
 	q.failures = append(q.failures, failure)
-	return true, nil
+	q.failureClass = append(q.failureClass, failureClass)
+	return sessionsync.DigestFailureResult{Changed: true}, nil
 }
 
 type processorStub struct {
@@ -96,8 +98,10 @@ func TestWorkerClaimsOnlyOneDigestV2Job(t *testing.T) {
 		t.Fatalf("unexpected completions: %v", queue.completed)
 	}
 	if len(queue.failed) != 1 || queue.failed[0] != "failed" ||
-		len(queue.failures) != 1 || queue.failures[0] != "digest_v2_build_failed" {
-		t.Fatalf("failure was not sanitized: ids=%v values=%v", queue.failed, queue.failures)
+		len(queue.failures) != 1 || queue.failures[0] != "digest_v2_build_failed" ||
+		len(queue.failureClass) != 1 || queue.failureClass[0] != "retryable" {
+		t.Fatalf("failure was not sanitized: ids=%v values=%v classes=%v",
+			queue.failed, queue.failures, queue.failureClass)
 	}
 }
 

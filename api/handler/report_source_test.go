@@ -117,3 +117,33 @@ func TestWriteReportSourceErrorReturnsRetryableLargeContextWarning(t *testing.T)
 		t.Fatalf("warning exposed internal details: %q", message)
 	}
 }
+
+type reportSourceSelectionCreatorStub struct {
+	calls int
+}
+
+func (s *reportSourceSelectionCreatorStub) CreateExplicit(
+	context.Context,
+	string,
+	string,
+	reportsource.Period,
+	[]reportsource.SourceInput,
+) (reportsource.Selection, error) {
+	s.calls++
+	return reportsource.Selection{ID: "selection-prepared", Status: "prepared"}, nil
+}
+
+func TestCreateReportSourceSelectionDoesNotFreezeDigest(t *testing.T) {
+	creator := &reportSourceSelectionCreatorStub{}
+	selection, err := createReportSourceSelection(
+		t.Context(), creator, "user-1", reportTypePersonalDaily,
+		reportsource.Period{Start: "2026-07-22", End: "2026-07-22"},
+		[]reportsource.SourceInput{{SliceKey: "slice-1"}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if creator.calls != 1 || selection.ID != "selection-prepared" || selection.Status != "prepared" {
+		t.Fatalf("calls=%d selection=%#v", creator.calls, selection)
+	}
+}

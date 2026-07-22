@@ -9,6 +9,10 @@ const controls = readFileSync(
   resolve(root, "src/features/aidashboard/reports/components/ReportAIGenerateControls.tsx"),
   "utf8"
 );
+const runTracking = readFileSync(
+  resolve(root, "src/features/aidashboard/reports/reportAIRunTracking.ts"),
+  "utf8"
+);
 const client = readFileSync(resolve(root, "src/features/aidashboard/api/client.ts"), "utf8");
 const agentAssets = readFileSync(
   resolve(root, "src/features/aidashboard/ai-assets/utils/agentAssets.ts"),
@@ -70,6 +74,26 @@ assert.doesNotMatch(
   controls,
   /large_context_confirmed|confirmLargeReportContext|confirmation_required/,
   "large context must not add a second frontend-driven workflow"
+);
+assert.match(
+  controls,
+  /input_ref_json\?\.large_context_warning\s*!==\s*true/,
+  "large context warning must be read from the existing Run response"
+);
+assert.match(
+  controls,
+  /markReportAIRunLargeContextWarningShown/,
+  "large context warning must be marked once per Run"
+);
+assert.match(
+  controls,
+  /报告上下文较大，可能消耗较多 Token，请确认所选模型支持足够的上下文长度。/,
+  "large context warning must be advisory and must not expose Digest state"
+);
+assert.match(
+  runTracking,
+  /largeContextWarningShown/,
+  "large context warning marker must survive a page refresh"
 );
 assert.doesNotMatch(controls, /mock_large_report_context|largeReportContextMockEnabled/);
 assert.doesNotMatch(

@@ -314,29 +314,10 @@ func (p *Processor) markSuperseded(ctx context.Context, revisionID string) error
 }
 
 func (p *Processor) recordFailure(
-	ctx context.Context,
-	job sessionsync.ProcessingJob,
+	_ context.Context,
+	_ sessionsync.ProcessingJob,
 	cause error,
 ) error {
-	if !job.TargetDigestRevisionID.Valid || job.Attempts < job.MaxAttempts {
-		return cause
-	}
-	result, err := p.db.ExecContext(ctx, `
-		UPDATE session_slice_digest_revisions
-		SET status = 'failed', error_code = $2, failure_class = $3, failed_at = now()
-		WHERE id = $1 AND status IN ('pending', 'building')`,
-		job.TargetDigestRevisionID.String, FailureCode(cause), FailureClass(cause),
-	)
-	if err != nil {
-		return ErrDigestStatePersistence
-	}
-	changed, err := result.RowsAffected()
-	if err != nil || changed != 1 {
-		return ErrDigestStatePersistence
-	}
-	if wakeErr := p.wakeRevision(ctx, job.TargetDigestRevisionID.String); wakeErr != nil {
-		return ErrDigestStatePersistence
-	}
 	return cause
 }
 

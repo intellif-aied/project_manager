@@ -197,7 +197,12 @@ func (c *Coordinator) EnsureDigest(
 			return EnsureResult{}, err
 		}
 		if result.State == EnsureWaiting && strings.HasPrefix(result.FailureClass, "rebuild_") {
-			observability.ObserveDigestRebuild("scheduled", strings.TrimPrefix(result.FailureClass, "rebuild_"))
+			reason := strings.TrimPrefix(result.FailureClass, "rebuild_")
+			decision := "scheduled"
+			if reason == "active_job" {
+				decision = "rejected"
+			}
+			observability.ObserveDigestRebuild(decision, reason)
 			result.FailureClass = ""
 		}
 		return result, nil
@@ -244,6 +249,31 @@ func (c *Coordinator) scheduleControlledRebuild(
 			State: EnsureFailed, RevisionID: revisionID,
 			ErrorCode: "DIGEST_REBUILD_EXHAUSTED", FailureClass: failureClass.String,
 		}, nil
+	}
+	var activeJobID, activeUrgency string
+	err := tx.QueryRowContext(ctx, `
+		SELECT id::text, urgency
+		FROM session_processing_jobs
+		WHERE job_type = $1 AND target_digest_revision_id = $2
+			AND status IN ('pending', 'leased', 'retry_wait')
+		FOR UPDATE`, JobType, revisionID,
+	).Scan(&activeJobID, &activeUrgency)
+	if err == nil {
+		if urgency == UrgencyInteractive && activeUrgency == UrgencyBackground {
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE session_processing_jobs
+				SET urgency = 'interactive', urgency_raised_at = COALESCE(urgency_raised_at, now())
+				WHERE id = $1 AND urgency = 'background'`, activeJobID,
+			); err != nil {
+				return EnsureResult{}, err
+			}
+		}
+		return EnsureResult{
+			State: EnsureWaiting, RevisionID: revisionID, FailureClass: "rebuild_active_job",
+		}, nil
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return EnsureResult{}, err
 	}
 	var previousJobID sql.NullString
 	if err := tx.QueryRowContext(ctx, `
@@ -335,7 +365,7 @@ func insertDigestJob(
 	if urgency == UrgencyInteractive {
 		raisedAt = time.Now().UTC()
 	}
-	_, err := tx.ExecContext(ctx, `
+	result, err := tx.ExecContext(ctx, `
 		INSERT INTO session_processing_jobs (
 			job_type, session_id, generation_id, target_digest_revision_id,
 			content_epoch, payload, status, max_attempts, next_retry_at,
@@ -345,7 +375,17 @@ func insertDigestJob(
 		JobType, identity.SessionID, identity.GenerationID, revisionID,
 		identity.ContentEpoch, payloadOrObject(payload), status, retryAt, urgency, raisedAt,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if changed != 1 {
+		return ErrDigestStatePersistence
+	}
+	return nil
 }
 
 func (c *Coordinator) WakeRevision(ctx context.Context, revisionID string) (int64, error) {

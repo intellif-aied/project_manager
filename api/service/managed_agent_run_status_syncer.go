@@ -79,7 +79,10 @@ func (s *ManagedAgentRunStatusSyncer) RunOnce(ctx context.Context, now time.Time
 			       started_at
 			FROM ai_runs
 			WHERE status IN ('pending', 'running')
-			  AND (external_task_id IS NOT NULL OR external_session_id IS NOT NULL)
+			  AND (
+				external_task_id IS NOT NULL OR external_session_id IS NOT NULL
+				OR business_type <> 'report_agent_run' OR execution_stage IS NULL
+			  )
 			ORDER BY created_at ASC
 			LIMIT $1`, s.batchLimit)
 	if err != nil {
@@ -105,6 +108,18 @@ func (s *ManagedAgentRunStatusSyncer) refreshRun(ctx context.Context, run manage
 		externalRunID = run.ExternalSessionID
 	}
 	if externalRunID == "" {
+		if run.Status == "pending" && run.StartedAt.Valid &&
+			!now.Before(run.StartedAt.Time.Add(ManagedAgentPendingTimeout)) {
+			return s.updateRunStatus(
+				ctx, run, nil, "timeout",
+				"managed agent run pending submit timed out after 10m", now,
+			)
+		}
+		if run.Status == "running" && s.isTimedOut(run, now) {
+			return s.updateRunStatus(
+				ctx, run, nil, "timeout", "managed agent run timed out after 2h", now,
+			)
+		}
 		return nil
 	}
 	task, err := s.client.GetTaskStatus(ctx, externalRunID)

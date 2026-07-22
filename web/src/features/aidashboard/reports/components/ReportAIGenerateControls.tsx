@@ -43,6 +43,7 @@ import { HttpError } from "@/shared/request/types";
 import { businessDateKey } from "@/shared/utils/businessTime";
 import {
   clearReportAIRun,
+  markReportAIRunLargeContextWarningShown,
   readStoredReportAIRun,
   registerReportAIRun,
   reportRunStorageKey,
@@ -160,6 +161,7 @@ function ReportAIGenerateControlsState({
   storageKey,
   currentUserId
 }: ReportAIGenerateControlsStateProps) {
+  const { message } = App.useApp();
   const queryClient = useQueryClient();
   const [activeRunId, setActiveRunId] = useState<string | undefined>(
     () => readStoredReportAIRun(storageKey)?.runId
@@ -275,6 +277,15 @@ function ReportAIGenerateControlsState({
   useEffect(() => {
     onGeneratingChange?.(generating);
   }, [generating, onGeneratingChange]);
+
+  useEffect(() => {
+    const run = activeRunQuery.data;
+    if (run?.input_ref_json?.large_context_warning !== true) return;
+    if (!markReportAIRunLargeContextWarningShown(storageKey, run.id)) return;
+    message.warning(
+      "报告上下文较大，可能消耗较多 Token，请确认所选模型支持足够的上下文长度。"
+    );
+  }, [activeRunQuery.data, message, storageKey]);
 
   useEffect(() => {
     const run = activeRunQuery.data;

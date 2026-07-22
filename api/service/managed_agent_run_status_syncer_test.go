@@ -54,7 +54,7 @@ func (m outputRefWithoutResult) Match(value driver.Value) bool {
 	return true
 }
 
-const managedRunSyncQueryPattern = `(?s)SELECT id::text, COALESCE\(external_task_id, ''\), COALESCE\(external_session_id, ''\), status,.*business_type.*business_id::text.*output_ref_json.*FROM ai_runs.*external_task_id IS NOT NULL OR external_session_id IS NOT NULL`
+const managedRunSyncQueryPattern = `(?s)SELECT id::text, COALESCE\(external_task_id, ''\), COALESCE\(external_session_id, ''\), status,.*business_type.*business_id::text.*output_ref_json.*FROM ai_runs.*external_task_id IS NOT NULL OR external_session_id IS NOT NULL OR business_type <> 'report_agent_run' OR execution_stage IS NULL`
 
 func managedRunStatusRows() *sqlmock.Rows {
 	return sqlmock.NewRows([]string{
@@ -129,6 +129,39 @@ func TestManagedAgentRunStatusSyncerTimesOutOldPendingRun(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	syncer := NewManagedAgentRunStatusSyncer(db, NewManagedAgentClient(platform.URL, "platform-token"))
+	if err := syncer.RunOnce(t.Context(), now); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestManagedAgentRunStatusSyncerStillTimesOutLegacyPendingRunWithoutExternalID(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	now := time.Date(2026, 7, 22, 9, 0, 0, 0, time.UTC)
+	startedAt := now.Add(-ManagedAgentPendingTimeout - time.Second)
+	mock.ExpectQuery(managedRunSyncQueryPattern).
+		WithArgs(100).
+		WillReturnRows(managedRunStatusRows().
+			AddRow("legacy-pending", "", "", "pending", "manual_agent_run", "", []byte(`{}`), startedAt))
+	mock.ExpectExec("UPDATE ai_runs SET").
+		WithArgs(
+			"timeout",
+			outputRefWithoutResult{status: "timeout", errText: "pending submit timed out after 10m"},
+			nil,
+			"managed agent run pending submit timed out after 10m",
+			now,
+			"legacy-pending",
+		).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	syncer := NewManagedAgentRunStatusSyncer(db, NewManagedAgentClient("", ""))
 	if err := syncer.RunOnce(t.Context(), now); err != nil {
 		t.Fatal(err)
 	}

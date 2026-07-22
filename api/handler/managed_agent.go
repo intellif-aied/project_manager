@@ -2611,7 +2611,10 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 		"redaction_version":             sessiondigestv2.RedactionVersion,
 		"report_context_schema_version": reportcontext.SchemaVersion,
 	}
-	requestFingerprint := copyAnyMap(frozenScope)
+	dedupeScope := reportRunDedupeScope(
+		frozenScope, runtimeOverrides, sortedStringKeys(reportSlots),
+	)
+	requestFingerprint := copyAnyMap(dedupeScope)
 	requestFingerprint["selected_session_slice_keys"] = fingerprintSliceKeys
 	requestFingerprint["report_source_selection_id"] = nullableStringValue(reportSourceSelectionID)
 	executionInput := map[string]any{
@@ -2627,7 +2630,7 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 		RequireSources: needsReportSourceSelection,
 		BusinessType:   reportAgentRunBusinessType, AgentID: agentID, ModelID: modelID,
 		IdempotencyKey:          idempotencyKey,
-		RequestFingerprintInput: requestFingerprint, ActiveDedupeInput: frozenScope,
+		RequestFingerprintInput: requestFingerprint, ActiveDedupeInput: dedupeScope,
 		InputRef: inputRef, ExecutionInput: executionInput,
 	})
 	if errors.Is(err, reportsource.ErrIdempotencyKeyReused) {
@@ -2654,6 +2657,17 @@ func copyAnyMap(input map[string]any) map[string]any {
 		output[key] = value
 	}
 	return output
+}
+
+func reportRunDedupeScope(
+	base map[string]any,
+	credentialOverrides map[string]string,
+	reportMCPSlots []string,
+) map[string]any {
+	scope := copyAnyMap(base)
+	scope["credential_overrides"] = copyStringMap(credentialOverrides)
+	scope["report_mcp_slots"] = append([]string(nil), reportMCPSlots...)
+	return scope
 }
 
 func nullableStringValue(value string) any {

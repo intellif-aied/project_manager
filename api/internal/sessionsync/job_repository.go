@@ -29,6 +29,12 @@ type ProcessingJob struct {
 	EligibleAt              time.Time
 }
 
+type DigestFailureResult struct {
+	Changed    bool
+	Terminal   bool
+	RevisionID string
+}
+
 func (r *PostgresJobRepository) ClaimDigest(
 	ctx context.Context,
 	owner, urgency string,
@@ -46,18 +52,54 @@ func (r *PostgresJobRepository) ClaimDigest(
 		return nil, err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE session_processing_jobs
-		SET status = 'dead', lease_owner = NULL, lease_until = NULL,
-			completed_at = COALESCE(completed_at, $1),
-			last_error = COALESCE(last_error, 'lease expired after maximum attempts')
-		WHERE job_type = $2 AND urgency = $3 AND status = 'leased'
-			AND lease_until <= $1 AND attempts >= max_attempts`,
+	rows, err := tx.QueryContext(ctx, `
+		UPDATE session_processing_jobs j
+		SET status = CASE
+				WHEN d.status IN ('ready', 'superseded') THEN 'completed'
+				ELSE 'dead'
+			END,
+			lease_owner = NULL, lease_until = NULL,
+			completed_at = COALESCE(j.completed_at, $1),
+			last_error = CASE
+				WHEN d.status IN ('ready', 'superseded') THEN NULL
+				ELSE COALESCE(j.last_error, 'digest_v2_lease_expired')
+			END
+		FROM session_slice_digest_revisions d
+		WHERE d.id = j.target_digest_revision_id
+			AND j.job_type = $2 AND j.urgency = $3 AND j.status = 'leased'
+			AND j.lease_until <= $1 AND j.attempts >= j.max_attempts
+		RETURNING j.target_digest_revision_id::text, j.status`,
 		now, jobType, urgency,
-	); err != nil {
+	)
+	if err != nil {
 		return nil, err
 	}
-	rows, err := tx.QueryContext(ctx, `
+	expiredRevisionIDs := make([]string, 0)
+	for rows.Next() {
+		var revisionID sql.NullString
+		var jobStatus string
+		if err := rows.Scan(&revisionID, &jobStatus); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if revisionID.Valid && jobStatus == "dead" {
+			expiredRevisionIDs = append(expiredRevisionIDs, revisionID.String)
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for _, revisionID := range expiredRevisionIDs {
+		if err := failDigestRevisionAndWake(
+			ctx, tx, revisionID, "digest_v2_lease_expired", "retryable", now,
+		); err != nil {
+			return nil, err
+		}
+	}
+	rows, err = tx.QueryContext(ctx, `
 		WITH candidates AS MATERIALIZED (
 			SELECT id, created_at,
 				CASE
@@ -119,6 +161,110 @@ func (r *PostgresJobRepository) ClaimDigest(
 		return nil, err
 	}
 	return jobs, nil
+}
+
+func (r *PostgresJobRepository) FailDigest(
+	ctx context.Context,
+	jobID, owner string,
+	now time.Time,
+	retryAfter time.Duration,
+	preserveAttempt bool,
+	failureCode, failureClass string,
+) (DigestFailureResult, error) {
+	if jobID == "" || owner == "" || retryAfter < 0 || failureCode == "" ||
+		(failureClass != "retryable" && failureClass != "permanent") {
+		return DigestFailureResult{}, errors.New("complete Digest failure state is required")
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return DigestFailureResult{}, err
+	}
+	defer tx.Rollback()
+
+	var revisionID, status string
+	err = tx.QueryRowContext(ctx, `
+		UPDATE session_processing_jobs
+		SET status = CASE WHEN $2 OR attempts < max_attempts THEN 'retry_wait' ELSE 'dead' END,
+			attempts = CASE WHEN $2 THEN GREATEST(attempts - 1, 0) ELSE attempts END,
+			lease_owner = NULL, lease_until = NULL,
+			next_retry_at = CASE WHEN $2 OR attempts < max_attempts THEN $1::timestamptz ELSE NULL END,
+			completed_at = CASE WHEN NOT $2 AND attempts >= max_attempts THEN $7 ELSE NULL END,
+			last_error = $3
+		WHERE id = $4 AND status = 'leased' AND lease_owner = $5 AND lease_until > $7
+			AND job_type = $6 AND target_digest_revision_id IS NOT NULL
+		RETURNING target_digest_revision_id::text, status`,
+		now.Add(retryAfter), preserveAttempt, failureCode, jobID, owner,
+		JobBuildContentSliceDigestV2, now,
+	).Scan(&revisionID, &status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return DigestFailureResult{}, nil
+	}
+	if err != nil {
+		return DigestFailureResult{}, err
+	}
+	terminal := status == "dead"
+	if terminal {
+		if err := failDigestRevisionAndWake(
+			ctx, tx, revisionID, failureCode, failureClass, now,
+		); err != nil {
+			return DigestFailureResult{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return DigestFailureResult{}, err
+	}
+	return DigestFailureResult{Changed: true, Terminal: terminal, RevisionID: revisionID}, nil
+}
+
+func failDigestRevisionAndWake(
+	ctx context.Context,
+	tx *sql.Tx,
+	revisionID, failureCode, failureClass string,
+	failedAt time.Time,
+) error {
+	result, err := tx.ExecContext(ctx, `
+		UPDATE session_slice_digest_revisions
+		SET status = 'failed', error_code = $2, failure_class = $3, failed_at = $4
+		WHERE id = $1 AND status IN ('pending', 'building')`,
+		revisionID, failureCode, failureClass, failedAt,
+	)
+	if err != nil {
+		return err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if changed != 1 {
+		var status string
+		if err := tx.QueryRowContext(ctx, `
+			SELECT status FROM session_slice_digest_revisions WHERE id = $1`, revisionID,
+		).Scan(&status); err != nil {
+			return err
+		}
+		if status != "failed" {
+			return errors.New("Digest Revision terminal state was not persisted")
+		}
+	}
+	_, err = tx.ExecContext(ctx, `
+		UPDATE ai_runs r
+		SET next_attempt_at = $2
+		FROM report_source_selections sel
+		WHERE sel.attached_run_id = r.id
+			AND r.business_type = 'report_agent_run' AND r.status = 'pending'
+			AND r.execution_stage = 'waiting_digest'
+			AND EXISTS (
+				SELECT 1
+				FROM report_source_selection_items i
+				JOIN session_slice_digest_revisions d
+				  ON d.id = $1
+				 AND d.session_content_slice_id = i.session_content_slice_id
+				 AND d.generation_id = i.source_generation_id
+				 AND d.content_projection_revision_id = i.content_projection_revision_id
+				 AND d.content_epoch = i.content_epoch_snapshot
+				WHERE i.selection_id = sel.id
+			)`, revisionID, failedAt)
+	return err
 }
 
 type PostgresJobRepository struct {

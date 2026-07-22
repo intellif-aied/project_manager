@@ -1942,6 +1942,34 @@ func TestStartReportAgentRunRejectsMissingIdempotencyKey(t *testing.T) {
 	}
 }
 
+func TestReportRunDedupeScopeIncludesPrivateExecutionIdentity(t *testing.T) {
+	base := map[string]any{"agent_id": "agent-report", "model_id": "model-1"}
+	first := reportRunDedupeScope(
+		base,
+		map[string]string{"mcp-github": "credential-1"},
+		[]string{"aida-report-mcp"},
+	)
+	second := reportRunDedupeScope(
+		base,
+		map[string]string{"mcp-github": "credential-2"},
+		[]string{"aida-report-mcp"},
+	)
+	firstJSON, err := json.Marshal(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondJSON, err := json.Marshal(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(firstJSON, secondJSON) {
+		t.Fatalf("different credential bindings produced the same dedupe scope: %s", firstJSON)
+	}
+	if strings.Contains(string(firstJSON), "user-token") {
+		t.Fatalf("dedupe scope contains a bearer token: %s", firstJSON)
+	}
+}
+
 func expectReportRunSubmission(mock sqlmock.Sqlmock, userID, agentID, modelID, idempotencyKey, runID string) {
 	mock.ExpectQuery("(?s)SELECT r.id::text.*FROM ai_runs.*idempotency_key").
 		WithArgs(userID, reportAgentRunBusinessType, idempotencyKey).

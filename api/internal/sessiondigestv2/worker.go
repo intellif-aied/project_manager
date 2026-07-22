@@ -15,7 +15,7 @@ type JobQueue interface {
 	ClaimDigest(context.Context, string, string, time.Time, time.Duration, int, string) ([]sessionsync.ProcessingJob, error)
 	Heartbeat(context.Context, string, string, time.Time, time.Duration) (bool, error)
 	Complete(context.Context, string, string, time.Time) (bool, error)
-	Fail(context.Context, string, string, time.Time, time.Duration, bool, string) (bool, error)
+	FailDigest(context.Context, string, string, time.Time, time.Duration, bool, string, string) (sessionsync.DigestFailureResult, error)
 }
 
 type JobProcessor interface {
@@ -99,13 +99,13 @@ func (w *Worker) RunOnce(ctx context.Context, now time.Time) error {
 		observability.ObserveDigestBuild(
 			w.urgency, result, FailureClass(processErr), time.Since(startedAt),
 		)
-		ok, failErr := w.queue.Fail(
+		failureResult, failErr := w.queue.FailDigest(
 			ctx, job.ID, w.owner, finishedAt, digestRetryDelay(job.Attempts),
-			preserveAttempt, FailureCode(processErr),
+			preserveAttempt, FailureCode(processErr), FailureClass(processErr),
 		)
 		if failErr != nil && firstError == nil {
 			firstError = failErr
-		} else if !ok && firstError == nil {
+		} else if !failureResult.Changed && firstError == nil {
 			firstError = fmt.Errorf("digest v2 job %s lost its lease before failure update", job.ID)
 		}
 	}
