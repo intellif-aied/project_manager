@@ -23,7 +23,8 @@ func TestStoreContextAndTransitionCastsContextBytes(t *testing.T) {
 		t.Fatal(err)
 	}
 	run := Run{ID: "run-1", LeaseOwner: "worker-1", Stage: StageBuildingContext}
-	query := regexp.QuoteMeta("'report_context_bytes', $5::integer") +
+	query := regexp.QuoteMeta("'report_context_hash', $4::text") +
+		"(?s).*" + regexp.QuoteMeta("'report_context_bytes', $5::integer") +
 		"(?s).*" + regexp.QuoteMeta("CASE WHEN $5::integer > 1048576")
 	mock.ExpectExec(query).
 		WithArgs(run.ID, run.LeaseOwner, run.Stage, "context-hash", 6153).
