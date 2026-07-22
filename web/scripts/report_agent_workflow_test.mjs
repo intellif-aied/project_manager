@@ -57,8 +57,14 @@ assert.match(
 );
 assert.match(
   controls,
+  /uuidv4\(\)/,
+  "manual Report Run idempotency keys must use the UUID library"
+);
+assert.match(agentRunPage, /uuidv4\(\)/, "Agent Run report requests must use the UUID library");
+assert.doesNotMatch(
+  `${controls}\n${agentRunPage}`,
   /crypto\.randomUUID\(\)/,
-  "manual Report Run idempotency keys must be UUID v4 values"
+  "Report Run creation must not depend on secure-context browser UUID APIs"
 );
 assert.match(
   controls,

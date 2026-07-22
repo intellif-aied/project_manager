@@ -20,6 +20,7 @@ import dayjs from "dayjs";
 import type { Dayjs } from "dayjs";
 import { useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { v4 as uuidv4 } from "uuid";
 
 import {
   createManagedCredential,
@@ -1046,7 +1047,7 @@ function ReportAgentRunForm({ agent }: { agent: ManagedAgent }) {
   const runMutation = useMutation({
     mutationFn: () => {
       return startReportAgentRun(agent.agent_id, {
-        idempotency_key: crypto.randomUUID(),
+        idempotency_key: uuidv4(),
         report_type: reportType,
         period,
         target: { type: "self" },

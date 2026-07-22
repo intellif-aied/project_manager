@@ -21,6 +21,7 @@ import {
 } from "antd";
 import type { Dayjs } from "dayjs";
 import { useEffect, useMemo, useState } from "react";
+import { v4 as uuidv4 } from "uuid";
 
 import {
   createDefaultReportAgent,
@@ -211,7 +212,7 @@ function ReportAIGenerateControlsState({
           throw new Error("__AIDA_REPORT_AI_CANCELLED__");
         }
       }
-      const idempotencyKey = crypto.randomUUID();
+      const idempotencyKey = uuidv4();
       const payload: ManagedReportAgentRunPayload = {
         report_type: reportType,
         period,
