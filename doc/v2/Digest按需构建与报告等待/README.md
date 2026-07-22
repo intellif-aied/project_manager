@@ -1,153 +1,95 @@
 # Digest 按需构建与报告等待
 
-> 状态：方案已建立，尚未开发
+> 状态：P0 开发基线，尚未开发
 > 对应问题：[`AIDA-BUG-20260717-006`](../bug清单/AIDA-BUG-20260717-006-报告生成Digest未就绪时序竞态.md)
-> 设计基准：[`开发方案设计基准.md`](../开发方案设计基准.md)
+> 设计基准：[`开发方案设计基准.md`](../../开发方案设计基准.md)
 
-## 1. 本期目标
+## 1. 固定产品口径、需求编号与设计结论
 
-根治“Session 内容已经可选，但 Digest 尚未 ready，用户生成日报直接失败”的时序竞态，同时满足：
-
-- 上传后的正常链路异步预生成 Digest；
-- 用户生成报告时，缺失 Digest 可以按需创建或提权；
-- 同一个 Digest 只能有一个实际构建任务；
-- 报告等待 Digest 时不占用 Agent Worker；
-- 用户等待任务拥有独立预留的 Digest 构建容量；
-- 不弱化 Selection、Digest hash、MCP 和报告写回完整性门禁。
-
-## 2. 代码事实与差距
-
-| 需求/验收项 | 当前能力 | 代码证据 | 差距 | 最小改动 |
-| --- | --- | --- | --- | --- |
-| 上传后预生成 | Reconciler 每 5 秒扫描 fully indexed Slice | `api/internal/sessiondigestv2/reconciler.go` | 正常链路依赖周期扫描，突发上传会形成发现积压 | Content Projection fully indexed 后主动幂等入队；Reconciler 保留为漏单修复 |
-| 按需创建或提权 | Report Run 冻结时只检查 Digest，未 ready 返回 409 | `api/internal/reportsource/digest_v2.go` | 用户请求不能推动缺失任务 | 增加统一 `EnsureDigest`，对 missing 创建、对 pending/retry 提权 |
-| 单飞构建 | Revision 和 Job 已有唯一索引，Worker 有 lease | migration `018`、`020`，`sessiondigestv2/worker.go` | 创建逻辑只在 Reconciler，尚无统一入口和提权语义 | 复用唯一索引与 `ON CONFLICT`，不增加进程内锁 |
-| 等待不占 Agent Worker | 当前 Digest 未 ready 时不创建 `ai_run` | `reportsource.Service.CreateAttachedRun` | 用户只能收到 409，不能持久等待、自动继续 | 增加不可领取的 `preparing_sources` 状态；ready 后原子转 `pending` |
-| 按需预留容量 | 当前两个 Worker 从同一普通队列领取 | `api/main.go`、`sessiondigestv2/worker.go` | background 已占满时，提权任务仍需等待 | 为 interactive 保留至少一个独立领取槽位 |
-| 后台公平性 | Job Claim 按最老 ready 时间；Reconciler 按最新 Slice 扫描 | `sessionsync/job_repository.go`、`sessiondigestv2/reconciler.go` | 持续上传时旧 Slice 可能长期未被发现 | Reconciler 改为最老 eligible Slice 优先 |
-
-## 3. 目标流程
+用户点击“智能生成”后，仍按现有产品语义创建一次持久化 `ai_run` 并立即返回 `run_id`：
 
 ```text
-Upload Finalize
-  -> Content Projection fully indexed
-  -> EnsureDigest(slice, background)
-  -> 异步预生成
+用户点击智能生成
+  -> 校验请求并冻结本次生成配置
+  -> 新请求创建 Selection；重复请求返回已有 Run 和已有 Selection
+  -> 创建 ai_run(status=pending)
+  -> 返回 run_id
+  -> 前端继续展示现有“生成中”
 
-用户点击生成报告
-  -> 创建或复用唯一 Report Run（preparing_sources）
-  -> EnsureDigest(selection slices, interactive)
-     -> ready：直接使用
-     -> missing：创建 Revision + 高优先级 Job
-     -> pending/retry：提升为 interactive
-     -> building：等待现有 Job，不重复创建
-     -> failed/dead：进入明确失败，不生成残缺报告
-  -> 全部 ready
-  -> 原子冻结 Selection Digest
-  -> Run preparing_sources -> pending
-  -> Agent Worker 开始执行
+后端 Report Run Processor
+  -> 确保 Digest
+  -> 构建不可变 Report Context
+  -> 提交 Agent
+  -> Agent 读取 Context 并写回报告
+  -> ai_run succeeded / failed / timeout
 ```
 
-## 4. 最小架构
+Digest 是 `ai_run` 的内部执行依赖，不形成新的前端业务流程。页面关闭、网络断开或前端进程退出后，后端必须继续推进。
 
-### 4.1 Digest Coordinator
+本期需求使用以下稳定编号，后续架构、开发任务和测试均引用这些编号：
 
-新增一个内部深模块，统一隐藏创建、去重、提权和状态汇总：
+| 编号 | 产品规则/验收目标 |
+| --- | --- |
+| R1 | 一次用户提交在本地最多创建一个 Selection 和一个持久化 `ai_run`；HTTP 立即返回 `run_id` |
+| R2 | Digest missing/pending/building 时由后端创建、提权或复用 Job；ready/failed 后自动恢复或终结原 Run，不依赖前端在线 |
+| R3 | Run 创建时冻结报告范围、Session 来源身份、版本和运行配置；Digest ready 后一次性冻结 Digest 与完整 Report Context |
+| R4 | Selection attached 与 Digest frozen 分离；Context Builder、Report MCP 和写回必须经过统一冻结完整性门禁 |
+| R5 | Report Run Processor 使用阶段、lease、heartbeat、有界重试和 Reconciler 幂等推进；等待 Digest 时立即释放执行槽和 lease；其并发由独立的报告执行配置控制，不属于 Digest 容量 |
+| R6 | Digest 只有 background、interactive 两类 Worker，分别使用独立且无实现版本号的运行配置；首发均为 20；修改并发只需修改部署配置并重启进程，不得修改代码或重建镜像；5000 个 background Job 不得造成 interactive Claim 随队列长度线性退化 |
+| R7 | pre-Agent Run 不进入 Agent Status Sync；外部 Session ID 已落库时不重提，提交结果未知时保守失败 |
+| R8 | 用户只提交一次；Digest 和 Report Context 不设大小硬上限；完整 Context 超过 1 MiB 时只记录并展示一次非阻断提醒，Run 继续执行，不增加前端二次确认或重试 |
+| R9 | 保持 Selection、Digest hash、Context hash、MCP 写回门禁以及 Claude Code/Codex 上传和 Token 统计链路不变 |
+| R10 | 上线时必须具备 Digest 两类队列、Claim/构建、Run 各阶段、lease、唤醒、Reconciler 和受控重建的指标、告警与运行手册 |
+| R11 | 新生成的 Digest 使用 `session-digest/v2.10.0`：不按总字节数压缩或删除 Work Unit，不对进入 Digest schema 的文本做固定长度截断，不设置单条 Digest 或 Selection Digest 总大小硬上限；脱敏、schema 事件筛选、空白规范化和完全相同内容去重继续保留；历史 v2.9 Digest/Run 只读兼容 |
+
+本目录四份文档共同构成本期 P0 基线。关联 Bug 文档只保留事故事实和关闭状态，不再承载另一套实现流程。
+
+本期明确采用：
+
+- `ai_run` 是唯一的报告生成请求，不新增 `report_generation_requests`；
+- `ai_run.status` 保持现有 `pending/running/succeeded/failed/timeout`；
+- 在 `ai_run` 上增加最小内部阶段和执行 lease，不引入通用状态机；
+- Report Run Processor 直接从 `ai_runs` 领取待推进 Run，不把 Report Run 塞入要求 `session_id` 的 `session_processing_jobs`；
+- Digest 继续使用现有 `session_processing_jobs`、Digest Worker、lease 和重试；
+- Selection 只冻结来源选择，不表达等待、重试或执行状态；
+- 前端只创建 Run 和读取 Run 状态，不推动后端继续执行；
+- 不引入 River、Temporal、Celery 或其他队列/工作流框架。
+
+## 2. 已知风险与固定处理
+
+| 风险 | 用户实际会遇到什么 | 本期固定处理 | 是否阻塞本期开发/发布 |
+| --- | --- | --- | --- |
+| AIHub 不支持按 Run 幂等创建或查询 Session | CreateSession 请求超时后，Aida 无法确认 AIHub 是否已经创建 Session | Run 以 `EXTERNAL_SUBMISSION_STATE_UNKNOWN` 失败并停止自动重试；不得宣称外部 Session 绝对只创建一次 | 不阻塞开发；P04 必须通过后才可发布 |
+| AIHub 不支持指定 Agent Version | 用户点击后、真正提交前 Agent 配置被修改，本次执行可能使用修改后的配置 | 创建 Run 时冻结 Agent ID、模型和输入；`agent_version_id` 在 AIHub 返回实际任务信息后记录，不声称点击时已冻结 Agent Version | 不阻塞开发；发布说明必须写明 |
+| 完整 Context 晚于用户点击生成 | Digest 等待期间，需求、任务、下级报告或组织信息发生修改时，报告使用 Context 构建时读到的内容 | 点击时冻结 Session 来源；Digest ready 后一次性构建 Context，创建后不再重新取数 | 已确认的产品口径，不阻塞发布 |
+| Context 不设大小硬上限 | 极大 Context 会增加内存、数据库、Token 和 AIHub 压力；所选模型也可能因上下文长度不足而失败 | 超过 1 MiB 只做一次非阻断提醒；不截断、不阻止提交；AIHub 明确拒绝时 Run failed，用户改用大上下文模型或减少来源后重新生成 | 已确认的产品口径，不阻塞发布 |
+| Digest 从 v2.9 升级到 v2.10 | 部署后所有 active Slice 都缺少 v2.10 Revision，会形成一轮 background 重建；大 Digest 不再压缩，数据库、内存和模型输入都会增加 | 旧 v2.9 数据不删除、不重写；新 Run 只使用 v2.10；旧 Run 继续读取已冻结的 v2.9；interactive Worker 独享 20 个槽；P10 未通过不得发布 | P10 阻塞发布 |
+| 三类执行角色首发均为 20 | 最忙时可同时存在 20 个 Report Run Processor、20 个 background Digest Worker 和 20 个 interactive Digest Worker；内存正常不代表数据库和 AIHub 一定能承受 | 测试服用相同配置持续满载 10 分钟；P09 未通过不得发布，不得现场改验收标准 | P09 阻塞发布 |
+| Claude Code/Codex 上传和 Token 统计与 Digest 共用部分任务基础设施 | 错误修改通用 Claim 会破坏现有上传或统计 | 只新增 Digest 专用 Claim；P06 未通过不得发布 | P06 阻塞发布 |
+
+## 3. 文档结构与唯一职责
+
+| 文档 | 唯一职责 | 不承载 |
+| --- | --- | --- |
+| `README.md` | 固定产品口径、R1-R11、范围和阅读入口 | 状态机细节、代码任务、测试步骤 |
+| [`架构设计.md`](架构设计.md) | 目标流程、模块接口、状态、冻结、调度、lease、失败与外部边界 | 文件级开发排期、测试用例正文 |
+| [`开发方案.md`](开发方案.md) | 代码事实与差距、D01-D12、真实依赖和开发顺序 | 重复定义架构状态或验收标准 |
+| [`测试与验收.md`](测试与验收.md) | T01-T43、P01-P10 和 R-D-T-P 追踪 | 新增产品规则或实现方案 |
+
+阅读与执行顺序：
 
 ```text
-EnsureDigest(sliceIdentity, urgency) -> ready | waiting | failed
-EnsureSelection(selectionID, urgency) -> ready | waiting | failed
+README 固定需求
+  -> 架构设计确定状态和模块接口
+  -> 开发方案落实代码任务
+  -> 测试与验收判定是否完成
 ```
 
-调用方只有三个：
+变更规则：
 
-1. Content Projection 完成：`background`；
-2. 用户生成报告：`interactive`；
-3. Reconciler 漏单恢复：`background`。
-
-不得让三个调用方分别实现 Revision/Job 创建 SQL。
-
-### 4.2 单飞事实
-
-单飞依赖数据库现有唯一事实：
-
-- Digest Revision identity：Slice、Projection Revision、content epoch、Digest version、redaction version；
-- Digest Job identity：job type + target Digest Revision；
-- Worker 通过 lease 保证同一 Job 只有一个执行者。
-
-并发调用统一使用事务和 `INSERT ... ON CONFLICT`。不得新增仅单进程有效的 mutex 或内存 singleflight。
-
-### 4.3 Report Run 等待状态
-
-增加 `preparing_sources`：
-
-- 保存用户已经发起报告生成的事实和唯一 Run ID；
-- 不创建外部 Agent Task、Credential 或 Session；
-- `started_at` 在真正提交 Agent 时设置；
-- Agent Worker 和状态同步器不得领取该状态；
-- Digest 全部 ready 后，通过条件更新只允许一次转为 `pending`；
-- Digest failed、等待超时或取消分别进入明确终态；
-- 定时报告的“已有活动 Run”判断必须包含 `preparing_sources`，避免重复创建。
-
-### 4.4 两级队列与预留容量
-
-继续使用现有 `session_processing_jobs`，不新建第二套队列系统：
-
-- `interactive`：用户已有 Report Run 正在等待；
-- `background`：上传后预生成和 Reconciler 补漏。
-
-至少保留一个只领取 interactive Digest Job 的 Worker 槽位。普通 background Worker 不得占用该槽位。同一优先级内部按最老 ready 时间执行。
-
-提权只作用于尚未领取的 pending/retry Job；已经 building 的 Job 继续执行，新的请求等待同一结果，不能复制或抢占构建。
-
-## 5. 本期必须完成
-
-1. 抽取统一 Digest Coordinator；
-2. Projection ready 后主动幂等入队；
-3. 报告生成时按需 Ensure 并提权；
-4. 增加 `preparing_sources` 和原子状态迁移；
-5. 增加 interactive/background 优先级与预留 Worker；
-6. Reconciler 改为最老 Slice 优先；
-7. 前端展示“正在准备报告数据”，恢复同一 Run，不要求用户重复点击；
-8. 增加 missing、interactive waiting、最老等待时间、failed/dead 和吞吐观测。
-
-## 6. 必要失败边界
-
-- Digest failed/dead：Run 明确失败，不回退原始 Session 内容；
-- 等待超时：Run 标记 timeout，可使用相同 Selection 重新发起；
-- 页面关闭：Run 和等待状态保留，重新打开可恢复；
-- 重复点击：返回同一个活动 Run，不创建重复 Selection、Run 或 Digest Job；
-- Digest 版本变化：旧 Run 继续使用冻结版本；新 Run 使用当前版本；
-- background 持续积压：不得占满 interactive 预留容量；
-- interactive 持续高峰：需要用户级并发限制，且 background 不得永久饥饿。
-
-## 7. 明确不做
-
-- 不在 HTTP 请求内同步扫描 JSONL 构建 Digest；
-- 不建立新的独立队列服务；
-- 不生成空 Digest 或跳过缺失 Slice；
-- 不修改 Claude Code/Codex 上传和 Token 统计；
-- 不把候选列表的 content ready 偷换成 Digest ready；
-- 不把 Digest JSON 加入候选分页查询；
-- 不通过继续增加 ReconcileBatch 代替根治。
-
-## 8. 验收条件
-
-1. fresh Slice 立即生成报告时进入 `preparing_sources`，最终自动开始，只产生一个 Run；
-2. 多 Slice 周报部分 ready 时，只为缺失项创建或提权，全部 ready 后一次性冻结；
-3. 20～50 个并发请求同一 Digest 时，只有一个 Revision、一个 Job、一个实际构建；
-4. background Worker 满载时，interactive 仍能使用预留容量；
-5. 持续新上传时，旧 Slice 不会无限等待；
-6. 页面关闭、重开、重复点击、网络重试不产生重复 Run；
-7. Digest failed、dead、timeout 和取消均有明确状态与中文提示；
-8. 等待阶段没有创建外部 Agent Task，不占 Agent Worker；
-9. attached Digest、MCP 读取和 `write_report_result` hash/完整性门禁保持；
-10. 生产等价 `upload all` 突发下，报告生成不再返回 `REPORT_SOURCE_DIGEST_NOT_READY`，API/DB p95 无明显回归。
-
-## 9. 后续增强
-
-只记录当前已发现但不阻塞本期的增强：
-
-- 根据真实生产等待分布动态调整预留容量；
-- 管理端展示 Digest 队列分层和等待 Run；
-- 对长时间无人使用的预生成 Digest 做独立成本分析。
+- 产品口径变化先修改本文件的 R 编号，再同步检查架构、开发任务和测试追踪；
+- 架构规则只修改《架构设计》，开发方案只引用其章节；
+- 文件与任务范围只修改《开发方案》，测试文档只引用 D 编号；
+- 通过标准只修改《测试与验收》，其他文档不得复制另一套标准；
+- 任一 R 编号必须同时存在架构落点、D 任务和 T/P 验收；
+- 不新增第五份平行方案文档。

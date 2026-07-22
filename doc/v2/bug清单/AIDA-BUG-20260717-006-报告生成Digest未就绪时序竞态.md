@@ -95,35 +95,32 @@ Slice 已进入候选
 
 ```text
 用户点击 AI 生成
-  -> Selection 已准备，但 Digest 未全部 ready
-  -> UI 显示“正在准备报告数据”
-  -> 使用同一个 prepared Selection 有界等待/重试
-  -> 全部 Digest ready
-  -> 自动冻结来源并启动 Agent Run
+  -> 事务内创建 ai_run 并绑定 Selection
+  -> 立即返回 run_id
+  -> 前端继续展示现有生成中状态
+
+后端 Report Run Processor
+  -> 按需创建、提权或复用 Digest Job
+  -> waiting 时释放 Worker 和 Run lease
+  -> Digest ready 后冻结 Digest 与完整 Report Context
+  -> 提交 Agent 并写回报告
+  -> ai_run 进入 succeeded / failed / timeout
 ```
 
-用户不应看到内部英文错误，也不应手工反复点击“重新生成”。
+用户不应看到 Digest 内部状态，也不应通过前端重试启动接口推动流程。页面关闭、网络断开或前端进程退出后，后端必须继续推进同一个 Run。
 
-## 5. 后续优化建议
+## 5. 根治方案唯一入口
 
-### 5.1 最小交互修复
+本 Bug 的架构、开发任务、状态、失败处理、自动化测试和生产等价验收统一以 [《Digest 按需构建与报告等待》文档集](../Digest按需构建与报告等待/README.md) 为准，`README.md` 是文档集入口。
 
-1. 前端识别 `REPORT_SOURCE_DIGEST_NOT_READY`；
-2. 保留本次 `report_source_selection_id`，不能每次轮询重新创建 Selection；
-3. 进入“正在准备报告数据”阶段，按有界间隔重试同一个启动请求；
-4. Digest ready 后自动进入现有 Agent Run 流程；
-5. 超过等待上限时显示可理解的中文提示，并允许用户稍后使用同一来源重新发起；
-6. 页面关闭、网络重试和重复点击不能产生多个 Run。
+固定口径：
 
-### 5.2 后端时序优化
-
-优先评估在 Projection 覆盖 Slice `end_cursor` 后直接幂等入队 Digest Job，以 Reconciler 继续承担漏单恢复，而不是只靠每 5 秒、每轮一个 Slice 的扫描发现。
-
-如果调整 Reconcile Batch 或 Worker 并发，必须先验证数据库 CPU、I/O、连接池、Digest 构建内存和前台接口 p95，不能为了缩短等待抢占现有请求资源。
-
-### 5.3 可选的轻量状态表达
-
-候选列表的 `content ready` 与 `digest ready` 必须保持为两个状态。若未来需要提前展示“报告数据准备中”，只能使用轻量状态字段或状态接口，不能让候选分页 JOIN Digest JSON、事件表或现场生成 Digest。
+- `ai_run` 是唯一持久化生成请求；
+- Selection attached 不等于 Digest frozen；
+- Digest 等待、恢复和失败完全由后端推进；
+- 前端只创建 Run 和展示现有 Run 状态；
+- 不新增前端 preparing 流程、启动重试或第二次大上下文确认；大 Context 只做非阻断提醒，不设置大小硬上限；
+- 不引入独立报告请求表、通用状态机或新任务框架。
 
 ## 6. 明确禁止
 
@@ -136,16 +133,12 @@ Slice 已进入候选
 
 ## 7. 回归用例
 
-| 编号 | 场景 | 通过标准 |
-| --- | --- | --- |
-| DIGEST-RACE-001 | 新 Slice 刚 fully indexed 即点击 AI 生成 | 不展示英文错误，进入准备状态并自动继续 |
-| DIGEST-RACE-002 | 周报选择多个 Slice，部分 ready、部分 pending | 等待全部 ready 后只创建一个 Run |
-| DIGEST-RACE-003 | Digest Worker 正常延迟 | 使用同一个 Selection 重试，不创建垃圾 Selection/Run |
-| DIGEST-RACE-004 | Digest 最终 failed | 停止等待，显示明确中文失败，不自动降级 |
-| DIGEST-RACE-005 | 等待超时 | 给出可恢复提示，重复操作幂等 |
-| DIGEST-RACE-006 | 用户关闭并重新打开弹窗 | 状态可恢复，不重复启动 Run |
-| DIGEST-RACE-007 | 多用户同时上传和生成 | Digest 后台任务不造成前台 p95 明显回归 |
-| DIGEST-RACE-008 | Digest ready 后生成报告 | attached Digest、MCP 完整读取与写回门禁保持 |
+完整用例和通过标准见开发基线的 T01-T43 与 P01-P10。本事故关闭至少要求：
+
+- fresh Slice、部分 ready、多 Run 共用 Digest 和 5000 background 积压场景均由后端自动推进；
+- 页面关闭、服务重启、Digest 失败和等待超时均使原 Run 进入正确状态，不创建新 Run；
+- Selection attached/frozen、Generation、Digest hash、Context hash 和 MCP 门禁全部通过；
+- Claude Code、Codex 上传、Token 统计和其他 Processing Job Claim 回归通过。
 
 ## 8. 与 Session/Token 性能专项的关系
 
@@ -160,10 +153,11 @@ Slice 已进入候选
 只有满足以下条件才能关闭：
 
 1. fresh Slice 和多 Slice 周报不再向用户暴露 `REPORT_SOURCE_DIGEST_NOT_READY`；
-2. 同一操作只产生一个 Selection 和一个 Agent Run；
-3. Digest failed、超时、页面关闭和网络重试均有明确且可恢复的状态；
-4. attached Digest、MCP 与 `write_report_result` 完整性门禁没有弱化；
-5. 测试服和生产均完成真实上传后立即生成的回归，并观察 Digest 队列与前台 p95。
+2. 用户点击后立即获得唯一 `run_id`，不依赖前端继续请求；
+3. 同一操作最多产生一个 Selection 和一个 Run；同一 Digest 只实际构建一次；
+4. Digest failed、超时、页面关闭、服务重启和网络重试均由后端使原 Run 进入明确状态；
+5. attached/frozen、Generation、Digest hash、Context hash、MCP 与 `write_report_result` 门禁没有弱化；
+6. 测试服完成开发基线 T01-T43 与 P01-P10，发布后完成真实上传立即生成回归并保留容量、v2.10 升级与告警证据。
 
 ## 10. 2026-07-21 生产 P0 事故记录
 
@@ -255,9 +249,10 @@ Slice 已进入候选
 | --- | --- | --- |
 | Reconciler 公平性 | 未完成 | 持续新上传时旧 Slice 不会无限等待；排序或调度策略有自动化与生产容量验证 |
 | Projection ready 后主动入队 | 未完成 | 正常链路直接幂等创建 Digest Job，周期 Reconciler 仅承担漏单恢复 |
-| 前端等待交互 | 未完成 | 用户看到“正在准备报告数据”，同一 Selection 自动重试并只创建一个 Run |
-| 有界失败与恢复 | 未完成 | Digest failed、等待超时、页面关闭和网络重试均有明确且可恢复的状态 |
-| 生产监控告警 | 未完成 | 至少覆盖 missing 数、pending 数、最老等待时间、failed/dead、处理吞吐和前台 409 |
-| 并发与容量回归 | 未完成 | 使用生产等价 `upload all` 突发量验证 DB CPU、API 内存、接口 p95 和清空时间 |
+| 后端 Run 等待与恢复 | 未完成 | 创建 Run 后由 Worker、Digest 完成唤醒和 Reconciler 自动推进，不依赖前端在线 |
+| 有界失败与恢复 | 未完成 | Digest failed、等待超时、页面关闭、服务重启和网络重试均落到原 Run 的明确状态 |
+| 并发与容量回归 | 未完成 | 使用首发 20 个 Report Run Processor、20 个 background Digest Worker、20 个 interactive Digest Worker 满载 10 分钟并通过 P09 |
+| Digest v2.10 无大小裁剪升级 | 未完成 | 新 Digest 不按大小删减已进入 schema 的内容，旧 v2.9 Run 可继续读取，并通过 T42、T43、P10 |
+| 生产可观测性与告警 | 未完成 | P07 通过，Digest/Run 指标可抓取，固定告警规则已加载并完成触发/恢复验证 |
 
 在以上根治项完成并通过第 9 节关闭条件前，本事故状态保持“P0 已止血，未关闭”。
