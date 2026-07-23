@@ -162,6 +162,10 @@ Canonical documents:
 
 Business documents, validation cases, rollout notes, and deployment instructions are maintained under [doc/](/home/intellif/dev/project_manager/doc).
 
+### Independent feature development
+
+Before creating a branch or worktree for an independent feature or bug fix, read and follow `doc/Git-Worktree独立功能开发流程.md`. When `main` is occupied by other development, testing, or release preparation, perform the task in an isolated worktree. Do not reuse the shared runtime, database, ports, containers, or volumes, and do not merge, push, deploy, or clean up outside the authorization and checks defined by that document.
+
 ### Product and architecture document governance
 
 For product, architecture, development, and test documents, use the templates under `doc/v2/文档模板/` and follow this order:
