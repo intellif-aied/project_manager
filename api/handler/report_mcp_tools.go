@@ -196,30 +196,24 @@ func reportMCPTools() []map[string]any {
 		},
 		{
 			"name":        toolWriteReportResult,
-			"description": "Write Agent-generated report content. run_id must belong to the current user.",
+			"description": "Write Agent-generated report content. The server resolves report type, period, target, and frozen sources from the authenticated run_id.",
 			"inputSchema": map[string]any{
 				"type":     "object",
-				"required": []string{"report_type", "period", "run_id", "content"},
+				"required": []string{"run_id", "content"},
 				"properties": map[string]any{
-					"report_type": reportTypeSchema,
-					"period":      periodSchema,
-					"target":      targetSchema,
-					"run_id":      map[string]any{"type": "string"},
-					"content":     map[string]any{"type": "string"},
-					"summary":     map[string]any{"type": "string"},
+					"run_id":  map[string]any{"type": "string"},
+					"content": map[string]any{"type": "string"},
+					"summary": map[string]any{"type": "string"},
 				},
 			},
 		},
 		{
 			"name":        toolWriteReportFailure,
-			"description": "Record an Agent generation failure for a run. Does not modify report content.",
+			"description": "Record an Agent generation failure for the authenticated run_id. Does not modify report content.",
 			"inputSchema": map[string]any{
 				"type":     "object",
-				"required": []string{"report_type", "period", "run_id", "error_message"},
+				"required": []string{"run_id", "error_message"},
 				"properties": map[string]any{
-					"report_type":   reportTypeSchema,
-					"period":        periodSchema,
-					"target":        targetSchema,
 					"run_id":        map[string]any{"type": "string"},
 					"error_code":    map[string]any{"type": "string"},
 					"error_message": map[string]any{"type": "string"},

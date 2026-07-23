@@ -24,6 +24,35 @@ func newReportMCPRequest(method string, body any) *http.Request {
 	return req
 }
 
+func TestManagedReportWriteToolsRequireRunIDInsteadOfCopiedScope(t *testing.T) {
+	wantRequired := map[string][]string{
+		toolWriteReportResult:  {"run_id", "content"},
+		toolWriteReportFailure: {"run_id", "error_message"},
+	}
+	for _, tool := range reportMCPTools() {
+		name, _ := tool["name"].(string)
+		want, ok := wantRequired[name]
+		if !ok {
+			continue
+		}
+		schema := tool["inputSchema"].(map[string]any)
+		required := schema["required"].([]string)
+		if strings.Join(required, ",") != strings.Join(want, ",") {
+			t.Fatalf("%s required=%v, want %v", name, required, want)
+		}
+		properties := schema["properties"].(map[string]any)
+		for _, forbidden := range []string{"report_type", "period", "target", "report_source_selection_id"} {
+			if _, exists := properties[forbidden]; exists {
+				t.Fatalf("%s exposes legacy identity property %q", name, forbidden)
+			}
+		}
+		delete(wantRequired, name)
+	}
+	if len(wantRequired) != 0 {
+		t.Fatalf("missing write tools: %#v", wantRequired)
+	}
+}
+
 func reportMCPBody(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
 	t.Helper()
 	if rec.Code != http.StatusOK {
@@ -509,10 +538,14 @@ func TestReportMCPGetExistingReportForbiddenTargetForEmployee(t *testing.T) {
 	}
 }
 
-func TestReportMCPWriteReportResultUnsupportedType(t *testing.T) {
-	db, _, _ := sqlmock.New()
+func TestReportMCPWriteReportResultRejectsInvalidTypeStoredOnRun(t *testing.T) {
+	db, mock, _ := sqlmock.New()
 	defer db.Close()
 	h := NewReportMCPHandler(db)
+	mock.ExpectQuery("SELECT id::text, business_type").
+		WithArgs("r-1", "u-1").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "business_type", "agent_id", "model_id", "status", "execution_stage", "input_ref_json", "output_ref_json", "created_at"}).
+			AddRow("r-1", reportAgentRunBusinessType, "agent-1", "MiniMax-M2.5", "running", "agent_running", []byte(`{"report_type":"invalid_type"}`), []byte(`{}`), time.Now()))
 	req := newReportMCPRequest("tools/call", map[string]any{
 		"jsonrpc": "2.0",
 		"id":      1,
@@ -520,22 +553,20 @@ func TestReportMCPWriteReportResultUnsupportedType(t *testing.T) {
 		"params": map[string]any{
 			"name": "write_report_result",
 			"arguments": map[string]any{
-				"report_type": "invalid_type",
-				"period":      map[string]any{"date": "2026-06-29"},
-				"run_id":      "r-1",
-				"content":     "x",
+				"run_id":  "r-1",
+				"content": "x",
 			},
 		},
 	})
 	req = requestWithUser(req, &model.User{ID: "u-1", Role: "employee"})
 	rec := httptest.NewRecorder()
 	h.Serve(rec, req)
-	if code := reportMCPError(t, rec); code != "REPORT_TYPE_NOT_SUPPORTED" {
-		t.Fatalf("expected REPORT_TYPE_NOT_SUPPORTED, got %s body=%s", code, rec.Body.String())
+	if code := reportMCPError(t, rec); code != "RUN_NOT_WRITABLE" {
+		t.Fatalf("expected RUN_NOT_WRITABLE, got %s body=%s", code, rec.Body.String())
 	}
 }
 
-func TestReportMCPWriteReportResultAcceptsSkillAuthoredContent(t *testing.T) {
+func TestReportMCPWriteReportResultUsesStoredRunIdentity(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
@@ -574,11 +605,11 @@ func TestReportMCPWriteReportResultAcceptsSkillAuthoredContent(t *testing.T) {
 		"params": map[string]any{
 			"name": "write_report_result",
 			"arguments": map[string]any{
-				"report_type": "personal_weekly",
-				"period":      map[string]any{"week_start": "2026-06-08", "week_end": "2026-06-14"},
-				"target":      map[string]any{"type": "self"},
 				"run_id":      "run-1",
 				"content":     content,
+				"report_type": "department_daily",
+				"period":      map[string]any{"date": "2099-01-01"},
+				"target":      map[string]any{"type": "department", "department_id": "wrong-target"},
 			},
 		},
 	})
@@ -648,11 +679,8 @@ func TestReportMCPWriteDepartmentDailyPersistsFrozenTeamReportSources(t *testing
 		"params": map[string]any{
 			"name": "write_report_result",
 			"arguments": map[string]any{
-				"report_type": "department_daily",
-				"period":      map[string]any{"date": "2026-07-16"},
-				"target":      map[string]any{"type": "department", "department_id": "department-1"},
-				"run_id":      "run-1",
-				"content":     content,
+				"run_id":  "run-1",
+				"content": content,
 			},
 		},
 	})
@@ -691,6 +719,45 @@ func TestReportMCPWriteReportFailureMissingRunID(t *testing.T) {
 	h.Serve(rec, req)
 	if code := reportMCPError(t, rec); code != "INVALID_ARGUMENT" {
 		t.Fatalf("expected INVALID_ARGUMENT, got %s body=%s", code, rec.Body.String())
+	}
+}
+
+func TestReportMCPWriteReportFailureUsesRunIDOnly(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	h := NewReportMCPHandler(db)
+	mock.ExpectQuery("SELECT id::text, business_type").
+		WithArgs("run-failed", "u-1").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "business_type", "agent_id", "model_id", "status", "execution_stage", "input_ref_json", "output_ref_json", "created_at"}).
+			AddRow("run-failed", reportAgentRunBusinessType, "agent-1", "MiniMax-M2.5", "running", "agent_running", []byte(`{"report_type":"personal_daily","period":{"date":"2026-07-23"},"target":{"type":"self","user_id":"u-1"}}`), []byte(`{}`), time.Now()))
+	mock.ExpectExec("(?s)UPDATE ai_runs.*status = 'failed'").
+		WithArgs("AGENT_REPORTED_FAILURE: boom", "AGENT_REPORTED_FAILURE", "run-failed", "u-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	req := newReportMCPRequest("tools/call", map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "write_report_failure",
+			"arguments": map[string]any{
+				"run_id":        "run-failed",
+				"error_message": "boom",
+			},
+		},
+	})
+	req = requestWithUser(req, &model.User{ID: "u-1", Role: "employee"})
+	rec := httptest.NewRecorder()
+	h.Serve(rec, req)
+	payload := reportMCPTextPayload(t, reportMCPBody(t, rec))
+	if payload["run_id"] != "run-failed" || payload["status"] != "failed" {
+		t.Fatalf("unexpected failure payload: %#v", payload)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 

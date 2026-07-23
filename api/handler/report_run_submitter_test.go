@@ -1,9 +1,11 @@
 package handler
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -11,6 +13,80 @@ import (
 	"github.com/aidashboard/api/model"
 	"github.com/aidashboard/api/service"
 )
+
+func TestReportRunSubmitterOnlySendsRunIDAsReportIdentity(t *testing.T) {
+	database, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	var submitted service.CreateManagedSessionRequest
+	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/credential/list":
+			writeJSON(w, http.StatusOK, model.ListManagedCredentialsResponse{Credentials: []model.ManagedCredential{{
+				CredentialID: "credential-1",
+				Metadata:     map[string]string{"ai_run_id": "run-identity", "purpose": "report_mcp_auth"},
+			}}})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/session":
+			if err := json.NewDecoder(r.Body).Decode(&submitted); err != nil {
+				t.Fatal(err)
+			}
+			writeJSON(w, http.StatusOK, service.CreateManagedSessionResponse{SessionID: "session-1"})
+		default:
+			t.Fatalf("unexpected platform request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer platform.Close()
+
+	mock.ExpectQuery("(?s)SELECT id::text, username.*FROM users").
+		WithArgs("305").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "username", "nickname", "email", "name", "employee_id", "role"}).
+			AddRow("305", "tester", "", "", "Tester", "", "employee"))
+	mock.ExpectExec("(?s)UPDATE ai_runs.*external_submission_started_at").
+		WithArgs("run-identity", "host:report-run:identity").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	submitter, err := NewReportRunSubmitter(
+		database, service.NewManagedAgentClient(platform.URL, "platform-token"),
+		ManagedAgentDefaults{AIHubSecret: "secret", AIDAPublicBaseURL: "https://aida.example.com"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = submitter.Submit(t.Context(), reportrun.Run{
+		ID: "run-identity", UserID: "305", AgentID: "agent-1", ModelID: "model-1",
+		Stage: reportrun.StageSubmittingAgent, LeaseOwner: "host:report-run:identity",
+		InputRef: map[string]any{
+			"report_type": "team_daily", "period": map[string]any{"date": "2026-07-23"},
+			"target":                     map[string]any{"type": "team", "team_id": "team-1"},
+			"report_source_selection_id": "selection-1",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if submitted.StartPromptValues["run_id"] != "run-identity" {
+		t.Fatalf("run_id=%q", submitted.StartPromptValues["run_id"])
+	}
+	for _, key := range []string{
+		"report_type", "period_json", "calendar_context_json", "target_json",
+		"report_source_selection_id", "selected_session_slice_keys_json", "report_date", "week_start", "week_end",
+	} {
+		if _, ok := submitted.StartPromptValues[key]; ok {
+			t.Fatalf("legacy report identity %q leaked in start prompt values: %#v", key, submitted.StartPromptValues)
+		}
+	}
+	for _, forbidden := range []string{"report_type=", "period=", "calendar_context=", "target=", "report_source_selection_id="} {
+		if strings.Contains(submitted.Message, forbidden) {
+			t.Fatalf("legacy report identity %q leaked in message: %s", forbidden, submitted.Message)
+		}
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestReportRunSubmitterFailsUnknownExternalStateWithoutRetry(t *testing.T) {
 	database, mock, err := sqlmock.New()

@@ -1260,11 +1260,11 @@ func defaultReportAgentInstructions(credentialSlot string) string {
 		"AIDA_REPORT_DEPLOYMENT:{{aida_deployment}}",
 		"你是 Aida 报告执行 Agent。报告内容、结构和写作风格由当前绑定的 Skill 决定；本 Prompt 只定义 Aida 运行参数和 MCP 读写协议。",
 		"每次报告运行必须先实际调用 Skill 工具加载 aida-report，并观察到对应的 Skill tool_result 后再调用任何报告 MCP；输入文本中出现 /aida-report 不代表已经加载。完整加载当前绑定版本的 SKILL.md 只是运行协议，不在 Prompt 中增加报告内容规则。",
-		"运行参数由 Aida 后端注入，包含 run_id、report_type、period、calendar_context、target，个人报告还可能包含 report_source_selection_id。不要要求用户提供 session IDs、URLs、token 或 credential。",
+		"Aida 注入的唯一报告业务身份参数是 run_id。报告类型、周期、目标、Selection 和来源范围均由后端通过该 Run 解析；不要要求用户或模型复制这些参数，也不要要求用户提供 session IDs、URLs、token 或 credential。",
 		"Aida Report MCP 已通过 " + credentialSlot + " 凭据槽注入当前用户 Authorization。使用当前用户身份调用已绑定的 MCP tools，不要手工拼接管理员 token。",
 		"平台已为六类托管报告冻结 Report Context。必须只用 run_id 调用一次 get_report_context 获取完整上下文，不得再调用 get_sessions、get_tasks、get_requirements、get_daily_reports、get_weekly_reports 或 get_report_inventory 重新扫描数据。",
 		"报告目标和权限范围已经冻结在 Report Context 中；必须使用 Context 的 run.target 和 scope，不得越权扩大、缩小或替换目标范围。",
-		"依据当前绑定 Skill 生成报告后，必须调用 write_report_result，传入相同的 run_id、report_type、period、target 和 content；不要用最终对话回复代替 MCP 回写。生成失败时调用 write_report_failure。",
+		"依据当前绑定 Skill 生成报告后，必须调用 write_report_result，只传入 run_id、content 和可选 summary；不要用最终对话回复代替 MCP 回写。生成失败时调用 write_report_failure，只传入 run_id 和错误信息。",
 	}, "\n")
 }
 
@@ -1272,12 +1272,7 @@ func defaultReportAgentStartPromptTemplate(credentialSlot string) string {
 	return strings.Join([]string{
 		"/aida-report",
 		"协议前置条件：必须实际调用 Skill 工具并观察到 aida-report 的 tool_result；本行 /aida-report 文本本身不代表 Skill 已加载，加载完成前不得调用报告 MCP。",
-		"请根据以下业务参数生成 Aida 报告。",
-		"report_type={{ report_type }}",
-		"period={{ period_json }}",
-		"calendar_context={{ calendar_context_json }}",
-		"target={{ target_json }}",
-		"report_source_selection_id={{ report_source_selection_id }}",
+		"请根据本次 Run 已冻结的 Report Context 生成 Aida 报告。",
 		"平台已为本次托管报告准备完整 Report Context；只传 run_id 调用一次 get_report_context。不要再调用其他读取工具扫描 Session、报告、任务、需求或组织数据。",
 		"报告内容与格式遵循当前绑定 Skill，本启动提示不增加额外内容限制。",
 		"报告目标与权限范围以 Report Context 的 run.target 和 scope 为准，不得改用其他范围。",
@@ -1936,35 +1931,8 @@ func reportCalendarContextJSON(reportType, date, weekStart, weekEnd string) stri
 	return string(raw)
 }
 
-func reportAgentStartPromptValues(runID, reportType, date, weekStart, weekEnd string, target reportTarget, selectedSessionSliceKeys []string, reportSourceSelectionID, mcpURL string) map[string]string {
-	_ = mcpURL
-	if selectedSessionSliceKeys == nil {
-		selectedSessionSliceKeys = []string{}
-	}
-	periodJSON, _ := json.Marshal(reportPeriodInputRef(reportType, date, weekStart, weekEnd))
-	// The MCP resolves the concrete target from the authenticated run. Prompting
-	// with database IDs invites the model to copy them into user-facing reports.
-	targetJSON, _ := json.Marshal(reportTarget{Type: target.Type})
-	selectedKeysJSON, _ := json.Marshal(selectedSessionSliceKeys)
-	values := map[string]string{
-		"run_id":                           runID,
-		"report_type":                      reportType,
-		"period_json":                      string(periodJSON),
-		"calendar_context_json":            reportCalendarContextJSON(reportType, date, weekStart, weekEnd),
-		"target_json":                      string(targetJSON),
-		"selected_session_slice_keys_json": string(selectedKeysJSON),
-		"report_source_selection_id":       strings.TrimSpace(reportSourceSelectionID),
-	}
-	if date != "" {
-		values["report_date"] = date
-	}
-	if weekStart != "" {
-		values["week_start"] = weekStart
-	}
-	if weekEnd != "" {
-		values["week_end"] = weekEnd
-	}
-	return values
+func reportAgentStartPromptValues(runID string) map[string]string {
+	return map[string]string{"run_id": strings.TrimSpace(runID)}
 }
 
 func isReportSystemPromptKey(key, credentialSlot string) bool {
@@ -2002,12 +1970,7 @@ func buildReportRunMessage(startPromptValues map[string]string, message string, 
 	parts := []string{
 		"/aida-report",
 		"协议前置条件：必须实际调用 Skill 工具并观察到 aida-report 的 tool_result；本行 /aida-report 文本本身不代表 Skill 已加载，加载完成前不得调用报告 MCP。",
-		"请根据以下业务参数生成 Aida 报告。",
-		"report_type=" + strings.TrimSpace(startPromptValues["report_type"]),
-		"period=" + strings.TrimSpace(startPromptValues["period_json"]),
-		"calendar_context=" + strings.TrimSpace(startPromptValues["calendar_context_json"]),
-		"target=" + strings.TrimSpace(startPromptValues["target_json"]),
-		"report_source_selection_id=" + strings.TrimSpace(startPromptValues["report_source_selection_id"]),
+		"请根据本次 Run 已冻结的 Report Context 生成 Aida 报告。",
 		"run_id=" + strings.TrimSpace(startPromptValues["run_id"]),
 		"当前用户凭据已通过 " + strings.TrimSpace(credentialSlot) + " credential slot 注入；优先调用已绑定的 Aida Report MCP tools 获取上下文并回写生成结果，不要手工拼接 Authorization。",
 	}
@@ -2022,24 +1985,8 @@ func buildReportRunMessage(startPromptValues map[string]string, message string, 
 	return strings.Join(parts, "\n")
 }
 
-func fallbackReportRunMessage(reportType, date, weekStart, weekEnd string, target reportTarget) string {
-	parts := []string{
-		"请生成 Aida 报告。",
-		"report_type=" + strings.TrimSpace(reportType),
-	}
-	if date != "" {
-		parts = append(parts, "date="+date)
-	}
-	if weekStart != "" {
-		parts = append(parts, "week_start="+weekStart)
-	}
-	if weekEnd != "" {
-		parts = append(parts, "week_end="+weekEnd)
-	}
-	if target.Type != "" {
-		parts = append(parts, "target_type="+target.Type)
-	}
-	return strings.Join(parts, "\n")
+func fallbackReportRunMessage() string {
+	return "请根据本次 Run 已冻结的 Report Context 生成 Aida 报告。"
 }
 
 func (h *ManagedAgentHandler) StartAgentRun(w http.ResponseWriter, r *http.Request) {
@@ -2577,7 +2524,7 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 	}
 	userMessage := strings.TrimSpace(req.Message)
 	if userMessage == "" {
-		userMessage = fallbackReportRunMessage(req.ReportType, date, weekStart, weekEnd, target)
+		userMessage = fallbackReportRunMessage()
 	}
 	idempotencyKey := strings.TrimSpace(req.IdempotencyKey)
 	if !isValidUUIDV4(idempotencyKey) {
@@ -4087,7 +4034,7 @@ func (h *ManagedAgentHandler) executeReportAgentScheduleRun(ctx context.Context,
 	contextPeriod := reportContextPeriod(reportType, period.Date, period.WeekStart, period.WeekEnd)
 	userMessage := strings.TrimSpace(schedule.InitialMessage)
 	if userMessage == "" {
-		userMessage = fallbackReportRunMessage(reportType, period.Date, period.WeekStart, period.WeekEnd, target)
+		userMessage = fallbackReportRunMessage()
 	}
 	if h.reportSource == nil {
 		return nil, fmt.Errorf("report source service is not configured")

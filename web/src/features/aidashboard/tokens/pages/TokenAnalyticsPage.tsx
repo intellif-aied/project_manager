@@ -28,7 +28,7 @@ import {
 } from "antd";
 import type { EChartsOption } from "echarts";
 import dayjs from "dayjs";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
 import {
@@ -55,8 +55,10 @@ import { businessDateKey } from "@/shared/utils/businessTime";
 
 import {
   buildModelUsageTopN,
+  claimExpiredSnapshotRefresh,
   getTokenAnalyticsPreset,
-  getTokenAnalyticsPresetRange
+  getTokenAnalyticsPresetRange,
+  shouldRetryTokenAnalyticsSnapshotQuery
 } from "../tokenAnalyticsView";
 import type {
   TokenAnalyticsDatePreset,
@@ -252,6 +254,7 @@ export function TokenAnalyticsPage({
   );
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+  const claimedSnapshotRefreshesRef = useRef(new Set<string>());
   const today = businessDateKey();
   const datePreset = getTokenAnalyticsPreset(dateRange, today);
 
@@ -341,7 +344,8 @@ export function TokenAnalyticsPage({
     queryKey: ["token-analytics-trends", snapshotToken],
     queryFn: () =>
       fetchTokenAnalyticsTrends({ ...overviewFilters, query_snapshot_token: snapshotToken! }),
-    enabled: Boolean(snapshotToken)
+    enabled: Boolean(snapshotToken),
+    retry: shouldRetryTokenAnalyticsSnapshotQuery
   });
   const rankingsQuery = useQuery({
     queryKey: ["token-analytics-rankings", snapshotToken, rankingGroup],
@@ -351,7 +355,8 @@ export function TokenAnalyticsPage({
         query_snapshot_token: snapshotToken!,
         group_by: rankingGroup
       }),
-    enabled: Boolean(snapshotToken)
+    enabled: Boolean(snapshotToken),
+    retry: shouldRetryTokenAnalyticsSnapshotQuery
   });
   const modelRankingsQuery = useQuery({
     queryKey: ["token-analytics-model-rankings", snapshotToken],
@@ -361,7 +366,8 @@ export function TokenAnalyticsPage({
         query_snapshot_token: snapshotToken!,
         group_by: "model"
       }),
-    enabled: !isPersonalView && Boolean(snapshotToken)
+    enabled: !isPersonalView && Boolean(snapshotToken),
+    retry: shouldRetryTokenAnalyticsSnapshotQuery
   });
   const peopleRankingsQuery = useQuery({
     queryKey: ["token-analytics-people-rankings", snapshotToken],
@@ -371,7 +377,8 @@ export function TokenAnalyticsPage({
         query_snapshot_token: snapshotToken!,
         group_by: "user"
       }),
-    enabled: scope === "management" && !isMemberDetail && Boolean(snapshotToken)
+    enabled: scope === "management" && !isMemberDetail && Boolean(snapshotToken),
+    retry: shouldRetryTokenAnalyticsSnapshotQuery
   });
   const teamOptionsQuery = useQuery({
     queryKey: ["token-analytics-team-options", scopeSnapshotToken],
@@ -381,7 +388,8 @@ export function TokenAnalyticsPage({
         query_snapshot_token: scopeSnapshotToken!,
         group_by: "team"
       }),
-    enabled: canFilterByTeam && Boolean(scopeSnapshotToken)
+    enabled: canFilterByTeam && Boolean(scopeSnapshotToken),
+    retry: shouldRetryTokenAnalyticsSnapshotQuery
   });
   const overviewSessionsQuery = useQuery({
     queryKey: ["token-analytics-overview-sessions", snapshotToken],
@@ -392,7 +400,8 @@ export function TokenAnalyticsPage({
         page: "1",
         page_size: "1"
       }),
-    enabled: isPersonalView && Boolean(snapshotToken)
+    enabled: isPersonalView && Boolean(snapshotToken),
+    retry: shouldRetryTokenAnalyticsSnapshotQuery
   });
   const sessionsQuery = useQuery({
     queryKey: ["token-analytics-sessions", sessionSnapshotToken, page, pageSize],
@@ -404,8 +413,73 @@ export function TokenAnalyticsPage({
         page_size: String(pageSize)
       }),
     enabled: isPersonalView && Boolean(sessionSnapshotToken),
-    placeholderData: (previous) => previous
+    placeholderData: (previous) => previous,
+    retry: shouldRetryTokenAnalyticsSnapshotQuery
   });
+
+  const refreshExpiredSnapshot = useCallback(
+    (token: string | undefined, errors: unknown[], refetchSummary: () => Promise<unknown>) => {
+      const shouldRefresh = errors.some((error) =>
+        claimExpiredSnapshotRefresh(error, token, claimedSnapshotRefreshesRef.current)
+      );
+      if (shouldRefresh) void refetchSummary();
+    },
+    []
+  );
+
+  useEffect(() => {
+    refreshExpiredSnapshot(
+      snapshotToken,
+      [
+        trendsQuery.error,
+        rankingsQuery.error,
+        modelRankingsQuery.error,
+        peopleRankingsQuery.error,
+        overviewSessionsQuery.error,
+        hasSessionFilter ? undefined : sessionsQuery.error
+      ],
+      summaryQuery.refetch
+    );
+  }, [
+    hasSessionFilter,
+    modelRankingsQuery.error,
+    overviewSessionsQuery.error,
+    peopleRankingsQuery.error,
+    rankingsQuery.error,
+    refreshExpiredSnapshot,
+    sessionsQuery.error,
+    snapshotToken,
+    summaryQuery.refetch,
+    trendsQuery.error
+  ]);
+
+  useEffect(() => {
+    refreshExpiredSnapshot(
+      scopeSnapshotToken,
+      [teamOptionsQuery.error],
+      scopeSummaryQuery.refetch
+    );
+  }, [
+    refreshExpiredSnapshot,
+    scopeSnapshotToken,
+    scopeSummaryQuery.refetch,
+    teamOptionsQuery.error
+  ]);
+
+  useEffect(() => {
+    if (!hasSessionFilter) return;
+    refreshExpiredSnapshot(
+      sessionSnapshotToken,
+      [sessionsQuery.error],
+      sessionSummaryQuery.refetch
+    );
+  }, [
+    hasSessionFilter,
+    refreshExpiredSnapshot,
+    sessionSnapshotToken,
+    sessionSummaryQuery.refetch,
+    sessionsQuery.error
+  ]);
 
   const trendOption = useMemo<EChartsOption>(() => {
     const points = trendsQuery.data?.items ?? [];

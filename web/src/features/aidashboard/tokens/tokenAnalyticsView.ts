@@ -17,6 +17,33 @@ const PRESET_DAYS: Record<Exclude<TokenAnalyticsDatePreset, "custom">, number> =
   last7days: 7
 };
 
+function snapshotErrorCode(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  if (typeof record.code === "string") return record.code;
+  return snapshotErrorCode(record.payload) ?? snapshotErrorCode(record.data);
+}
+
+export function isQuerySnapshotExpired(error: unknown) {
+  return snapshotErrorCode(error) === "QUERY_SNAPSHOT_EXPIRED";
+}
+
+export function claimExpiredSnapshotRefresh(
+  error: unknown,
+  snapshotToken: string | undefined,
+  claimedTokens: Set<string>
+) {
+  if (!snapshotToken || !isQuerySnapshotExpired(error) || claimedTokens.has(snapshotToken)) {
+    return false;
+  }
+  claimedTokens.add(snapshotToken);
+  return true;
+}
+
+export function shouldRetryTokenAnalyticsSnapshotQuery(failureCount: number, error: unknown) {
+  return !isQuerySnapshotExpired(error) && failureCount < 3;
+}
+
 function shiftDateKey(value: string, days: number) {
   const date = new Date(`${value}T00:00:00Z`);
   date.setUTCDate(date.getUTCDate() + days);

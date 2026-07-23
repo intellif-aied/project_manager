@@ -13,6 +13,7 @@ import (
 
 	"github.com/aidashboard/api/internal/reportcontext"
 	"github.com/aidashboard/api/internal/reportsource"
+	"github.com/aidashboard/api/model"
 	"github.com/lib/pq"
 )
 
@@ -30,21 +31,15 @@ type reportAIRun struct {
 }
 
 type writeReportResultArgs struct {
-	ReportType string       `json:"report_type"`
-	Period     periodArgs   `json:"period"`
-	Target     reportTarget `json:"target,omitempty"`
-	RunID      string       `json:"run_id"`
-	Content    string       `json:"content"`
-	Summary    string       `json:"summary,omitempty"`
+	RunID   string `json:"run_id"`
+	Content string `json:"content"`
+	Summary string `json:"summary,omitempty"`
 }
 
 type writeReportFailureArgs struct {
-	ReportType   string       `json:"report_type"`
-	Period       periodArgs   `json:"period"`
-	Target       reportTarget `json:"target,omitempty"`
-	RunID        string       `json:"run_id"`
-	ErrorCode    string       `json:"error_code,omitempty"`
-	ErrorMessage string       `json:"error_message"`
+	RunID        string `json:"run_id"`
+	ErrorCode    string `json:"error_code,omitempty"`
+	ErrorMessage string `json:"error_message"`
 }
 
 type frozenReportSourceRefs struct {
@@ -64,18 +59,11 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 	if err := decodeArguments(rawArgs, &args); err != nil {
 		return nil, err
 	}
-	if err := validateReportType(args.ReportType); err != nil {
-		return nil, err
-	}
-	date, ws, we, err := resolveReportPeriod(args.ReportType, args.Period)
-	if err != nil {
-		return nil, err
-	}
-	target, err := resolveTarget(u, args.Target, args.ReportType, true)
-	if err != nil {
-		return nil, err
-	}
 	run, err := h.aiRunGuard(r, args.RunID, u.ID)
+	if err != nil {
+		return nil, err
+	}
+	reportType, date, ws, we, target, err := resolveRunReportIdentity(u, run)
 	if err != nil {
 		return nil, err
 	}
@@ -84,13 +72,13 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 		return nil, mcpErr("INVALID_ARGUMENT", "content is required")
 	}
 	resultHash := reportResultHash(content)
-	if idempotent, reportID, err := validateReportWriteAllowed(run, args.ReportType, date, ws, we, target, resultHash); err != nil {
+	if idempotent, reportID, err := validateReportWriteAllowed(run, reportType, date, ws, we, target, resultHash); err != nil {
 		return nil, err
 	} else if idempotent {
 		return mcpTextResult(map[string]any{
 			"status":          "saved",
 			"report_id":       reportID,
-			"report_type":     args.ReportType,
+			"report_type":     reportType,
 			"agent_run_id":    run.ID,
 			"already_written": true,
 		}), nil
@@ -110,12 +98,12 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 		if h.reportSource == nil {
 			return nil, mcpErr("REPORT_SOURCE_MISMATCH", "report source selection is unavailable")
 		}
-		period, periodErr := reportsource.ReportPeriod(args.ReportType, date, ws, we)
+		period, periodErr := reportsource.ReportPeriod(reportType, date, ws, we)
 		if periodErr != nil {
 			return nil, mcpErr("REPORT_SOURCE_MISMATCH", "report source period is invalid")
 		}
 		if err := h.reportSource.ValidateAttachedSelectionTx(
-			ctx, tx, u.ID, selectionID, run.ID, args.ReportType, period,
+			ctx, tx, u.ID, selectionID, run.ID, reportType, period,
 		); err != nil {
 			switch {
 			case errors.Is(err, reportsource.ErrSourceIncomplete):
@@ -145,7 +133,7 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 		return nil, mcpErr("RUN_NOT_WRITABLE", "run is not in the report writeback stage")
 	}
 
-	existing, err := selectReportForUpdate(ctx, tx, args.ReportType, date, ws, we, target)
+	existing, err := selectReportForUpdate(ctx, tx, reportType, date, ws, we, target)
 	if err != nil {
 		return nil, errMCPInternal
 	}
@@ -160,13 +148,13 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 		return nil, errReportEditConflict
 	}
 
-	reportID, err := upsertReportContent(ctx, tx, args.ReportType, date, ws, we, target, content, run, u.ID, sourceRefs)
+	reportID, err := upsertReportContent(ctx, tx, reportType, date, ws, we, target, content, run, u.ID, sourceRefs)
 	if err != nil {
 		return nil, errMCPInternal
 	}
 
 	outputPayload := map[string]any{
-		"report_type":        args.ReportType,
+		"report_type":        reportType,
 		"report_id":          reportID,
 		"date":               date,
 		"week_start":         ws,
@@ -202,7 +190,7 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 	return mcpTextResult(map[string]any{
 		"status":               "saved",
 		"report_id":            reportID,
-		"report_type":          args.ReportType,
+		"report_type":          reportType,
 		"agent_run_id":         run.ID,
 		"managed_agent_run_id": run.ID,
 		"product_status":       "ai_generated",
@@ -286,15 +274,6 @@ func (h *ReportMCPHandler) toolWriteReportFailure(r *http.Request, rawArgs json.
 	if err := decodeArguments(rawArgs, &args); err != nil {
 		return nil, err
 	}
-	if err := validateReportType(args.ReportType); err != nil {
-		return nil, err
-	}
-	if _, _, _, err := resolveReportPeriod(args.ReportType, args.Period); err != nil {
-		return nil, err
-	}
-	if _, err := resolveTarget(u, args.Target, args.ReportType, true); err != nil {
-		return nil, err
-	}
 	if strings.TrimSpace(args.RunID) == "" {
 		return nil, mcpErr("INVALID_ARGUMENT", "run_id is required")
 	}
@@ -339,6 +318,38 @@ func (h *ReportMCPHandler) toolWriteReportFailure(r *http.Request, rawArgs json.
 		"status":    "failed",
 		"retryable": true,
 	}), nil
+}
+
+func resolveRunReportIdentity(u *model.User, run *reportAIRun) (string, string, string, string, reportTarget, error) {
+	if run == nil {
+		return "", "", "", "", reportTarget{}, mcpErr("RUN_NOT_WRITABLE", "report run is unavailable")
+	}
+	reportType := strings.TrimSpace(stringFromAny(run.InputRef["report_type"]))
+	if err := validateReportType(reportType); err != nil {
+		return "", "", "", "", reportTarget{}, mcpErr("RUN_NOT_WRITABLE", "report run type is invalid")
+	}
+	var period periodArgs
+	periodRaw, err := json.Marshal(run.InputRef["period"])
+	if err != nil || json.Unmarshal(periodRaw, &period) != nil {
+		return "", "", "", "", reportTarget{}, mcpErr("RUN_NOT_WRITABLE", "report run period is invalid")
+	}
+	date, weekStart, weekEnd, err := resolveReportPeriod(reportType, period)
+	if err != nil {
+		return "", "", "", "", reportTarget{}, mcpErr("RUN_NOT_WRITABLE", "report run period is invalid")
+	}
+	var storedTarget reportTarget
+	targetRaw, err := json.Marshal(run.InputRef["target"])
+	if err != nil || json.Unmarshal(targetRaw, &storedTarget) != nil {
+		return "", "", "", "", reportTarget{}, mcpErr("RUN_NOT_WRITABLE", "report run target is invalid")
+	}
+	target, err := resolveTarget(u, storedTarget, reportType, true)
+	if err != nil {
+		return "", "", "", "", reportTarget{}, err
+	}
+	if err := validateRunReportIdentity(run.InputRef, reportType, date, weekStart, weekEnd, target); err != nil {
+		return "", "", "", "", reportTarget{}, err
+	}
+	return reportType, date, weekStart, weekEnd, target, nil
 }
 
 // aiRunGuard validates that runID belongs to the current user.
