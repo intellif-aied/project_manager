@@ -114,7 +114,7 @@ func TestReportContextBuildRequestMapsAllReportTargets(t *testing.T) {
 	}
 }
 
-func TestBuildReportRunMessageIncludesSystemParams(t *testing.T) {
+func TestBuildReportRunMessageUsesRunIDOnly(t *testing.T) {
 	message := buildReportRunMessage(map[string]string{
 		"report_type":                "personal_daily",
 		"period_json":                `{"date":"2026-07-01"}`,
@@ -130,20 +130,20 @@ func TestBuildReportRunMessageIncludesSystemParams(t *testing.T) {
 		"必须实际调用 Skill 工具",
 		"文本本身不代表 Skill 已加载",
 		"加载完成前不得调用报告 MCP",
-		"report_type=personal_daily",
-		`period={"date":"2026-07-01"}`,
-		`calendar_context={"type":"daily","day":{"date":"2026-07-01","weekday":"周三"}}`,
-		`target={"type":"self","user_id":"305"}`,
 		"run_id=run-report",
 		reportMCPCredentialSlot,
 		"请重点关注风险",
-		"report_source_selection_id=selection-report-source",
 		"只传 run_id 调用一次 get_report_context",
 		"不得再调用其他读取工具重新扫描 Session、下级报告、任务、需求或组织数据",
 		"报告内容与格式遵循当前绑定 Skill",
 		"最终动作：必须调用 write_report_result 回写",
 		"最终动作：必须调用 write_report_result 回写",
 	)
+	for _, forbidden := range []string{"report_type=", "period=", "calendar_context=", "target=", "report_source_selection_id="} {
+		if strings.Contains(message, forbidden) {
+			t.Fatalf("run message leaked legacy identity %q: %q", forbidden, message)
+		}
+	}
 	if !strings.HasPrefix(message, "/aida-report\n") {
 		t.Fatalf("run message must invoke the bound report skill first: %q", message)
 	}
@@ -228,8 +228,7 @@ func TestDefaultReportAgentInstructionsContainProtocolOnly(t *testing.T) {
 		"每次报告运行必须先实际调用 Skill 工具加载 aida-report",
 		"输入文本中出现 /aida-report 不代表已经加载",
 		"不在 Prompt 中增加报告内容规则",
-		"run_id、report_type、period、calendar_context、target",
-		"report_source_selection_id",
+		"唯一报告业务身份参数是 run_id",
 		"get_report_context",
 		"平台已为六类托管报告冻结 Report Context",
 		"不得再调用 get_sessions、get_tasks、get_requirements、get_daily_reports、get_weekly_reports 或 get_report_inventory",
@@ -238,6 +237,11 @@ func TestDefaultReportAgentInstructionsContainProtocolOnly(t *testing.T) {
 		"write_report_failure",
 		"不要用最终对话回复代替 MCP 回写",
 	)
+	for _, forbidden := range []string{"run_id、report_type", "report_source_selection_id", "相同的 run_id、report_type、period、target"} {
+		if strings.Contains(instructions, forbidden) {
+			t.Fatalf("agent instructions leaked legacy identity %q: %q", forbidden, instructions)
+		}
+	}
 	for _, forbidden := range []string{"PRD/ADR", "TDD", "Top-K", "REPORT_CONTENT_INVALID", "验证记录", "文件变更"} {
 		if strings.Contains(instructions, forbidden) {
 			t.Fatalf("agent protocol must not constrain report prose with %q: %q", forbidden, instructions)
@@ -1690,7 +1694,7 @@ func TestReportAgentRepairRequestDoesNotOverwriteCustomInstructions(t *testing.T
 func TestReportAgentRepairRequestRefreshesManagedStartPromptTemplate(t *testing.T) {
 	defaults := testManagedAgentDefaults()
 	h := NewManagedAgentHandlerWithDefaults(nil, nil, defaults)
-	oldTemplate := strings.Replace(defaultReportAgentStartPromptTemplate(reportMCPCredentialSlot), "calendar_context={{ calendar_context_json }}\n", "", 1)
+	oldTemplate := strings.Replace(defaultReportAgentStartPromptTemplate(reportMCPCredentialSlot), "run_id={{ run_id }}", "report_type={{ report_type }}\nperiod={{ period_json }}\ncalendar_context={{ calendar_context_json }}\ntarget={{ target_json }}\nreport_source_selection_id={{ report_source_selection_id }}\nrun_id={{ run_id }}", 1)
 	existing := model.ManagedAgent{
 		AgentID:             "agent-default",
 		Name:                defaultReportAgentName,
@@ -1711,8 +1715,8 @@ func TestReportAgentRepairRequestRefreshesManagedStartPromptTemplate(t *testing.
 	if repairReq.StartPromptTemplate != h.reportAgentStartPromptTemplate() {
 		t.Fatalf("start prompt = %q", repairReq.StartPromptTemplate)
 	}
-	if !strings.Contains(repairReq.StartPromptTemplate, "calendar_context={{ calendar_context_json }}") {
-		t.Fatalf("calendar context missing from refreshed start prompt: %q", repairReq.StartPromptTemplate)
+	if !strings.Contains(repairReq.StartPromptTemplate, "run_id={{ run_id }}") || strings.Contains(repairReq.StartPromptTemplate, "report_type={{ report_type }}") {
+		t.Fatalf("refreshed start prompt did not converge on run_id-only identity: %q", repairReq.StartPromptTemplate)
 	}
 }
 
@@ -1747,7 +1751,7 @@ func TestResolveAndRepairDefaultReportAgentRefreshesManagedPromptBeforeRun(t *te
 		Engine:              "claude-code",
 		DefaultModelID:      defaults.ModelID,
 		Instructions:        defaultReportAgentInstructions(reportMCPCredentialSlot),
-		StartPromptTemplate: strings.Replace(defaultReportAgentStartPromptTemplate(reportMCPCredentialSlot), "calendar_context={{ calendar_context_json }}\n", "", 1),
+		StartPromptTemplate: strings.Replace(defaultReportAgentStartPromptTemplate(reportMCPCredentialSlot), "run_id={{ run_id }}", "report_type={{ report_type }}\nperiod={{ period_json }}\ncalendar_context={{ calendar_context_json }}\ntarget={{ target_json }}\nreport_source_selection_id={{ report_source_selection_id }}\nrun_id={{ run_id }}", 1),
 		CredentialSlots:     []model.ManagedCredentialSlot{{Name: reportMCPCredentialSlot, Required: true}},
 		Skills:              []model.ManagedSkillRef{{Owner: "100866", Slug: service.ReportSkillSlug, Version: service.ReportSkillVersion}},
 		MCPServers:          []model.ManagedMCPServer{h.defaultReportMCPServer()},
@@ -1756,7 +1760,7 @@ func TestResolveAndRepairDefaultReportAgentRefreshesManagedPromptBeforeRun(t *te
 	if err := h.resolveAndRepairReportAgent(context.Background(), h.client, &agent, true); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(updated.StartPromptTemplate, "calendar_context={{ calendar_context_json }}") {
+	if !strings.Contains(updated.StartPromptTemplate, "run_id={{ run_id }}") || strings.Contains(updated.StartPromptTemplate, "target={{ target_json }}") {
 		t.Fatalf("updated start prompt = %q", updated.StartPromptTemplate)
 	}
 	if agent.StartPromptTemplate != h.reportAgentStartPromptTemplate() {
@@ -2201,13 +2205,11 @@ func TestDailyReportIntegrationReturnsMCPAndSkill(t *testing.T) {
 
 func TestReportPromptDoesNotExposeResolvedTargetIDs(t *testing.T) {
 	target := reportTarget{Type: "department", DepartmentID: "11111111-1111-4111-8111-111111111111"}
-	values := reportAgentStartPromptValues(
-		"run-1", reportTypeDepartmentDaily, "2026-07-15", "", "", target, nil, "selection-1", "",
-	)
-	if values["target_json"] != `{"type":"department"}` {
-		t.Fatalf("target_json=%q", values["target_json"])
+	values := reportAgentStartPromptValues("run-1")
+	if len(values) != 1 || values["run_id"] != "run-1" {
+		t.Fatalf("report start prompt values=%#v", values)
 	}
-	message := fallbackReportRunMessage(reportTypeDepartmentDaily, "2026-07-15", "", "", target)
+	message := fallbackReportRunMessage()
 	if strings.Contains(message, target.DepartmentID) || strings.Contains(message, "target_department_id") {
 		t.Fatalf("fallback message leaked target id: %s", message)
 	}

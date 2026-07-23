@@ -92,11 +92,11 @@ Generate one reader-facing Chinese work report from one frozen Report Context V1
 
 The bound MCP server is %s. Aida injects its credential through %s. Never ask for credentials, print them, build an Authorization header, or call the MCP URL manually.
 
-1. Read report_type, period, target, run_id, and calendar_context from the run input.
+1. Read run_id from the run input. Treat Report Context as the only source of report_type, period, target, Selection, and source scope.
 2. Call get_report_context exactly once with {"run_id": run_id}. Do not send other arguments and do not call get_sessions, get_tasks, get_requirements, get_daily_reports, get_weekly_reports, get_report_inventory, or get_existing_report.
 3. Parse content[0].text as JSON and require schema_version=report-context/v1. If unavailable, forbidden, or invalid, call write_report_failure. Do not rescan, change scope, or substitute data.
 4. Build the private fact ledger below, then draft non-empty Markdown.
-5. Call write_report_result with {"report_type": report_type, "period": period, "target": target, "run_id": run_id, "content": markdown, "summary": optional_summary}. On generation failure call write_report_failure with the same run identity and error_message.
+5. Call write_report_result with {"run_id": run_id, "content": markdown, "summary": optional_summary}. On generation failure call write_report_failure with {"run_id": run_id, "error_message": error_message}. Never copy report_type, period, target, or Selection into a write call.
 
 ## 2. Route sources
 

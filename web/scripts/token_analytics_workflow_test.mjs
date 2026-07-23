@@ -35,10 +35,45 @@ const transpiled = ts.transpileModule(viewSource, {
 const tempModuleUrl = `data:text/javascript;base64,${Buffer.from(transpiled).toString("base64")}`;
 const {
   buildModelUsageTopN,
+  claimExpiredSnapshotRefresh,
   getTokenAnalyticsPreset,
   getTokenAnalyticsPresetRange,
-  isTokenAnalyticsDateRange
+  isTokenAnalyticsDateRange,
+  shouldRetryTokenAnalyticsSnapshotQuery
 } = await import(tempModuleUrl);
+
+const claimedSnapshotRefreshes = new Set();
+const expiredSnapshotError = {
+  payload: {
+    code: "QUERY_SNAPSHOT_EXPIRED",
+    error: "query snapshot expired; restart from summary"
+  }
+};
+assert.equal(
+  claimExpiredSnapshotRefresh(expiredSnapshotError, "snapshot-old", claimedSnapshotRefreshes),
+  true,
+  "the first expired child request should claim one Summary refresh"
+);
+assert.equal(
+  claimExpiredSnapshotRefresh(expiredSnapshotError, "snapshot-old", claimedSnapshotRefreshes),
+  false,
+  "concurrent failures for the same snapshot must not trigger duplicate Summary refreshes"
+);
+assert.equal(
+  claimExpiredSnapshotRefresh(new Error("network error"), "snapshot-network", claimedSnapshotRefreshes),
+  false,
+  "unrelated request failures must not rebuild the query snapshot"
+);
+assert.equal(
+  shouldRetryTokenAnalyticsSnapshotQuery(0, expiredSnapshotError),
+  false,
+  "an expired token must not be retried against the same snapshot"
+);
+assert.equal(
+  shouldRetryTokenAnalyticsSnapshotQuery(0, new Error("network error")),
+  true,
+  "ordinary transient failures should keep the existing retry policy"
+);
 
 assert.deepEqual(
   getTokenAnalyticsPresetRange("today", "2026-07-20"),
@@ -92,6 +127,21 @@ assert.match(
   pageSource,
   /const \[dateRange, setDateRange\] = useState<TokenAnalyticsDateRange>/,
   "management drilldown should own the shared date range"
+);
+assert.match(
+  pageSource,
+  /refreshExpiredSnapshot\(\s*snapshotToken,[\s\S]*summaryQuery\.refetch/,
+  "overview child failures should rebuild the overview Summary snapshot"
+);
+assert.match(
+  pageSource,
+  /refreshExpiredSnapshot\(\s*scopeSnapshotToken,[\s\S]*scopeSummaryQuery\.refetch/,
+  "team option failures should rebuild the scope Summary snapshot"
+);
+assert.match(
+  pageSource,
+  /refreshExpiredSnapshot\(\s*sessionSnapshotToken,[\s\S]*sessionSummaryQuery\.refetch/,
+  "filtered Session failures should rebuild the filtered Summary snapshot"
 );
 assert.ok(
   (pageSource.match(/onDateRangeChange=\{setDateRange\}/g) ?? []).length === 1,

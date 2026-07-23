@@ -50,20 +50,7 @@ func (s *ReportRunSubmitter) Submit(
 		return reportrun.SubmissionResult{}, prepareSubmissionError(err)
 	}
 
-	reportType := runString(run.InputRef, "report_type")
-	periodMap := runMap(run.InputRef, "period")
-	targetMap := runMap(run.InputRef, "target")
-	target := reportTarget{
-		Type: runString(targetMap, "type"), UserID: runString(targetMap, "user_id"),
-		TeamID: runString(targetMap, "team_id"), DepartmentID: runString(targetMap, "department_id"),
-	}
-	date := runString(periodMap, "date")
-	weekStart := runString(periodMap, "week_start")
-	weekEnd := runString(periodMap, "week_end")
-	selectionID := runString(run.InputRef, "report_source_selection_id")
-	systemValues := reportAgentStartPromptValues(
-		run.ID, reportType, date, weekStart, weekEnd, target, nil, selectionID, s.reportMCPURL(),
-	)
+	systemValues := reportAgentStartPromptValues(run.ID)
 	userValues := runStringMap(run.ExecutionInput, "start_prompt_values")
 	message := runString(run.ExecutionInput, "initial_message")
 	startValues, reserved, ok := mergeReportStartPromptValues(
@@ -184,22 +171,10 @@ func (s *ReportRunSubmitter) findOrCreateCredential(
 	return created.CredentialID, nil
 }
 
-func (s *ReportRunSubmitter) reportMCPURL() string {
-	if value := strings.TrimSpace(s.defaults.ReportMCPURL); value != "" {
-		return value
-	}
-	return strings.TrimRight(s.defaults.AIDAPublicBaseURL, "/") + "/api/v1/mcp/reports"
-}
-
 func prepareSubmissionError(err error) error {
 	return &reportrun.SubmissionError{
 		Code: "EXTERNAL_SUBMISSION_PREPARE_FAILED", Message: err.Error(), Retryable: true,
 	}
-}
-
-func runMap(values map[string]any, key string) map[string]any {
-	result, _ := values[key].(map[string]any)
-	return result
 }
 
 func runString(values map[string]any, key string) string {

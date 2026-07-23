@@ -33,7 +33,7 @@ func TestReportSkillMarkdownUsesDeterministicDisplayContext(t *testing.T) {
 		"Output the report, not an audit trail",
 		"Every claimed result has work evidence",
 		"Every future action is explicitly planned in the source",
-		"write_report_result with {\"report_type\": report_type",
+		"write_report_result with {\"run_id\": run_id",
 	}
 	for _, expected := range required {
 		if !strings.Contains(markdown, expected) {
@@ -43,6 +43,11 @@ func TestReportSkillMarkdownUsesDeterministicDisplayContext(t *testing.T) {
 	for _, legacyRead := range []string{"get_daily_reports: {", "get_weekly_reports: {", "get_report_inventory for daily", "legacy read routing", "write that the report is based on saved reports", "list them as no activity/no saved report"} {
 		if strings.Contains(markdown, legacyRead) {
 			t.Fatalf("managed Report Context skill must not retain legacy read routing %q", legacyRead)
+		}
+	}
+	for _, legacyIdentity := range []string{"Read report_type, period, target", "\"report_type\": report_type", "\"period\": period", "\"target\": target"} {
+		if strings.Contains(markdown, legacyIdentity) {
+			t.Fatalf("report skill retains legacy run identity %q", legacyIdentity)
 		}
 	}
 	if len(markdown) > 15000 || len(strings.Split(markdown, "\n")) > 120 {
