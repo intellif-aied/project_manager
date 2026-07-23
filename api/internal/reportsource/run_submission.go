@@ -17,6 +17,15 @@ import (
 
 const reportDigestWaitTimeout = 60 * time.Minute
 
+// Serializable report submission can conflict when the same prepared
+// selection is attached by concurrent requests. Retry the whole transaction
+// so the loser can observe and replay the winner through idempotency.
+var reportRunSerializationRetryDelays = []time.Duration{
+	50 * time.Millisecond,
+	150 * time.Millisecond,
+	300 * time.Millisecond,
+}
+
 var (
 	ErrInvalidIdempotencyKey = errors.New("invalid report run idempotency key")
 	ErrIdempotencyKeyReused  = errors.New("report run idempotency key was reused")
@@ -63,6 +72,25 @@ type sourceIdentity struct {
 }
 
 func (s *Service) CreateReportRun(
+	ctx context.Context,
+	request RunSubmissionRequest,
+) (RunSubmissionResult, error) {
+	for attempt := 0; ; attempt++ {
+		result, err := s.createReportRunOnce(ctx, request)
+		if err == nil || !isSerializationConflict(err) || attempt >= len(reportRunSerializationRetryDelays) {
+			return result, err
+		}
+		timer := time.NewTimer(reportRunSerializationRetryDelays[attempt])
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return RunSubmissionResult{}, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func (s *Service) createReportRunOnce(
 	ctx context.Context,
 	request RunSubmissionRequest,
 ) (RunSubmissionResult, error) {
@@ -364,4 +392,9 @@ func (s *Service) findActiveDedupeRun(
 func isUniqueViolation(err error) bool {
 	var pqErr *pq.Error
 	return errors.As(err, &pqErr) && pqErr.Code == "23505"
+}
+
+func isSerializationConflict(err error) bool {
+	var pqErr *pq.Error
+	return errors.As(err, &pqErr) && pqErr.Code == "40001"
 }
