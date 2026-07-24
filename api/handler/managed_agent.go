@@ -2480,10 +2480,9 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 	needsReportSourceSelection := req.ReportType == reportTypePersonalDaily ||
 		(req.ReportType == reportTypePersonalWeekly && (reportSourceSelectionID != "" || len(selectedSessionSliceKeys) > 0))
 
+	// An omitted per-run model_id must remain omitted. The managed platform then
+	// resolves the Agent's saved default model together with its provider binding.
 	modelID := strings.TrimSpace(req.ModelID)
-	if modelID == "" {
-		modelID = strings.TrimSpace(agent.DefaultModelID)
-	}
 	inputRef := map[string]any{
 		"trigger_source":  "manual",
 		"report_type":     req.ReportType,

@@ -162,6 +162,12 @@ Canonical documents:
 
 Business documents, validation cases, rollout notes, and deployment instructions are maintained under [doc/](/home/intellif/dev/project_manager/doc).
 
+### Documentation writing boundary
+
+When the user asks to add or update a document, write only the requested facts, scope, steps, evidence, and results. Do not put the conversation process, debate, emotional context, repeated explanations, or extra persuasive wording into the document. If the user says an item was omitted, add that item to the existing checklist or document in the appropriate place; do not expand the document with new emphasis, slogans, or unrelated policy language.
+
+For documents under `doc/发布事项/`, follow `doc/发布事项格式基准.md` exactly. Do not invent a different release-document structure.
+
 ### Independent feature development
 
 Before creating a branch or worktree for an independent feature or bug fix, read and follow `doc/Git-Worktree独立功能开发流程.md`. When `main` is occupied by other development, testing, or release preparation, perform the task in an isolated worktree. Do not reuse the shared runtime, database, ports, containers, or volumes, and do not merge, push, deploy, or clean up outside the authorization and checks defined by that document.
