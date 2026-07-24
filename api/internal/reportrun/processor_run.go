@@ -271,6 +271,7 @@ func contextBuildRequest(run Run, selectionID string) (reportcontext.BuildReques
 		Period: period, Timezone: timezone,
 		TriggerSource: stringValue(run.InputRef, "trigger_source"), ModelID: run.ModelID,
 		Target: target, SourceSelectionID: selectionID,
+		Representation: stringValue(run.ExecutionInput, "report_context_representation"),
 	}
 	if reportType == "" || period.Start == "" || period.End == "" {
 		return reportcontext.BuildRequest{}, errors.New("frozen report run input is incomplete")

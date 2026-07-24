@@ -15,6 +15,7 @@ const (
 	ReportTypeTeamWeekly       = "team_weekly"
 	ReportTypeDepartmentDaily  = "department_daily"
 	ReportTypeDepartmentWeekly = "department_weekly"
+	RepresentationWorkEvidence = "work_evidence"
 )
 
 type Target struct {
@@ -34,12 +35,16 @@ type BuildRequest struct {
 	ModelID           string
 	Target            Target
 	SourceSelectionID string
+	Representation    string
 }
 
 func (r BuildRequest) validate() error {
 	if strings.TrimSpace(r.UserID) == "" || strings.TrimSpace(r.RunID) == "" ||
 		strings.TrimSpace(r.ReportType) == "" || strings.TrimSpace(r.Period.Start) == "" ||
 		strings.TrimSpace(r.Period.End) == "" || strings.TrimSpace(r.Timezone) == "" {
+		return ErrInvalidRequest
+	}
+	if r.Representation != "" && r.Representation != RepresentationWorkEvidence {
 		return ErrInvalidRequest
 	}
 	switch r.ReportType {
@@ -189,18 +194,138 @@ type Sources struct {
 	SessionDigest json.RawMessage `json:"session_digest,omitempty"`
 }
 
+// WorkEvidence is the deterministic Agent-facing projection of one frozen
+// Session Digest. Repeated text is interned, while every report-facing result
+// Work Unit and its evidence references remain explicit.
+type WorkEvidence struct {
+	SelectionID      string               `json:"selection_id"`
+	Mode             string               `json:"mode"`
+	Timezone         string               `json:"timezone,omitempty"`
+	DigestVersion    string               `json:"digest_version"`
+	RedactionVersion string               `json:"redaction_version"`
+	ContentSnapshot  string               `json:"content_snapshot_at"`
+	Completeness     string               `json:"completeness"`
+	Coverage         WorkEvidenceCoverage `json:"coverage"`
+	Period           WorkEvidencePeriod   `json:"period"`
+	Categories       []WorkEvidenceLookup `json:"categories"`
+	Statuses         []WorkEvidenceLookup `json:"statuses"`
+	EvidenceGrades   []WorkEvidenceLookup `json:"evidence_grades"`
+	ResultSources    []WorkEvidenceLookup `json:"result_sources"`
+	ResultTexts      []WorkEvidenceLookup `json:"result_texts"`
+	EvidenceByGoal   []ExactGoalEvidence  `json:"evidence_by_exact_goal"`
+	Sources          []WorkEvidenceSource `json:"sources"`
+}
+
+type WorkEvidenceCoverage struct {
+	Complete             bool  `json:"complete"`
+	SourceItemCount      int   `json:"source_item_count"`
+	RepresentedItemCount int   `json:"represented_item_count"`
+	SourceEventCount     int64 `json:"source_event_count"`
+	IncludedEventCount   int64 `json:"included_event_count"`
+	OmittedEventCount    int64 `json:"omitted_event_count"`
+	TruncatedItemCount   int   `json:"truncated_item_count"`
+}
+
+type WorkEvidencePeriod struct {
+	StartDate           string            `json:"start_date"`
+	EndDate             string            `json:"end_date"`
+	WorkUnitCount       int               `json:"work_unit_count,omitempty"`
+	ResultWorkUnitCount int               `json:"result_work_unit_count,omitempty"`
+	PrimaryResultCount  int               `json:"primary_result_count,omitempty"`
+	VerifiedResultCount int               `json:"verified_result_count,omitempty"`
+	ChangeCount         int               `json:"change_count,omitempty"`
+	ValidationCount     int               `json:"validation_count,omitempty"`
+	UnresolvedCount     int               `json:"unresolved_count,omitempty"`
+	Days                []WorkEvidenceDay `json:"days"`
+}
+
+type WorkEvidenceDay struct {
+	Date                 string `json:"date"`
+	WorkUnitCount        int    `json:"work_unit_count,omitempty"`
+	ResultWorkUnitCount  int    `json:"result_work_unit_count,omitempty"`
+	PrimaryResultCount   int    `json:"primary_result_count,omitempty"`
+	VerifiedResultCount  int    `json:"verified_result_count,omitempty"`
+	ChangeCount          int    `json:"change_count,omitempty"`
+	ValidationCount      int    `json:"validation_count,omitempty"`
+	UnresolvedCount      int    `json:"unresolved_count,omitempty"`
+	SourceFactCount      int    `json:"source_fact_count"`
+	RepresentedFactCount int    `json:"represented_fact_count"`
+	Complete             bool   `json:"complete"`
+	SourceTextCompacted  bool   `json:"source_text_compacted"`
+	SourceFactsTruncated bool   `json:"source_facts_truncated"`
+}
+
+type WorkEvidenceLookup struct {
+	ID    int
+	Value string
+}
+
+type WorkEvidenceResult struct {
+	TextRef      int
+	SourceRef    int
+	EvidenceRefs []string
+}
+
+type WorkEvidenceFact struct {
+	WorkUnitRef      string
+	Sequence         int
+	DateRef          int
+	ActivityEndAt    string
+	CategoryRef      int
+	StatusRef        int
+	EvidenceGradeRef int
+	Results          []WorkEvidenceResult
+	Unresolved       []WorkEvidenceUnresolved
+}
+
+type WorkEvidenceUnresolved struct {
+	Text        string
+	EvidenceRef string
+}
+
+type ExactGoalEvidence struct {
+	Goal  string             `json:"goal"`
+	Facts []WorkEvidenceFact `json:"facts"`
+}
+
+type WorkEvidenceSource struct {
+	SourceItemRef           string
+	SessionRef              string
+	AgentType               string
+	ActivityStartAt         string
+	ActivityEndAt           string
+	DigestSHA256            string
+	SourceEventCount        int64
+	IncludedEventCount      int64
+	OmittedEventCount       int64
+	Truncated               bool
+	SourceWorkUnitCount     int
+	DetailedWorkUnitCount   int
+	AggregatedWorkUnitCount int
+}
+
+// PresentationProfile is the immutable, report-type-specific presentation
+// contract supplied to the Report Agent. It changes organization only; it
+// never changes the frozen evidence set.
+type PresentationProfile struct {
+	SummaryFocus    string `json:"summary_focus"`
+	ContentGrouping string `json:"content_grouping"`
+}
+
 type Payload struct {
-	SchemaVersion string          `json:"schema_version"`
-	Run           Run             `json:"run"`
-	Scope         Scope           `json:"scope"`
-	Coverage      []CoverageItem  `json:"coverage"`
-	SourceReports []SourceReport  `json:"source_reports"`
-	Requirements  []Requirement   `json:"requirements"`
-	Tasks         []Task          `json:"tasks"`
-	Sessions      []SessionSource `json:"sessions"`
-	SourceIssues  []SourceIssue   `json:"source_issues"`
-	SourceState   SourceState     `json:"source_state"`
-	Sources       Sources         `json:"sources"`
+	SchemaVersion       string               `json:"schema_version"`
+	Run                 Run                  `json:"run"`
+	Scope               Scope                `json:"scope"`
+	Coverage            []CoverageItem       `json:"coverage"`
+	SourceReports       []SourceReport       `json:"source_reports"`
+	Requirements        []Requirement        `json:"requirements"`
+	Tasks               []Task               `json:"tasks"`
+	Sessions            []SessionSource      `json:"sessions,omitempty"`
+	SourceIssues        []SourceIssue        `json:"source_issues"`
+	SourceState         SourceState          `json:"source_state"`
+	Sources             Sources              `json:"sources,omitzero"`
+	WorkEvidence        *WorkEvidence        `json:"work_evidence,omitempty"`
+	PresentationProfile *PresentationProfile `json:"presentation_profile,omitempty"`
 }
 
 func targetFromAny(value any) (Target, error) {

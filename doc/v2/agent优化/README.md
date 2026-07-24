@@ -23,6 +23,7 @@
 | 第五阶段：Report Context V1 | 14.157 开发与验收完成，未发布 | 个人报告使用冻结 Context 简化 Agent 读取链路 | [第五阶段-Report-Context-V1/](第五阶段-Report-Context-V1/README.md) |
 | 第六阶段：通用 Report Context V1 | 需求已收口，待架构设计 | 六类报告由平台确定性准备并冻结 Context，标准 Agent 只读取一次 Context | [第六阶段-分层来源与组织覆盖/](第六阶段-分层来源与组织覆盖/README.md) |
 | 第七阶段：Digest 样本验证与确定性策略增强 | 已评审封板，不进入开发 | 保留职责边界和样本分析；不继续扩充命令分类、批量 Golden 标注或引入 LLM | [第七阶段-Digest样本验证与确定性策略增强/](第七阶段-Digest样本验证与确定性策略增强/README.md) |
+| 第八阶段：生产运行证据驱动优化 | 已立项，待生产样本分析 | 关联 Aida Run、Agent Session 和模型调用证据，定位报告生成链路中的质量、耗时、成本和稳定性问题 | [第八阶段-生产运行证据驱动优化/](第八阶段-生产运行证据驱动优化/README.md) |
 
 ## 统一边界
 

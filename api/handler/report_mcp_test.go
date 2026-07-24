@@ -53,6 +53,37 @@ func TestManagedReportWriteToolsRequireRunIDInsteadOfCopiedScope(t *testing.T) {
 	}
 }
 
+func TestPrepareReportResultContentForWorkEvidence(t *testing.T) {
+	content, summary, err := prepareReportResultContent(
+		reportcontext.RepresentationWorkEvidence,
+		"完成日报结构优化。\n  已通过验证。",
+		"\n## 日报结构优化\n\n完成实现。\n",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "## 工作总结\n\n完成日报结构优化。 已通过验证。\n\n## 日报结构优化\n\n完成实现。"
+	if content != want || summary != "完成日报结构优化。 已通过验证。" {
+		t.Fatalf("content=%q summary=%q", content, summary)
+	}
+
+	_, _, err = prepareReportResultContent(reportcontext.RepresentationWorkEvidence, " ", "## 正文\n内容")
+	if got, ok := err.(*mcpErrorCode); !ok || got.Code != "REPORT_SUMMARY_REQUIRED" {
+		t.Fatalf("missing summary error=%v", err)
+	}
+	_, _, err = prepareReportResultContent(reportcontext.RepresentationWorkEvidence, "总结", "\n## 工作总结\n重复")
+	if got, ok := err.(*mcpErrorCode); !ok || got.Code != "REPORT_CONTENT_DUPLICATE_SUMMARY" {
+		t.Fatalf("duplicate summary error=%v", err)
+	}
+}
+
+func TestPrepareReportResultContentKeepsHistoricalContent(t *testing.T) {
+	content, summary, err := prepareReportResultContent("", "legacy summary", "  # 历史报告\n内容  ")
+	if err != nil || content != "# 历史报告\n内容" || summary != "legacy summary" {
+		t.Fatalf("content=%q summary=%q err=%v", content, summary, err)
+	}
+}
+
 func reportMCPBody(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
 	t.Helper()
 	if rec.Code != http.StatusOK {
@@ -199,6 +230,36 @@ func TestReportMCPToolsListIncludesReportContextAndLegacyTools(t *testing.T) {
 			if name != toolGetReportInventory && !strings.Contains(description, "Asia/Shanghai") {
 				t.Fatalf("%s does not describe the business timezone: %q", name, description)
 			}
+		}
+	}
+}
+
+func TestReportMCPToolsListManagedReportToolset(t *testing.T) {
+	db, _, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	h := NewReportMCPHandler(db)
+	req := newReportMCPRequest("tools/list", map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/list",
+	})
+	req.Header.Set(managedReportMCPToolsetHeader, managedReportMCPToolset)
+	rec := httptest.NewRecorder()
+	h.Serve(rec, req)
+
+	result := reportMCPBody(t, rec)
+	tools, ok := result["tools"].([]any)
+	if !ok || len(tools) != 3 {
+		t.Fatalf("managed report tools=%#v", result["tools"])
+	}
+	want := []string{toolGetReportContext, toolWriteReportResult, toolWriteReportFailure}
+	for i, tool := range tools {
+		got := tool.(map[string]any)["name"]
+		if got != want[i] {
+			t.Fatalf("tool[%d]=%v, want %s", i, got, want[i])
 		}
 	}
 }
@@ -544,8 +605,8 @@ func TestReportMCPWriteReportResultRejectsInvalidTypeStoredOnRun(t *testing.T) {
 	h := NewReportMCPHandler(db)
 	mock.ExpectQuery("SELECT id::text, business_type").
 		WithArgs("r-1", "u-1").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "business_type", "agent_id", "model_id", "status", "execution_stage", "input_ref_json", "output_ref_json", "created_at"}).
-			AddRow("r-1", reportAgentRunBusinessType, "agent-1", "MiniMax-M2.5", "running", "agent_running", []byte(`{"report_type":"invalid_type"}`), []byte(`{}`), time.Now()))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "business_type", "agent_id", "model_id", "status", "execution_stage", "input_ref_json", "execution_input_json", "output_ref_json", "created_at"}).
+			AddRow("r-1", reportAgentRunBusinessType, "agent-1", "MiniMax-M2.5", "running", "agent_running", []byte(`{"report_type":"invalid_type"}`), []byte(`{}`), []byte(`{}`), time.Now()))
 	req := newReportMCPRequest("tools/call", map[string]any{
 		"jsonrpc": "2.0",
 		"id":      1,
@@ -577,8 +638,8 @@ func TestReportMCPWriteReportResultUsesStoredRunIdentity(t *testing.T) {
 	inputRef := []byte(`{"report_type":"personal_weekly","period":{"week_start":"2026-06-08","week_end":"2026-06-14"},"target":{"type":"self","user_id":"310"}}`)
 	mock.ExpectQuery("SELECT id::text, business_type").
 		WithArgs("run-1", "310").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "business_type", "agent_id", "model_id", "status", "execution_stage", "input_ref_json", "output_ref_json", "created_at"}).
-			AddRow("run-1", reportAgentRunBusinessType, "agent-1", "MiniMax-M2.5", "running", "agent_running", inputRef, []byte(`{}`), now))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "business_type", "agent_id", "model_id", "status", "execution_stage", "input_ref_json", "execution_input_json", "output_ref_json", "created_at"}).
+			AddRow("run-1", reportAgentRunBusinessType, "agent-1", "MiniMax-M2.5", "running", "agent_running", inputRef, []byte(`{"report_context_representation":"work_evidence"}`), []byte(`{}`), now))
 	mock.ExpectBegin()
 	mock.ExpectExec("(?s)UPDATE ai_runs.*execution_stage = 'writing_result'").
 		WithArgs("run-1", "310").
@@ -586,7 +647,9 @@ func TestReportMCPWriteReportResultUsesStoredRunIdentity(t *testing.T) {
 	mock.ExpectQuery("SELECT id::text, edited, updated_at FROM personal_weekly_reports").
 		WithArgs("310", "2026-06-08", "2026-06-14").
 		WillReturnError(sql.ErrNoRows)
-	content := "# 周报\n- PRD 042 已按 TDD 完成，详见 `docs/prd/042.md`。\n- `go test ./...` 验证通过，参考 https://example.com/result。"
+	body := "## PRD 042\n\n已完成实现并通过自动化验证。"
+	summary := "完成 PRD 042 实现，\n  自动化验证通过。"
+	content := "## 工作总结\n\n完成 PRD 042 实现， 自动化验证通过。\n\n" + body
 	mock.ExpectQuery("INSERT INTO personal_weekly_reports").
 		WithArgs(
 			"310", "2026-06-08", "2026-06-14", content, "run-1", "agent-1", "MiniMax-M2.5",
@@ -606,7 +669,8 @@ func TestReportMCPWriteReportResultUsesStoredRunIdentity(t *testing.T) {
 			"name": "write_report_result",
 			"arguments": map[string]any{
 				"run_id":      "run-1",
-				"content":     content,
+				"content":     body,
+				"summary":     summary,
 				"report_type": "department_daily",
 				"period":      map[string]any{"date": "2099-01-01"},
 				"target":      map[string]any{"type": "department", "department_id": "wrong-target"},
@@ -638,11 +702,14 @@ func TestReportMCPWriteDepartmentDailyPersistsFrozenTeamReportSources(t *testing
 	inputRef := []byte(`{"report_type":"department_daily","period":{"date":"2026-07-16"},"target":{"type":"department","department_id":"department-1"},"report_context_hash":"context-hash"}`)
 	mock.ExpectQuery("SELECT id::text, business_type").
 		WithArgs("run-1", "304").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "business_type", "agent_id", "model_id", "status", "execution_stage", "input_ref_json", "output_ref_json", "created_at"}).
-			AddRow("run-1", reportAgentRunBusinessType, "agent-1", "MiniMax-M2.5", "running", "agent_running", inputRef, []byte(`{}`), now))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "business_type", "agent_id", "model_id", "status", "execution_stage", "input_ref_json", "execution_input_json", "output_ref_json", "created_at"}).
+			AddRow("run-1", reportAgentRunBusinessType, "agent-1", "MiniMax-M2.5", "running", "agent_running", inputRef, []byte(`{}`), []byte(`{}`), now))
 
 	contextPayload := []byte(`{
 		"schema_version":"report-context/v1",
+		"work_evidence":{
+			"categories":[[1,"implementation"]]
+		},
 		"source_reports":[
 			{"id":"team-report-a","report_type":"team_daily"},
 			{"id":"personal-report-direct","report_type":"personal_daily"},
@@ -731,8 +798,8 @@ func TestReportMCPWriteReportFailureUsesRunIDOnly(t *testing.T) {
 	h := NewReportMCPHandler(db)
 	mock.ExpectQuery("SELECT id::text, business_type").
 		WithArgs("run-failed", "u-1").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "business_type", "agent_id", "model_id", "status", "execution_stage", "input_ref_json", "output_ref_json", "created_at"}).
-			AddRow("run-failed", reportAgentRunBusinessType, "agent-1", "MiniMax-M2.5", "running", "agent_running", []byte(`{"report_type":"personal_daily","period":{"date":"2026-07-23"},"target":{"type":"self","user_id":"u-1"}}`), []byte(`{}`), time.Now()))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "business_type", "agent_id", "model_id", "status", "execution_stage", "input_ref_json", "execution_input_json", "output_ref_json", "created_at"}).
+			AddRow("run-failed", reportAgentRunBusinessType, "agent-1", "MiniMax-M2.5", "running", "agent_running", []byte(`{"report_type":"personal_daily","period":{"date":"2026-07-23"},"target":{"type":"self","user_id":"u-1"}}`), []byte(`{}`), []byte(`{}`), time.Now()))
 	mock.ExpectExec("(?s)UPDATE ai_runs.*status = 'failed'").
 		WithArgs("AGENT_REPORTED_FAILURE: boom", "AGENT_REPORTED_FAILURE", "run-failed", "u-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))

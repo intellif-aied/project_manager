@@ -19,15 +19,16 @@ import (
 
 // reportAIRun is the validated AI run after aiRunGuard.
 type reportAIRun struct {
-	ID           string
-	BusinessType string
-	AgentID      string
-	ModelID      *string
-	Status       string
-	Stage        string
-	InputRef     map[string]any
-	OutputRef    map[string]any
-	CreatedAt    time.Time
+	ID                    string
+	BusinessType          string
+	AgentID               string
+	ModelID               *string
+	Status                string
+	Stage                 string
+	InputRef              map[string]any
+	OutputRef             map[string]any
+	ContextRepresentation string
+	CreatedAt             time.Time
 }
 
 type writeReportResultArgs struct {
@@ -67,7 +68,10 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 	if err != nil {
 		return nil, err
 	}
-	content := strings.TrimSpace(args.Content)
+	content, normalizedSummary, err := prepareReportResultContent(run.ContextRepresentation, args.Summary, args.Content)
+	if err != nil {
+		return nil, err
+	}
 	if content == "" {
 		return nil, mcpErr("INVALID_ARGUMENT", "content is required")
 	}
@@ -160,7 +164,7 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 		"week_start":         ws,
 		"week_end":           we,
 		"target":             target,
-		"summary":            args.Summary,
+		"summary":            normalizedSummary,
 		"report_result_hash": resultHash,
 	}
 	copyReportRunMetadata(outputPayload, run.InputRef)
@@ -217,7 +221,17 @@ func (h *ReportMCPHandler) loadFrozenReportSourceRefs(ctx context.Context, userI
 	if expected := strings.TrimSpace(stringFromAny(run.InputRef["report_context_hash"])); expected != stored.Hash {
 		return refs, fmt.Errorf("report context hash mismatch")
 	}
-	var payload reportcontext.Payload
+	// The write path only needs immutable source identities. Decode that narrow
+	// contract so Agent-facing Context representations can evolve independently.
+	var payload struct {
+		SourceReports []struct {
+			ID         string `json:"id"`
+			ReportType string `json:"report_type"`
+		} `json:"source_reports"`
+		Tasks []struct {
+			ID string `json:"id"`
+		} `json:"tasks"`
+	}
 	if err := json.Unmarshal(stored.Payload, &payload); err != nil {
 		return refs, err
 	}
@@ -361,13 +375,14 @@ func (h *ReportMCPHandler) aiRunGuard(r *http.Request, runID, userID string) (*r
 	var run reportAIRun
 	var modelID sql.NullString
 	var createdAt sql.NullTime
-	var inputRaw, outputRaw []byte
+	var inputRaw, executionInputRaw, outputRaw []byte
 	err := h.db.QueryRowContext(r.Context(), `
 		SELECT id::text, business_type, COALESCE(agent_id, ''), model_id, status,
-		       COALESCE(execution_stage, ''), input_ref_json, output_ref_json, created_at
+		       COALESCE(execution_stage, ''), input_ref_json, execution_input_json,
+		       output_ref_json, created_at
 		FROM ai_runs
 		WHERE id::text = $1 AND user_id = $2`, runID, userID).
-		Scan(&run.ID, &run.BusinessType, &run.AgentID, &modelID, &run.Status, &run.Stage, &inputRaw, &outputRaw, &createdAt)
+		Scan(&run.ID, &run.BusinessType, &run.AgentID, &modelID, &run.Status, &run.Stage, &inputRaw, &executionInputRaw, &outputRaw, &createdAt)
 	if err == sql.ErrNoRows {
 		return nil, errRunNotFound
 	}
@@ -382,6 +397,9 @@ func (h *ReportMCPHandler) aiRunGuard(r *http.Request, runID, userID string) (*r
 		run.CreatedAt = createdAt.Time
 	}
 	_ = json.Unmarshal(inputRaw, &run.InputRef)
+	var executionInput map[string]any
+	_ = json.Unmarshal(executionInputRaw, &executionInput)
+	run.ContextRepresentation = strings.TrimSpace(stringFromAny(executionInput["report_context_representation"]))
 	_ = json.Unmarshal(outputRaw, &run.OutputRef)
 	if run.InputRef == nil {
 		run.InputRef = map[string]any{}
@@ -390,6 +408,31 @@ func (h *ReportMCPHandler) aiRunGuard(r *http.Request, runID, userID string) (*r
 		run.OutputRef = map[string]any{}
 	}
 	return &run, nil
+}
+
+func prepareReportResultContent(representation, summary, content string) (string, string, error) {
+	body := strings.TrimSpace(content)
+	if body == "" {
+		return "", "", mcpErr("INVALID_ARGUMENT", "content is required")
+	}
+	if strings.TrimSpace(representation) != reportcontext.RepresentationWorkEvidence {
+		return body, summary, nil
+	}
+	normalizedSummary := strings.Join(strings.Fields(summary), " ")
+	if normalizedSummary == "" {
+		return "", "", mcpErr("REPORT_SUMMARY_REQUIRED", "summary is required for this report run")
+	}
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if line == "## 工作总结" {
+			return "", "", mcpErr("REPORT_CONTENT_DUPLICATE_SUMMARY", "content must not contain a leading work summary section")
+		}
+		break
+	}
+	return "## 工作总结\n\n" + normalizedSummary + "\n\n" + body, normalizedSummary, nil
 }
 
 func reportResultHash(content string) string {

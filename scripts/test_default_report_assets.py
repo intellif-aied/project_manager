@@ -27,7 +27,10 @@ AIHUB_SECRET = os.getenv("AIHUB_SECRET", "").strip()
 RUN_SMOKE = os.getenv("AIDA_RUN_AGENT_SMOKE", "0") == "1"
 
 REPORT_SKILL_SLUG = os.getenv("MANAGED_AGENT_REPORT_SKILL_SLUG", "aida-report")
-REPORT_SKILL_VERSION = os.getenv("MANAGED_AGENT_REPORT_SKILL_VERSION", "1.0.0")
+REPORT_SKILL_VERSION = os.getenv("MANAGED_AGENT_REPORT_SKILL_VERSION", "").strip()
+if not REPORT_SKILL_VERSION:
+    raise SystemExit("MANAGED_AGENT_REPORT_SKILL_VERSION is required")
+
 REPORT_SKILL_NAME = os.getenv("MANAGED_AGENT_REPORT_SKILL_NAME", "Aida Report Skill")
 REPORT_SKILL_DESCRIPTION = os.getenv("MANAGED_AGENT_REPORT_SKILL_DESCRIPTION", "Aida shared Report Skill.\nAIDA_REPORT_DEFAULT:true")
 REPORT_MCP_SLUG = os.getenv("MANAGED_AGENT_REPORT_MCP_SLUG", "aida-report-mcp")
@@ -43,27 +46,30 @@ REPORT_AGENT_MARKERS = [
     "AIDA_MANAGED_DEFAULT_AGENT:true",
 ]
 REQUIRED_TOOLS = [
-    "get_sessions",
-    "get_daily_reports",
-    "get_weekly_reports",
-    "get_tasks",
-    "get_requirements",
-    "get_existing_report",
-    "get_report_inventory",
+    "get_report_context",
     "write_report_result",
     "write_report_failure",
 ]
 FORBIDDEN_TOOLS = [
-    "get_report_context",
+    "get_report_evidence",
     "aida_daily_report_get_context",
     "aida_daily_report_save_draft",
+    "sessions[].digest",
+    "report_period_summary.days",
 ]
 REQUIRED_SKILL_TERMS = [
-    "tools/call",
+    "one frozen Report Context",
+    "Call get_report_context exactly once",
     "content[0].text",
-    "date_range",
-    "week_range",
-    '"period"',
+    '{"run_id": run_id}',
+    "objective-outcome ledger",
+    "one-based lookup tables",
+    "Never use Top-K",
+    "presentation_profile is present",
+    "summary as one plain-text paragraph",
+    "Git commands, output, commit messages",
+    "There are no operation-type exceptions",
+    "fixed 重点工作 heading",
 ]
 
 
@@ -299,19 +305,12 @@ def create_mcp(token, mcp_url):
     return request_json("POST", API_BASE + "/ai-assets/mcp", token, payload)
 
 
-def agent_payload(agent_id, owner):
-    description = "\n".join([REPORT_AGENT_DESCRIPTION, "AIDA_REPORT_DEFAULT:true"] + REPORT_AGENT_MARKERS)
+def agent_payload(agent_id, owner, mcp_url):
+    description = REPORT_AGENT_DESCRIPTION
     instructions = "\n".join([
         "AIDA_REPORT_DEFAULT:true",
         *REPORT_AGENT_MARKERS,
-        "你是 Aida 报告生成 Agent。根据 report_type 生成个人、小组或部门的日报/周报。",
-        "运行参数由 Aida 后端注入，包含 run_id、report_type、period、target。不要要求用户提供 session_ids、urls、token 或 credential。",
-        f"{REPORT_MCP_NAME} 已通过 {REPORT_MCP_SLOT} 凭据槽配置当前用户 Authorization。调用 MCP 时不要手工拼接管理员 token。",
-        "必须使用当前用户身份调用 Aida Report MCP，并尊重 MCP 返回的权限边界和缺失来源事实。",
-        "先调用 get_existing_report 获取已有内容，再根据 report_type 调用 get_sessions/get_daily_reports/get_weekly_reports/get_tasks/get_requirements/get_report_inventory 等原子工具取数。",
-        "get_sessions/get_tasks/get_requirements 等读取工具使用 date_range 或 week_range；write_report_result/write_report_failure 使用 period。",
-        "生成成功后调用 write_report_result，传入相同 run_id、report_type、period、target 和 content。",
-        "生成失败时调用 write_report_failure。不要编造 Aida 上下文之外的事实；如果上下文为空，应明确说明暂无记录。",
+        "你是 Aida 报告执行 Agent。每次运行必须实际加载当前绑定的 aida-report Skill，并观察到对应的 Skill tool_result 后再继续。除 Skill 加载要求外，本 Prompt 不定义报告流程、来源、结构或写作规则。",
     ])
     return {
         "agent_id": agent_id or "",
@@ -320,26 +319,26 @@ def agent_payload(agent_id, owner):
         "engine": os.getenv("MANAGED_AGENT_DEFAULT_ENGINE", "claude-code"),
         "default_model_id": os.getenv("MANAGED_AGENT_DEFAULT_MODEL_ID", "MiniMax-M2.5"),
         "instructions": instructions,
-        "start_prompt_template": "\n".join([
-            "请根据以下业务参数生成 Aida 报告。",
-            "report_type={{ report_type }}",
-            "period={{ period_json }}",
-            "target={{ target_json }}",
-            "run_id={{ run_id }}",
-            "mcp_url={{ mcp_url }}",
-            f"当前用户凭据已通过 {REPORT_MCP_SLOT} credential slot 注入，请通过 {REPORT_MCP_NAME} 获取上下文并回写生成结果。",
-        ]),
+        "start_prompt_template": "/aida-report\nrun_id={{ run_id }}",
         "credential_slots": [{"name": REPORT_MCP_SLOT, "required": True}],
         "skills": [{"owner": owner, "slug": REPORT_SKILL_SLUG, "version": REPORT_SKILL_VERSION}],
-        "mcp_bindings": [{"owner": owner, "slug": REPORT_MCP_SLUG, "version": REPORT_MCP_VERSION, "credential_slot": REPORT_MCP_SLOT}],
+        "mcp_servers": [{
+            "name": REPORT_MCP_SLUG,
+            "url": mcp_url,
+            "credential_slot": REPORT_MCP_SLOT,
+            "auth_header": "Authorization",
+            "auth_scheme": "Bearer",
+            "headers": {"X-Aida-MCP-Toolset": "managed-report"},
+        }],
+        "mcp_bindings": [],
     }
 
 
-def create_or_repair_agent(token, owner, agent=None):
+def create_or_repair_agent(token, owner, mcp_url, agent=None):
     if agent:
-        payload = agent_payload(agent.get("agent_id"), owner)
+        payload = agent_payload(agent.get("agent_id"), owner, mcp_url)
         return request_json("PUT", API_BASE + f"/ai-assets/agents/{agent.get('agent_id')}", token, payload)
-    payload = agent_payload("", owner)
+    payload = agent_payload("", owner, mcp_url)
     return request_json("POST", API_BASE + "/ai-assets/agents", token, payload)
 
 
@@ -374,12 +373,12 @@ def direct_backfill_user(account):
             raise RuntimeError(f"create mcp failed {status}: {body}")
         result["mcp_created"] = True
     if not agent:
-        status, body = create_or_repair_agent(token, owner, None)
+        status, body = create_or_repair_agent(token, owner, mcp_url, None)
         if status >= 300:
             raise RuntimeError(f"create agent failed {status}: {body}")
         result["agent_created"] = True
     elif legacy_agent:
-        status, body = create_or_repair_agent(token, owner, agent)
+        status, body = create_or_repair_agent(token, owner, mcp_url, agent)
         if status >= 300:
             raise RuntimeError(f"repair legacy agent failed {status}: {body}")
         result["agent_repaired"] = True

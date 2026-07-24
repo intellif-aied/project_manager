@@ -161,3 +161,32 @@ func TestProcessorWaitingDigestReleasesLeaseWithoutPolling(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestContextBuildRequestUsesFrozenRepresentation(t *testing.T) {
+	run := Run{
+		ID: "run-1", UserID: "7", ModelID: "model-1",
+		InputRef: map[string]any{
+			"report_type": "personal_daily",
+			"period":      map[string]any{"date": "2026-07-23"},
+			"target":      map[string]any{"type": "self", "user_id": "7"},
+		},
+		ExecutionInput: map[string]any{
+			"report_context_representation": reportcontext.RepresentationWorkEvidence,
+		},
+	}
+	request, err := contextBuildRequest(run, "selection-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.Representation != reportcontext.RepresentationWorkEvidence {
+		t.Fatalf("representation = %q", request.Representation)
+	}
+	delete(run.ExecutionInput, "report_context_representation")
+	request, err = contextBuildRequest(run, "selection-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.Representation != "" {
+		t.Fatalf("legacy run must keep the legacy representation, got %q", request.Representation)
+	}
+}

@@ -7,6 +7,11 @@ import (
 	"time"
 )
 
+const (
+	managedReportMCPToolsetHeader = "X-Aida-MCP-Toolset"
+	managedReportMCPToolset       = "managed-report"
+)
+
 // reportMCPTools returns the current Report MCP schemas. Legacy read tools stay
 // available for compatibility while all managed report runs use get_report_context.
 func reportMCPTools() []map[string]any {
@@ -221,6 +226,26 @@ func reportMCPTools() []map[string]any {
 			},
 		},
 	}
+}
+
+func reportMCPToolsForToolset(toolset string) []map[string]any {
+	tools := reportMCPTools()
+	if strings.TrimSpace(toolset) != managedReportMCPToolset {
+		return tools
+	}
+	allowed := map[string]struct{}{
+		toolGetReportContext:   {},
+		toolWriteReportResult:  {},
+		toolWriteReportFailure: {},
+	}
+	filtered := make([]map[string]any, 0, len(allowed))
+	for _, tool := range tools {
+		name, _ := tool["name"].(string)
+		if _, ok := allowed[name]; ok {
+			filtered = append(filtered, tool)
+		}
+	}
+	return filtered
 }
 
 // periodArgs mirrors the period JSON shape shared by read/write tools.

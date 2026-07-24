@@ -56,3 +56,32 @@ func TestLoadWorkerCountsUsesIndependentSettings(t *testing.T) {
 		t.Fatalf("counts = %#v", counts)
 	}
 }
+
+func TestLoadDoesNotFallbackReportSkillVersion(t *testing.T) {
+	if err := os.Unsetenv("MANAGED_AGENT_REPORT_SKILL_VERSION"); err != nil {
+		t.Fatal(err)
+	}
+	if got := Load().ManagedAgentReportSkillVersion; got != "" {
+		t.Fatalf("version = %q, want empty so startup validation can fail closed", got)
+	}
+}
+
+func TestValidateManagedReportResourcesRequiresSkillVersion(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		version string
+		wantErr bool
+	}{
+		{name: "missing", wantErr: true},
+		{name: "whitespace", version: "  ", wantErr: true},
+		{name: "configured", version: "1.0.45"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := &Config{ManagedAgentReportSkillVersion: test.version}
+			err := cfg.ValidateManagedReportResources()
+			if (err != nil) != test.wantErr {
+				t.Fatalf("error = %v, wantErr %v", err, test.wantErr)
+			}
+		})
+	}
+}

@@ -34,6 +34,9 @@ import (
 
 func main() {
 	cfg := config.Load()
+	if err := cfg.ValidateManagedReportResources(); err != nil {
+		log.Fatalf("Invalid managed report resource configuration: %v", err)
+	}
 	workerCounts, err := config.LoadWorkerCounts()
 	if err != nil {
 		log.Fatalf("Invalid worker configuration: %v", err)

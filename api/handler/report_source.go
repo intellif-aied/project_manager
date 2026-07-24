@@ -187,7 +187,7 @@ func writeReportSourceError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"status":                     "confirmation_required",
 			"code":                       "LARGE_REPORT_CONTEXT_CONFIRMATION_REQUIRED",
-			"message":                    "所选会话内容较多，可能消耗较多 Token，部分模型可能无法完整处理。你可以更换模型、减少所选会话，或继续生成。",
+			"message":                    "所选会话内容较多，可能消耗较多 Token。你可以减少所选会话，或继续生成。",
 			"report_source_selection_id": largeContextErr.SelectionID,
 			"context_bytes":              largeContextErr.ContextBytes,
 			"warning_required":           true,

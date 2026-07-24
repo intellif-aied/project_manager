@@ -63,12 +63,19 @@ func TestReportRunSubmitterOnlySendsRunIDAsReportIdentity(t *testing.T) {
 			"target":                     map[string]any{"type": "team", "team_id": "team-1"},
 			"report_source_selection_id": "selection-1",
 		},
+		ExecutionInput: map[string]any{
+			"initial_message":     "请强调已经确认的风险",
+			"start_prompt_values": map[string]any{"custom": "legacy-value"},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if submitted.StartPromptValues["run_id"] != "run-identity" {
 		t.Fatalf("run_id=%q", submitted.StartPromptValues["run_id"])
+	}
+	if len(submitted.StartPromptValues) != 1 {
+		t.Fatalf("start prompt values must contain only run_id: %#v", submitted.StartPromptValues)
 	}
 	for _, key := range []string{
 		"report_type", "period_json", "calendar_context_json", "target_json",
@@ -82,6 +89,9 @@ func TestReportRunSubmitterOnlySendsRunIDAsReportIdentity(t *testing.T) {
 		if strings.Contains(submitted.Message, forbidden) {
 			t.Fatalf("legacy report identity %q leaked in message: %s", forbidden, submitted.Message)
 		}
+	}
+	if submitted.Message != "用户补充说明：\n请强调已经确认的风险" {
+		t.Fatalf("runtime message=%q", submitted.Message)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

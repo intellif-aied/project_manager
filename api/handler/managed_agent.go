@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"sort"
@@ -129,9 +130,6 @@ func normalizeManagedAgentDefaults(defaults ManagedAgentDefaults) ManagedAgentDe
 		defaults.ReportSkillSlug = service.ReportSkillSlug
 	}
 	defaults.ReportSkillVersion = strings.TrimSpace(defaults.ReportSkillVersion)
-	if defaults.ReportSkillVersion == "" {
-		defaults.ReportSkillVersion = service.ReportSkillVersion
-	}
 	defaults.ReportSkillName = strings.TrimSpace(defaults.ReportSkillName)
 	if defaults.ReportSkillName == "" {
 		defaults.ReportSkillName = service.ReportSkillName
@@ -1224,13 +1222,23 @@ func (h *ManagedAgentHandler) defaultReportMCPBinding(owner string) model.Manage
 }
 
 func (h *ManagedAgentHandler) defaultReportMCPServer() model.ManagedMCPServer {
-	return model.ManagedMCPServer{
+	return h.reportMCPServer(true)
+}
+
+func (h *ManagedAgentHandler) reportMCPServer(managedToolset bool) model.ManagedMCPServer {
+	server := model.ManagedMCPServer{
 		Name:           h.defaults.ReportMCPSlug,
 		URL:            h.reportMCPURL(),
 		CredentialSlot: h.defaults.ReportMCPCredentialSlot,
 		AuthHeader:     "Authorization",
 		AuthScheme:     "Bearer",
 	}
+	if managedToolset {
+		server.Headers = map[string]string{
+			managedReportMCPToolsetHeader: managedReportMCPToolset,
+		}
+	}
+	return server
 }
 
 func (h *ManagedAgentHandler) defaultReportAgentRequest(reportSkill model.ManagedSkillRef) model.UpsertManagedAgentRequest {
@@ -1251,35 +1259,19 @@ func (h *ManagedAgentHandler) defaultReportAgentRequest(reportSkill model.Manage
 	}
 }
 
-func defaultReportAgentInstructions(credentialSlot string) string {
+func defaultReportAgentInstructions(_ string) string {
 	return strings.Join([]string{
 		defaultReportAssetsMarker,
 		defaultReportAgentMarker,
 		defaultReportAgentTypesPrefix + strings.Join(supportedReportTypes, ","),
 		defaultManagedAgentMarker,
 		"AIDA_REPORT_DEPLOYMENT:{{aida_deployment}}",
-		"你是 Aida 报告执行 Agent。报告内容、结构和写作风格由当前绑定的 Skill 决定；本 Prompt 只定义 Aida 运行参数和 MCP 读写协议。",
-		"每次报告运行必须先实际调用 Skill 工具加载 aida-report，并观察到对应的 Skill tool_result 后再调用任何报告 MCP；输入文本中出现 /aida-report 不代表已经加载。完整加载当前绑定版本的 SKILL.md 只是运行协议，不在 Prompt 中增加报告内容规则。",
-		"Aida 注入的唯一报告业务身份参数是 run_id。报告类型、周期、目标、Selection 和来源范围均由后端通过该 Run 解析；不要要求用户或模型复制这些参数，也不要要求用户提供 session IDs、URLs、token 或 credential。",
-		"Aida Report MCP 已通过 " + credentialSlot + " 凭据槽注入当前用户 Authorization。使用当前用户身份调用已绑定的 MCP tools，不要手工拼接管理员 token。",
-		"平台已为六类托管报告冻结 Report Context。必须只用 run_id 调用一次 get_report_context 获取完整上下文，不得再调用 get_sessions、get_tasks、get_requirements、get_daily_reports、get_weekly_reports 或 get_report_inventory 重新扫描数据。",
-		"报告目标和权限范围已经冻结在 Report Context 中；必须使用 Context 的 run.target 和 scope，不得越权扩大、缩小或替换目标范围。",
-		"依据当前绑定 Skill 生成报告后，必须调用 write_report_result，只传入 run_id、content 和可选 summary；不要用最终对话回复代替 MCP 回写。生成失败时调用 write_report_failure，只传入 run_id 和错误信息。",
+		"你是 Aida 报告执行 Agent。每次运行必须实际加载当前绑定的 aida-report Skill，并观察到对应的 Skill tool_result 后再继续。除 Skill 加载要求外，本 Prompt 不定义报告流程、来源、结构或写作规则。",
 	}, "\n")
 }
 
-func defaultReportAgentStartPromptTemplate(credentialSlot string) string {
-	return strings.Join([]string{
-		"/aida-report",
-		"协议前置条件：必须实际调用 Skill 工具并观察到 aida-report 的 tool_result；本行 /aida-report 文本本身不代表 Skill 已加载，加载完成前不得调用报告 MCP。",
-		"请根据本次 Run 已冻结的 Report Context 生成 Aida 报告。",
-		"平台已为本次托管报告准备完整 Report Context；只传 run_id 调用一次 get_report_context。不要再调用其他读取工具扫描 Session、报告、任务、需求或组织数据。",
-		"报告内容与格式遵循当前绑定 Skill，本启动提示不增加额外内容限制。",
-		"报告目标与权限范围以 Report Context 的 run.target 和 scope 为准，不得改用其他范围。",
-		"run_id={{ run_id }}",
-		"当前用户凭据已通过 " + credentialSlot + " credential slot 注入；优先调用已绑定的 Aida Report MCP tools 获取上下文并回写生成结果，不要手工拼接 Authorization。",
-		"最终必须调用 write_report_result 完成回写；生成失败时调用 write_report_failure。",
-	}, "\n")
+func defaultReportAgentStartPromptTemplate(_ string) string {
+	return "/aida-report\nrun_id={{ run_id }}"
 }
 
 func (h *ManagedAgentHandler) selectDefaultReportAgent(agents []model.ManagedAgent) (model.ManagedAgent, bool) {
@@ -1450,7 +1442,7 @@ func (h *ManagedAgentHandler) repairedDefaultReportAgentRequest(agent model.Mana
 		})
 		changed = true
 	}
-	if servers, ok := h.ensureCurrentReportMCPServer(req.MCPServers); ok {
+	if servers, ok := h.ensureCurrentReportMCPServer(req.MCPServers, true); ok {
 		req.MCPServers = servers
 		changed = true
 	}
@@ -1482,11 +1474,7 @@ func (h *ManagedAgentHandler) repairedDefaultReportAgentRequest(agent model.Mana
 }
 
 func isDefaultLikeStartPromptTemplate(text string) bool {
-	return strings.Contains(text, "report_type={{ report_type }}") &&
-		strings.Contains(text, "period={{ period_json }}") &&
-		strings.Contains(text, "target={{ target_json }}") &&
-		strings.Contains(text, "run_id={{ run_id }}") &&
-		strings.Contains(text, "Aida Report MCP")
+	return strings.Contains(text, "/aida-report") && strings.Contains(text, "run_id={{ run_id }}")
 }
 
 func (h *ManagedAgentHandler) repairedReportAgentDependencyRequest(agent model.ManagedAgent, reportSkill model.ManagedSkillRef) (model.UpsertManagedAgentRequest, bool) {
@@ -1512,7 +1500,7 @@ func (h *ManagedAgentHandler) repairedReportAgentDependencyRequest(agent model.M
 		})
 		changed = true
 	}
-	if servers, ok := h.ensureCurrentReportMCPServer(req.MCPServers); ok {
+	if servers, ok := h.ensureCurrentReportMCPServer(req.MCPServers, false); ok {
 		req.MCPServers = servers
 		changed = true
 	}
@@ -1637,10 +1625,10 @@ func (h *ManagedAgentHandler) ensureCurrentReportMCPBinding(bindings []model.Man
 	return out, changed
 }
 
-func (h *ManagedAgentHandler) ensureCurrentReportMCPServer(servers []model.ManagedMCPServer) ([]model.ManagedMCPServer, bool) {
+func (h *ManagedAgentHandler) ensureCurrentReportMCPServer(servers []model.ManagedMCPServer, managedToolset bool) ([]model.ManagedMCPServer, bool) {
 	changed := false
 	found := false
-	expected := h.defaultReportMCPServer()
+	expected := h.reportMCPServer(managedToolset)
 	out := make([]model.ManagedMCPServer, 0, len(servers)+1)
 	for _, server := range servers {
 		if server.Name != h.defaults.ReportMCPSlug {
@@ -1651,7 +1639,7 @@ func (h *ManagedAgentHandler) ensureCurrentReportMCPServer(servers []model.Manag
 			changed = true
 			continue
 		}
-		if server.URL != expected.URL || server.CredentialSlot != expected.CredentialSlot || server.AuthHeader != expected.AuthHeader || server.AuthScheme != expected.AuthScheme {
+		if server.URL != expected.URL || server.CredentialSlot != expected.CredentialSlot || server.AuthHeader != expected.AuthHeader || server.AuthScheme != expected.AuthScheme || !maps.Equal(server.Headers, expected.Headers) {
 			server = expected
 			changed = true
 		}
@@ -1946,7 +1934,7 @@ func isReportSystemPromptKey(key, credentialSlot string) bool {
 
 func mergeReportStartPromptValues(systemValues map[string]string, userValues map[string]string, message string, credentialSlot string) (map[string]string, string, bool) {
 	merged := copyStringMap(systemValues)
-	for key, value := range userValues {
+	for key := range userValues {
 		key = strings.TrimSpace(key)
 		if key == "" {
 			continue
@@ -1954,39 +1942,20 @@ func mergeReportStartPromptValues(systemValues map[string]string, userValues map
 		if isReportSystemPromptKey(key, credentialSlot) {
 			return nil, key, false
 		}
-		merged[key] = strings.TrimSpace(value)
-	}
-	message = strings.TrimSpace(message)
-	if message != "" {
-		if isReportSystemPromptKey("message", credentialSlot) {
-			return nil, "message", false
-		}
-		merged["message"] = message
 	}
 	return merged, "", true
 }
 
-func buildReportRunMessage(startPromptValues map[string]string, message string, credentialSlot string) string {
-	parts := []string{
-		"/aida-report",
-		"协议前置条件：必须实际调用 Skill 工具并观察到 aida-report 的 tool_result；本行 /aida-report 文本本身不代表 Skill 已加载，加载完成前不得调用报告 MCP。",
-		"请根据本次 Run 已冻结的 Report Context 生成 Aida 报告。",
-		"run_id=" + strings.TrimSpace(startPromptValues["run_id"]),
-		"当前用户凭据已通过 " + strings.TrimSpace(credentialSlot) + " credential slot 注入；优先调用已绑定的 Aida Report MCP tools 获取上下文并回写生成结果，不要手工拼接 Authorization。",
-	}
-	parts = append(parts,
-		"来源协议：平台已经为本次托管报告冻结完整 Report Context。只传 run_id 调用一次 get_report_context；不得再调用其他读取工具重新扫描 Session、下级报告、任务、需求或组织数据。报告目标和权限范围以 Context 为准；报告内容与格式遵循当前绑定 Skill，本消息不增加额外内容限制。",
-	)
+func buildReportRunMessage(_ map[string]string, message string, _ string) string {
 	message = strings.TrimSpace(message)
-	if message != "" {
-		parts = append(parts, "", "用户补充说明：", message)
+	if message == "" || message == fallbackReportRunMessage() {
+		return fallbackReportRunMessage()
 	}
-	parts = append(parts, "", "最终动作：必须调用 write_report_result 回写；生成失败时调用 write_report_failure。")
-	return strings.Join(parts, "\n")
+	return "用户补充说明：\n" + message
 }
 
 func fallbackReportRunMessage() string {
-	return "请根据本次 Run 已冻结的 Report Context 生成 Aida 报告。"
+	return "生成本次 Aida 报告。"
 }
 
 func (h *ManagedAgentHandler) StartAgentRun(w http.ResponseWriter, r *http.Request) {
@@ -2523,9 +2492,6 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 		inputRef["credential_override"] = "redacted"
 	}
 	userMessage := strings.TrimSpace(req.Message)
-	if userMessage == "" {
-		userMessage = fallbackReportRunMessage()
-	}
 	idempotencyKey := strings.TrimSpace(req.IdempotencyKey)
 	if !isValidUUIDV4(idempotencyKey) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
@@ -2552,11 +2518,11 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 		"period": inputRef["period"], "timezone": biztime.Zone,
 		"agent_id": agentID, "model_id": modelID,
 		"initial_message":               userMessage,
-		"start_prompt_values":           copyStringMap(req.StartPromptValues),
 		"trigger_source":                "manual",
 		"digest_version":                sessiondigestv2.Version,
 		"redaction_version":             sessiondigestv2.RedactionVersion,
 		"report_context_schema_version": reportcontext.SchemaVersion,
+		"report_context_representation": reportcontext.RepresentationWorkEvidence,
 	}
 	dedupeScope := reportRunDedupeScope(
 		frozenScope, runtimeOverrides, sortedStringKeys(reportSlots),
@@ -2565,11 +2531,11 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 	requestFingerprint["selected_session_slice_keys"] = fingerprintSliceKeys
 	requestFingerprint["report_source_selection_id"] = nullableStringValue(reportSourceSelectionID)
 	executionInput := map[string]any{
-		"timezone":             biztime.Zone,
-		"initial_message":      userMessage,
-		"start_prompt_values":  copyStringMap(req.StartPromptValues),
-		"credential_overrides": copyStringMap(runtimeOverrides),
-		"report_mcp_slots":     sortedStringKeys(reportSlots),
+		"timezone":                      biztime.Zone,
+		"initial_message":               userMessage,
+		"credential_overrides":          copyStringMap(runtimeOverrides),
+		"report_mcp_slots":              sortedStringKeys(reportSlots),
+		"report_context_representation": reportcontext.RepresentationWorkEvidence,
 	}
 	result, err := h.reportSource.CreateReportRun(r.Context(), reportsource.RunSubmissionRequest{
 		UserID: u.ID, ReportType: req.ReportType, Period: contextPeriod,
@@ -4033,9 +3999,6 @@ func (h *ManagedAgentHandler) executeReportAgentScheduleRun(ctx context.Context,
 	inputRef["credential_slot"] = h.defaults.ReportMCPCredentialSlot
 	contextPeriod := reportContextPeriod(reportType, period.Date, period.WeekStart, period.WeekEnd)
 	userMessage := strings.TrimSpace(schedule.InitialMessage)
-	if userMessage == "" {
-		userMessage = fallbackReportRunMessage()
-	}
 	if h.reportSource == nil {
 		return nil, fmt.Errorf("report source service is not configured")
 	}
@@ -4043,11 +4006,12 @@ func (h *ManagedAgentHandler) executeReportAgentScheduleRun(ctx context.Context,
 		"user_id": u.ID, "business_type": reportAgentRunBusinessType,
 		"report_type": reportType, "target": target, "period": periodRef,
 		"timezone": schedule.Timezone, "agent_id": schedule.AgentID, "model_id": modelID,
-		"initial_message": userMessage, "start_prompt_values": copyStringMap(schedule.StartPromptValues),
-		"trigger_source": inputRef["trigger_source"], "schedule_id": schedule.ID,
+		"initial_message": userMessage,
+		"trigger_source":  inputRef["trigger_source"], "schedule_id": schedule.ID,
 		"scheduled_trigger_at": inputRef["scheduled_trigger_at"],
 		"digest_version":       sessiondigestv2.Version, "redaction_version": sessiondigestv2.RedactionVersion,
 		"report_context_schema_version": reportcontext.SchemaVersion,
+		"report_context_representation": reportcontext.RepresentationWorkEvidence,
 	}
 	result, err := h.reportSource.CreateReportRun(ctx, reportsource.RunSubmissionRequest{
 		UserID: u.ID, ReportType: reportType, Period: contextPeriod,
@@ -4058,9 +4022,9 @@ func (h *ManagedAgentHandler) executeReportAgentScheduleRun(ctx context.Context,
 		InputRef: inputRef,
 		ExecutionInput: map[string]any{
 			"timezone": schedule.Timezone, "initial_message": userMessage,
-			"start_prompt_values":  copyStringMap(schedule.StartPromptValues),
-			"credential_overrides": map[string]string{},
-			"report_mcp_slots":     []string{h.defaults.ReportMCPCredentialSlot},
+			"credential_overrides":          map[string]string{},
+			"report_mcp_slots":              []string{h.defaults.ReportMCPCredentialSlot},
+			"report_context_representation": reportcontext.RepresentationWorkEvidence,
 		},
 	})
 	if err != nil {

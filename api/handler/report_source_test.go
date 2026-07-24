@@ -113,7 +113,7 @@ func TestWriteReportSourceErrorReturnsRetryableLargeContextWarning(t *testing.T)
 		t.Fatalf("unexpected payload: %#v", payload)
 	}
 	message, _ := payload["message"].(string)
-	if message == "" || strings.Contains(message, "Digest") || strings.Contains(message, "清洗") {
+	if message == "" || strings.Contains(message, "Digest") || strings.Contains(message, "清洗") || strings.Contains(message, "更换模型") {
 		t.Fatalf("warning exposed internal details: %q", message)
 	}
 }

@@ -73,7 +73,7 @@ func Load() *Config {
 		ManagedAgentDefaultEngine:      getEnv("MANAGED_AGENT_DEFAULT_ENGINE", "claude-code"),
 		ManagedAgentDefaultModelID:     getEnv("MANAGED_AGENT_DEFAULT_MODEL_ID", "MiniMax-M2.5"),
 		ManagedAgentReportSkillOwner:   getEnv("MANAGED_AGENT_REPORT_SKILL_OWNER", ""),
-		ManagedAgentReportSkillVersion: getEnv("MANAGED_AGENT_REPORT_SKILL_VERSION", "1.0.0"),
+		ManagedAgentReportSkillVersion: getEnv("MANAGED_AGENT_REPORT_SKILL_VERSION", ""),
 		ManagedAgentReportMCPURL:       getEnv("MANAGED_AGENT_REPORT_MCP_URL", ""),
 		AIDAPublicBaseURL:              getEnv("AIDA_PUBLIC_BASE_URL", ""),
 		AIDAInternalMetricsAddr:        getEnv("AIDA_INTERNAL_METRICS_ADDR", ":9091"),
@@ -103,6 +103,17 @@ func LoadWorkerCounts() (WorkerCounts, error) {
 		return WorkerCounts{}, err
 	}
 	return counts, nil
+}
+
+func (c *Config) ValidateManagedReportResources() error {
+	if c == nil {
+		return fmt.Errorf("managed report resource configuration is required")
+	}
+	c.ManagedAgentReportSkillVersion = strings.TrimSpace(c.ManagedAgentReportSkillVersion)
+	if c.ManagedAgentReportSkillVersion == "" {
+		return fmt.Errorf("MANAGED_AGENT_REPORT_SKILL_VERSION is required; publish and configure an immutable environment Skill version")
+	}
+	return nil
 }
 
 func (c *Config) MinioConfigured() bool {

@@ -124,7 +124,7 @@ func (h *ReportMCPHandler) Serve(w http.ResponseWriter, r *http.Request) {
 	case "ping":
 		result = map[string]any{}
 	case "tools/list":
-		result = map[string]any{"tools": reportMCPTools()}
+		result = map[string]any{"tools": reportMCPToolsForToolset(r.Header.Get(managedReportMCPToolsetHeader))}
 	case "tools/call":
 		result, err = h.callTool(r, req.Params)
 	default:

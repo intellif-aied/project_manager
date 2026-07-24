@@ -46,13 +46,14 @@ func TestBuildPersonalDailyStoresCompleteFrozenContext(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
-	source := &sourceStub{page: reportsource.ContentPage{FrozenPayload: json.RawMessage(`{"content_mode":"digest_v2","coverage":{"complete":true},"items":[{"summary":"done"}]}`)}}
+	source := &sourceStub{page: reportsource.ContentPage{FrozenPayload: validFrozenDigestV2()}}
 	svc := &Service{db: db, source: source}
 	stored, err := svc.Build(context.Background(), BuildRequest{
 		UserID: "7", RunID: "run-1", ReportType: ReportTypePersonalDaily,
 		Period:   reportsource.Period{Start: "2026-07-16", End: "2026-07-16"},
 		Timezone: biztime.Zone, TriggerSource: "manual", ModelID: "model-1",
 		Target: Target{Type: "self", UserID: "7"}, SourceSelectionID: "selection-1",
+		Representation: RepresentationWorkEvidence,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -60,19 +61,291 @@ func TestBuildPersonalDailyStoresCompleteFrozenContext(t *testing.T) {
 	if source.calls != 1 || stored.Bytes == 0 || len(stored.Hash) != 64 {
 		t.Fatalf("unexpected stored context: calls=%d context=%+v", source.calls, stored)
 	}
-	var payload Payload
+	var payload struct {
+		SchemaVersion       string               `json:"schema_version"`
+		SourceState         SourceState          `json:"source_state"`
+		Requirements        []Requirement        `json:"requirements"`
+		Tasks               []Task               `json:"tasks"`
+		Sessions            []SessionSource      `json:"sessions"`
+		Sources             Sources              `json:"sources"`
+		WorkEvidence        json.RawMessage      `json:"work_evidence"`
+		PresentationProfile *PresentationProfile `json:"presentation_profile"`
+	}
 	if err := json.Unmarshal(stored.Payload, &payload); err != nil {
 		t.Fatal(err)
 	}
 	if payload.SchemaVersion != SchemaVersion || !payload.SourceState.CoverageComplete || payload.SourceState.SourceMode != "sessions_only" || payload.SourceState.Mode != "digest_v2" {
 		t.Fatalf("unexpected payload state: %+v", payload.SourceState)
 	}
-	if len(payload.Sessions) != 1 || len(payload.Requirements) != 0 || len(payload.Tasks) != 0 {
+	if len(payload.Sessions) != 0 || len(payload.WorkEvidence) == 0 || len(payload.Requirements) != 0 || len(payload.Tasks) != 0 {
 		t.Fatalf("unexpected payload facts: %+v", payload)
+	}
+	if len(payload.Sources.SessionDigest) != 0 {
+		t.Fatal("new context must not duplicate the frozen digest in sources.session_digest")
+	}
+	if payload.PresentationProfile == nil || payload.PresentationProfile.SummaryFocus == "" || payload.PresentationProfile.ContentGrouping == "" {
+		t.Fatalf("presentation profile was not frozen: %+v", payload.PresentationProfile)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestBuildRequestFreezesProjectionCompatibility(t *testing.T) {
+	request := BuildRequest{
+		UserID: "7", RunID: "run-1", ReportType: ReportTypePersonalDaily,
+		Period:   reportsource.Period{Start: "2026-07-23", End: "2026-07-23"},
+		Timezone: biztime.Zone, Target: Target{Type: "self", UserID: "7"},
+		SourceSelectionID: "selection-1",
+	}
+	if err := request.validate(); err != nil {
+		t.Fatalf("legacy run without representation must remain readable: %v", err)
+	}
+	request.Representation = RepresentationWorkEvidence
+	if err := request.validate(); err != nil {
+		t.Fatalf("work evidence representation must be valid: %v", err)
+	}
+	request.Representation = "unknown"
+	if !errors.Is(request.validate(), ErrInvalidRequest) {
+		t.Fatal("unknown frozen representation must be rejected")
+	}
+}
+
+func TestPresentationProfileForEveryManagedReportType(t *testing.T) {
+	tests := map[string]PresentationProfile{
+		ReportTypePersonalDaily: {
+			SummaryFocus:    "个人当日推进的主要目标、关键成果、验证和整体状态；只有存在明确证据时才提及风险或阻塞。",
+			ContentGrouping: "按个人工作目标归并；同一目标下的开发、文档、部署、验证和修复合并表达。",
+		},
+		ReportTypePersonalWeekly: {
+			SummaryFocus:    "个人本周核心进展、里程碑、最新状态和明确风险。",
+			ContentGrouping: "跨日期归并持续目标，不按星期或日报逐条复述。",
+		},
+		ReportTypeTeamDaily: {
+			SummaryFocus:    "小组当日共同目标、团队交付、整体状态和共享阻塞。",
+			ContentGrouping: "按小组共同目标归并，不默认逐人罗列；只有解释职责或阻塞归属时提及成员。",
+		},
+		ReportTypeTeamWeekly: {
+			SummaryFocus:    "小组本周交付、关键里程碑、协作状态和明确风险。",
+			ContentGrouping: "按小组业务目标与里程碑归并，不按成员或日期罗列。",
+		},
+		ReportTypeDepartmentDaily: {
+			SummaryFocus:    "部门当日重要进展、整体状态和需要管理关注的跨团队问题。",
+			ContentGrouping: "按部门级目标归并，不机械罗列小组；只有解释责任或依赖时提及小组。",
+		},
+		ReportTypeDepartmentWeekly: {
+			SummaryFocus:    "部门本周整体成果、关键进度、跨团队依赖和管理关注项。",
+			ContentGrouping: "按部门级目标和关键里程碑归并，不按小组逐份复述。",
+		},
+	}
+	for reportType, want := range tests {
+		t.Run(reportType, func(t *testing.T) {
+			got, err := presentationProfileFor(reportType)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != want {
+				t.Fatalf("profile=%+v, want %+v", got, want)
+			}
+		})
+	}
+	if _, err := presentationProfileFor("unknown"); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("unknown report type error=%v", err)
+	}
+}
+
+func TestProjectPayloadForRepresentationKeepsHistoricalRunShape(t *testing.T) {
+	digest := validFrozenDigestV2()
+	payload := Payload{
+		Run:      Run{ReportType: ReportTypePersonalDaily},
+		Sessions: []SessionSource{{SelectionID: "selection-1", Mode: "digest_v2", Digest: digest}},
+		Sources:  Sources{SessionDigest: digest},
+	}
+	legacy, err := projectPayloadForRepresentation(payload, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(legacy.Sessions) != 1 || len(legacy.Sources.SessionDigest) == 0 || legacy.WorkEvidence != nil || legacy.PresentationProfile != nil {
+		t.Fatalf("historical run shape changed: %+v", legacy)
+	}
+	current, err := projectPayloadForRepresentation(payload, RepresentationWorkEvidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(current.Sessions) != 0 || len(current.Sources.SessionDigest) != 0 || current.WorkEvidence == nil || current.PresentationProfile == nil {
+		t.Fatalf("new run projection was not applied: %+v", current)
+	}
+}
+
+func TestProjectPayloadRemovesOnlyProvablyDuplicateLegacyDigest(t *testing.T) {
+	digest := validFrozenDigestV2()
+	payload := Payload{
+		Sessions: []SessionSource{{SelectionID: "selection-1", Mode: "digest_v2", Digest: digest}},
+		Sources:  Sources{SessionDigest: digest},
+	}
+
+	if err := removeDuplicateLegacyDigest(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Sessions) != 1 || string(payload.Sessions[0].Digest) != string(digest) {
+		t.Fatalf("canonical session digest was not preserved: %+v", payload.Sessions)
+	}
+	if len(payload.Sources.SessionDigest) != 0 {
+		t.Fatal("provably duplicate legacy digest was retained")
+	}
+	payload.Sources.SessionDigest = json.RawMessage("\n" + string(digest))
+	if err := removeDuplicateLegacyDigest(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Sources.SessionDigest) == 0 {
+		t.Fatal("byte-distinct legacy digest must be retained even when its JSON value is equal")
+	}
+
+	distinct := json.RawMessage(`{"content_mode":"digest_v2","different":true}`)
+	payload.Sources.SessionDigest = distinct
+	if err := removeDuplicateLegacyDigest(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if string(payload.Sources.SessionDigest) != string(distinct) {
+		t.Fatal("non-identical legacy digest must not be removed")
+	}
+}
+
+func TestProjectPayloadInternsExactTextAndPreservesEveryFactReference(t *testing.T) {
+	digest := validFrozenDigestV2()
+	payload := Payload{
+		Sessions: []SessionSource{{SelectionID: "selection-1", Mode: "digest_v2", Digest: digest}},
+		Sources:  Sources{SessionDigest: digest},
+	}
+
+	projected, err := projectPayload(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projected.WorkEvidence == nil || len(projected.Sessions) != 0 || len(projected.Sources.SessionDigest) != 0 {
+		t.Fatalf("digest was not replaced by one work evidence projection: %+v", projected)
+	}
+	evidence := projected.WorkEvidence
+	if len(evidence.EvidenceByGoal) != 2 || len(evidence.ResultTexts) != 2 {
+		t.Fatalf("exact repeated values were not interned deterministically: %+v", evidence)
+	}
+	if len(evidence.EvidenceByGoal[0].Facts) != 2 || len(evidence.EvidenceByGoal[1].Facts) != 1 {
+		t.Fatalf("work unit occurrences were lost: %+v", evidence.EvidenceByGoal)
+	}
+	first := evidence.EvidenceByGoal[0].Facts[0]
+	second := evidence.EvidenceByGoal[0].Facts[1]
+	if first.Results[0].TextRef != second.Results[0].TextRef ||
+		first.Results[0].EvidenceRefs[0] != "ev-1" || second.Results[0].EvidenceRefs[0] != "ev-2" {
+		t.Fatalf("text interning lost per-fact evidence references: first=%+v second=%+v", first, second)
+	}
+	lookups := [][]WorkEvidenceLookup{
+		evidence.Categories, evidence.Statuses, evidence.EvidenceGrades,
+		evidence.ResultSources, evidence.ResultTexts,
+	}
+	for _, values := range lookups {
+		for index, value := range values {
+			if value.ID != index+1 {
+				t.Fatalf("lookup IDs must be dense and one-based: %+v", values)
+			}
+		}
+	}
+	factCount := 0
+	seenRefs := map[string]struct{}{}
+	for _, group := range evidence.EvidenceByGoal {
+		for _, fact := range group.Facts {
+			factCount++
+			if _, exists := seenRefs[fact.WorkUnitRef]; exists {
+				t.Fatalf("duplicate projected work unit %q", fact.WorkUnitRef)
+			}
+			seenRefs[fact.WorkUnitRef] = struct{}{}
+			if fact.DateRef < 1 || fact.DateRef > len(evidence.Period.Days) ||
+				fact.CategoryRef < 1 || fact.CategoryRef > len(evidence.Categories) ||
+				fact.StatusRef < 1 || fact.StatusRef > len(evidence.Statuses) ||
+				fact.EvidenceGradeRef < 1 || fact.EvidenceGradeRef > len(evidence.EvidenceGrades) {
+				t.Fatalf("orphan fact lookup: %+v", fact)
+			}
+			for _, result := range fact.Results {
+				if result.TextRef < 1 || result.TextRef > len(evidence.ResultTexts) ||
+					result.SourceRef < 1 || result.SourceRef > len(evidence.ResultSources) {
+					t.Fatalf("orphan result lookup: %+v", result)
+				}
+			}
+		}
+	}
+	if factCount != evidence.Period.Days[0].RepresentedFactCount {
+		t.Fatalf("fact coverage mismatch: facts=%d period=%+v", factCount, evidence.Period)
+	}
+	encoded, err := json.Marshal(evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	visible := string(encoded)
+	if !strings.Contains(visible, `"fact_columns"`) ||
+		!strings.Contains(visible, `"period_day_ref"`) ||
+		strings.Contains(visible, `"work_unit_ref":`) {
+		t.Fatalf("work evidence is not a self-described columnar projection: %s", visible)
+	}
+}
+
+func TestProjectPayloadRejectsDuplicateWorkUnitReference(t *testing.T) {
+	digest := json.RawMessage(strings.Replace(string(validFrozenDigestV2()), `"work_unit_ref":"wu-3"`, `"work_unit_ref":"wu-2"`, 1))
+	_, err := projectPayload(Payload{
+		Sessions: []SessionSource{{SelectionID: "selection-1", Mode: "digest_v2", Digest: digest}},
+	})
+	if !errors.Is(err, ErrIncomplete) {
+		t.Fatalf("duplicate work unit reference must fail projection, got %v", err)
+	}
+}
+
+func TestProjectPayloadRejectsContradictoryTruncatedCoverage(t *testing.T) {
+	digest := json.RawMessage(strings.Replace(
+		string(validFrozenDigestV2()),
+		`"outcome_coverage":{"source_count":3`,
+		`"highlights_truncated":true,"outcome_coverage":{"source_count":3`,
+		1,
+	))
+	_, err := projectPayload(Payload{
+		Sessions: []SessionSource{{SelectionID: "selection-1", Mode: "digest_v2", Digest: digest}},
+	})
+	if !errors.Is(err, ErrIncomplete) {
+		t.Fatalf("truncated day must fail projection even when coverage claims complete, got %v", err)
+	}
+}
+
+func TestProjectPayloadRejectsIncompleteFactAndSourceIdentity(t *testing.T) {
+	for name, digest := range map[string]json.RawMessage{
+		"empty result text": json.RawMessage(strings.Replace(string(validFrozenDigestV2()), `"text":"same result"`, `"text":""`, 1)),
+		"empty source item": json.RawMessage(strings.Replace(string(validFrozenDigestV2()), `"source_item_ref":"item-1"`, `"source_item_ref":""`, 1)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := projectPayload(Payload{
+				Sessions: []SessionSource{{SelectionID: "selection-1", Mode: "digest_v2", Digest: digest}},
+			})
+			if !errors.Is(err, ErrIncomplete) {
+				t.Fatalf("incomplete frozen fact must fail projection, got %v", err)
+			}
+		})
+	}
+}
+
+func validFrozenDigestV2() json.RawMessage {
+	return json.RawMessage(`{
+		"content_mode":"digest_v2",
+		"timezone":"Asia/Shanghai",
+		"digest_version":"session-digest/v2.10.0",
+		"redaction_version":"report-redaction/v1",
+		"content_snapshot_at":"2026-07-23T12:00:00+08:00",
+		"completeness":"complete",
+		"returned_item_count":1,
+		"has_more":false,
+		"coverage":{"complete":true,"source_item_count":1,"represented_item_count":1,"source_event_count":9,"included_event_count":3,"omitted_event_count":6,"truncated_item_count":1},
+		"report_period_summary":{"start_date":"2026-07-23","end_date":"2026-07-23","result_work_unit_count":3,"days":[{"date":"2026-07-23","result_work_unit_count":3,"highlights":[
+			{"work_unit_ref":"wu-1","sequence":1,"activity_end_at":"2026-07-23T09:00:00+08:00","category":"implementation","status":"completed","evidence_grade":"A","goal":"same goal","result_statements":[{"text":"same result","source":"tool_result","evidence_refs":["ev-1"]}],"unresolved":[]},
+			{"work_unit_ref":"wu-2","sequence":2,"activity_end_at":"2026-07-23T10:00:00+08:00","category":"validation","status":"completed","evidence_grade":"A","goal":"same goal","result_statements":[{"text":"same result","source":"tool_result","evidence_refs":["ev-2"]}],"unresolved":[]},
+			{"work_unit_ref":"wu-3","sequence":3,"activity_end_at":"2026-07-23T11:00:00+08:00","category":"investigation","status":"partial","evidence_grade":"B","goal":"other goal","result_statements":[{"text":"other result","source":"agent_claim","evidence_refs":null}],"unresolved":[{"text":"follow up","evidence_ref":"ev-3"}]}
+		],"outcome_coverage":{"source_count":3,"represented_count":3,"complete":true,"text_compacted":false}}]},
+		"items":[{"source_item_ref":"item-1","session_ref":"session-1","agent_type":"codex","activity_start_at":"2026-07-23T08:00:00+08:00","activity_end_at":"2026-07-23T11:00:00+08:00","digest_sha256":"abc","coverage":{"source_event_count":9,"included_event_count":3,"omitted_event_count":6,"truncated":true,"representation":"period_result_focused"},"digest":{"coverage":{"source_work_unit_count":3,"detailed_work_unit_count":0,"aggregated_work_unit_count":3}}}]
+	}`)
 }
 
 func TestBuildReturnsExistingContextWithoutReadingSources(t *testing.T) {
