@@ -107,6 +107,7 @@ func MergeReportPeriodSummarySources(
 		highlights := make([]DailyHighlight, 0, len(candidates.highlights))
 		for _, candidate := range candidates.highlights {
 			highlight := candidate.highlight
+			highlight.SourceRef = candidate.sourceRef
 			key := highlight.WorkUnitRef
 			if key == "" {
 				key = canonicalKey(highlight.Goal + "\x00" +

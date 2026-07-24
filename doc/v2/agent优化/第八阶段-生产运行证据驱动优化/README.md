@@ -1,6 +1,6 @@
 # 第八阶段：生产运行证据驱动优化
 
-> 状态：完整回复去重版本仍产生 332,428 字符 Context 并导致 Run 超时；结果首段 Projection 与重复 Summary 写回归一化已完成开发和真实载荷重放，待合并、部署及同配置新 Run 验收
+> 状态：结果首段版已真实写回成功，但 347 条事实仍耗时 620.7 秒且日报过长；Session+工作类别首末状态 Projection 已完成开发和离线重放，待合并、部署及同配置新 Run 验收
 > 日期：2026-07-23
 > API 部署基线：`main@3a6c3f5`
 
@@ -31,7 +31,8 @@
 - 代码已合并 `main@3a6c3f5`，测试服 API 使用镜像 `sha256:bb8436d15590c21c6eb0060b0299be2a44ea182ae174eb952b74146b9ea7cc38`；
 - 测试服使用 `100866/aida-report@1.0.48`，真实 Session 已确认加载该版本；
 - 真实 Run `4ba163dc-...` 已确认 Agent 只收到 `/aida-report + run_id`，完成 Skill、一次 `get_report_context` 和一次写回尝试；332,428 字符 Context 使模型处理约 7 分 30 秒，重复 Summary 写回被拒绝后 Run 超时；
-- 当前结果首段 Projection 对相同载荷将事实文本从 286,554 降至 20,691 个 Unicode 字符，完整 Digest 不变；写回层已兼容重复的前置 `## 工作总结`；
+- 结果首段版真实 Run `6987645c-...` 已成功写回，重复 Summary 兼容有效；但 MCP 仍有 64,103 字符、模型输入 47,665 Token、总耗时 620.7 秒，日报仍过度展开；
+- 当前 Session+工作类别首末状态 Projection 对相同来源离线生成 91 条事实、6,144 字符事实文本；完整 Digest 不变，跨类别结果和所有未解决项保留；
 - 原始生产载荷保存到本机 Git 仓库外的权限受控缓存，每个新流程样本同时保留 Context、原始 JSONL 和结构化 Session，不提交 Git；
 - 不修改 Agent Platform、不切换模型，不用外部平台故障掩盖 Aida 验收结果。
 

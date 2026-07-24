@@ -288,6 +288,119 @@ func TestProjectPayloadUsesReadableFactsAndOmitsRawGoals(t *testing.T) {
 	}
 }
 
+func TestProjectPayloadKeepsFirstAndLatestResultPerSession(t *testing.T) {
+	digest := string(validFrozenDigestV2())
+	for _, workUnitRef := range []string{"wu-1", "wu-2", "wu-3"} {
+		digest = strings.Replace(
+			digest,
+			`"work_unit_ref":"`+workUnitRef+`"`,
+			`"source_ref":"session-1","work_unit_ref":"`+workUnitRef+`"`,
+			1,
+		)
+	}
+	second := strings.Index(digest, `"source_ref":"session-1","work_unit_ref":"wu-2"`)
+	if second < 0 {
+		t.Fatal("second Work Unit marker missing")
+	}
+	digest = digest[:second] + strings.Replace(
+		digest[second:], `"text":"same result"`, `"text":"middle result"`, 1,
+	)
+	digest = strings.ReplaceAll(digest, `"category":"validation"`, `"category":"implementation"`)
+	digest = strings.ReplaceAll(digest, `"category":"investigation"`, `"category":"implementation"`)
+
+	projected, err := projectPayload(Payload{
+		Sessions: []SessionSource{{
+			SelectionID: "selection-1", Mode: "digest_v2", Digest: json.RawMessage(digest),
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projected.WorkEvidence == nil {
+		t.Fatal("work evidence missing")
+	}
+	visible, err := json.Marshal(projected.WorkEvidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(visible)
+	if !strings.Contains(text, "same result") || !strings.Contains(text, "other result") ||
+		strings.Contains(text, "middle result") || strings.Contains(text, "session-1") {
+		t.Fatalf("session projection did not keep first/latest without exposing identity: %s", text)
+	}
+}
+
+func TestProjectPayloadKeepsAllLegacyResultsWithoutSourceRefs(t *testing.T) {
+	digest := strings.Replace(
+		string(validFrozenDigestV2()),
+		`{"text":"same result","source":"tool_result","evidence_refs":["ev-1"]}`,
+		`{"text":"legacy first","source":"tool_result","evidence_refs":["ev-1"]},{"text":"legacy middle","source":"tool_result","evidence_refs":["ev-1"]},{"text":"legacy latest","source":"tool_result","evidence_refs":["ev-1"]}`,
+		1,
+	)
+	projected, err := projectPayload(Payload{
+		Sessions: []SessionSource{{
+			SelectionID: "selection-1", Mode: "digest_v2", Digest: json.RawMessage(digest),
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	visible, _ := json.Marshal(projected.WorkEvidence)
+	for _, expected := range []string{"legacy first", "legacy middle", "legacy latest"} {
+		if !strings.Contains(string(visible), expected) {
+			t.Fatalf("legacy result %q was lost: %s", expected, visible)
+		}
+	}
+}
+
+func TestProjectPayloadKeepsDifferentWorkCategoriesInOneSession(t *testing.T) {
+	digest := string(validFrozenDigestV2())
+	for _, workUnitRef := range []string{"wu-1", "wu-2", "wu-3"} {
+		digest = strings.Replace(
+			digest,
+			`"work_unit_ref":"`+workUnitRef+`"`,
+			`"source_ref":"session-1","work_unit_ref":"`+workUnitRef+`"`,
+			1,
+		)
+	}
+	second := strings.Index(digest, `"source_ref":"session-1","work_unit_ref":"wu-2"`)
+	digest = digest[:second] + strings.Replace(
+		digest[second:], `"text":"same result"`, `"text":"validation result"`, 1,
+	)
+
+	projected, err := projectPayload(Payload{
+		Sessions: []SessionSource{{
+			SelectionID: "selection-1", Mode: "digest_v2", Digest: json.RawMessage(digest),
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	visible, _ := json.Marshal(projected.WorkEvidence)
+	for _, expected := range []string{"same result", "validation result", "other result"} {
+		if !strings.Contains(string(visible), expected) {
+			t.Fatalf("independent category result %q was lost: %s", expected, visible)
+		}
+	}
+}
+
+func TestProjectPayloadRejectsUnknownHighlightSource(t *testing.T) {
+	digest := strings.Replace(
+		string(validFrozenDigestV2()),
+		`"work_unit_ref":"wu-1"`,
+		`"source_ref":"unknown-session","work_unit_ref":"wu-1"`,
+		1,
+	)
+	_, err := projectPayload(Payload{
+		Sessions: []SessionSource{{
+			SelectionID: "selection-1", Mode: "digest_v2", Digest: json.RawMessage(digest),
+		}},
+	})
+	if !errors.Is(err, ErrIncomplete) {
+		t.Fatalf("unknown source_ref must fail projection, got %v", err)
+	}
+}
+
 func TestProjectReportFactTextKeepsOutcomeLeadAndDropsProcessDetail(t *testing.T) {
 	input := "已完成方案收口。测试已全部通过。\n\n## 实现细节\n\n" +
 		"```go\nfunc internalOnly() {}\n```\n\n" + strings.Repeat("内部实现、命令和文件路径。", 1000)
@@ -334,6 +447,40 @@ func TestProjectReportFactTextDropsPureGitOperation(t *testing.T) {
 func TestProjectReportFactTextDropsPureWorktreeMerge(t *testing.T) {
 	if got := projectReportFactText("已合入当前 worktree。"); got != "" {
 		t.Fatalf("pure worktree merge became report fact: %q", got)
+	}
+}
+
+func TestProjectReportFactTextDropsGitOnlyValidation(t *testing.T) {
+	input := "已完成分支 rebase 和 merge，前端测试及生产构建均通过。"
+	if got := projectReportFactText(input); got != "" {
+		t.Fatalf("Git-only validation became report fact: %q", got)
+	}
+}
+
+func TestProjectReportFactTextDropsInternalDelegationResult(t *testing.T) {
+	input := "审查结论已发给主代理：前端旧技术文档可以删除。"
+	if got := projectReportFactText(input); got != "" {
+		t.Fatalf("internal delegation became report fact: %q", got)
+	}
+}
+
+func TestProjectReportFactTextDropsInstructionAcknowledgement(t *testing.T) {
+	input := "已完整阅读 AGENTS.md，后续任务我会严格遵守远程开发约定。"
+	if got := projectReportFactText(input); got != "" {
+		t.Fatalf("instruction acknowledgement became report fact: %q", got)
+	}
+}
+
+func TestProjectReportFactTextDropsProcessNarration(t *testing.T) {
+	for _, input := range []string{
+		"我会先按领域建模方法只读拆解现有手册。",
+		"我先只做文档职责和引用核对，不会直接删除或改名。",
+		"你的担忧完全正确，而且这不是零散后端问题。",
+		"只读分析结论如下，可直接用于后续文档。",
+	} {
+		if got := projectReportFactText(input); got != "" {
+			t.Fatalf("process narration became report fact: input=%q got=%q", input, got)
+		}
 	}
 }
 

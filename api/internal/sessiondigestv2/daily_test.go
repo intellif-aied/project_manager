@@ -388,10 +388,15 @@ func TestMergeReportPeriodSummarySourcesPreservesSessionCoverage(t *testing.T) {
 		t.Fatalf("unexpected merged period: %#v", got)
 	}
 	refs := map[string]bool{}
+	sourceRefs := map[string]bool{}
 	for _, highlight := range got.Days[0].Highlights {
 		refs[highlight.WorkUnitRef] = true
+		sourceRefs[highlight.SourceRef] = true
 	}
 	if !refs["bravo-a"] || !refs["charlie-a"] {
 		t.Fatalf("selected sessions lost all representation: %#v", got.Days[0].Highlights)
+	}
+	if !sourceRefs["session-a"] || !sourceRefs["session-b"] || !sourceRefs["session-c"] {
+		t.Fatalf("merged highlights lost their source sessions: %#v", got.Days[0].Highlights)
 	}
 }
