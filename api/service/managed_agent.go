@@ -289,6 +289,7 @@ type ManagedTaskStatus struct {
 	Result         string          `json:"result"`
 	Error          string          `json:"error"`
 	Progress       string          `json:"progress"`
+	StartedAt      int64           `json:"started_at"`
 	FinishedAt     int64           `json:"finished_at"`
 	Raw            json.RawMessage `json:"-"`
 }
