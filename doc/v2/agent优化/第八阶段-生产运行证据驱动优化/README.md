@@ -2,7 +2,7 @@
 
 > 状态：Session+工作类别 Projection 与精简全局 Skill 已在测试服真实写回成功；Git 轨迹确定性剥离已完成自动化，待下一次常规报告 Run 持续观察
 > 日期：2026-07-23
-> API 部署基线：`main@3a6c3f5`
+> API 部署版本：`main@815938c` / `sha256:44347c49fab97e189d251cc8f84286c934063ec44ab330cf3a3c929ee1bcaf7e`
 
 ## 阶段目标
 
