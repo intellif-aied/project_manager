@@ -71,9 +71,17 @@ func TestPrepareReportResultContentForWorkEvidence(t *testing.T) {
 	if got, ok := err.(*mcpErrorCode); !ok || got.Code != "REPORT_SUMMARY_REQUIRED" {
 		t.Fatalf("missing summary error=%v", err)
 	}
-	_, _, err = prepareReportResultContent(reportcontext.RepresentationWorkEvidence, "总结", "\n## 工作总结\n重复")
-	if got, ok := err.(*mcpErrorCode); !ok || got.Code != "REPORT_CONTENT_DUPLICATE_SUMMARY" {
-		t.Fatalf("duplicate summary error=%v", err)
+	content, summary, err = prepareReportResultContent(
+		reportcontext.RepresentationWorkEvidence,
+		"完成日报结构优化。",
+		"\n## 工作总结\n\n完成日报结构优化。\n\n## 日报结构优化\n\n完成实现。",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = "## 工作总结\n\n完成日报结构优化。\n\n## 日报结构优化\n\n完成实现。"
+	if content != want || summary != "完成日报结构优化。" {
+		t.Fatalf("normalized duplicate content=%q summary=%q", content, summary)
 	}
 }
 

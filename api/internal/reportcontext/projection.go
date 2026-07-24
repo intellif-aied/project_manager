@@ -231,7 +231,194 @@ func projectReportFactText(value string) string {
 	if isHandoffPromptArtifact(text) {
 		return ""
 	}
-	return text
+	return compactReportFactLead(text)
+}
+
+const maxReportFactRunes = 240
+
+func compactReportFactLead(value string) string {
+	lines := strings.Split(strings.ReplaceAll(value, "\r\n", "\n"), "\n")
+	blocks := make([]string, 0, 4)
+	paragraph := make([]string, 0, 4)
+	inFence := false
+	flush := func() {
+		text := strings.Join(strings.Fields(strings.Join(paragraph, " ")), " ")
+		paragraph = paragraph[:0]
+		if text != "" {
+			blocks = append(blocks, text)
+		}
+	}
+	for _, rawLine := range lines {
+		line := strings.TrimSpace(rawLine)
+		if strings.HasPrefix(line, "```") || strings.HasPrefix(line, "~~~") {
+			flush()
+			inFence = !inFence
+			continue
+		}
+		if inFence {
+			continue
+		}
+		if line == "" {
+			flush()
+			continue
+		}
+		if strings.HasPrefix(line, "#") || isMarkdownTableLine(line) {
+			flush()
+			continue
+		}
+		cleaned, listItem := stripMarkdownListMarker(line)
+		cleaned = strings.TrimSpace(strings.TrimPrefix(cleaned, ">"))
+		if cleaned == "" || isCommandOrPathOnly(cleaned) || isPureGitOperation(cleaned) {
+			flush()
+			continue
+		}
+		if listItem {
+			flush()
+			blocks = append(blocks, cleaned)
+			continue
+		}
+		paragraph = append(paragraph, cleaned)
+	}
+	flush()
+	for _, block := range blocks {
+		if isLowInformationReportLead(block) {
+			continue
+		}
+		block = stripFlattenedReportDetail(block)
+		return reportFactLeadSentences(stripMarkdownLinkTargets(block), maxReportFactRunes)
+	}
+	return ""
+}
+
+func stripFlattenedReportDetail(value string) string {
+	for _, marker := range []string{
+		" ```", " ~~~", " ## ", " 主要改进：", " 核心修改：", " 主要修复：",
+		" 修改内容：", " 关键闭环：", " 主要交付：", " 证据链：", "： - ", ": - ",
+	} {
+		if index := strings.Index(value, marker); index >= 0 {
+			prefix := strings.TrimSpace(value[:index])
+			if len([]rune(prefix)) >= 18 && !isLowInformationReportLead(prefix) {
+				value = prefix
+			}
+		}
+	}
+	return strings.TrimSpace(value)
+}
+
+func stripMarkdownListMarker(value string) (string, bool) {
+	for _, prefix := range []string{"- ", "* ", "+ "} {
+		if strings.HasPrefix(value, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(value, prefix)), true
+		}
+	}
+	index := 0
+	for index < len(value) && value[index] >= '0' && value[index] <= '9' {
+		index++
+	}
+	if index > 0 && index+1 < len(value) && value[index] == '.' && value[index+1] == ' ' {
+		return strings.TrimSpace(value[index+2:]), true
+	}
+	return value, false
+}
+
+func isMarkdownTableLine(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	return strings.HasPrefix(trimmed, "|") && strings.Count(trimmed, "|") >= 2
+}
+
+func isCommandOrPathOnly(value string) bool {
+	lower := strings.ToLower(strings.TrimSpace(strings.Trim(value, "`")))
+	for _, prefix := range []string{
+		"$ ", "curl ", "go test ", "pytest ", "pnpm ", "npm ", "yarn ",
+		"docker ", "kubectl ", "make ", "git ", "ssh ",
+	} {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	return strings.HasPrefix(lower, "/") && !strings.ContainsAny(lower, "，。；：,;: ")
+}
+
+func isPureGitOperation(value string) bool {
+	lower := strings.ToLower(value)
+	if !containsAnyText(lower, "git ", "commit", "merge", "rebase", "cherry-pick", "提交号", "分支", "worktree", "已合入") {
+		return false
+	}
+	return !containsAnyText(lower,
+		"修复", "实现", "开发", "设计", "验证", "测试", "部署", "发布", "上线",
+		"回滚", "冲突", "解决", "定位", "分析", "文档", "方案", "功能", "故障",
+	)
+}
+
+func isLowInformationReportLead(value string) bool {
+	trimmed := strings.TrimSpace(strings.Trim(value, "。！？!?：: "))
+	if trimmed == "" {
+		return true
+	}
+	if len([]rune(trimmed)) <= 24 && containsAnyText(strings.ToLower(trimmed),
+		"可以", "好的", "没问题", "已处理", "处理好了", "已经完成", "完成了", "结论如下", "结果如下",
+	) {
+		return true
+	}
+	return len([]rune(trimmed)) <= 80 &&
+		(strings.HasSuffix(value, "如下：") || strings.HasSuffix(value, "如下:"))
+}
+
+func reportFactLeadSentences(value string, limit int) string {
+	runes := []rune(strings.TrimSpace(value))
+	if len(runes) == 0 {
+		return ""
+	}
+	cut := 0
+	for index, value := range runes {
+		if strings.ContainsRune("。！？!?", value) ||
+			(value == '.' && index+1 < len(runes) && runes[index+1] == ' ') {
+			cut = index + 1
+			if cut >= 18 {
+				break
+			}
+		}
+		if index+1 >= limit {
+			break
+		}
+	}
+	if cut < 18 || cut > limit {
+		cut = min(limit, len(runes))
+	}
+	result := strings.TrimSpace(string(runes[:cut]))
+	if cut < len(runes) && !strings.ContainsRune("。！？!?", runes[cut-1]) {
+		result += "…"
+	}
+	return strings.Trim(strings.ReplaceAll(result, "**", ""), "*` ")
+}
+
+func stripMarkdownLinkTargets(value string) string {
+	for {
+		open := strings.Index(value, "[")
+		if open < 0 {
+			return value
+		}
+		middleOffset := strings.Index(value[open:], "](")
+		if middleOffset < 0 {
+			return value
+		}
+		middle := open + middleOffset
+		closeOffset := strings.Index(value[middle+2:], ")")
+		if closeOffset < 0 {
+			return value
+		}
+		closeIndex := middle + 2 + closeOffset
+		value = value[:open] + value[open+1:middle] + value[closeIndex+1:]
+	}
+}
+
+func containsAnyText(value string, markers ...string) bool {
+	for _, marker := range markers {
+		if strings.Contains(value, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func unwrapTextEnvelope(value string) string {

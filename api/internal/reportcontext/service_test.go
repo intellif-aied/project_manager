@@ -288,10 +288,52 @@ func TestProjectPayloadUsesReadableFactsAndOmitsRawGoals(t *testing.T) {
 	}
 }
 
-func TestProjectReportFactTextKeepsCompleteSupportedReply(t *testing.T) {
-	input := "已完成方案收口。测试已全部通过。 ## 实现细节\n" + strings.Repeat("内部实现和路径 ", 1000)
-	if got := projectReportFactText(input); got != strings.TrimSpace(input) {
-		t.Fatalf("complete supported reply changed: chars=%d", len(got))
+func TestProjectReportFactTextKeepsOutcomeLeadAndDropsProcessDetail(t *testing.T) {
+	input := "已完成方案收口。测试已全部通过。\n\n## 实现细节\n\n" +
+		"```go\nfunc internalOnly() {}\n```\n\n" + strings.Repeat("内部实现、命令和文件路径。", 1000)
+	if got, want := projectReportFactText(input), "已完成方案收口。测试已全部通过。"; got != want {
+		t.Fatalf("projected fact=%q want=%q", got, want)
+	}
+}
+
+func TestProjectReportFactTextUsesFirstSubstantiveListItem(t *testing.T) {
+	input := "## 修改结果\n\n- 已修复报告超时并完成真实链路验证。\n- `go test ./...` 已通过。\n- 修改文件：`api/internal/reportcontext/projection.go`。"
+	if got, want := projectReportFactText(input), "已修复报告超时并完成真实链路验证。"; got != want {
+		t.Fatalf("projected fact=%q want=%q", got, want)
+	}
+}
+
+func TestProjectReportFactTextStopsBeforeFlattenedDetailList(t *testing.T) {
+	input := "已完成 8 项问题修复，并同步到前后端规范与唯一评审稿。 主要改进： - 增加查询预算。 - 补齐状态机。 - 修复缓存规则。"
+	if got, want := projectReportFactText(input), "已完成 8 项问题修复，并同步到前后端规范与唯一评审稿。"; got != want {
+		t.Fatalf("projected fact=%q want=%q", got, want)
+	}
+}
+
+func TestProjectReportFactTextDropsFlattenedCodeFence(t *testing.T) {
+	input := "脚本语法检查通过，但缺少运行依赖，无法确认端到端训练成功；直接运行会报： ```text ModuleNotFoundError ``` 后续命令省略。"
+	if got, want := projectReportFactText(input), "脚本语法检查通过，但缺少运行依赖，无法确认端到端训练成功；直接运行会报："; got != want {
+		t.Fatalf("projected fact=%q want=%q", got, want)
+	}
+}
+
+func TestProjectReportFactTextDoesNotKeepGenericShortSentenceAlone(t *testing.T) {
+	input := "已完成。日报投影现在只保留最终结果并排除过程命令和文件路径"
+	if got, want := projectReportFactText(input), input; got != want {
+		t.Fatalf("projected fact=%q want=%q", got, want)
+	}
+}
+
+func TestProjectReportFactTextDropsPureGitOperation(t *testing.T) {
+	input := "已执行 git add、git commit 和 merge，提交号为 abc123。"
+	if got := projectReportFactText(input); got != "" {
+		t.Fatalf("pure Git operation became report fact: %q", got)
+	}
+}
+
+func TestProjectReportFactTextDropsPureWorktreeMerge(t *testing.T) {
+	if got := projectReportFactText("已合入当前 worktree。"); got != "" {
+		t.Fatalf("pure worktree merge became report fact: %q", got)
 	}
 }
 

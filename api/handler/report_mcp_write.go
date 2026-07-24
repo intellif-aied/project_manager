@@ -422,17 +422,34 @@ func prepareReportResultContent(representation, summary, content string) (string
 	if normalizedSummary == "" {
 		return "", "", mcpErr("REPORT_SUMMARY_REQUIRED", "summary is required for this report run")
 	}
-	for _, line := range strings.Split(body, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
+	if normalized, removed := stripLeadingWorkSummary(body); removed {
+		body = normalized
+		if body == "" {
+			return "", "", mcpErr("INVALID_ARGUMENT", "content body is required after the work summary")
 		}
-		if line == "## 工作总结" {
-			return "", "", mcpErr("REPORT_CONTENT_DUPLICATE_SUMMARY", "content must not contain a leading work summary section")
-		}
-		break
 	}
 	return "## 工作总结\n\n" + normalizedSummary + "\n\n" + body, normalizedSummary, nil
+}
+
+func stripLeadingWorkSummary(content string) (string, bool) {
+	lines := strings.Split(strings.ReplaceAll(strings.TrimSpace(content), "\r\n", "\n"), "\n")
+	first := -1
+	for index, line := range lines {
+		if strings.TrimSpace(line) != "" {
+			first = index
+			break
+		}
+	}
+	if first < 0 || strings.TrimSpace(lines[first]) != "## 工作总结" {
+		return strings.TrimSpace(content), false
+	}
+	for index := first + 1; index < len(lines); index++ {
+		line := strings.TrimSpace(lines[index])
+		if strings.HasPrefix(line, "## ") && line != "## 工作总结" {
+			return strings.TrimSpace(strings.Join(lines[index:], "\n")), true
+		}
+	}
+	return "", true
 }
 
 func reportResultHash(content string) string {
