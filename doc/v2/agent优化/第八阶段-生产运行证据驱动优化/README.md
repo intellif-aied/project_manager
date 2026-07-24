@@ -1,6 +1,6 @@
 # 第八阶段：生产运行证据驱动优化
 
-> 状态：结果首段版已真实写回成功，但 347 条事实仍耗时 620.7 秒且日报过长；Session+工作类别首末状态 Projection 已完成开发和离线重放，待合并、部署及同配置新 Run 验收
+> 状态：Session+工作类别 Projection 与精简全局 Skill 已在测试服真实写回成功；Git 轨迹确定性剥离已完成自动化，待下一次常规报告 Run 持续观察
 > 日期：2026-07-23
 > API 部署基线：`main@3a6c3f5`
 
@@ -24,15 +24,17 @@
 | [08-报告内容组织与目标归并-20260723.md](08-报告内容组织与目标归并-20260723.md) | 已完成高频用户反馈定位 | 用 GPT-5.5 直接成功样本证明过度拆分来自扁平 Digest 和 Skill 归并规则，固定目标成果组织验收 |
 | [09-Agent-facing-Context收敛方向-20260723.md](09-Agent-facing-Context收敛方向-20260723.md) | 决策已更新 | 删除分页和额外 LLM，使用确定性 Projection 收敛单次输入 |
 | [10-presentation-profile主流设计调研.md](10-presentation-profile主流设计调研.md) | 已完成 | 用一手资料核对 Skill、Context 和结构化写回的设计边界 |
-| [报告摘要与Presentation-Profile](报告摘要与Presentation-Profile/README.md) | 代码、自动化与测试 Skill `1.0.48` 已发布；最终写回待验收 | 固定六类 Summary、Profile、持久化、前端和验收方案 |
+| [报告摘要与Presentation-Profile](报告摘要与Presentation-Profile/README.md) | 代码、自动化、测试 Skill `1.0.50` 与真实写回已通过 | 固定六类 Summary、Profile、持久化、前端和验收方案 |
 
 ## 当前交付边界
 
 - 代码已合并 `main@3a6c3f5`，测试服 API 使用镜像 `sha256:bb8436d15590c21c6eb0060b0299be2a44ea182ae174eb952b74146b9ea7cc38`；
-- 测试服使用 `100866/aida-report@1.0.48`，真实 Session 已确认加载该版本；
+- 测试服使用 `100866/aida-report@1.0.50`，Registry 正文与 API 生成正文逐字节一致，真实 Session 已确认加载该版本；
 - 真实 Run `4ba163dc-...` 已确认 Agent 只收到 `/aida-report + run_id`，完成 Skill、一次 `get_report_context` 和一次写回尝试；332,428 字符 Context 使模型处理约 7 分 30 秒，重复 Summary 写回被拒绝后 Run 超时；
 - 结果首段版真实 Run `6987645c-...` 已成功写回，重复 Summary 兼容有效；但 MCP 仍有 64,103 字符、模型输入 47,665 Token、总耗时 620.7 秒，日报仍过度展开；
 - 当前 Session+工作类别首末状态 Projection 对相同来源离线生成 91 条事实、6,144 字符事实文本；完整 Digest 不变，跨类别结果和所有未解决项保留；
+- 真实 Run `31808223-...` 冻结 85 条事实、22,596 bytes Context，MCP 正文 16,807 字符；Skill 正文 3,901 字符，模型在写回调用时输入 30,420 Token，约 401 秒完成，Summary 290 字、正文 3,430 字；Skill、Context 与写回各调用一次；
+- 真实报告仍暴露少量分支、提交号与 worktree 轨迹，因此 Projection 已增加混合结果中的 Git 尾句剥离；业务成果保留，纯 Git 事实删除，该增量由单元测试验收，不再额外消耗一次真实模型调用；
 - 原始生产载荷保存到本机 Git 仓库外的权限受控缓存，每个新流程样本同时保留 Context、原始 JSONL 和结构化 Session，不提交 Git；
 - 不修改 Agent Platform、不切换模型，不用外部平台故障掩盖 Aida 验收结果。
 

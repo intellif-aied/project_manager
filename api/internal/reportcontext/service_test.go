@@ -457,10 +457,33 @@ func TestProjectReportFactTextDropsGitOnlyValidation(t *testing.T) {
 	}
 }
 
+func TestProjectReportFactTextKeepsOutcomeAndStripsGitTrace(t *testing.T) {
+	for input, expected := range map[string]string{
+		"已完成预审问题修复，并推送前后端功能分支。":             "已完成预审问题修复。",
+		"已完成 commit 和测试服部署。":                "已完成测试服部署。",
+		"已合入当前 worktree，当前 HEAD：`9ba749b`。": "",
+	} {
+		if got := projectReportFactText(input); got != expected {
+			t.Fatalf("Git trace sanitization mismatch: input=%q got=%q want=%q", input, got, expected)
+		}
+	}
+}
+
+func TestProjectReportFactTextKeepsNonGitSubmissionBlocker(t *testing.T) {
+	input := "当前提交不能进入人工测试，静态 Review 发现 2 个 P0 竞态和 1 个现有流程回归。"
+	if got := projectReportFactText(input); got != input {
+		t.Fatalf("non-Git blocker was lost: %q", got)
+	}
+}
+
 func TestProjectReportFactTextDropsInternalDelegationResult(t *testing.T) {
-	input := "审查结论已发给主代理：前端旧技术文档可以删除。"
-	if got := projectReportFactText(input); got != "" {
-		t.Fatalf("internal delegation became report fact: %q", got)
+	for _, input := range []string{
+		"审查结论已发给主代理：前端旧技术文档可以删除。",
+		"只读分析已完成，并已向主代理提交完整流水线结论。",
+	} {
+		if got := projectReportFactText(input); got != "" {
+			t.Fatalf("internal delegation became report fact: %q", got)
+		}
 	}
 }
 
