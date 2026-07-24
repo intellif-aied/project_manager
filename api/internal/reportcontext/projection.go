@@ -324,6 +324,7 @@ func projectReportFactText(value string) string {
 	if unwrapped := unwrapTextEnvelope(text); unwrapped != "" {
 		text = unwrapped
 	}
+	text = stripGitTraceClauses(text)
 	if isHandoffPromptArtifact(text) {
 		return ""
 	}
@@ -333,7 +334,12 @@ func projectReportFactText(value string) string {
 	if isProcessNarration(text) {
 		return ""
 	}
-	return compactReportFactLead(text)
+	lead := stripGitTraceClauses(compactReportFactLead(text))
+	if isPureGitOperation(lead) || isLowInformationReportLead(lead) ||
+		isInternalDelegationResult(lead) || isProcessNarration(lead) {
+		return ""
+	}
+	return lead
 }
 
 const maxReportFactRunes = 240
@@ -443,7 +449,13 @@ func isCommandOrPathOnly(value string) bool {
 
 func isPureGitOperation(value string) bool {
 	lower := strings.ToLower(value)
-	if !containsAnyText(lower, "git ", "commit", "merge", "rebase", "cherry-pick", "提交号", "分支", "worktree", "已合入") {
+	for _, negative := range []string{"未提交", "未推送", "未部署", "未合并", "未变基"} {
+		lower = strings.ReplaceAll(lower, negative, "")
+	}
+	if !containsAnyText(lower,
+		"git ", "commit", "merge", "rebase", "cherry-pick", "提交号", "提交：", "提交 `", "分支",
+		"worktree", "工作树", "已合入", "合并", "推送", "变基", "当前 head", "新 head",
+	) {
 		return false
 	}
 	return !containsAnyText(lower,
@@ -469,7 +481,38 @@ func isLowInformationReportLead(value string) bool {
 func isInternalDelegationResult(value string) bool {
 	lower := strings.ToLower(value)
 	return containsAnyText(lower, "主代理", "父代理", "父任务", "主任务") &&
-		containsAnyText(lower, "发给", "同步给", "交给", "回传", "发送给")
+		containsAnyText(lower, "发给", "同步给", "交给", "回传", "发送给", "提交给", "向主代理提交")
+}
+
+func stripGitTraceClauses(value string) string {
+	text := strings.TrimSpace(value)
+	for _, replacement := range [][2]string{
+		{" commit 和", ""}, {" commit及", ""}, {" commit、", ""},
+		{" Commit 和", ""}, {" Commit及", ""}, {" Commit、", ""},
+	} {
+		text = strings.ReplaceAll(text, replacement[0], replacement[1])
+	}
+	lower := strings.ToLower(text)
+	cut := false
+	for _, marker := range []string{
+		"并已提交、推送", "并提交、推送", "提交并推送", "并已推送", "并推送",
+		"，当前 head", "；当前 head", ", current head", "; current head",
+		"，新 head", "；新 head", " - 新 worktree", " - worktree", " - 分支：", " - 分支:",
+	} {
+		if index := strings.Index(lower, marker); index >= 0 {
+			text = strings.TrimSpace(text[:index])
+			cut = true
+			break
+		}
+	}
+	if cut {
+		text = strings.TrimRight(text, "，,；;：: ")
+		runes := []rune(text)
+		if len(runes) > 0 && !strings.ContainsRune("。！？!?", runes[len(runes)-1]) {
+			text += "。"
+		}
+	}
+	return strings.TrimSpace(text)
 }
 
 func isInstructionAcknowledgement(value string) bool {
