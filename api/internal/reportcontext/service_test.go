@@ -312,6 +312,44 @@ func TestProjectPayloadRejectsContradictoryTruncatedCoverage(t *testing.T) {
 	}
 }
 
+func TestProjectPayloadPreservesPendingFactWithoutOutcome(t *testing.T) {
+	digest := strings.Replace(
+		string(validFrozenDigestV2()),
+		`"status":"partial","evidence_grade":"B","goal":"other goal","result_statements":[{"text":"other result","source":"agent_claim","evidence_refs":null}],"unresolved":[{"text":"follow up","evidence_ref":"ev-3"}]`,
+		`"status":"pending","evidence_grade":"B","goal":"other goal","result_statements":[],"unresolved":[]`,
+		1,
+	)
+	projected, err := projectPayload(Payload{
+		Sessions: []SessionSource{{
+			SelectionID: "selection-1",
+			Mode:        "digest_v2",
+			Digest:      json.RawMessage(digest),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("pending fact without outcome must remain valid: %v", err)
+	}
+	if projected.WorkEvidence == nil {
+		t.Fatal("work evidence is missing")
+	}
+	for _, group := range projected.WorkEvidence.EvidenceByGoal {
+		for _, fact := range group.Facts {
+			if fact.WorkUnitRef != "wu-3" {
+				continue
+			}
+			if len(fact.Results) != 0 || len(fact.Unresolved) != 0 {
+				t.Fatalf("pending fact gained unsupported outcomes: %+v", fact)
+			}
+			status := projected.WorkEvidence.Statuses[fact.StatusRef-1].Value
+			if status != "pending" {
+				t.Fatalf("pending status was not preserved: %q", status)
+			}
+			return
+		}
+	}
+	t.Fatal("pending fact wu-3 was dropped")
+}
+
 func TestProjectPayloadRejectsIncompleteFactAndSourceIdentity(t *testing.T) {
 	for name, digest := range map[string]json.RawMessage{
 		"empty result text": json.RawMessage(strings.Replace(string(validFrozenDigestV2()), `"text":"same result"`, `"text":""`, 1)),
