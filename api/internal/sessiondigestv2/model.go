@@ -112,6 +112,7 @@ type SessionSummary struct {
 }
 
 type DailyHighlight struct {
+	SourceRef        string            `json:"source_ref,omitempty"`
 	WorkUnitRef      string            `json:"work_unit_ref"`
 	Sequence         int               `json:"sequence"`
 	ActivityEndAt    string            `json:"activity_end_at,omitempty"`

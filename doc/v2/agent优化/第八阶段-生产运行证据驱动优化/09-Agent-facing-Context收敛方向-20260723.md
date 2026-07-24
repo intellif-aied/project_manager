@@ -30,7 +30,7 @@
 
 ### 2.4 完整 Digest 与报告事实分层
 
-原始 Session、完整 Digest WorkUnit 和冻结来源保持不变。Report Projection 不再把完整 Agent 回复直接视为日报事实，而是固定取首个有信息量的结果段，最长 240 个 Unicode 字符并在句子边界结束；代码块、命令、纯路径、纯 Git 操作和中间实现过程不进入 Agent-facing Context。该规则只作用于报告表示，不修改 Digest Revision，完整正文仍可追溯。
+原始 Session、完整 Digest WorkUnit 和冻结来源保持不变。Report Projection 不再把完整 Agent 回复直接视为日报事实，而是固定取首个有信息量的结果段，最长 240 个 Unicode 字符并在句子边界结束；同一 Session、同一工作类别只保留报告期内首个和最新结果，所有明确未解决项保留；代码块、命令、纯路径、纯 Git 操作、过程叙述和内部交接结果不进入 Agent-facing Context。该规则只作用于报告表示，不修改 Digest Revision，完整正文仍可追溯。
 
 ### 2.5 Digest 和 Projection 禁止新增 LLM
 
@@ -38,7 +38,7 @@
 
 ### 2.6 Projection 是确定性内部模块
 
-Projection 位于现有 Report Context Builder 内部，固定执行：冻结 Payload → 删除完全相同的 Digest 双写 → 从每条结果正文提取首个有信息量的结果段 → 排除代码块、命令、纯路径、纯 Git、原始 Goal、交接 Prompt和内部审计引用 → 构建普通 `facts[]` → 按紧凑 `kind + text + source` 精确归并 → 保留去重后的日期/状态观察 → 校验 Digest 来源覆盖和 Work Unit 唯一性 → 冻结单份 Context。
+Projection 位于现有 Report Context Builder 内部，固定执行：冻结 Payload → 删除完全相同的 Digest 双写 → 校验每个 Highlight 的内部 Session 来源属于冻结 Item → 从每条结果正文提取首个有信息量的结果段 → 按 Session+工作类别保留首个和最新结果 → 保留全部未解决项 → 排除代码块、命令、纯路径、纯 Git、过程叙述、原始 Goal、交接 Prompt和内部审计引用 → 构建普通 `facts[]` → 按紧凑 `kind + text + source` 精确归并 → 保留日期/状态观察 → 冻结单份 Context。内部 `source_ref` 不进入 Agent Context。
 
 Projection 不做主题归并、不改变 Digest Revision，不创建新表、Job、Worker 或队列。语义主题归并仍由最终 Report Agent 完成；Projection 只执行上述固定报告事实规则。失败时 Run 明确失败，不回退超大 Context。
 
@@ -103,7 +103,9 @@ Projection 不做主题归并、不改变 Digest Revision，不创建新表、Jo
 
 第一版普通对象 Projection 只做完整正文精确去重。真实 Run `4ba163dc-c785-436b-9421-44b934e11da8` 仍返回 332,428 字符、372 条完整结果，GLM-5.2 处理约 7 分 30 秒后才调用写回；生成内容过度展开历史过程，且重复 Summary 触发写回拒绝，Run 最终超时。
 
-第二版对同一真实载荷执行确定性结果首段重放：372 条输入保留 347 条有效事实，事实文本由 286,554 降至 20,691 个 Unicode 字符，减少 92.8%。完整后端测试通过；未修改 Digest、数据库、队列、模型、前端、上传或 Token 统计。测试服真实新 Run 尚待执行，因此当前不能宣布最终生成通过。
+第二版结果首段真实 Run `6987645c-...` 已成功写回：MCP 64,103 字符，模型输入 47,665 Token，总耗时 620.7 秒。它证明单次读取和重复 Summary 写回兼容已闭环，但 347 条事实仍导致模型长时间归并并生成过长日报。
+
+第三版 Session+工作类别首末状态方案对同一来源离线重放为 91 条事实、6,144 字符事实文本；多任务 Session 通过保留不同 Digest Category 降低中间成果遗漏风险。完整 Digest、数据库、队列、模型、前端、上传和 Token 统计均不修改。真实新 Run 尚待执行，因此当前不能宣布时延和报告质量通过。
 
 测试服真实 Agent 验收通过前，不提交发布申请，不部署生产。
 

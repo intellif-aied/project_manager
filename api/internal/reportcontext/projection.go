@@ -43,6 +43,16 @@ type workEvidenceFactIdentity struct {
 	Source string
 }
 
+type workEvidenceFactCandidate struct {
+	Identity    workEvidenceFactIdentity
+	Observation WorkEvidenceObservation
+}
+
+type workEvidenceGroupIdentity struct {
+	SourceRef string
+	Category  string
+}
+
 func projectPayloadForRepresentation(payload Payload, representation string) (Payload, error) {
 	switch representation {
 	case "":
@@ -159,8 +169,24 @@ func projectDigestV2(session SessionSource) (WorkEvidence, error) {
 
 	workUnitRefs := make(map[string]struct{})
 	sourceItemRefs := make(map[string]struct{})
+	sessionRefs := make(map[string]struct{})
 	factIndexes := make(map[workEvidenceFactIdentity]int)
 	factObservations := make([]map[WorkEvidenceObservation]struct{}, 0)
+	resultCandidates := make(map[workEvidenceGroupIdentity][]workEvidenceFactCandidate)
+	groupOrder := make([]workEvidenceGroupIdentity, 0)
+	unresolvedCandidates := make([]workEvidenceFactCandidate, 0)
+	for _, item := range digest.Items {
+		if strings.TrimSpace(item.SourceItemRef) == "" || strings.TrimSpace(item.SessionRef) == "" {
+			return WorkEvidence{}, ErrIncomplete
+		}
+		if _, exists := sourceItemRefs[item.SourceItemRef]; exists {
+			return WorkEvidence{}, ErrIncomplete
+		}
+		sourceItemRefs[item.SourceItemRef] = struct{}{}
+		sessionRefs[item.SessionRef] = struct{}{}
+	}
+	hasSourceRefs := false
+	hasMissingSourceRefs := false
 	for _, day := range digest.ReportPeriod.Days {
 		if day.HighlightsTruncated || !day.OutcomeCoverage.Complete ||
 			day.OutcomeCoverage.SourceCount != day.OutcomeCoverage.RepresentedCount ||
@@ -175,6 +201,28 @@ func projectDigestV2(session SessionSource) (WorkEvidence, error) {
 				return WorkEvidence{}, ErrIncomplete
 			}
 			workUnitRefs[highlight.WorkUnitRef] = struct{}{}
+			sourceRef := strings.TrimSpace(highlight.SourceRef)
+			if sourceRef == "" {
+				hasMissingSourceRefs = true
+				// Frozen contexts created before source_ref was added keep their
+				// original one-result-per-Work-Unit behavior.
+				sourceRef = "legacy:" + highlight.WorkUnitRef
+			} else {
+				hasSourceRefs = true
+				if _, exists := sessionRefs[sourceRef]; !exists {
+					return WorkEvidence{}, ErrIncomplete
+				}
+			}
+			group := workEvidenceGroupIdentity{
+				SourceRef: sourceRef,
+				Category:  strings.TrimSpace(highlight.Category),
+			}
+			if group.Category == "" {
+				group.Category = "unknown"
+			}
+			if _, exists := resultCandidates[group]; !exists {
+				groupOrder = append(groupOrder, group)
+			}
 			observation := WorkEvidenceObservation{
 				Date: day.Date, Status: highlight.Status,
 			}
@@ -186,38 +234,86 @@ func projectDigestV2(session SessionSource) (WorkEvidence, error) {
 				if text == "" {
 					continue
 				}
-				appendWorkEvidenceFact(
-					&projection, factIndexes, &factObservations,
-					workEvidenceFactIdentity{Kind: "result", Text: text, Source: statement.Source},
-					observation,
+				resultCandidates[group] = append(
+					resultCandidates[group],
+					workEvidenceFactCandidate{
+						Identity: workEvidenceFactIdentity{
+							Kind: "result", Text: text, Source: statement.Source,
+						},
+						Observation: observation,
+					},
 				)
 			}
 			for _, unresolved := range highlight.Unresolved {
 				if strings.TrimSpace(unresolved.Text) == "" {
 					return WorkEvidence{}, ErrIncomplete
 				}
-				appendWorkEvidenceFact(
-					&projection, factIndexes, &factObservations,
-					workEvidenceFactIdentity{Kind: "unresolved", Text: unresolved.Text},
-					observation,
+				unresolvedCandidates = append(
+					unresolvedCandidates,
+					workEvidenceFactCandidate{
+						Identity: workEvidenceFactIdentity{
+							Kind: "unresolved", Text: unresolved.Text,
+						},
+						Observation: observation,
+					},
 				)
 			}
 		}
 	}
-
-	for _, item := range digest.Items {
-		if strings.TrimSpace(item.SourceItemRef) == "" {
-			return WorkEvidence{}, ErrIncomplete
-		}
-		if _, exists := sourceItemRefs[item.SourceItemRef]; exists {
-			return WorkEvidence{}, ErrIncomplete
-		}
-		sourceItemRefs[item.SourceItemRef] = struct{}{}
+	if hasSourceRefs && hasMissingSourceRefs {
+		return WorkEvidence{}, ErrIncomplete
 	}
+
+	for _, group := range groupOrder {
+		candidates := distinctWorkEvidenceCandidates(resultCandidates[group])
+		if len(candidates) == 0 {
+			continue
+		}
+		if !hasSourceRefs {
+			for _, candidate := range candidates {
+				appendWorkEvidenceFact(
+					&projection, factIndexes, &factObservations,
+					candidate.Identity, candidate.Observation,
+				)
+			}
+			continue
+		}
+		appendWorkEvidenceFact(
+			&projection, factIndexes, &factObservations,
+			candidates[0].Identity, candidates[0].Observation,
+		)
+		if len(candidates) > 1 {
+			latest := candidates[len(candidates)-1]
+			appendWorkEvidenceFact(
+				&projection, factIndexes, &factObservations,
+				latest.Identity, latest.Observation,
+			)
+		}
+	}
+	for _, candidate := range unresolvedCandidates {
+		appendWorkEvidenceFact(
+			&projection, factIndexes, &factObservations,
+			candidate.Identity, candidate.Observation,
+		)
+	}
+
 	if len(projection.Facts) == 0 && digest.ReportPeriod.ResultWorkUnitCount > 0 {
 		return WorkEvidence{}, ErrIncomplete
 	}
 	return projection, nil
+}
+
+func distinctWorkEvidenceCandidates(values []workEvidenceFactCandidate) []workEvidenceFactCandidate {
+	result := make([]workEvidenceFactCandidate, 0, len(values))
+	seen := make(map[workEvidenceFactIdentity]struct{}, len(values))
+	for _, value := range values {
+		if _, exists := seen[value.Identity]; exists {
+			continue
+		}
+		seen[value.Identity] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }
 
 func projectReportFactText(value string) string {
@@ -229,6 +325,12 @@ func projectReportFactText(value string) string {
 		text = unwrapped
 	}
 	if isHandoffPromptArtifact(text) {
+		return ""
+	}
+	if isInternalDelegationResult(text) || isInstructionAcknowledgement(text) {
+		return ""
+	}
+	if isProcessNarration(text) {
 		return ""
 	}
 	return compactReportFactLead(text)
@@ -345,7 +447,7 @@ func isPureGitOperation(value string) bool {
 		return false
 	}
 	return !containsAnyText(lower,
-		"修复", "实现", "开发", "设计", "验证", "测试", "部署", "发布", "上线",
+		"修复", "实现", "开发", "设计", "部署", "发布", "上线",
 		"回滚", "冲突", "解决", "定位", "分析", "文档", "方案", "功能", "故障",
 	)
 }
@@ -356,12 +458,36 @@ func isLowInformationReportLead(value string) bool {
 		return true
 	}
 	if len([]rune(trimmed)) <= 24 && containsAnyText(strings.ToLower(trimmed),
-		"可以", "好的", "没问题", "已处理", "处理好了", "已经完成", "完成了", "结论如下", "结果如下",
+		"可以", "好的", "没问题", "已处理", "处理好了", "已经完成", "完成了", "已结束", "结论如下", "结果如下",
 	) {
 		return true
 	}
 	return len([]rune(trimmed)) <= 80 &&
 		(strings.HasSuffix(value, "如下：") || strings.HasSuffix(value, "如下:"))
+}
+
+func isInternalDelegationResult(value string) bool {
+	lower := strings.ToLower(value)
+	return containsAnyText(lower, "主代理", "父代理", "父任务", "主任务") &&
+		containsAnyText(lower, "发给", "同步给", "交给", "回传", "发送给")
+}
+
+func isInstructionAcknowledgement(value string) bool {
+	lower := strings.ToLower(value)
+	return containsAnyText(lower, "已完整阅读 agents.md", "已阅读 agents.md", "后续任务我会严格遵守")
+}
+
+func isProcessNarration(value string) bool {
+	lower := strings.ToLower(strings.TrimSpace(value))
+	for _, prefix := range []string{
+		"我会", "我先", "接下来", "下一步", "现在先", "先只", "你的担忧", "你的判断", "你的理解",
+		"只读分析结论如下", "只读检查结果如下", "审查结论如下",
+	} {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func reportFactLeadSentences(value string, limit int) string {
