@@ -1946,12 +1946,13 @@ func mergeReportStartPromptValues(systemValues map[string]string, userValues map
 	return merged, "", true
 }
 
-func buildReportRunMessage(_ map[string]string, message string, _ string) string {
+func buildReportRunMessage(startValues map[string]string, message string, _ string) string {
+	runMessage := "/aida-report\nrun_id=" + strings.TrimSpace(startValues["run_id"])
 	message = strings.TrimSpace(message)
 	if message == "" || message == fallbackReportRunMessage() {
-		return fallbackReportRunMessage()
+		return runMessage
 	}
-	return "用户补充说明：\n" + message
+	return runMessage + "\n\n用户补充说明：\n" + message
 }
 
 func fallbackReportRunMessage() string {

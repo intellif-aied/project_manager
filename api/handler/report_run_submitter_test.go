@@ -90,11 +90,35 @@ func TestReportRunSubmitterOnlySendsRunIDAsReportIdentity(t *testing.T) {
 			t.Fatalf("legacy report identity %q leaked in message: %s", forbidden, submitted.Message)
 		}
 	}
-	if submitted.Message != "用户补充说明：\n请强调已经确认的风险" {
+	if submitted.Message != "/aida-report\nrun_id=run-identity\n\n用户补充说明：\n请强调已经确认的风险" {
 		t.Fatalf("runtime message=%q", submitted.Message)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestBuildReportRunMessageAlwaysCarriesRunID(t *testing.T) {
+	tests := []struct {
+		name    string
+		message string
+		want    string
+	}{
+		{name: "default", want: "/aida-report\nrun_id=run-identity"},
+		{name: "legacy fallback", message: fallbackReportRunMessage(), want: "/aida-report\nrun_id=run-identity"},
+		{
+			name:    "user instruction",
+			message: "请强调已经确认的风险",
+			want:    "/aida-report\nrun_id=run-identity\n\n用户补充说明：\n请强调已经确认的风险",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := buildReportRunMessage(reportAgentStartPromptValues("run-identity"), test.message, reportMCPCredentialSlot)
+			if got != test.want {
+				t.Fatalf("message=%q, want %q", got, test.want)
+			}
+		})
 	}
 }
 

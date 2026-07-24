@@ -135,10 +135,10 @@ func TestBuildReportRunMessageUsesRunIDOnly(t *testing.T) {
 		"mcp_url":                    "https://aida.example.com/api/v1/mcp/reports",
 	}, "请重点关注风险", reportMCPCredentialSlot)
 
-	if message != "用户补充说明：\n请重点关注风险" {
+	if message != "/aida-report\nrun_id=run-report\n\n用户补充说明：\n请重点关注风险" {
 		t.Fatalf("run message=%q", message)
 	}
-	for _, forbidden := range []string{"/aida-report", "run_id", "get_report_context", reportMCPCredentialSlot, "write_report_result"} {
+	for _, forbidden := range []string{"report_type", "period_json", "calendar_context_json", "target_json", "report_source_selection_id", "mcp_url", "get_report_context", reportMCPCredentialSlot, "write_report_result"} {
 		if strings.Contains(message, forbidden) {
 			t.Fatalf("runtime message repeats protocol %q: %q", forbidden, message)
 		}
@@ -154,7 +154,7 @@ func TestBuildReportRunMessageUsesFrozenContextWithoutSelection(t *testing.T) {
 		"run_id":                "run-department-weekly",
 	}, "", reportMCPCredentialSlot)
 
-	if message != "生成本次 Aida 报告。" {
+	if message != "/aida-report\nrun_id=run-department-weekly" {
 		t.Fatalf("fallback run message=%q", message)
 	}
 }
