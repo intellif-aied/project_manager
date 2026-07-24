@@ -252,9 +252,7 @@ func projectDigestV2(session SessionSource) (WorkEvidence, error) {
 			SourceFactsTruncated: day.HighlightsTruncated,
 		})
 		for _, highlight := range day.Highlights {
-			if strings.TrimSpace(highlight.WorkUnitRef) == "" ||
-				(len(highlight.ResultStatements) == 0 && len(highlight.Unresolved) == 0 &&
-					highlight.Status != "failed" && highlight.Status != "blocked") {
+			if strings.TrimSpace(highlight.WorkUnitRef) == "" {
 				return WorkEvidence{}, ErrIncomplete
 			}
 			if _, exists := workUnitRefs[highlight.WorkUnitRef]; exists {

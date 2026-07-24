@@ -190,3 +190,30 @@ func TestContextBuildRequestUsesFrozenRepresentation(t *testing.T) {
 		t.Fatalf("legacy run must keep the legacy representation, got %q", request.Representation)
 	}
 }
+
+func TestHandleContextErrorClassifiesProjectionFailure(t *testing.T) {
+	database, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	repository, err := NewRepository(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := Run{ID: "run-1", LeaseOwner: "worker-1", Stage: StageBuildingContext}
+	mock.ExpectExec("(?s)UPDATE ai_runs.*error_code = \\$5").
+		WithArgs(
+			run.ID, run.LeaseOwner, run.Stage, "failed",
+			"REPORT_CONTEXT_BUILD_FAILED", reportcontext.ErrIncomplete.Error(),
+		).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	processor := &Processor{repository: repository}
+	if err := processor.handleContextError(t.Context(), run, reportcontext.ErrIncomplete); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -168,9 +168,11 @@ func (p *Processor) processBuildingContext(ctx context.Context, run Run) error {
 func (p *Processor) handleContextError(ctx context.Context, run Run, err error) error {
 	if errors.Is(err, reportsource.ErrDigestCorrupt) ||
 		errors.Is(err, reportsource.ErrDigestVersionMismatch) ||
-		errors.Is(err, reportsource.ErrSourceUnavailable) ||
-		errors.Is(err, reportcontext.ErrIncomplete) {
+		errors.Is(err, reportsource.ErrSourceUnavailable) {
 		return p.repository.Fail(ctx, run, "failed", "REPORT_SOURCE_DIGEST_FAILED", err.Error())
+	}
+	if errors.Is(err, reportcontext.ErrIncomplete) {
+		return p.repository.Fail(ctx, run, "failed", "REPORT_CONTEXT_BUILD_FAILED", err.Error())
 	}
 	if isRetryableDatabaseError(err) {
 		return p.repository.RetryStage(ctx, run, "REPORT_CONTEXT_BUILD_FAILED", err.Error())
