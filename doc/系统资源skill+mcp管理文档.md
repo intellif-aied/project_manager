@@ -1,6 +1,6 @@
 # 系统资源 Skill 与 MCP 管理
 
-> 最近核对：2026-07-23
+> 最近核对：2026-07-24
 >
 > 适用项目：/home/intellif/dev/project_manager
 
@@ -23,7 +23,7 @@
 | 环境 | Skill owner | Skill | MCP | 最近验证 | 验证依据 |
 | --- | --- | --- | --- | --- | --- |
 | 生产 | 10086 | aida-report@1.0.16 | aida-report-mcp@report-v1 | 2026-07-22 | AIDA-BUG-20260722-014 发布记录及新 Run SkillRef |
-| 14.157 测试 | 100866 | aida-report@1.0.47 | aida-report-mcp@report-v1 | 2026-07-24 | 测试环境 .env、公共 Registry 与 API 健康检查 |
+| 14.157 测试 | 100866 | aida-report@1.0.48 | aida-report-mcp@report-v1 | 2026-07-24 | `20260724-03-report-projection-p0` 发布记录、运行环境、公共 Registry 与真实 Session SkillRef |
 
 规则：
 

@@ -103,7 +103,7 @@ Projection 不判断重要性、不做主题归并、不删除独立事实、不
 
 离线实现结果：31 份包含 Digest V2 的冻结样本全部投影成功。三个最大样本的 MCP 包装字符数为 381,583、267,676、187,850，均低于 500,000 字符硬上限；最大样本 Projection 基准约 20ms、4.6MB 分配。该结果只证明结构、容量和本地性能，不代替真实 Agent 内容质量验收。
 
-当前 worktree 的代码和自动化门禁已完成，测试服 API 与 `100866/aida-report@1.0.47` 已发布。紧凑 Context、单元测试和三个最大冻结样本离线验证已完成；测试服 S0210 Projection 的 `get_report_context(run_id)`、Skill 加载和 MCP 凭据注入均已分别验证成功。2026-07-24 的 P0 回放已确认 Agent 只收到真实 `run_id`，但 Agent Platform 在 597 秒内未产生执行事件并以 `infrastructure_failure` 结束，因此仍不能评价 Projection 内容或报告写回。本分支不修改平台、不切换模型，也不新增事件监控。
+代码和自动化门禁已完成并合并 `main`，测试服 API 与 `100866/aida-report@1.0.48` 已发布。新 Run 的紧凑 Context 为 894,223 bytes，37/37 来源冻结完成，真实 Session 已加载 Skill 并一次调用 `get_report_context(run_id)`。Agent Platform 在 596 秒执行后终止，最终报告写回仍未通过；Aida 已将该错误归一为报告超时。本期不修改平台、不切换模型，也不新增事件监控。
 
 测试服真实 Agent 验收通过前，不提交发布申请，不部署生产。
 

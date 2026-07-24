@@ -1,6 +1,6 @@
 # 报告摘要与 Presentation Profile
 
-> 文档状态：代码与自动化完成；测试 Skill `1.0.47` 为合并评审前修订，最终 Skill 文本待新不可变版本；真实 Agent 写回被平台基础设施故障阻断
+> 文档状态：代码、自动化和测试 Skill `1.0.48` 已部署；Skill/MCP/Context 已验证；真实 Agent 最终写回因平台执行时限未通过
 > 日期：2026-07-24
 > 适用范围：个人日报、个人周报、小组日报、小组周报、部门日报、部门周报
 > 设计基准：[开发方案设计基准](../../../../开发方案设计基准.md)
@@ -62,4 +62,4 @@
 
 ## 4. 当前状态
 
-方案代码和自动化已经完成：Presentation Profile、Summary 组合、默认 Agent Prompt、MCP Toolset、全局 Skill 与 Git 信息证据规则均已落地。`go test ./...`、`go vet ./...`、验收脚本语法检查和完整分支 `git diff --check` 已通过。测试 Skill `100866/aida-report@1.0.47` 和 API 已部署前一修订；合并评审新增的自定义 Agent Header 保留和独立计划章节禁止尚未部署，其中 Skill 正文变更必须发布新不可变版本。真实 Agent 已验证只收到 `run_id`，但在进入 Skill/MCP 前以 `infrastructure_failure` 结束，因此 Summary、Content 和六类写回未验收。没有数据库迁移和前端改动，生产未部署。
+方案代码和自动化已经完成：Presentation Profile、Summary 组合、默认 Agent Prompt、MCP Toolset、全局 Skill 与 Git 信息证据规则均已落地。`go test ./...`、`go vet ./...` 和 `git diff --check` 已通过。测试 Skill `100866/aida-report@1.0.48` 与 API 已部署。真实 Agent 已验证只收到 `run_id`，完成 Skill 加载和一次 Context MCP 读取，但平台在 596 秒后终止执行，因此 Summary、Content 和六类写回仍未验收。Aida 已将该情况归一为用户可理解的报告超时，不再暴露平台内部错误。没有数据库迁移和前端改动，生产未部署。
