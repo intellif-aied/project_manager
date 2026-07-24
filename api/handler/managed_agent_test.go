@@ -1481,6 +1481,14 @@ func TestRepairedReportAgentDependencyMovesReportMCPToInlineServer(t *testing.T)
 	})
 	agent := model.ManagedAgent{
 		AgentID: "agent-report",
+		MCPServers: []model.ManagedMCPServer{{
+			Name: service.ReportMCPSlug,
+			URL:  "https://old-aida.example.com/api/v1/mcp/reports",
+			Headers: map[string]string{
+				"X-Custom-Header":             "keep-me",
+				managedReportMCPToolsetHeader: managedReportMCPToolset,
+			},
+		}},
 		MCPBindings: []model.ManagedMCPBinding{
 			{Owner: "t03", Slug: service.ReportMCPSlug, Version: service.ReportMCPVersion, CredentialSlot: reportMCPCredentialSlot},
 			{Owner: "t03", Slug: "custom-mcp", Version: "1.0.0", CredentialSlot: "custom-slot"},
@@ -1501,7 +1509,10 @@ func TestRepairedReportAgentDependencyMovesReportMCPToInlineServer(t *testing.T)
 	if len(req.MCPServers) != 1 || req.MCPServers[0].Name != service.ReportMCPSlug || req.MCPServers[0].CredentialSlot != reportMCPCredentialSlot {
 		t.Fatalf("current report mcp server = %#v", req.MCPServers)
 	}
-	if len(req.MCPServers[0].Headers) != 0 {
+	if req.MCPServers[0].Headers["X-Custom-Header"] != "keep-me" {
+		t.Fatalf("custom report agent header was not preserved: %#v", req.MCPServers[0].Headers)
+	}
+	if _, exists := req.MCPServers[0].Headers[managedReportMCPToolsetHeader]; exists {
 		t.Fatalf("custom report agent must keep the full MCP toolset: %#v", req.MCPServers[0].Headers)
 	}
 	if len(req.Skills) != 2 {

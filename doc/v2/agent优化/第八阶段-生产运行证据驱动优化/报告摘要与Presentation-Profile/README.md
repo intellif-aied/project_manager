@@ -1,6 +1,6 @@
 # 报告摘要与 Presentation Profile
 
-> 文档状态：代码与自动化完成，待测试服真实 Agent 验收
+> 文档状态：代码与自动化完成；测试 Skill `1.0.47` 为合并评审前修订，最终 Skill 文本待新不可变版本；真实 Agent 写回被平台基础设施故障阻断
 > 日期：2026-07-24
 > 适用范围：个人日报、个人周报、小组日报、小组周报、部门日报、部门周报
 > 设计基准：[开发方案设计基准](../../../../开发方案设计基准.md)
@@ -42,7 +42,7 @@
 - Git 信息仅作为后台辅助溯源材料，不能单独证明工作成果，也不得作为独立工作项或操作流水展示；
 - 每个 Context 只有当前报告类型的一份 Profile；
 - 全局 Skill 只保留通用执行、证据和写回规则；
-- 默认 Agent 四层 Prompt 按唯一职责收敛：Instructions 只保证 Skill 真实加载，Start Prompt 只传 `/aida-report + run_id`，运行时 Message 只传用户补充，报告流程只存在于 Skill；
+- 默认 Agent Prompt 按平台真实契约收敛：Instructions 只保证 Skill 真实加载；Start Prompt Template 保留 `/aida-report + run_id`；由于平台在 Message 非空时不渲染 Template，Aida 提交的最终 Message 也必须以同一 `/aida-report + run_id` 开头，用户补充只追加一次；报告流程仍只存在于 Skill；
 - 默认 Agent 的 MCP Toolset 只暴露 Context 读取和成功/失败写回三个工具；旧工具不删除，自定义和历史 Agent 不受影响；
 - Summary 与 Content 由同一次平台固定模型执行生成，不新增模型调用；
 - `summary` 只属于 Agent 写回内部契约，不成为报告表、报告接口或前端字段；
@@ -62,4 +62,4 @@
 
 ## 4. 当前状态
 
-方案代码和自动化已经完成：Presentation Profile、Summary 组合、默认 Agent Prompt、MCP Toolset、全局 Skill 与 Git 信息证据规则均已落地。`go test ./...`、`go vet ./...`、验收脚本语法检查和 `git diff --check` 已通过。没有数据库迁移和前端改动；正式 Skill 资源尚未发布，测试服真实 Agent 和六类报告尚未验收，生产未部署。
+方案代码和自动化已经完成：Presentation Profile、Summary 组合、默认 Agent Prompt、MCP Toolset、全局 Skill 与 Git 信息证据规则均已落地。`go test ./...`、`go vet ./...`、验收脚本语法检查和完整分支 `git diff --check` 已通过。测试 Skill `100866/aida-report@1.0.47` 和 API 已部署前一修订；合并评审新增的自定义 Agent Header 保留和独立计划章节禁止尚未部署，其中 Skill 正文变更必须发布新不可变版本。真实 Agent 已验证只收到 `run_id`，但在进入 Skill/MCP 前以 `infrastructure_failure` 结束，因此 Summary、Content 和六类写回未验收。没有数据库迁移和前端改动，生产未部署。

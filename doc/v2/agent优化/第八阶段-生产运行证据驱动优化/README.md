@@ -1,8 +1,8 @@
 # 第八阶段：生产运行证据驱动优化
 
-> 状态：Projection 代码与自动化验证完成；Summary 与 Presentation Profile 方案已定稿、尚未开发  
-> 日期：2026-07-23  
-> 基线：`main@77d293f`
+> 状态：分支代码与自动化完成；测试服已部署前一修订，合并评审新增的兼容修复和 Skill 规则修正尚未重新发布；真实 Agent 写回被平台基础设施故障阻断
+> 日期：2026-07-23
+> 开发基线：`main@7bc400a`
 
 ## 阶段目标
 
@@ -16,23 +16,23 @@
 | --- | --- | --- |
 | [01-需求文档.md](01-需求文档.md) | 已定稿 | 固定目标、证据口径、产品边界和验收标准 |
 | [02-架构设计.md](02-架构设计.md) | 已定稿，代码已落地 | 固定数据链路、Agent-facing Context 和兼容决策 |
-| [03-开发方案.md](03-开发方案.md) | D-06、D-08 代码完成，D-07 已取消 | 固定无 LLM 的确定性 Projection 和 Skill 全局重写 |
-| [04-测试与验收.md](04-测试与验收.md) | 自动化与冻结样本离线验证通过，待真实 Agent | 固定对照验证和既有链路回归范围 |
-| [05-生产数据分析执行单.md](05-生产数据分析执行单.md) | 待执行 | 固定采样、取证、归因和输出格式 |
+| [03-开发方案.md](03-开发方案.md) | D-01～D-09 已执行，D-07 已取消 | 固定无 LLM 的确定性 Projection、Summary、Profile、Prompt、Toolset 和 Skill 收敛 |
+| [04-测试与验收.md](04-测试与验收.md) | 自动化与冻结样本通过；真实 Agent 未完成写回 | 固定对照验证、现有链路回归与平台故障边界 |
+| [05-生产数据分析执行单.md](05-生产数据分析执行单.md) | 首轮已执行 | 固定采样、取证、归因和输出格式 |
 | [06-首轮生产基线-20260723.md](06-首轮生产基线-20260723.md) | 已完成首批取证 | 记录身份关联、规模分布、四个脱敏样本和当前可确认结论 |
 | [07-Agent流程稳定性与一致性-20260723.md](07-Agent流程稳定性与一致性-20260723.md) | 已完成新流程全量分析 | 仅统计 `get_report_context` 流程，核对 Skill、工具顺序、用户追问、写回和失败日志完整性 |
 | [08-报告内容组织与目标归并-20260723.md](08-报告内容组织与目标归并-20260723.md) | 已完成高频用户反馈定位 | 用 GPT-5.5 直接成功样本证明过度拆分来自扁平 Digest 和 Skill 归并规则，固定目标成果组织验收 |
 | [09-Agent-facing-Context收敛方向-20260723.md](09-Agent-facing-Context收敛方向-20260723.md) | 决策已更新 | 删除分页和额外 LLM，使用确定性 Projection 收敛单次输入 |
 | [10-presentation-profile主流设计调研.md](10-presentation-profile主流设计调研.md) | 已完成 | 用一手资料核对 Skill、Context 和结构化写回的设计边界 |
-| [报告摘要与Presentation-Profile](报告摘要与Presentation-Profile/README.md) | 方案已定稿，尚未开发 | 固定六类 Summary、Profile、持久化、前端和验收方案 |
+| [报告摘要与Presentation-Profile](报告摘要与Presentation-Profile/README.md) | 代码和自动化完成；测试 Skill `1.0.47` 为前一修订，最终文本待新不可变版本 | 固定六类 Summary、Profile、持久化、前端和验收方案 |
 
-## 当前执行边界
+## 当前交付边界
 
-- 只读访问生产任务、Session、Thread Event、Aida Run 和可关联的模型调用记录；
-- 不修改生产数据、Agent、Skill、MCP、模型配置或服务；
-- 不启动或复用共享开发运行环境；
+- 代码位于独立 `feat/agent-runtime-optimization` worktree，尚未合并 `main`；
+- 测试服 API 和 `100866/aida-report@1.0.47` 已部署前一修订；合并评审新增的自定义 Agent Header 保留和独立计划章节禁止尚未部署；
+- 真实 Agent 已确认只收到 `/aida-report + run_id`，但平台执行在进入 Skill/MCP 前因 `infrastructure_failure` 结束，未完成报告写回；
 - 原始生产载荷保存到本机 Git 仓库外的权限受控缓存，每个新流程样本同时保留 Context、原始 JSONL 和结构化 Session，不提交 Git；
-- 当前阶段先输出基线和问题清单，未通过开发准入的代码改动不实施。
+- 不修改 Agent Platform、不切换模型，不用外部平台故障掩盖 Aida 验收结果。
 
 ## 固定主链路
 

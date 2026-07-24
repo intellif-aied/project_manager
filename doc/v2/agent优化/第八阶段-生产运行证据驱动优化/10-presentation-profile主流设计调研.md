@@ -87,7 +87,7 @@ Anthropic 将 Workflow 定义为由代码预先编排 LLM 和工具的系统，�
 
 ### 4.2 默认 Agent Prompt 只负责触发 Skill
 
-主流“高信号、按需提供 Context”的原则不仅适用于 Skill，也适用于 Agent Instructions 和启动消息。当前同一协议在四层重复不会增加事实可靠性，只会增加 Token、冲突面和模型注意力负担。本项目固定为：Instructions 只保证 Skill 被真实加载；Start Prompt 只传 `/aida-report + run_id`；运行时 Message 只传一次用户补充；Context/MCP/凭据/范围/写回和报告规则只由 Skill 定义。自定义 Agent 不参与该收敛。
+主流“高信号、按需提供 Context”的原则不仅适用于 Skill，也适用于 Agent Instructions 和启动消息。当前同一报告协议在四层重复不会增加事实可靠性，只会增加 Token、冲突面和模型注意力负担。本项目固定为：Instructions 只保证 Skill 被真实加载；Start Prompt Template 保留 `/aida-report + run_id`；由于平台在非空 Message 存在时不渲染 Template，Aida 提交的最终 Message 也必须自带同一 `/aida-report + run_id`，用户补充只追加一次；Context/MCP/凭据/范围/写回和报告规则只由 Skill 定义。自定义 Agent 不参与该收敛。
 
 同一原则也适用于 Tool Schema。默认 Agent 的确定流程只使用 `get_report_context`、`write_report_result`、`write_report_failure`，因此通过现有 MCP Server Header 为它返回这三个 Tool Schema。旧工具实现和无 Header 的完整 tools/list 保留，避免为减少 Prompt 而破坏自定义或历史 Agent。该选择是本项目基于真实工具集作出的实现决策，不是 MCP 规范要求。
 

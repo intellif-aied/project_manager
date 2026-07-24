@@ -1,8 +1,8 @@
 # AIDA-BUG-20260723-017：Agent 新 Session 疑似上下文污染或错误续接
 
-> 优先级：P0  
-> 状态：测试服已复现，已确认不属于 Aida 输入、Digest、Projection 或 MCP；作为 Agent 平台外部风险单独跟踪  
-> 发现日期：2026-07-23  
+> 优先级：P0
+> 状态：测试服已复现，已确认不属于 Aida 输入、Digest、Projection 或 MCP；作为 Agent 平台外部风险单独跟踪
+> 发现日期：2026-07-23
 > 范围：Agent Platform Session 隔离、Claude Code 执行上下文、Sandbox 初始化、会话恢复
 
 ## 1. 问题

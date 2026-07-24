@@ -1639,8 +1639,16 @@ func (h *ManagedAgentHandler) ensureCurrentReportMCPServer(servers []model.Manag
 			changed = true
 			continue
 		}
-		if server.URL != expected.URL || server.CredentialSlot != expected.CredentialSlot || server.AuthHeader != expected.AuthHeader || server.AuthScheme != expected.AuthScheme || !maps.Equal(server.Headers, expected.Headers) {
-			server = expected
+		normalized := expected
+		if !managedToolset {
+			normalized.Headers = maps.Clone(server.Headers)
+			delete(normalized.Headers, managedReportMCPToolsetHeader)
+			if len(normalized.Headers) == 0 {
+				normalized.Headers = nil
+			}
+		}
+		if server.URL != normalized.URL || server.CredentialSlot != normalized.CredentialSlot || server.AuthHeader != normalized.AuthHeader || server.AuthScheme != normalized.AuthScheme || !maps.Equal(server.Headers, normalized.Headers) {
+			server = normalized
 			changed = true
 		}
 		found = true
