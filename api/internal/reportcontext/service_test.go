@@ -239,7 +239,7 @@ func TestProjectPayloadRemovesOnlyProvablyDuplicateLegacyDigest(t *testing.T) {
 	}
 }
 
-func TestProjectPayloadInternsExactTextAndPreservesEveryFactReference(t *testing.T) {
+func TestProjectPayloadUsesReadableFactsAndOmitsRawGoals(t *testing.T) {
 	digest := validFrozenDigestV2()
 	payload := Payload{
 		Sessions: []SessionSource{{SelectionID: "selection-1", Mode: "digest_v2", Digest: digest}},
@@ -254,64 +254,59 @@ func TestProjectPayloadInternsExactTextAndPreservesEveryFactReference(t *testing
 		t.Fatalf("digest was not replaced by one work evidence projection: %+v", projected)
 	}
 	evidence := projected.WorkEvidence
-	if len(evidence.EvidenceByGoal) != 2 || len(evidence.ResultTexts) != 2 {
-		t.Fatalf("exact repeated values were not interned deterministically: %+v", evidence)
+	if len(evidence.Facts) != 3 {
+		t.Fatalf("report-bearing facts were lost: %+v", evidence.Facts)
 	}
-	if len(evidence.EvidenceByGoal[0].Facts) != 2 || len(evidence.EvidenceByGoal[1].Facts) != 1 {
-		t.Fatalf("work unit occurrences were lost: %+v", evidence.EvidenceByGoal)
+	if evidence.Facts[0].Kind != "result" ||
+		evidence.Facts[0].Text != "same result" ||
+		evidence.Facts[0].Source != "tool_result" ||
+		len(evidence.Facts[0].Observations) != 1 ||
+		evidence.Facts[0].Observations[0].Date != "2026-07-23" ||
+		evidence.Facts[0].Observations[0].Status != "completed" {
+		t.Fatalf("plain fact lost report semantics: %+v", evidence.Facts[0])
 	}
-	first := evidence.EvidenceByGoal[0].Facts[0]
-	second := evidence.EvidenceByGoal[0].Facts[1]
-	if first.Results[0].TextRef != second.Results[0].TextRef ||
-		first.Results[0].EvidenceRefs[0] != "ev-1" || second.Results[0].EvidenceRefs[0] != "ev-2" {
-		t.Fatalf("text interning lost per-fact evidence references: first=%+v second=%+v", first, second)
-	}
-	lookups := [][]WorkEvidenceLookup{
-		evidence.Categories, evidence.Statuses, evidence.EvidenceGrades,
-		evidence.ResultSources, evidence.ResultTexts,
-	}
-	for _, values := range lookups {
-		for index, value := range values {
-			if value.ID != index+1 {
-				t.Fatalf("lookup IDs must be dense and one-based: %+v", values)
-			}
-		}
-	}
-	factCount := 0
-	seenRefs := map[string]struct{}{}
-	for _, group := range evidence.EvidenceByGoal {
-		for _, fact := range group.Facts {
-			factCount++
-			if _, exists := seenRefs[fact.WorkUnitRef]; exists {
-				t.Fatalf("duplicate projected work unit %q", fact.WorkUnitRef)
-			}
-			seenRefs[fact.WorkUnitRef] = struct{}{}
-			if fact.DateRef < 1 || fact.DateRef > len(evidence.Period.Days) ||
-				fact.CategoryRef < 1 || fact.CategoryRef > len(evidence.Categories) ||
-				fact.StatusRef < 1 || fact.StatusRef > len(evidence.Statuses) ||
-				fact.EvidenceGradeRef < 1 || fact.EvidenceGradeRef > len(evidence.EvidenceGrades) {
-				t.Fatalf("orphan fact lookup: %+v", fact)
-			}
-			for _, result := range fact.Results {
-				if result.TextRef < 1 || result.TextRef > len(evidence.ResultTexts) ||
-					result.SourceRef < 1 || result.SourceRef > len(evidence.ResultSources) {
-					t.Fatalf("orphan result lookup: %+v", result)
-				}
-			}
-		}
-	}
-	if factCount != evidence.Period.Days[0].RepresentedFactCount {
-		t.Fatalf("fact coverage mismatch: facts=%d period=%+v", factCount, evidence.Period)
+	if evidence.Facts[2].Kind != "unresolved" || evidence.Facts[2].Text != "follow up" || evidence.Facts[2].Source != "" {
+		t.Fatalf("unresolved fact was lost: %+v", evidence.Facts[2])
 	}
 	encoded, err := json.Marshal(evidence)
 	if err != nil {
 		t.Fatal(err)
 	}
 	visible := string(encoded)
-	if !strings.Contains(visible, `"fact_columns"`) ||
-		!strings.Contains(visible, `"period_day_ref"`) ||
-		strings.Contains(visible, `"work_unit_ref":`) {
-		t.Fatalf("work evidence is not a self-described columnar projection: %s", visible)
+	for _, forbidden := range []string{
+		`"fact_columns"`, `"lookup_columns"`, `"row_reference_base"`,
+		`"evidence_by_exact_goal"`, `"work_unit_ref"`, `"goal"`,
+		`"evidence_refs"`, `"selection_id"`, `"digest_sha256"`,
+	} {
+		if strings.Contains(visible, forbidden) {
+			t.Fatalf("work evidence leaked transport or raw goal field %s: %s", forbidden, visible)
+		}
+	}
+	if !strings.Contains(visible, `"facts":[{"kind":"result","text":"same result","source":"tool_result","observations":[{"date":"2026-07-23"`) ||
+		!strings.Contains(visible, `"kind":"unresolved","text":"follow up"`) {
+		t.Fatalf("work evidence is not readable object JSON: %s", visible)
+	}
+}
+
+func TestProjectReportFactTextKeepsCompleteSupportedReply(t *testing.T) {
+	input := "已完成方案收口。测试已全部通过。 ## 实现细节\n" + strings.Repeat("内部实现和路径 ", 1000)
+	if got := projectReportFactText(input); got != strings.TrimSpace(input) {
+		t.Fatalf("complete supported reply changed: chars=%d", len(got))
+	}
+}
+
+func TestProjectReportFactTextRejectsHandoffPromptArtifact(t *testing.T) {
+	input := `[{"type":"text","text":"下面这段可直接交给下一个能访问工作区的大模型：\n\n` +
+		"```text\\n请接手并继续执行全部任务\\n```" + `"}]`
+	if got := projectReportFactText(input); got != "" {
+		t.Fatalf("handoff prompt became report fact: %q", got)
+	}
+}
+
+func TestProjectReportFactTextKeepsSingleSupportedStatement(t *testing.T) {
+	input := "定位到报告超时来自工具结果过大，并完成回归验证"
+	if got := projectReportFactText(input); got != input {
+		t.Fatalf("single supported statement changed: %q", got)
 	}
 }
 
@@ -340,11 +335,12 @@ func TestProjectPayloadRejectsContradictoryTruncatedCoverage(t *testing.T) {
 	}
 }
 
-func TestProjectPayloadPreservesPendingFactWithoutOutcome(t *testing.T) {
+func TestProjectPayloadDoesNotExposeRawPendingGoalWithoutOutcome(t *testing.T) {
+	longPrompt := strings.Repeat("raw-user-prompt-", 1000)
 	digest := strings.Replace(
 		string(validFrozenDigestV2()),
 		`"status":"partial","evidence_grade":"B","goal":"other goal","result_statements":[{"text":"other result","source":"agent_claim","evidence_refs":null}],"unresolved":[{"text":"follow up","evidence_ref":"ev-3"}]`,
-		`"status":"pending","evidence_grade":"B","goal":"other goal","result_statements":[],"unresolved":[]`,
+		`"status":"pending","evidence_grade":"B","goal":"`+longPrompt+`","result_statements":[],"unresolved":[]`,
 		1,
 	)
 	projected, err := projectPayload(Payload{
@@ -360,22 +356,16 @@ func TestProjectPayloadPreservesPendingFactWithoutOutcome(t *testing.T) {
 	if projected.WorkEvidence == nil {
 		t.Fatal("work evidence is missing")
 	}
-	for _, group := range projected.WorkEvidence.EvidenceByGoal {
-		for _, fact := range group.Facts {
-			if fact.WorkUnitRef != "wu-3" {
-				continue
-			}
-			if len(fact.Results) != 0 || len(fact.Unresolved) != 0 {
-				t.Fatalf("pending fact gained unsupported outcomes: %+v", fact)
-			}
-			status := projected.WorkEvidence.Statuses[fact.StatusRef-1].Value
-			if status != "pending" {
-				t.Fatalf("pending status was not preserved: %q", status)
-			}
-			return
-		}
+	if len(projected.WorkEvidence.Facts) != 1 {
+		t.Fatalf("goal-only pending input became a report fact: %+v", projected.WorkEvidence.Facts)
 	}
-	t.Fatal("pending fact wu-3 was dropped")
+	encoded, err := json.Marshal(projected.WorkEvidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), longPrompt) || strings.Contains(string(encoded), `"goal"`) {
+		t.Fatal("raw user prompt leaked into Agent-facing Projection")
+	}
 }
 
 func TestProjectPayloadRejectsIncompleteFactAndSourceIdentity(t *testing.T) {

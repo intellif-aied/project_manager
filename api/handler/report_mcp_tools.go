@@ -64,6 +64,9 @@ func reportMCPTools() []map[string]any {
 		{
 			"name":        toolGetReportContext,
 			"description": "Read the complete server-prepared context for a managed report run. Call once with the injected run_id; do not rescan sessions, lower-level reports, tasks, or requirements for the same run. " + businessTimeContract,
+			"_meta": map[string]any{
+				"anthropic/maxResultSizeChars": 500000,
+			},
 			"inputSchema": map[string]any{
 				"type":     "object",
 				"required": []string{"run_id"},

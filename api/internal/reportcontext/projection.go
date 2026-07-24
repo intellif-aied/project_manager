@@ -37,53 +37,10 @@ type frozenDigestV2Item struct {
 	} `json:"digest"`
 }
 
-func (e WorkEvidence) MarshalJSON() ([]byte, error) {
-	type alias WorkEvidence
-	return json.Marshal(struct {
-		RowReferenceBase  int      `json:"row_reference_base"`
-		LookupColumns     []string `json:"lookup_columns"`
-		FactColumns       []string `json:"fact_columns"`
-		ResultColumns     []string `json:"result_columns"`
-		UnresolvedColumns []string `json:"unresolved_columns"`
-		SourceColumns     []string `json:"source_columns"`
-		alias
-	}{
-		RowReferenceBase:  1,
-		LookupColumns:     []string{"id", "value"},
-		FactColumns:       []string{"work_unit_ref", "sequence", "period_day_ref", "activity_end_at", "category_ref", "status_ref", "evidence_grade_ref", "results", "unresolved"},
-		ResultColumns:     []string{"text_ref", "source_ref", "evidence_refs"},
-		UnresolvedColumns: []string{"text", "evidence_ref"},
-		SourceColumns:     []string{"source_item_ref", "session_ref", "agent_type", "activity_start_at", "activity_end_at", "digest_sha256", "source_event_count", "included_event_count", "omitted_event_count", "truncated", "source_work_unit_count", "detailed_work_unit_count", "aggregated_work_unit_count"},
-		alias:             alias(e),
-	})
-}
-
-func (v WorkEvidenceLookup) MarshalJSON() ([]byte, error) {
-	return json.Marshal([]any{v.ID, v.Value})
-}
-
-func (v WorkEvidenceResult) MarshalJSON() ([]byte, error) {
-	return json.Marshal([]any{v.TextRef, v.SourceRef, v.EvidenceRefs})
-}
-
-func (v WorkEvidenceUnresolved) MarshalJSON() ([]byte, error) {
-	return json.Marshal([]any{v.Text, v.EvidenceRef})
-}
-
-func (v WorkEvidenceFact) MarshalJSON() ([]byte, error) {
-	return json.Marshal([]any{
-		v.WorkUnitRef, v.Sequence, v.DateRef, v.ActivityEndAt,
-		v.CategoryRef, v.StatusRef, v.EvidenceGradeRef, v.Results, v.Unresolved,
-	})
-}
-
-func (v WorkEvidenceSource) MarshalJSON() ([]byte, error) {
-	return json.Marshal([]any{
-		v.SourceItemRef, v.SessionRef, v.AgentType, v.ActivityStartAt,
-		v.ActivityEndAt, v.DigestSHA256, v.SourceEventCount,
-		v.IncludedEventCount, v.OmittedEventCount, v.Truncated,
-		v.SourceWorkUnitCount, v.DetailedWorkUnitCount, v.AggregatedWorkUnitCount,
-	})
+type workEvidenceFactIdentity struct {
+	Kind   string
+	Text   string
+	Source string
 }
 
 func projectPayloadForRepresentation(payload Payload, representation string) (Payload, error) {
@@ -191,73 +148,25 @@ func projectDigestV2(session SessionSource) (WorkEvidence, error) {
 	}
 
 	projection := WorkEvidence{
-		SelectionID:      session.SelectionID,
-		Mode:             session.Mode,
-		Timezone:         digest.Timezone,
-		DigestVersion:    digest.DigestVersion,
-		RedactionVersion: digest.RedactionVersion,
-		ContentSnapshot:  digest.ContentSnapshot,
-		Completeness:     digest.Completeness,
-		Coverage: WorkEvidenceCoverage{
-			Complete:             digest.Coverage.Complete,
-			SourceItemCount:      digest.Coverage.SourceItemCount,
-			RepresentedItemCount: digest.Coverage.RepresentedItemCount,
-			SourceEventCount:     digest.Coverage.SourceEventCount,
-			IncludedEventCount:   digest.Coverage.IncludedEventCount,
-			OmittedEventCount:    digest.Coverage.OmittedEventCount,
-			TruncatedItemCount:   digest.Coverage.TruncatedItemCount,
-		},
+		Mode:     session.Mode,
+		Timezone: digest.Timezone,
 		Period: WorkEvidencePeriod{
-			StartDate:           digest.ReportPeriod.StartDate,
-			EndDate:             digest.ReportPeriod.EndDate,
-			WorkUnitCount:       digest.ReportPeriod.WorkUnitCount,
-			ResultWorkUnitCount: digest.ReportPeriod.ResultWorkUnitCount,
-			PrimaryResultCount:  digest.ReportPeriod.PrimaryResultCount,
-			VerifiedResultCount: digest.ReportPeriod.VerifiedResultCount,
-			ChangeCount:         digest.ReportPeriod.ChangeCount,
-			ValidationCount:     digest.ReportPeriod.ValidationCount,
-			UnresolvedCount:     digest.ReportPeriod.UnresolvedCount,
-			Days:                make([]WorkEvidenceDay, 0, len(digest.ReportPeriod.Days)),
+			StartDate: digest.ReportPeriod.StartDate,
+			EndDate:   digest.ReportPeriod.EndDate,
 		},
-		Categories:     []WorkEvidenceLookup{},
-		Statuses:       []WorkEvidenceLookup{},
-		EvidenceGrades: []WorkEvidenceLookup{},
-		ResultSources:  []WorkEvidenceLookup{},
-		ResultTexts:    []WorkEvidenceLookup{},
-		EvidenceByGoal: []ExactGoalEvidence{},
-		Sources:        make([]WorkEvidenceSource, 0, len(digest.Items)),
+		Facts: make([]WorkEvidenceFact, 0),
 	}
 
-	goalIndexes := make(map[string]int)
-	categoryIDs := make(map[string]int)
-	statusIDs := make(map[string]int)
-	evidenceGradeIDs := make(map[string]int)
-	resultSourceIDs := make(map[string]int)
-	textIDs := make(map[string]int)
 	workUnitRefs := make(map[string]struct{})
 	sourceItemRefs := make(map[string]struct{})
-	representedFacts := 0
-	for dayIndex, day := range digest.ReportPeriod.Days {
+	factIndexes := make(map[workEvidenceFactIdentity]int)
+	factObservations := make([]map[WorkEvidenceObservation]struct{}, 0)
+	for _, day := range digest.ReportPeriod.Days {
 		if day.HighlightsTruncated || !day.OutcomeCoverage.Complete ||
 			day.OutcomeCoverage.SourceCount != day.OutcomeCoverage.RepresentedCount ||
 			day.OutcomeCoverage.RepresentedCount != len(day.Highlights) {
 			return WorkEvidence{}, ErrIncomplete
 		}
-		projection.Period.Days = append(projection.Period.Days, WorkEvidenceDay{
-			Date:                 day.Date,
-			WorkUnitCount:        day.WorkUnitCount,
-			ResultWorkUnitCount:  day.ResultWorkUnitCount,
-			PrimaryResultCount:   day.PrimaryResultCount,
-			VerifiedResultCount:  day.VerifiedResultCount,
-			ChangeCount:          day.ChangeCount,
-			ValidationCount:      day.ValidationCount,
-			UnresolvedCount:      day.UnresolvedCount,
-			SourceFactCount:      day.OutcomeCoverage.SourceCount,
-			RepresentedFactCount: day.OutcomeCoverage.RepresentedCount,
-			Complete:             day.OutcomeCoverage.Complete,
-			SourceTextCompacted:  day.OutcomeCoverage.TextCompacted,
-			SourceFactsTruncated: day.HighlightsTruncated,
-		})
 		for _, highlight := range day.Highlights {
 			if strings.TrimSpace(highlight.WorkUnitRef) == "" {
 				return WorkEvidence{}, ErrIncomplete
@@ -266,45 +175,33 @@ func projectDigestV2(session SessionSource) (WorkEvidence, error) {
 				return WorkEvidence{}, ErrIncomplete
 			}
 			workUnitRefs[highlight.WorkUnitRef] = struct{}{}
-			groupIndex, ok := goalIndexes[highlight.Goal]
-			if !ok {
-				groupIndex = len(projection.EvidenceByGoal)
-				goalIndexes[highlight.Goal] = groupIndex
-				projection.EvidenceByGoal = append(projection.EvidenceByGoal, ExactGoalEvidence{
-					Goal: highlight.Goal, Facts: []WorkEvidenceFact{},
-				})
-			}
-			fact := WorkEvidenceFact{
-				WorkUnitRef:      highlight.WorkUnitRef,
-				Sequence:         highlight.Sequence,
-				DateRef:          dayIndex + 1,
-				ActivityEndAt:    highlight.ActivityEndAt,
-				CategoryRef:      internLookup(categoryIDs, &projection.Categories, highlight.Category),
-				StatusRef:        internLookup(statusIDs, &projection.Statuses, highlight.Status),
-				EvidenceGradeRef: internLookup(evidenceGradeIDs, &projection.EvidenceGrades, highlight.EvidenceGrade),
-				Results:          make([]WorkEvidenceResult, 0, len(highlight.ResultStatements)),
-				Unresolved:       make([]WorkEvidenceUnresolved, 0, len(highlight.Unresolved)),
+			observation := WorkEvidenceObservation{
+				Date: day.Date, Status: highlight.Status,
 			}
 			for _, statement := range highlight.ResultStatements {
 				if strings.TrimSpace(statement.Text) == "" || strings.TrimSpace(statement.Source) == "" {
 					return WorkEvidence{}, ErrIncomplete
 				}
-				fact.Results = append(fact.Results, WorkEvidenceResult{
-					TextRef:      internLookup(textIDs, &projection.ResultTexts, statement.Text),
-					SourceRef:    internLookup(resultSourceIDs, &projection.ResultSources, statement.Source),
-					EvidenceRefs: statement.EvidenceRefs,
-				})
+				text := projectReportFactText(statement.Text)
+				if text == "" {
+					continue
+				}
+				appendWorkEvidenceFact(
+					&projection, factIndexes, &factObservations,
+					workEvidenceFactIdentity{Kind: "result", Text: text, Source: statement.Source},
+					observation,
+				)
 			}
 			for _, unresolved := range highlight.Unresolved {
 				if strings.TrimSpace(unresolved.Text) == "" {
 					return WorkEvidence{}, ErrIncomplete
 				}
-				fact.Unresolved = append(fact.Unresolved, WorkEvidenceUnresolved{
-					Text: unresolved.Text, EvidenceRef: unresolved.EvidenceRef,
-				})
+				appendWorkEvidenceFact(
+					&projection, factIndexes, &factObservations,
+					workEvidenceFactIdentity{Kind: "unresolved", Text: unresolved.Text},
+					observation,
+				)
 			}
-			projection.EvidenceByGoal[groupIndex].Facts = append(projection.EvidenceByGoal[groupIndex].Facts, fact)
-			representedFacts++
 		}
 	}
 
@@ -316,34 +213,79 @@ func projectDigestV2(session SessionSource) (WorkEvidence, error) {
 			return WorkEvidence{}, ErrIncomplete
 		}
 		sourceItemRefs[item.SourceItemRef] = struct{}{}
-		projection.Sources = append(projection.Sources, WorkEvidenceSource{
-			SourceItemRef:           item.SourceItemRef,
-			SessionRef:              item.SessionRef,
-			AgentType:               item.AgentType,
-			ActivityStartAt:         item.ActivityStart,
-			ActivityEndAt:           item.ActivityEnd,
-			DigestSHA256:            item.DigestSHA256,
-			SourceEventCount:        item.Coverage.SourceEventCount,
-			IncludedEventCount:      item.Coverage.IncludedEventCount,
-			OmittedEventCount:       item.Coverage.OmittedEventCount,
-			Truncated:               item.Coverage.Truncated,
-			SourceWorkUnitCount:     item.Digest.Coverage.SourceWorkUnitCount,
-			DetailedWorkUnitCount:   item.Digest.Coverage.DetailedWorkUnitCount,
-			AggregatedWorkUnitCount: item.Digest.Coverage.AggregatedWorkUnitCount,
-		})
 	}
-	if representedFacts == 0 && digest.ReportPeriod.ResultWorkUnitCount > 0 {
+	if len(projection.Facts) == 0 && digest.ReportPeriod.ResultWorkUnitCount > 0 {
 		return WorkEvidence{}, ErrIncomplete
 	}
 	return projection, nil
 }
 
-func internLookup(index map[string]int, values *[]WorkEvidenceLookup, value string) int {
-	if id, ok := index[value]; ok {
-		return id
+func projectReportFactText(value string) string {
+	text := strings.TrimSpace(value)
+	if text == "" {
+		return ""
 	}
-	id := len(*values) + 1
-	index[value] = id
-	*values = append(*values, WorkEvidenceLookup{ID: id, Value: value})
-	return id
+	if unwrapped := unwrapTextEnvelope(text); unwrapped != "" {
+		text = unwrapped
+	}
+	if isHandoffPromptArtifact(text) {
+		return ""
+	}
+	return text
+}
+
+func unwrapTextEnvelope(value string) string {
+	var items []struct {
+		Text string `json:"text"`
+	}
+	if json.Unmarshal([]byte(value), &items) != nil || len(items) == 0 {
+		return ""
+	}
+	texts := make([]string, 0, len(items))
+	for _, item := range items {
+		text := strings.TrimSpace(item.Text)
+		if text == "" {
+			return ""
+		}
+		texts = append(texts, text)
+	}
+	return strings.Join(texts, "\n\n")
+}
+
+func isHandoffPromptArtifact(value string) bool {
+	prefix := value
+	if len(prefix) > 300 {
+		prefix = prefix[:300]
+	}
+	prefix = strings.ToLower(prefix)
+	introducesPayload := strings.Contains(prefix, "下面这段") || strings.Contains(prefix, "以下内容") ||
+		strings.Contains(prefix, `[{"text": "下面这段`) || strings.Contains(prefix, `[{"text":"下面这段`)
+	transfersPayload := strings.Contains(prefix, "直接") || strings.Contains(prefix, "复制") ||
+		strings.Contains(prefix, "发给") || strings.Contains(prefix, "交给")
+	targetsModel := strings.Contains(prefix, "模型") || strings.Contains(prefix, "agent")
+	return introducesPayload && transfersPayload && targetsModel
+}
+
+func appendWorkEvidenceFact(
+	projection *WorkEvidence,
+	indexes map[workEvidenceFactIdentity]int,
+	observationSets *[]map[WorkEvidenceObservation]struct{},
+	identity workEvidenceFactIdentity,
+	observation WorkEvidenceObservation,
+) {
+	index, exists := indexes[identity]
+	if !exists {
+		index = len(projection.Facts)
+		indexes[identity] = index
+		projection.Facts = append(projection.Facts, WorkEvidenceFact{
+			Kind: identity.Kind, Text: identity.Text, Source: identity.Source,
+			Observations: []WorkEvidenceObservation{},
+		})
+		*observationSets = append(*observationSets, make(map[WorkEvidenceObservation]struct{}))
+	}
+	if _, exists := (*observationSets)[index][observation]; exists {
+		return
+	}
+	(*observationSets)[index][observation] = struct{}{}
+	projection.Facts[index].Observations = append(projection.Facts[index].Observations, observation)
 }

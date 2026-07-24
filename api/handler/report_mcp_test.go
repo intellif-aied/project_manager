@@ -264,6 +264,20 @@ func TestReportMCPToolsListManagedReportToolset(t *testing.T) {
 	}
 }
 
+func TestGetReportContextDeclaresCompleteResultCapacity(t *testing.T) {
+	for _, tool := range reportMCPTools() {
+		if tool["name"] != toolGetReportContext {
+			continue
+		}
+		meta, ok := tool["_meta"].(map[string]any)
+		if !ok || meta["anthropic/maxResultSizeChars"] != 500000 {
+			t.Fatalf("get_report_context result capacity metadata=%#v", tool["_meta"])
+		}
+		return
+	}
+	t.Fatal("get_report_context tool is missing")
+}
+
 func TestGetReportContextReturnsOwnedPreparedPayload(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
