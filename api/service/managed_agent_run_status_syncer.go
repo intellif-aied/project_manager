@@ -15,8 +15,12 @@ const (
 	ManagedAgentSessionTimeout         = 30 * time.Minute
 	ManagedAgentRunTimeout             = 2 * time.Hour
 	ManagedAgentReportWritebackGrace   = 2 * time.Minute
+	ManagedAgentInfrastructureTimeout  = 9*time.Minute + 30*time.Second
 	managedReportAgentRunBusinessType  = "report_agent_run"
 	reportWritebackMissingErrorMessage = "managed agent session completed without report writeback"
+	reportAgentTimeoutErrorMessage     = "报告生成超时，请稍后重试"
+	reportAgentFailureErrorMessage     = "报告生成失败，请稍后重试"
+	managedInfrastructureFailure       = "infrastructure_failure"
 )
 
 type ManagedAgentRunStatusSyncer struct {
@@ -134,7 +138,14 @@ func (s *ManagedAgentRunStatusSyncer) refreshRun(ctx context.Context, run manage
 	status := NormalizeManagedRunStatus(task.Status)
 	errMsg := ""
 	if status == "failed" && strings.TrimSpace(task.Error) != "" {
-		errMsg = task.Error
+		if run.isReportAgentRun() {
+			if strings.EqualFold(strings.TrimSpace(task.Error), managedInfrastructureFailure) {
+				log.Printf("managed agent report run %s upstream failure: %s", run.ID, task.Error)
+			}
+			status, errMsg = normalizeManagedAgentFailure(task)
+		} else {
+			errMsg = task.Error
+		}
 	}
 	if run.isReportAgentRun() && status == "succeeded" && !run.hasReportWriteback() {
 		if !reportWritebackGraceElapsed(task, now) {
@@ -149,6 +160,21 @@ func (s *ManagedAgentRunStatusSyncer) refreshRun(ctx context.Context, run manage
 		errMsg = "managed agent run timed out after 2h"
 	}
 	return s.updateRunStatus(ctx, run, task, status, errMsg, now)
+}
+
+func normalizeManagedAgentFailure(task *ManagedTaskStatus) (string, string) {
+	if task == nil {
+		return "failed", ""
+	}
+	errorMessage := strings.TrimSpace(task.Error)
+	if !strings.EqualFold(errorMessage, managedInfrastructureFailure) {
+		return "failed", errorMessage
+	}
+	if task.StartedAt > 0 && task.FinishedAt >= task.StartedAt &&
+		time.Duration(task.FinishedAt-task.StartedAt)*time.Second >= ManagedAgentInfrastructureTimeout {
+		return "timeout", reportAgentTimeoutErrorMessage
+	}
+	return "failed", reportAgentFailureErrorMessage
 }
 
 func (run managedAgentRunStatusRow) isReportAgentRun() bool {

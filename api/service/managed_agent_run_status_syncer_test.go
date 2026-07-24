@@ -13,11 +13,12 @@ import (
 )
 
 type outputRefWithoutResult struct {
-	status    string
-	taskID    string
-	sessionID string
-	reportID  string
-	errText   string
+	status        string
+	taskID        string
+	sessionID     string
+	reportID      string
+	errText       string
+	forbiddenText string
 }
 
 func (m outputRefWithoutResult) Match(value driver.Value) bool {
@@ -49,6 +50,9 @@ func (m outputRefWithoutResult) Match(value driver.Value) bool {
 		return false
 	}
 	if m.errText != "" && !strings.Contains(managedStringFromAny(payload["error"]), m.errText) {
+		return false
+	}
+	if m.forbiddenText != "" && strings.Contains(string(raw), m.forbiddenText) {
 		return false
 	}
 	return true
@@ -325,6 +329,88 @@ func TestManagedAgentRunStatusSyncerFailsPlatformFailedSession(t *testing.T) {
 			AddRow("run-failed", "", "session-failed", "running", "report_agent_run", "", []byte(`{}`), startedAt))
 	mock.ExpectExec("UPDATE ai_runs SET").
 		WithArgs("failed", outputRefWithoutResult{status: "failed", taskID: "session-failed", sessionID: "session-failed", errText: "tool execution failed"}, nil, "tool execution failed", now, "AGENT_EXECUTION_FAILED", "run-failed").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	syncer := NewManagedAgentRunStatusSyncer(db, NewManagedAgentClient(platform.URL, "platform-token"))
+	if err := syncer.RunOnce(t.Context(), now); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestManagedAgentRunStatusSyncerNormalizesInfrastructureTimeout(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	now := time.Date(2026, 7, 24, 19, 39, 0, 0, time.UTC)
+	startedAt := now.Add(-11 * time.Minute)
+	platformStartedAt := now.Add(-9*time.Minute - 56*time.Second).Unix()
+	platformFinishedAt := now.Unix()
+	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"task_id":"session-timeout","status":"failed","error":"infrastructure_failure","started_at":` + managedStringFromAny(platformStartedAt) + `,"finished_at":` + managedStringFromAny(platformFinishedAt) + `}`))
+	}))
+	defer platform.Close()
+
+	mock.ExpectQuery(managedRunSyncQueryPattern).
+		WithArgs(100).
+		WillReturnRows(managedRunStatusRows().
+			AddRow("run-timeout", "", "session-timeout", "running", "report_agent_run", "", []byte(`{}`), startedAt))
+	mock.ExpectExec("UPDATE ai_runs SET").
+		WithArgs(
+			"timeout",
+			outputRefWithoutResult{status: "failed", taskID: "session-timeout", sessionID: "session-timeout", errText: "报告生成超时，请稍后重试", forbiddenText: "infrastructure_failure"},
+			nil,
+			"报告生成超时，请稍后重试",
+			now,
+			"AGENT_EXECUTION_TIMEOUT",
+			"run-timeout",
+		).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	syncer := NewManagedAgentRunStatusSyncer(db, NewManagedAgentClient(platform.URL, "platform-token"))
+	if err := syncer.RunOnce(t.Context(), now); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestManagedAgentRunStatusSyncerHidesEarlyInfrastructureFailure(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	now := time.Date(2026, 7, 24, 19, 39, 0, 0, time.UTC)
+	startedAt := now.Add(-2 * time.Minute)
+	platformStartedAt := now.Add(-time.Minute).Unix()
+	platformFinishedAt := now.Unix()
+	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"task_id":"session-failed","status":"failed","error":"infrastructure_failure","started_at":` + managedStringFromAny(platformStartedAt) + `,"finished_at":` + managedStringFromAny(platformFinishedAt) + `}`))
+	}))
+	defer platform.Close()
+
+	mock.ExpectQuery(managedRunSyncQueryPattern).
+		WithArgs(100).
+		WillReturnRows(managedRunStatusRows().
+			AddRow("run-failed", "", "session-failed", "running", "report_agent_run", "", []byte(`{}`), startedAt))
+	mock.ExpectExec("UPDATE ai_runs SET").
+		WithArgs(
+			"failed",
+			outputRefWithoutResult{status: "failed", taskID: "session-failed", sessionID: "session-failed", errText: "报告生成失败，请稍后重试", forbiddenText: "infrastructure_failure"},
+			nil,
+			"报告生成失败，请稍后重试",
+			now,
+			"AGENT_EXECUTION_FAILED",
+			"run-failed",
+		).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	syncer := NewManagedAgentRunStatusSyncer(db, NewManagedAgentClient(platform.URL, "platform-token"))
