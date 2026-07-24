@@ -58,18 +58,16 @@ FORBIDDEN_TOOLS = [
     "report_period_summary.days",
 ]
 REQUIRED_SKILL_TERMS = [
-    "one frozen Report Context",
+    "frozen Context is the only evidence source",
     "Call get_report_context exactly once",
-    "content[0].text",
     '{"run_id": run_id}',
-    "objective-outcome ledger",
-    "one-based lookup tables",
-    "Never use Top-K",
-    "presentation_profile is present",
-    "summary as one plain-text paragraph",
-    "Git commands, output, commit messages",
-    "There are no operation-type exceptions",
-    "fixed 重点工作 heading",
+    "Do not emit progress narration between tools",
+    "Follow presentation_profile",
+    "smallest set of coherent workstreams",
+    "every materially distinct supported outcome",
+    "summary as one non-empty plain-text paragraph",
+    "Git commands and metadata are trace data",
+    "Do not add a fixed 重点工作 heading",
 ]
 
 
