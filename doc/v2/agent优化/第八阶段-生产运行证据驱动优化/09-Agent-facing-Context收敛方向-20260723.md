@@ -1,6 +1,6 @@
 # Agent-facing Context 收敛方向（2026-07-23）
 
-> 状态：分页方案已取消；Context 体积分析、Projection 实现和离线验证完成，测试服真实 Agent 写回未通过
+> 状态：分页和列式方案均已取消；普通对象 Projection 与离线验证完成，待测试服同配置新 Run 验收
 > 范围：托管报告 Agent 的 get_report_context(run_id) 输入
 
 ## 1. 已确认问题
@@ -38,7 +38,7 @@ Digest 不替 Agent 判断用户内容价值。本期不使用 Top-K、固定主
 
 ### 2.6 Projection 是确定性内部模块
 
-Projection 位于现有 Report Context Builder 内部，固定执行：冻结 Payload → 删除完全相同的 Digest 双写 → 按完全相同目标文本组织结果事实 → 将事实、结果、未决项和来源编码为带列定义的行数组 → 日期、枚举和完全相同结果文本进入一基查找表 → 校验每条结果型 Work Unit、来源和证据引用均被保留 → 冻结单份紧凑 Context。
+Projection 位于现有 Report Context Builder 内部，固定执行：冻结 Payload → 删除完全相同的 Digest 双写 → 从结果正文和未解决项构建普通 `facts[]` → 按完整 `kind + text + source` 精确归并 → 保留去重后的日期/状态观察 → 排除原始 Goal、明确交接 Prompt 和内部审计引用 → 校验 Digest 来源覆盖和 Work Unit 唯一性 → 冻结单份 Context。
 
 Projection 不判断重要性、不做主题归并、不删除独立事实、不改变 Digest Revision，不创建新表、Job、Worker 或队列。失败时 Run 明确失败，不回退超大 Context。
 
@@ -82,7 +82,7 @@ Projection 不判断重要性、不做主题归并、不删除独立事实、不
 固定实现顺序：
 
 1. 先消除 Report Context 中可证明的整块重复，不修改 Digest Job；
-2. 再统一同一事实的重复结构表达：列名只出现一次，重复值进入查找表；保留全部结果型 Work Unit、状态、时间、来源和 `evidence_refs`，并保留非结果 Work Unit 覆盖计数；
+2. 再统一同一事实的重复表达：完整正文相同才归并，不做近似匹配；保留不同日期和状态观察；不把原始 Goal、内部引用和交接 Prompt 当成报告事实；
 3. 若单个 Digest 在确定性 Projection 后仍异常大，另行分析 Digest 内部确定性表达，不引入 LLM；
 4. 最大样本一次读取和队列指标通过后，才进入真实 Agent 验收。
 
@@ -101,7 +101,7 @@ Projection 不判断重要性、不做主题归并、不删除独立事实、不
 
 ## 6. 当前发布结论
 
-离线实现结果：31 份包含 Digest V2 的冻结样本全部投影成功。三个最大样本的 MCP 包装字符数为 381,583、267,676、187,850，均低于 500,000 字符硬上限；最大样本 Projection 基准约 20ms、4.6MB 分配。该结果只证明结构、容量和本地性能，不代替真实 Agent 内容质量验收。
+离线实现结果：31 份包含 Digest V2 的冻结样本全部投影成功；8,713 次结果出现归并为 2,134 条不同事实，最大 MCP 包装为 133,066 字符。旧失败 Run `dac01e5c-...` 的等价回放为 339,762 字符，低于 `get_report_context` 声明的 500,000 字符容量。该结果只证明结构与容量，不代替真实 Agent 内容质量验收。
 
 代码和自动化门禁已完成并合并 `main`，测试服 API 与 `100866/aida-report@1.0.48` 已发布。新 Run 的紧凑 Context 为 894,223 bytes，37/37 来源冻结完成，真实 Session 已加载 Skill 并一次调用 `get_report_context(run_id)`。Agent Platform 在 596 秒执行后终止，最终报告写回仍未通过；Aida 已将该错误归一为报告超时。本期不修改平台、不切换模型，也不新增事件监控。
 

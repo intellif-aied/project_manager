@@ -22,10 +22,10 @@ func TestReportSkillMarkdownUsesDeterministicDisplayContext(t *testing.T) {
 		"Do not call get_sessions, get_tasks, get_requirements, get_daily_reports, get_weekly_reports, get_report_inventory, or get_existing_report",
 		"presentation_profile is present, use its summary_focus and content_grouping as the only report-type-specific presentation contract",
 		"Do not choose a source route from report_type",
-		"Source goal text is evidence for clustering",
-		"Decode every row with its supplied column definition and one-based lookup tables",
-		"resolve every result-text reference before reasoning",
-		"Exact source-goal groups are transport organization only",
+		"work_evidence.facts contains ordinary JSON objects",
+		"Exactly repeated fact text from the same evidence source appears once with its distinct date/status observations",
+		"there are no lookup tables, positional rows, or source-goal groups to reconstruct",
+		"Reconstruct coherent workstreams from supported outcomes and relationships across facts",
 		"Group features, documents, deployment, validation, investigation, and fixes under one workstream",
 		"Keep work separate only when the business objective, delivered outcome, owner scope, or current state is genuinely independent",
 		"Git commands, output, commit messages, commit metadata, hashes, branches, merges, reverts, pushes, pulls, checkouts, and conflict operations are trace data only",
@@ -74,6 +74,11 @@ func TestReportSkillMarkdownUsesDeterministicDisplayContext(t *testing.T) {
 	for _, internalPath := range []string{"sessions[].digest", "report_period_summary.days", "period_result_focused", "work_units"} {
 		if strings.Contains(markdown, internalPath) {
 			t.Fatalf("report skill depends on internal Digest path %q", internalPath)
+		}
+	}
+	for _, obsoleteProjection := range []string{"Decode every row", "one-based lookup tables", "resolve every result-text reference", "Exact source-goal groups"} {
+		if strings.Contains(markdown, obsoleteProjection) {
+			t.Fatalf("report skill retains obsolete columnar projection instruction %q", obsoleteProjection)
 		}
 	}
 	if len(markdown) > 15000 || len(strings.Split(markdown, "\n")) > 120 {

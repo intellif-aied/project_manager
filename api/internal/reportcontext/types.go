@@ -195,113 +195,30 @@ type Sources struct {
 }
 
 // WorkEvidence is the deterministic Agent-facing projection of one frozen
-// Session Digest. Repeated text is interned, while every report-facing result
-// Work Unit and its evidence references remain explicit.
+// Session Digest. It exposes report facts as ordinary JSON objects and keeps
+// Digest transport, audit, and raw user-goal fields out of the model context.
 type WorkEvidence struct {
-	SelectionID      string               `json:"selection_id"`
-	Mode             string               `json:"mode"`
-	Timezone         string               `json:"timezone,omitempty"`
-	DigestVersion    string               `json:"digest_version"`
-	RedactionVersion string               `json:"redaction_version"`
-	ContentSnapshot  string               `json:"content_snapshot_at"`
-	Completeness     string               `json:"completeness"`
-	Coverage         WorkEvidenceCoverage `json:"coverage"`
-	Period           WorkEvidencePeriod   `json:"period"`
-	Categories       []WorkEvidenceLookup `json:"categories"`
-	Statuses         []WorkEvidenceLookup `json:"statuses"`
-	EvidenceGrades   []WorkEvidenceLookup `json:"evidence_grades"`
-	ResultSources    []WorkEvidenceLookup `json:"result_sources"`
-	ResultTexts      []WorkEvidenceLookup `json:"result_texts"`
-	EvidenceByGoal   []ExactGoalEvidence  `json:"evidence_by_exact_goal"`
-	Sources          []WorkEvidenceSource `json:"sources"`
-}
-
-type WorkEvidenceCoverage struct {
-	Complete             bool  `json:"complete"`
-	SourceItemCount      int   `json:"source_item_count"`
-	RepresentedItemCount int   `json:"represented_item_count"`
-	SourceEventCount     int64 `json:"source_event_count"`
-	IncludedEventCount   int64 `json:"included_event_count"`
-	OmittedEventCount    int64 `json:"omitted_event_count"`
-	TruncatedItemCount   int   `json:"truncated_item_count"`
+	Mode     string             `json:"mode"`
+	Timezone string             `json:"timezone,omitempty"`
+	Period   WorkEvidencePeriod `json:"period"`
+	Facts    []WorkEvidenceFact `json:"facts"`
 }
 
 type WorkEvidencePeriod struct {
-	StartDate           string            `json:"start_date"`
-	EndDate             string            `json:"end_date"`
-	WorkUnitCount       int               `json:"work_unit_count,omitempty"`
-	ResultWorkUnitCount int               `json:"result_work_unit_count,omitempty"`
-	PrimaryResultCount  int               `json:"primary_result_count,omitempty"`
-	VerifiedResultCount int               `json:"verified_result_count,omitempty"`
-	ChangeCount         int               `json:"change_count,omitempty"`
-	ValidationCount     int               `json:"validation_count,omitempty"`
-	UnresolvedCount     int               `json:"unresolved_count,omitempty"`
-	Days                []WorkEvidenceDay `json:"days"`
-}
-
-type WorkEvidenceDay struct {
-	Date                 string `json:"date"`
-	WorkUnitCount        int    `json:"work_unit_count,omitempty"`
-	ResultWorkUnitCount  int    `json:"result_work_unit_count,omitempty"`
-	PrimaryResultCount   int    `json:"primary_result_count,omitempty"`
-	VerifiedResultCount  int    `json:"verified_result_count,omitempty"`
-	ChangeCount          int    `json:"change_count,omitempty"`
-	ValidationCount      int    `json:"validation_count,omitempty"`
-	UnresolvedCount      int    `json:"unresolved_count,omitempty"`
-	SourceFactCount      int    `json:"source_fact_count"`
-	RepresentedFactCount int    `json:"represented_fact_count"`
-	Complete             bool   `json:"complete"`
-	SourceTextCompacted  bool   `json:"source_text_compacted"`
-	SourceFactsTruncated bool   `json:"source_facts_truncated"`
-}
-
-type WorkEvidenceLookup struct {
-	ID    int
-	Value string
-}
-
-type WorkEvidenceResult struct {
-	TextRef      int
-	SourceRef    int
-	EvidenceRefs []string
+	StartDate string `json:"start_date"`
+	EndDate   string `json:"end_date"`
 }
 
 type WorkEvidenceFact struct {
-	WorkUnitRef      string
-	Sequence         int
-	DateRef          int
-	ActivityEndAt    string
-	CategoryRef      int
-	StatusRef        int
-	EvidenceGradeRef int
-	Results          []WorkEvidenceResult
-	Unresolved       []WorkEvidenceUnresolved
+	Kind         string                    `json:"kind"`
+	Text         string                    `json:"text"`
+	Source       string                    `json:"source,omitempty"`
+	Observations []WorkEvidenceObservation `json:"observations"`
 }
 
-type WorkEvidenceUnresolved struct {
-	Text        string
-	EvidenceRef string
-}
-
-type ExactGoalEvidence struct {
-	Goal  string             `json:"goal"`
-	Facts []WorkEvidenceFact `json:"facts"`
-}
-
-type WorkEvidenceSource struct {
-	SourceItemRef           string
-	SessionRef              string
-	AgentType               string
-	ActivityStartAt         string
-	ActivityEndAt           string
-	DigestSHA256            string
-	SourceEventCount        int64
-	IncludedEventCount      int64
-	OmittedEventCount       int64
-	Truncated               bool
-	SourceWorkUnitCount     int
-	DetailedWorkUnitCount   int
-	AggregatedWorkUnitCount int
+type WorkEvidenceObservation struct {
+	Date   string `json:"date"`
+	Status string `json:"status"`
 }
 
 // PresentationProfile is the immutable, report-type-specific presentation
