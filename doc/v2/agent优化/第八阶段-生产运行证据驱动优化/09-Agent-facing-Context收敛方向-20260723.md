@@ -28,9 +28,9 @@
 
 开发代码不填写环境实际 Skill 版本，运行时版本只取 MANAGED_AGENT_REPORT_SKILL_VERSION；本次没有不兼容 MCP 协议变化，MCP 保持 report-v1。Skill 正文变化所需的新补丁版本由正式发布决策确定，开发实现不得通过 Skill 主版本自动切换 Context 契约。
 
-### 2.4 不静默裁剪事实
+### 2.4 完整 Digest 与报告事实分层
 
-Digest 不替 Agent 判断用户内容价值。本期不使用 Top-K、固定主题数、字符硬截断或随机抽样制造“小 Context”。
+原始 Session、完整 Digest WorkUnit 和冻结来源保持不变。Report Projection 不再把完整 Agent 回复直接视为日报事实，而是固定取首个有信息量的结果段，最长 240 个 Unicode 字符并在句子边界结束；代码块、命令、纯路径、纯 Git 操作和中间实现过程不进入 Agent-facing Context。该规则只作用于报告表示，不修改 Digest Revision，完整正文仍可追溯。
 
 ### 2.5 Digest 和 Projection 禁止新增 LLM
 
@@ -38,9 +38,9 @@ Digest 不替 Agent 判断用户内容价值。本期不使用 Top-K、固定主
 
 ### 2.6 Projection 是确定性内部模块
 
-Projection 位于现有 Report Context Builder 内部，固定执行：冻结 Payload → 删除完全相同的 Digest 双写 → 从结果正文和未解决项构建普通 `facts[]` → 按完整 `kind + text + source` 精确归并 → 保留去重后的日期/状态观察 → 排除原始 Goal、明确交接 Prompt 和内部审计引用 → 校验 Digest 来源覆盖和 Work Unit 唯一性 → 冻结单份 Context。
+Projection 位于现有 Report Context Builder 内部，固定执行：冻结 Payload → 删除完全相同的 Digest 双写 → 从每条结果正文提取首个有信息量的结果段 → 排除代码块、命令、纯路径、纯 Git、原始 Goal、交接 Prompt和内部审计引用 → 构建普通 `facts[]` → 按紧凑 `kind + text + source` 精确归并 → 保留去重后的日期/状态观察 → 校验 Digest 来源覆盖和 Work Unit 唯一性 → 冻结单份 Context。
 
-Projection 不判断重要性、不做主题归并、不删除独立事实、不改变 Digest Revision，不创建新表、Job、Worker 或队列。失败时 Run 明确失败，不回退超大 Context。
+Projection 不做主题归并、不改变 Digest Revision，不创建新表、Job、Worker 或队列。语义主题归并仍由最终 Report Agent 完成；Projection 只执行上述固定报告事实规则。失败时 Run 明确失败，不回退超大 Context。
 
 ## 3. 当前代码处理结果
 
@@ -82,7 +82,7 @@ Projection 不判断重要性、不做主题归并、不删除独立事实、不
 固定实现顺序：
 
 1. 先消除 Report Context 中可证明的整块重复，不修改 Digest Job；
-2. 再统一同一事实的重复表达：完整正文相同才归并，不做近似匹配；保留不同日期和状态观察；不把原始 Goal、内部引用和交接 Prompt 当成报告事实；
+2. 再统一报告事实表达：每条完整结果提取一个结果首段，不做主题判断或近似匹配；保留不同日期和状态观察；不把代码、命令、纯路径、纯 Git、原始 Goal、内部引用和交接 Prompt 当成报告事实；
 3. 若单个 Digest 在确定性 Projection 后仍异常大，另行分析 Digest 内部确定性表达，不引入 LLM；
 4. 最大样本一次读取和队列指标通过后，才进入真实 Agent 验收。
 
@@ -90,7 +90,7 @@ Projection 不判断重要性、不做主题归并、不删除独立事实、不
 
 只有同时满足以下条件，才能进入下一轮代码修改：
 
-- 被删除的是可证明的重复表达或 Agent 不需要理解的存储结构，不是用户事实；
+- 完整 Digest 保持可追溯，Agent-facing Projection 删除的是代码、命令、纯路径、纯 Git 和结果首段后的过程细节；
 - 每条保留事实仍能追溯到冻结来源；
 - 最大生产样本一次 MCP 调用不超过执行引擎限制；
 - 同输入、同模型的事实覆盖不下降；
@@ -101,9 +101,9 @@ Projection 不判断重要性、不做主题归并、不删除独立事实、不
 
 ## 6. 当前发布结论
 
-离线实现结果：31 份包含 Digest V2 的冻结样本全部投影成功；8,713 次结果出现归并为 2,134 条不同事实，最大 MCP 包装为 133,066 字符。旧失败 Run `dac01e5c-...` 的等价回放为 339,762 字符，低于 `get_report_context` 声明的 500,000 字符容量。该结果只证明结构与容量，不代替真实 Agent 内容质量验收。
+第一版普通对象 Projection 只做完整正文精确去重。真实 Run `4ba163dc-c785-436b-9421-44b934e11da8` 仍返回 332,428 字符、372 条完整结果，GLM-5.2 处理约 7 分 30 秒后才调用写回；生成内容过度展开历史过程，且重复 Summary 触发写回拒绝，Run 最终超时。
 
-代码和自动化门禁已完成并合并 `main`，测试服 API 与 `100866/aida-report@1.0.48` 已发布。新 Run 的紧凑 Context 为 894,223 bytes，37/37 来源冻结完成，真实 Session 已加载 Skill 并一次调用 `get_report_context(run_id)`。Agent Platform 在 596 秒执行后终止，最终报告写回仍未通过；Aida 已将该错误归一为报告超时。本期不修改平台、不切换模型，也不新增事件监控。
+第二版对同一真实载荷执行确定性结果首段重放：372 条输入保留 347 条有效事实，事实文本由 286,554 降至 20,691 个 Unicode 字符，减少 92.8%。完整后端测试通过；未修改 Digest、数据库、队列、模型、前端、上传或 Token 统计。测试服真实新 Run 尚待执行，因此当前不能宣布最终生成通过。
 
 测试服真实 Agent 验收通过前，不提交发布申请，不部署生产。
 
