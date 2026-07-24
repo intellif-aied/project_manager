@@ -23,7 +23,7 @@
 | 环境 | Skill owner | Skill | MCP | 最近验证 | 验证依据 |
 | --- | --- | --- | --- | --- | --- |
 | 生产 | 10086 | aida-report@1.0.16 | aida-report-mcp@report-v1 | 2026-07-22 | AIDA-BUG-20260722-014 发布记录及新 Run SkillRef |
-| 14.157 测试 | 100866 | aida-report@1.0.45 | aida-report-mcp@report-v1 | 2026-07-23 | 测试环境 .env 与公共 Registry |
+| 14.157 测试 | 100866 | aida-report@1.0.47 | aida-report-mcp@report-v1 | 2026-07-24 | 测试环境 .env、公共 Registry 与 API 健康检查 |
 
 规则：
 
