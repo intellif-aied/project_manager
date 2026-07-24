@@ -37,11 +37,12 @@ func MintAIHubCompatibleToken(user *model.User, secret string) (string, error) {
 		secret = "dev-jwt-secret"
 	}
 	now := time.Now()
+	issuedAt := now.Add(-time.Hour)
 	claims := jwt.MapClaims{
 		"uid":      uid,
 		"user_id":  user.ID,
 		"username": user.Username,
-		"iat":      now.Unix(),
+		"iat":      issuedAt.Unix(),
 		"exp":      now.Add(24 * time.Hour).Unix(),
 	}
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(secret))
