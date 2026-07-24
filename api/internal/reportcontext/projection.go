@@ -3,6 +3,7 @@ package reportcontext
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"strings"
 
 	"github.com/aidashboard/api/internal/reportsource"
@@ -96,7 +97,13 @@ func projectPayloadForRepresentation(payload Payload, representation string) (Pa
 		}
 		projected, err := projectPayload(payload)
 		if err != nil {
-			return Payload{}, err
+			if !errors.Is(err, ErrIncomplete) {
+				return Payload{}, err
+			}
+			projected = payload
+			if err := removeDuplicateLegacyDigest(&projected); err != nil {
+				return Payload{}, err
+			}
 		}
 		projected.PresentationProfile = &profile
 		return projected, nil

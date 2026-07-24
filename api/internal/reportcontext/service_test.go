@@ -177,6 +177,34 @@ func TestProjectPayloadForRepresentationKeepsHistoricalRunShape(t *testing.T) {
 	}
 }
 
+func TestProjectPayloadForRepresentationFallsBackToFrozenDigest(t *testing.T) {
+	digest := json.RawMessage(strings.Replace(
+		string(validFrozenDigestV2()),
+		`"work_unit_ref":"wu-3"`,
+		`"work_unit_ref":"wu-2"`,
+		1,
+	))
+	payload := Payload{
+		Run:      Run{ReportType: ReportTypePersonalDaily},
+		Sessions: []SessionSource{{SelectionID: "selection-1", Mode: "digest_v2", Digest: digest}},
+		Sources:  Sources{SessionDigest: digest},
+	}
+
+	projected, err := projectPayloadForRepresentation(payload, RepresentationWorkEvidence)
+	if err != nil {
+		t.Fatalf("projection mismatch must fall back to the frozen digest: %v", err)
+	}
+	if len(projected.Sessions) != 1 || projected.WorkEvidence != nil {
+		t.Fatalf("frozen digest fallback was not preserved: %+v", projected)
+	}
+	if len(projected.Sources.SessionDigest) != 0 {
+		t.Fatal("fallback must still remove a byte-identical duplicate digest")
+	}
+	if projected.PresentationProfile == nil {
+		t.Fatal("fallback must retain the report presentation profile")
+	}
+}
+
 func TestProjectPayloadRemovesOnlyProvablyDuplicateLegacyDigest(t *testing.T) {
 	digest := validFrozenDigestV2()
 	payload := Payload{
