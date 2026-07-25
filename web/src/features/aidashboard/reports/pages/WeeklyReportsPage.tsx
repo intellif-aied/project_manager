@@ -541,6 +541,7 @@ function WeeklyReportEditorModal({
       invalidate();
       message.success("周报已保存");
       onDone?.();
+      onClose();
     },
     onError: (err: unknown) => message.error(errorMessage(err))
   });
