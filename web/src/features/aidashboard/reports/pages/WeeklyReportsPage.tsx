@@ -1113,7 +1113,7 @@ function InlineWeeklyContentItem<TRecord extends InlineWeeklyRecord>({
   const articleRef = useRef<HTMLElement | null>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const detailQuery = useQuery({
-    queryKey: ["reports", "weekly-inline-detail", record.id],
+    queryKey: ["reports", "weekly", "inline-detail", record.id],
     queryFn: () => fetchDetail(record),
     enabled: expanded || summaryRequested,
     staleTime: 30_000

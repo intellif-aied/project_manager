@@ -509,7 +509,7 @@ function InlineDailyContentItem<TRecord extends InlineDailyRecord, TDetail exten
   const articleRef = useRef<HTMLElement | null>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const detailQuery = useQuery({
-    queryKey: ["reports", "daily-inline-detail", title, record.id],
+    queryKey: ["reports", "daily", "inline-detail", title, record.id],
     queryFn: () => fetchDetail(record.id),
     enabled: expanded || summaryRequested,
     staleTime: 30_000
