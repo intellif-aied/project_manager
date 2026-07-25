@@ -39,7 +39,7 @@
 
 - Digest 和原有 Report Context 来源不改变、不裁剪；
 - Profile 只决定展示结构，不决定事实范围和事实价值；
-- Git 信息仅作为后台辅助溯源材料，不能单独证明工作成果，也不得作为独立工作项或操作流水展示；
+- Projection 删除纯 Git 和可独立分离的 Git 片段；无法与业务结果安全拆分的少量 Git 信息仅作为后台辅助溯源材料，不能单独证明工作成果，也不得作为独立工作项或操作流水展示；
 - 每个 Context 只有当前报告类型的一份 Profile；
 - 全局 Skill 只保留通用执行、证据和写回规则；
 - 默认 Agent Prompt 按平台真实契约收敛：Instructions 只保证 Skill 真实加载；Start Prompt Template 保留 `/aida-report + run_id`；由于平台在 Message 非空时不渲染 Template，Aida 提交的最终 Message 也必须以同一 `/aida-report + run_id` 开头，用户补充只追加一次；报告流程仍只存在于 Skill；

@@ -217,8 +217,12 @@ type WorkEvidenceFact struct {
 }
 
 type WorkEvidenceObservation struct {
-	Date   string `json:"date"`
-	Status string `json:"status"`
+	Date            string `json:"date"`
+	FirstObservedAt string `json:"first_observed_at,omitempty"`
+	ObservedAt      string `json:"observed_at,omitempty"`
+	Category        string `json:"category,omitempty"`
+	Status          string `json:"status"`
+	OccurrenceCount int    `json:"occurrence_count"`
 }
 
 // PresentationProfile is the immutable, report-type-specific presentation
