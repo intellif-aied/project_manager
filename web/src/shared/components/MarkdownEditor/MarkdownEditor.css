@@ -1,4 +1,5 @@
 .markdown-editor-shell {
+  position: relative;
   display: flex;
   min-height: 220px;
   flex-direction: column;
@@ -42,9 +43,36 @@
 .markdown-editor .cm-gutters { display: none; }
 .markdown-editor .cm-activeLine { background: transparent; }
 .markdown-editor .cm-line { padding: 0 2px; }
+.markdown-editor .markdown-editor-inline-image {
+  display: block;
+  max-width: min(100%, 720px);
+  margin: 8px 2px 12px;
+}
+.markdown-editor .markdown-editor-inline-image img {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  max-height: 320px;
+  object-fit: contain;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+  box-shadow: 0 3px 10px rgba(15, 23, 42, .06);
+}
 .markdown-editor .cm-selectionBackground,
 .markdown-editor .cm-content ::selection { background: rgba(37, 99, 235, .14) !important; }
 .markdown-editor .cm-focused { outline: none; }
-.markdown-editor-images { display: flex; gap: 10px; overflow-x: auto; padding: 10px 12px; border-top: 1px solid #edf2f7; background: #f8fafc; }
-.markdown-editor-image { width: 112px; height: 72px; flex: 0 0 auto; object-fit: cover; border: 1px solid #dbe5f0; border-radius: 8px; background: #fff; }
-.markdown-editor-image.is-uploading { display: grid; place-items: center; color: #64748b; font-size: 12px; }
+.markdown-editor-uploading {
+  position: absolute;
+  z-index: 3;
+  right: 12px;
+  bottom: 10px;
+  padding: 5px 9px;
+  color: #475569;
+  font-size: 12px;
+  line-height: 18px;
+  background: rgba(248, 250, 252, .96);
+  border: 1px solid #dbe5f0;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, .08);
+}
