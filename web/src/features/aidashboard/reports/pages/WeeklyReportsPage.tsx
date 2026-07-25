@@ -5,8 +5,8 @@ import {
   Button,
   Card,
   DatePicker,
+  Dropdown,
   Empty,
-  Input,
   Modal,
   Pagination,
   Segmented,
@@ -16,6 +16,7 @@ import {
   Tag,
   Tooltip
 } from "antd";
+import type { MenuProps } from "antd";
 import {
   CalendarOutlined,
   CloudSyncOutlined,
@@ -24,7 +25,6 @@ import {
   DownOutlined,
   EditOutlined,
   LeftOutlined,
-  UpOutlined,
   FileTextOutlined
 } from "@ant-design/icons";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -66,13 +66,13 @@ import {
 } from "../../requirements/components/RequirementMetricCard";
 import { useAuth } from "@/shared/auth/authContext";
 import { MarkdownViewer } from "@/shared/components/MarkdownViewer/MarkdownViewer";
+import { MarkdownEditor } from "@/shared/components/MarkdownEditor/MarkdownEditor";
 import { PagePanel } from "@/shared/components/PagePanel/PagePanel";
 import { MemberReportBrowser } from "../MemberReportBrowser";
+import { reportContentSummary } from "../utils/reportSummary";
 
 import "../components/DailyReportGenerateModal.css";
 import "./ReportsPage.css";
-
-const { TextArea } = Input;
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "请稍后重试";
@@ -115,6 +115,17 @@ function formatWeekDate(value: string) {
 function weeklyRange(weekStart: string, weekEnd?: string) {
   const start = formatWeekDate(weekStart);
   return `${start} 至 ${weekEnd ? formatWeekDate(weekEnd) : weekEndOf(start)}`;
+}
+
+function weeklyRangeParts(weekStart: string) {
+  const start = dayjs(weekStart);
+  const end = start.add(6, "day");
+  return {
+    date: start.month() === end.month()
+      ? `${start.format("MM/DD")}–${end.format("DD")}`
+      : `${start.format("MM/DD")}–${end.format("MM/DD")}`,
+    context: `${start.format("YYYY")} · 周报`
+  };
 }
 
 type WeeklyReportScope = "personal" | "team" | "department";
@@ -357,12 +368,12 @@ export function PersonalWeeklyReportsView({
             </span>
           </header>
           <div className="reports-edit-shell">
-            <TextArea
-              rows={14}
+            <MarkdownEditor
               className="reports-weekly-editor"
               value={editorContent}
-              onChange={(e) => {
-                setContent(e.target.value);
+              height="min(46vh, 420px)"
+              onChange={(value) => {
+                setContent(value);
                 setContentTouched(true);
               }}
             />
@@ -530,6 +541,7 @@ function WeeklyReportEditorModal({
       invalidate();
       message.success("周报已保存");
       onDone?.();
+      onClose();
     },
     onError: (err: unknown) => message.error(errorMessage(err))
   });
@@ -676,30 +688,20 @@ function WeeklyReportEditorModal({
             ) : (
               <div className="console-report-editor-layout">
                 <div className="console-report-editor-layout__main">
-                  <div className="console-session-modal__section">
-                    <strong>报告正文</strong>
-                    <span>
-                      {editorContent.trim()
-                        ? readOnly
-                          ? "已加载报告内容。"
-                          : "已加载报告，可编辑后保存。"
-                        : readOnly
-                          ? "暂无报告内容"
-                          : "暂无报告，可直接填写。"}
-                    </span>
-                  </div>
-                  <TextArea
+                  {readOnly ? (
+                    <MarkdownViewer value={editorContent} />
+                  ) : (
+                    <MarkdownEditor
                     className="console-report-editor-layout__content-input"
-                    rows={18}
-                    readOnly={readOnly || aiGenerating}
+                    height="min(46vh, 360px)"
+                    disabled={aiGenerating}
                     value={editorContent}
-                    onChange={(event) => {
-                      if (readOnly || aiGenerating) return;
-                      setContent(event.target.value);
+                    onChange={(value) => {
+                      setContent(value);
                       setContentTouched(true);
                     }}
-                    placeholder={readOnly ? "暂无报告内容" : "暂无报告，可直接填写。"}
-                  />
+                    />
+                  )}
                 </div>
               </div>
             )}
@@ -1045,7 +1047,12 @@ function InlineWeeklyContentList<TRecord extends InlineWeeklyRecord>({
   return (
     <Card
       className="reports-list-card reports-inline-content-list reports-weekly-inline-content-list"
-      title={title}
+      title={
+        <div className="member-report-content-list__title">
+          <span>{title}</span>
+          {!loading && !error ? <small>共 {total} 篇</small> : null}
+        </div>
+      }
     >
       {error ? <Alert type="error" showIcon message={error} /> : null}
       {!error && loading ? <ReportsSkeleton rows={4} /> : null}
@@ -1053,7 +1060,7 @@ function InlineWeeklyContentList<TRecord extends InlineWeeklyRecord>({
         <ReportsEmpty description={`暂无${title}`} />
       ) : null}
       {!error && !loading && items.length > 0 ? (
-        <div className="member-report-content-list">
+        <div className="member-report-content-list__items">
           {items.map((record) => (
             <InlineWeeklyContentItem
               key={record.id}
@@ -1101,11 +1108,15 @@ function InlineWeeklyContentItem<TRecord extends InlineWeeklyRecord>({
 }) {
   const { message } = App.useApp();
   const [expanded, setExpanded] = useState(false);
+  const [summaryRequested, setSummaryRequested] = useState(
+    () => typeof window !== "undefined" && !("IntersectionObserver" in window)
+  );
+  const articleRef = useRef<HTMLElement | null>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const detailQuery = useQuery({
-    queryKey: ["reports", "weekly-inline-detail", record.id],
+    queryKey: ["reports", "weekly", "inline-detail", record.id],
     queryFn: () => fetchDetail(record),
-    enabled: expanded,
+    enabled: expanded || summaryRequested,
     staleTime: 30_000
   });
   const copyCurrentReport = async () => {
@@ -1135,6 +1146,21 @@ function InlineWeeklyContentItem<TRecord extends InlineWeeklyRecord>({
   };
 
   useEffect(() => {
+    const article = articleRef.current;
+    if (!article || summaryRequested || !("IntersectionObserver" in window)) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry?.isIntersecting) return;
+        setSummaryRequested(true);
+        observer.disconnect();
+      },
+      { rootMargin: "240px 0px" }
+    );
+    observer.observe(article);
+    return () => observer.disconnect();
+  }, [summaryRequested]);
+
+  useEffect(() => {
     if (!expanded) return;
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") closeReport();
@@ -1160,31 +1186,49 @@ function InlineWeeklyContentItem<TRecord extends InlineWeeklyRecord>({
     </>
   );
 
+  const period = weeklyRangeParts(record.week_start);
+  const contentSummary = reportContentSummary(detailQuery.data?.content ?? "");
+  const summary = contentSummary || preview;
+  const summaryText = summary || (detailQuery.isLoading ? "正在读取正文摘要…" : "展开查看周报正文");
+  const actionItems: MenuProps["items"] = [
+    { key: "edit", label: "编辑", icon: <EditOutlined /> }
+  ];
+  if (canDelete) {
+    actionItems.push({ key: "delete", label: "删除", icon: <DeleteOutlined />, danger: true });
+  }
+
   return (
-    <article className={`member-report-content-item${expanded ? " is-expanded" : ""}`}>
+    <article
+      ref={articleRef}
+      className={`member-report-content-item${expanded ? " is-expanded" : ""}`}
+      onMouseEnter={() => setSummaryRequested(true)}
+      onFocusCapture={() => setSummaryRequested(true)}
+    >
       <header className="member-report-content-item__head">
-        <div>
-          <div className="member-report-content-item__identity">
-            <strong>{getRange(record)}</strong>
-            <span>{meta}</span>
-          </div>
-          <small>{formatDateTime(record.updated_at)}</small>
-        </div>
-        <div className="member-report-content-item__actions">
-          <Button
-            className="member-report-content-item__edit"
-            type="text"
-            size="small"
-            icon={<EditOutlined />}
-            onClick={onEdit}
-          >
-            编辑
-          </Button>
-          {canDelete ? (
-            <Button type="text" size="small" danger icon={<DeleteOutlined />} onClick={onDelete}>
-              删除
-            </Button>
-          ) : null}
+        <button
+          className="member-report-content-item__summary"
+          type="button"
+          aria-label={getRange(record)}
+          aria-expanded={expanded}
+          onClick={toggleReport}
+        >
+          <span className="member-report-content-item__date">
+            <strong>{period.date}</strong>
+            <small>{period.context}</small>
+          </span>
+          <span className="member-report-content-item__overview">
+            {meta ? (
+              <span className="member-report-content-item__identity">
+                <span>{meta}</span>
+              </span>
+            ) : null}
+            <span className={`member-report-content-item__preview${summary ? "" : " member-report-content-item__preview--empty"}`}>
+              {summaryText}
+            </span>
+            <small>更新于 {formatDateTime(record.updated_at)}</small>
+          </span>
+        </button>
+        <div className="member-report-content-item__actions" role="group" aria-label="周报操作">
           <Button
             className="member-report-content-item__toggle"
             type="text"
@@ -1192,16 +1236,30 @@ function InlineWeeklyContentItem<TRecord extends InlineWeeklyRecord>({
             aria-expanded={expanded}
             onClick={toggleReport}
           >
-            {expanded ? <UpOutlined /> : <DownOutlined />}
-            {expanded ? "收起" : "展开"}
+            {expanded ? "收起正文" : "查看全文"}
           </Button>
+          <Dropdown
+            overlayClassName="report-record-actions-dropdown"
+            placement="bottomRight"
+            trigger={["click"]}
+            menu={{
+              items: actionItems,
+              onClick: ({ key }) => {
+                if (key === "edit") onEdit();
+                if (key === "delete") onDelete();
+              }
+            }}
+          >
+            <Button className="member-report-content-item__more" type="text" size="small" aria-label="更多操作">
+              更多
+              <DownOutlined />
+            </Button>
+          </Dropdown>
         </div>
       </header>
-      <p className="member-report-content-item__preview">{preview}</p>
       {expanded ? (
         <div className="member-report-content-item__detail">
           <div className="member-report-content-item__detail-bar">
-            <span>周报全文</span>
             <Tooltip title="复制全文（保留 Markdown 格式）">
               <Button
                 className="member-report-content-item__copy"
@@ -1297,7 +1355,7 @@ function PersonalWeeklyRecordsTable({
         }
       }}
       getRange={(record) => weeklyRange(record.week_start, record.week_end)}
-      getMeta={() => "我的周报"}
+      getMeta={() => ""}
       getPreview={(record) =>
         `已关联 ${record.source_daily_count} 份日报 · ${record.source_session_count} 个 session`
       }
@@ -1437,7 +1495,7 @@ function DepartmentWeeklyRecordsTable({
         }
       }}
       getRange={(record) => weeklyRange(record.week_start)}
-      getMeta={() => "部门周报"}
+      getMeta={() => ""}
       getPreview={(record) =>
         record.content?.trim() || `已汇总 ${record.source_team_weekly_report_ids.length} 个小组周报`
       }
@@ -1655,11 +1713,12 @@ export function TeamWeeklyReportsView({
           </header>
           {canEdit && !submittedLocked ? (
             <div className="reports-edit-shell">
-              <TextArea
-                rows={12}
+              <MarkdownEditor
+                className="reports-weekly-editor"
+                height="min(46vh, 420px)"
                 value={editorContent}
-                onChange={(e) => {
-                  setContent(e.target.value);
+                onChange={(value) => {
+                  setContent(value);
                   setContentTouched(true);
                 }}
               />
@@ -1988,12 +2047,12 @@ export function DirectorWeeklyReportsView({
           </header>
           {modalMode || editing || !report ? (
             <div className="reports-edit-shell">
-              <TextArea
-                rows={12}
+              <MarkdownEditor
                 className="reports-weekly-editor"
+                height="min(46vh, 420px)"
                 value={editorContent}
-                onChange={(e) => {
-                  setContent(e.target.value);
+                onChange={(value) => {
+                  setContent(value);
                   setContentTouched(true);
                 }}
               />

@@ -1,4 +1,4 @@
-﻿import { CopyOutlined, DeleteOutlined, DownOutlined, EditOutlined, UpOutlined } from "@ant-design/icons";
+﻿import { CopyOutlined, DeleteOutlined, DownOutlined, EditOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { LeftOutlined } from "@ant-design/icons";
 import {
@@ -7,17 +7,16 @@ import {
   Button,
   Card,
   DatePicker,
+  Dropdown,
   Empty,
   Pagination,
   Segmented,
   Select,
   Space,
-  Table,
-  Tag,
   Tooltip,
   Typography
 } from "antd";
-import type { ColumnsType } from "antd/es/table";
+import type { MenuProps } from "antd";
 import type { Dayjs } from "dayjs";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
@@ -43,6 +42,7 @@ import {
 } from "../../api/client";
 import { DailyReportGenerateModal, type DailyGenerateScope } from "../components/DailyReportGenerateModal";
 import { MemberReportBrowser } from "../MemberReportBrowser";
+import { reportContentSummary } from "../utils/reportSummary";
 import type {
   DailyReport,
   DailyReportListItem,
@@ -80,16 +80,22 @@ function formatDate(value?: string) {
   return value ? dayjs(value).format("YYYY-MM-DD") : "-";
 }
 
-function planPreview(value?: string) {
-  const plan = value?.trim();
-  return plan ? <span title={plan}>{plan}</span> : "-";
+function reportDateParts(value: string) {
+  const date = dayjs(value);
+  const today = dayjs().startOf("day");
+  const distance = today.diff(date.startOf("day"), "day");
+  const relative = distance === 0 ? "今天" : distance === 1 ? "昨天" : ["周日", "周一", "周二", "周三", "周四", "周五", "周六"][date.day()];
+  return {
+    date: date.format("MM月DD日"),
+    context: `${relative} · ${date.format("YYYY")}`
+  };
 }
 
-function teamStatus(record: TeamReportListItem) {
-  if (record.status === "submitted") return <Tag color="green">已发送</Tag>;
-  if (record.status === "saved" && record.submitted_at) return <Tag color="gold">已保存，未发送最新修改</Tag>;
-  if (record.status === "saved") return <Tag color="blue">已保存</Tag>;
-  return <Tag>暂无报告</Tag>;
+function teamStatusText(record: TeamReportListItem) {
+  if (record.status === "submitted") return "已发送";
+  if (record.status === "saved" && record.submitted_at) return "有未发送修改";
+  if (record.status === "saved") return "已保存";
+  return "暂无报告";
 }
 
 function useTablePagination() {
@@ -306,9 +312,6 @@ export function ReportsPage() {
           key={`team:${from ?? ""}:${to ?? ""}`}
           from={from}
           to={to}
-          onOpen={(record) =>
-            setGenerateTarget({ scope: "team", reportId: record.id, reportDate: record.report_date, readOnly: true })
-          }
           onEdit={(record) =>
             setGenerateTarget({ scope: "team", reportId: record.id, reportDate: record.report_date })
           }
@@ -419,8 +422,10 @@ function InlineDailyContentList<TRecord extends InlineDailyRecord, TDetail exten
   fetchDetail,
   renderStatus,
   renderMeta,
+  renderPreview,
   onEdit,
-  onDelete
+  onDelete,
+  canDelete = () => true
 }: {
   title: string;
   items: TRecord[];
@@ -431,11 +436,21 @@ function InlineDailyContentList<TRecord extends InlineDailyRecord, TDetail exten
   fetchDetail: (id: string) => Promise<TDetail>;
   renderStatus: (record: TRecord) => ReactNode;
   renderMeta: (record: TRecord) => string;
+  renderPreview: (record: TRecord) => string;
   onEdit: (record: TRecord) => void;
   onDelete: (record: TRecord) => void;
+  canDelete?: (record: TRecord) => boolean;
 }) {
   return (
-    <Card className="member-report-content-list reports-inline-content-list" title={title}>
+    <Card
+      className="member-report-content-list reports-inline-content-list"
+      title={
+        <div className="member-report-content-list__title">
+          <span>{title}</span>
+          {!loading && !error ? <small>共 {total} 篇</small> : null}
+        </div>
+      }
+    >
       {error ? (
         <Alert type="error" showIcon message={error} />
       ) : loading ? (
@@ -452,8 +467,10 @@ function InlineDailyContentList<TRecord extends InlineDailyRecord, TDetail exten
               fetchDetail={fetchDetail}
               status={renderStatus(record)}
               meta={renderMeta(record)}
+              preview={renderPreview(record)}
               onEdit={() => onEdit(record)}
               onDelete={() => onDelete(record)}
+              canDelete={canDelete(record)}
             />
           ))}
         </div>
@@ -469,24 +486,32 @@ function InlineDailyContentItem<TRecord extends InlineDailyRecord, TDetail exten
   fetchDetail,
   status,
   meta,
+  preview,
   onEdit,
-  onDelete
+  onDelete,
+  canDelete
 }: {
   record: TRecord;
   title: string;
   fetchDetail: (id: string) => Promise<TDetail>;
   status: ReactNode;
   meta: string;
+  preview: string;
   onEdit: () => void;
   onDelete: () => void;
+  canDelete: boolean;
 }) {
   const { message } = App.useApp();
   const [expanded, setExpanded] = useState(false);
+  const [summaryRequested, setSummaryRequested] = useState(
+    () => typeof window !== "undefined" && !("IntersectionObserver" in window)
+  );
+  const articleRef = useRef<HTMLElement | null>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const detailQuery = useQuery({
-    queryKey: ["reports", "daily-inline-detail", title, record.id],
+    queryKey: ["reports", "daily", "inline-detail", title, record.id],
     queryFn: () => fetchDetail(record.id),
-    enabled: expanded,
+    enabled: expanded || summaryRequested,
     staleTime: 30_000
   });
   const copyCurrentReport = async () => {
@@ -516,6 +541,21 @@ function InlineDailyContentItem<TRecord extends InlineDailyRecord, TDetail exten
   };
 
   useEffect(() => {
+    const article = articleRef.current;
+    if (!article || summaryRequested || !("IntersectionObserver" in window)) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry?.isIntersecting) return;
+        setSummaryRequested(true);
+        observer.disconnect();
+      },
+      { rootMargin: "240px 0px" }
+    );
+    observer.observe(article);
+    return () => observer.disconnect();
+  }, [summaryRequested]);
+
+  useEffect(() => {
     if (!expanded) return;
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") closeReport();
@@ -539,34 +579,74 @@ function InlineDailyContentItem<TRecord extends InlineDailyRecord, TDetail exten
     </>
   );
 
+  const dateParts = reportDateParts(record.report_date);
+  const contentSummary = reportContentSummary(detailQuery.data?.content ?? "");
+  const summary = contentSummary || preview;
+  const summaryText = summary || (detailQuery.isLoading ? "正在读取正文摘要…" : "展开查看日报正文");
+  const actionItems: MenuProps["items"] = [
+    { key: "edit", label: "编辑", icon: <EditOutlined /> }
+  ];
+  if (canDelete) {
+    actionItems.push({ key: "delete", label: "删除", icon: <DeleteOutlined />, danger: true });
+  }
+
   return (
-    <article className={`member-report-content-item${expanded ? " is-expanded" : ""}`}>
+    <article
+      ref={articleRef}
+      className={`member-report-content-item${expanded ? " is-expanded" : ""}`}
+      onMouseEnter={() => setSummaryRequested(true)}
+      onFocusCapture={() => setSummaryRequested(true)}
+    >
       <header className="member-report-content-item__head">
-        <div>
-          <div className="member-report-content-item__identity">
-            <strong>{formatDate(record.report_date)}</strong>
-            <span>{meta}</span>
-          </div>
-          <small>{formatDateTime(record.updated_at)}</small>
-        </div>
-        <div className="member-report-content-item__actions">
-          {status}
-          <Button className="member-report-content-item__edit" type="text" size="small" onClick={onEdit}>
-            编辑
-          </Button>
-          <Button type="text" size="small" danger icon={<DeleteOutlined />} onClick={onDelete}>
-            删除
-          </Button>
+        <button
+          className="member-report-content-item__summary"
+          type="button"
+          aria-expanded={expanded}
+          onClick={toggleReport}
+        >
+          <span className="member-report-content-item__date">
+            <strong>{dateParts.date}</strong>
+            <small>{dateParts.context}</small>
+          </span>
+          <span className="member-report-content-item__overview">
+            {status || meta ? (
+              <span className="member-report-content-item__identity">
+                {status}
+                {meta ? <span>{meta}</span> : null}
+              </span>
+            ) : null}
+            <span className={`member-report-content-item__preview${summary ? "" : " member-report-content-item__preview--empty"}`}>
+              {summaryText}
+            </span>
+            <small>更新于 {formatDateTime(record.updated_at)}</small>
+          </span>
+        </button>
+        <div className="member-report-content-item__actions" role="group" aria-label="日报操作">
           <Button className="member-report-content-item__toggle" type="text" size="small" aria-expanded={expanded} onClick={toggleReport}>
-            {expanded ? <UpOutlined /> : <DownOutlined />}
-            {expanded ? "收起" : "展开"}
+            {expanded ? "收起正文" : "查看全文"}
           </Button>
+          <Dropdown
+            overlayClassName="report-record-actions-dropdown"
+            placement="bottomRight"
+            trigger={["click"]}
+            menu={{
+              items: actionItems,
+              onClick: ({ key }) => {
+                if (key === "edit") onEdit();
+                if (key === "delete") onDelete();
+              }
+            }}
+          >
+            <Button className="member-report-content-item__more" type="text" size="small" aria-label="更多操作">
+              更多
+              <DownOutlined />
+            </Button>
+          </Dropdown>
         </div>
       </header>
       {expanded ? (
         <div className="member-report-content-item__detail">
           <div className="member-report-content-item__detail-bar">
-            <span>日报全文</span>
             <Tooltip title="复制全文（保留 Markdown 格式）">
               <Button className="member-report-content-item__copy" type="text" size="small" icon={<CopyOutlined />} aria-label="复制日报全文" disabled={!detailQuery.data?.content?.trim()} onClick={() => void copyCurrentReport()} />
             </Tooltip>
@@ -652,7 +732,8 @@ function PersonalDailyTable({
       pagination={tablePagination}
       fetchDetail={fetchReport}
       renderStatus={() => null}
-      renderMeta={() => "我的日报"}
+      renderMeta={() => ""}
+      renderPreview={() => ""}
       onEdit={onEdit}
       onDelete={onDelete}
     />
@@ -662,13 +743,11 @@ function PersonalDailyTable({
 function TeamDailyTable({
   from,
   to,
-  onOpen,
   onEdit,
   onDelete
 }: {
   from?: string;
   to?: string;
-  onOpen: (record: TeamReportListItem) => void;
   onEdit: (record: TeamReportListItem) => void;
   onDelete: (record: TeamReportListItem) => void;
 }) {
@@ -687,74 +766,24 @@ function TeamDailyTable({
     staleTime: 30_000
   });
 
-  const columns: ColumnsType<TeamReportListItem> = [
-    { title: "日期", dataIndex: "report_date", width: 130, render: formatDate },
-    { title: "明日计划", dataIndex: "next_day_plan", width: 260, ellipsis: true, render: planPreview },
-    { title: "成员数", dataIndex: "member_count", width: 100 },
-    { title: "已发送人数", dataIndex: "submitted_count", width: 120 },
-    { title: "未发送人数", dataIndex: "missing_count", width: 120 },
-    { title: "小组日报状态", key: "status", width: 190, render: (_, record) => teamStatus(record) },
-    { title: "发送给总监时间", dataIndex: "submitted_at", render: formatDateTime },
-    { title: "更新时间", dataIndex: "updated_at", render: formatDateTime },
-    {
-      title: "操作",
-      key: "actions",
-      width: 190,
-      render: (_, record) => (
-        <Space size={4}>
-          <Button size="small" type="link" onClick={() => onOpen(record)}>
-            打开
-          </Button>
-          <Button size="small" type="link" onClick={() => onEdit(record)}>
-            编辑
-          </Button>
-          {record.leader_id === user?.id ? (
-            <Button size="small" type="link" danger onClick={() => onDelete(record)}>
-              删除
-            </Button>
-          ) : null}
-        </Space>
-      )
-    }
-  ];
   return (
-    <>
-      <div className="reports-team-daily-desktop">
-        <Card
-          className="reports-list-card"
-          title="小组日报记录"
-        >
-          {reportsQuery.isError ? (
-            <Alert type="error" showIcon message="小组日报加载失败" description={errorMessage(reportsQuery.error)} />
-          ) : (
-            <Table<TeamReportListItem>
-              rowKey="id"
-              columns={columns}
-              dataSource={reportsQuery.data?.items ?? []}
-              loading={reportsQuery.isLoading}
-              pagination={tablePagination(reportsQuery.data?.total ?? 0)}
-            />
-          )}
-        </Card>
-      </div>
-      <div className="reports-team-daily-mobile">
-        <InlineDailyContentList<TeamReportListItem, TeamReport>
-          title="小组日报记录"
-          items={reportsQuery.data?.items ?? []}
-          total={reportsQuery.data?.total ?? 0}
-          loading={reportsQuery.isLoading}
-          error={reportsQuery.isError ? `小组日报加载失败：${errorMessage(reportsQuery.error)}` : undefined}
-          pagination={tablePagination}
-          fetchDetail={fetchTeamReport}
-          renderStatus={teamStatus}
-          renderMeta={(record) =>
-            `小组日报 · 共 ${record.member_count} 人 · 已提交 ${record.submitted_count} · 未提交 ${record.missing_count}`
-          }
-          onEdit={onEdit}
-          onDelete={onDelete}
-        />
-      </div>
-    </>
+    <InlineDailyContentList<TeamReportListItem, TeamReport>
+      title="小组日报记录"
+      items={reportsQuery.data?.items ?? []}
+      total={reportsQuery.data?.total ?? 0}
+      loading={reportsQuery.isLoading}
+      error={reportsQuery.isError ? `小组日报加载失败：${errorMessage(reportsQuery.error)}` : undefined}
+      pagination={tablePagination}
+      fetchDetail={fetchTeamReport}
+      renderStatus={() => null}
+      renderMeta={(record) =>
+        `${teamStatusText(record)} · 共 ${record.member_count} 人 · 已提交 ${record.submitted_count} · 未提交 ${record.missing_count}`
+      }
+      renderPreview={(record) => record.next_day_plan?.trim() ? `明日计划：${record.next_day_plan.trim()}` : ""}
+      onEdit={onEdit}
+      onDelete={onDelete}
+      canDelete={(record) => record.leader_id === user?.id}
+    />
   );
 }
 
@@ -800,6 +829,7 @@ function DepartmentDailyTable({
       fetchDetail={(id) => fetchDepartmentReport(id, departmentId)}
       renderStatus={() => null}
       renderMeta={(record) => `共 ${record.team_count} 个小组 · 已提交 ${record.submitted_team_count} · 未提交 ${record.missing_team_count}`}
+      renderPreview={(record) => record.next_day_plan?.trim() ? `明日计划：${record.next_day_plan.trim()}` : ""}
       onEdit={onEdit}
       onDelete={onDelete}
     />
