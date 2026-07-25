@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +11,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/aidashboard/api/internal/biztime"
 	"github.com/aidashboard/api/internal/reportsource"
+	"github.com/aidashboard/api/internal/sessiondigestv2"
 )
 
 type sourceStub struct {
@@ -378,52 +378,400 @@ func TestProjectPayloadKeepsChronologicalCorrectionChain(t *testing.T) {
 	}
 }
 
-func TestSelectReportCheckpointsDropsSupersededProcessState(t *testing.T) {
-	candidates := []workEvidenceFactCandidate{
+func TestProjectPayloadPreservesFactsAcrossWorkUnitStatesAndRemovesStructuralNoise(t *testing.T) {
+	var digest frozenDigestV2
+	if err := json.Unmarshal(validFrozenDigestV2(), &digest); err != nil {
+		t.Fatal(err)
+	}
+	digest.ReportPeriod.Days[0].Highlights = []sessiondigestv2.DailyHighlight{
 		{
-			Identity: workEvidenceFactIdentity{Kind: "result", Text: "正在实现", Source: "agent_claim"},
-			Observation: WorkEvidenceObservation{
-				Date: "2026-07-23", ObservedAt: "2026-07-23T09:00:00+08:00",
-				Category: "implementation", Status: "partial",
-			},
-			SourceRef: "session-1", Sequence: 1,
+			SourceRef: "session-1", WorkUnitRef: "wu-completed", Sequence: 1,
+			ActivityEndAt: "2026-07-23T09:00:00+08:00", Category: "implementation", Status: "completed", EvidenceGrade: "A",
+			ResultStatements: []sessiondigestv2.ResultStatement{{
+				Text: "我会先检查现状。\n\n已完成上传并验证结果。", Source: "agent_claim",
+			}},
 		},
 		{
-			Identity: workEvidenceFactIdentity{Kind: "result", Text: "实现完成", Source: "tool_result"},
-			Observation: WorkEvidenceObservation{
-				Date: "2026-07-23", ObservedAt: "2026-07-23T10:00:00+08:00",
-				Category: "implementation", Status: "completed",
-			},
-			SourceRef: "session-1", Sequence: 2,
+			SourceRef: "session-1", WorkUnitRef: "wu-partial", Sequence: 2,
+			ActivityEndAt: "2026-07-23T10:00:00+08:00", Category: "discussion", Status: "partial", EvidenceGrade: "B",
+			ResultStatements: []sessiondigestv2.ResultStatement{{
+				Text: "## 结果\n修复缓存失效问题。\n\n## 实现细节\n```go\nfunc internalOnly() {}\n```\n$ go test ./...\n\n## 验证\n12 项测试全部通过。", Source: "tool_result",
+			}},
 		},
 		{
-			Identity: workEvidenceFactIdentity{Kind: "result", Text: "后续验证中", Source: "agent_claim"},
-			Observation: WorkEvidenceObservation{
-				Date: "2026-07-23", ObservedAt: "2026-07-23T11:00:00+08:00",
-				Category: "validation", Status: "partial",
-			},
-			SourceRef: "session-1", Sequence: 3,
+			SourceRef: "session-1", WorkUnitRef: "wu-unknown", Sequence: 3,
+			ActivityEndAt: "2026-07-23T11:00:00+08:00", Category: "administrative", Status: "unknown", EvidenceGrade: "B",
+			ResultStatements: []sessiondigestv2.ResultStatement{{
+				Text: "发现发布配置缺少必要变量，当前部署存在失败风险。", Source: "agent_claim",
+			}},
+			Unresolved: []sessiondigestv2.Unresolved{{Text: "需要补齐测试服变量后重新验证。"}},
 		},
 		{
-			Identity: workEvidenceFactIdentity{Kind: "unresolved", Text: "等待人工验收"},
-			Observation: WorkEvidenceObservation{
-				Date: "2026-07-23", ObservedAt: "2026-07-23T11:00:00+08:00",
-				Category: "validation", Status: "partial",
-			},
-			SourceRef: "session-1", Sequence: 3,
+			SourceRef: "session-1", WorkUnitRef: "wu-git-only", Sequence: 4,
+			ActivityEndAt: "2026-07-23T12:00:00+08:00", Category: "administrative", Status: "completed", EvidenceGrade: "C",
+			ResultStatements: []sessiondigestv2.ResultStatement{{
+				Text: "已执行 git add、git commit 和 push，提交号为 abc123。", Source: "agent_claim",
+			}},
 		},
+	}
+	digest.ReportPeriod.Days[0].OutcomeCoverage = sessiondigestv2.OutcomeCoverage{
+		SourceCount: 4, RepresentedCount: 4, Complete: true,
+	}
+	digest.ReportPeriod.ResultWorkUnitCount = 4
+	digest.ReportPeriod.Days[0].ResultWorkUnitCount = 4
+	raw, err := json.Marshal(digest)
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	selected := selectReportCheckpoints(candidates)
-	sortWorkEvidenceCandidates(selected)
-	got := make([]string, 0, len(selected))
-	for _, candidate := range selected {
-		got = append(got, candidate.Identity.Text)
+	projected, err := projectPayload(Payload{Sessions: []SessionSource{{
+		SelectionID: "selection-1", Mode: reportsource.ReadModeDigestV2, Digest: raw,
+	}}})
+	if err != nil {
+		t.Fatal(err)
 	}
-	want := []string{"实现完成", "后续验证中", "等待人工验收"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("selected checkpoints=%v want=%v", got, want)
+	visible, err := json.Marshal(projected.WorkEvidence)
+	if err != nil {
+		t.Fatal(err)
 	}
+	text := string(visible)
+	for _, required := range []string{
+		"已完成上传并验证结果。",
+		"修复缓存失效问题。",
+		"12 项测试全部通过。",
+		"发现发布配置缺少必要变量，当前部署存在失败风险。",
+		"需要补齐测试服变量后重新验证。",
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("report fact %q was lost: %s", required, text)
+		}
+	}
+	for _, noise := range []string{
+		"我会先检查现状", "func internalOnly", "$ go test", "git add", "abc123",
+	} {
+		if strings.Contains(text, noise) {
+			t.Fatalf("structural noise %q leaked into Projection: %s", noise, text)
+		}
+	}
+}
+
+func TestProjectPayloadKeepsBusinessValidationFromMixedGitStatement(t *testing.T) {
+	digest := strings.Replace(
+		string(validFrozenDigestV2()),
+		`"text":"same result"`,
+		`"text":"已完成分支 rebase 和 merge，前端测试及生产构建均通过。"`,
+		1,
+	)
+	projected, err := projectPayload(Payload{Sessions: []SessionSource{{
+		SelectionID: "selection-1", Mode: reportsource.ReadModeDigestV2,
+		Digest: json.RawMessage(digest),
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	visible, err := json.Marshal(projected.WorkEvidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(visible)
+	if !strings.Contains(text, "前端测试及生产构建均通过。") {
+		t.Fatalf("business validation was removed with Git trace: %s", text)
+	}
+	if strings.Contains(text, "rebase") || strings.Contains(text, "merge") {
+		t.Fatalf("Git trace was not removed from mixed statement: %s", text)
+	}
+}
+
+func TestProjectPayloadKeepsBusinessFactsFromFlattenedStructures(t *testing.T) {
+	for name, input := range map[string]string{
+		"flattened headings":       "## 完成 ### 服务交付 - 完成 API 改造。 - 12/12 测试通过。",
+		"delegated conclusion":     "审计结论已发给主代理：当前实现未并行执行，需要调整调度。",
+		"markdown table":           "| 变更 | 状态 | 验证 | |---|---|---| | 缓存修复 | 完成 | 12/12 通过 |",
+		"flattened Git validation": "Rebase completed successfully. - Branch: feat/cache - New HEAD: abc123 - All 548 frontend tests passed - Full Go test suite passed",
+		"command prefix prose":     "`docker compose --env-file .env` 只负责变量替换，不会自动把变量注入容器；当前服务必须显式配置必要变量。",
+	} {
+		t.Run(name, func(t *testing.T) {
+			digest := strings.Replace(
+				string(validFrozenDigestV2()), `"text":"same result"`,
+				`"text":`+string(mustJSON(t, input)), 1,
+			)
+			projected, err := projectPayload(Payload{Sessions: []SessionSource{{
+				SelectionID: "selection-1", Mode: reportsource.ReadModeDigestV2,
+				Digest: json.RawMessage(digest),
+			}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			visible, err := json.Marshal(projected.WorkEvidence)
+			if err != nil {
+				t.Fatal(err)
+			}
+			text := string(visible)
+			for _, required := range map[string][]string{
+				"flattened headings":       {"完成 API 改造。", "12/12 测试通过。"},
+				"delegated conclusion":     {"当前实现未并行执行", "需要调整调度"},
+				"markdown table":           {"缓存修复", "完成", "12/12 通过"},
+				"flattened Git validation": {"548 frontend tests passed", "Full Go test suite passed"},
+				"command prefix prose":     {"只负责变量替换", "必须显式配置必要变量"},
+			}[name] {
+				if !strings.Contains(text, required) {
+					t.Fatalf("business fact %q was lost: %s", required, text)
+				}
+			}
+			for _, noise := range []string{"发给主代理", "|---|", "New HEAD", "abc123"} {
+				if strings.Contains(text, noise) {
+					t.Fatalf("structural noise %q leaked into Projection: %s", noise, text)
+				}
+			}
+		})
+	}
+}
+
+func TestProjectPayloadKeepsBusinessFactsAfterFlattenedCodeFences(t *testing.T) {
+	input := "确认有问题，而且是两个问题叠加。这个请求参数是： ```text period_start=2026-07-16 ``` " +
+		"日期筛选实际没有生效。后端只读取： ```text activity_from activity_to ``` " +
+		"冷缓存耗时约 18 秒，并发时出现 30 秒失败；根因是日期条件未提前限制事件范围。"
+	digest := strings.Replace(
+		string(validFrozenDigestV2()), `"text":"same result"`,
+		`"text":`+string(mustJSON(t, input)), 1,
+	)
+	projected, err := projectPayload(Payload{Sessions: []SessionSource{{
+		SelectionID: "selection-1", Mode: reportsource.ReadModeDigestV2,
+		Digest: json.RawMessage(digest),
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	visible, err := json.Marshal(projected.WorkEvidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(visible)
+	for _, required := range []string{
+		"确认有问题，而且是两个问题叠加", "日期筛选实际没有生效", "冷缓存耗时约 18 秒",
+		"根因是日期条件未提前限制事件范围", "period_start=2026-07-16",
+		"activity_from activity_to",
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("business fact after flattened code fence %q was lost: %s", required, text)
+		}
+	}
+	for _, noise := range []string{"```"} {
+		if strings.Contains(text, noise) {
+			t.Fatalf("flattened code noise %q leaked into Projection: %s", noise, text)
+		}
+	}
+}
+
+func TestProjectPayloadKeepsBusinessExplanationInsideTechnicalSection(t *testing.T) {
+	input := "已完成并发隔离修复。\n\n## 技术细节\n\n" +
+		"interactive Worker 只领取交互任务，后台积压不会占用预留容量。\n\n" +
+		"```go\nfunc internalOnly() {}\n```\n\n" +
+		"/api/internal/reportcontext/projection.go\n\n## 验证\n\n" +
+		"5000 个后台任务排队时，交互任务仍被独立 Worker 领取。"
+	digest := strings.Replace(
+		string(validFrozenDigestV2()), `"text":"same result"`,
+		`"text":`+string(mustJSON(t, input)), 1,
+	)
+	projected, err := projectPayload(Payload{Sessions: []SessionSource{{
+		SelectionID: "selection-1", Mode: reportsource.ReadModeDigestV2,
+		Digest: json.RawMessage(digest),
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	visible, err := json.Marshal(projected.WorkEvidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(visible)
+	for _, required := range []string{
+		"已完成并发隔离修复", "interactive Worker 只领取交互任务",
+		"后台积压不会占用预留容量", "5000 个后台任务排队时",
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("business explanation in technical section %q was lost: %s", required, text)
+		}
+	}
+	for _, noise := range []string{"func internalOnly", "/api/internal/reportcontext/projection.go", "```"} {
+		if strings.Contains(text, noise) {
+			t.Fatalf("technical noise %q leaked into Projection: %s", noise, text)
+		}
+	}
+}
+
+func TestProjectPayloadDropsPromptCopiedToAnotherSession(t *testing.T) {
+	input := "复制下面这段给另一个会话： ```text 继续执行生产发布。先检查服务状态，再构建镜像并发布。 ```"
+	digest := strings.Replace(
+		string(validFrozenDigestV2()), `"text":"same result"`,
+		`"text":`+string(mustJSON(t, input)), 1,
+	)
+	projected, err := projectPayload(Payload{Sessions: []SessionSource{{
+		SelectionID: "selection-1", Mode: reportsource.ReadModeDigestV2,
+		Digest: json.RawMessage(digest),
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	visible, err := json.Marshal(projected.WorkEvidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(visible)
+	for _, promptText := range []string{"复制下面这段", "另一个会话", "继续执行生产发布", "构建镜像并发布"} {
+		if strings.Contains(text, promptText) {
+			t.Fatalf("handoff prompt %q became report evidence: %s", promptText, text)
+		}
+	}
+}
+
+func TestProjectPayloadKeepsBusinessMappingThatContainsBranchMetadata(t *testing.T) {
+	input := "当前 QEMU pipeline 使用非 TST 入口。具体是： " +
+		"```text Jenkins job: ngu800p 分支: master PIPELINE_ID: qemu_tst_pipeline ``` " +
+		"所以虽然名称包含 tst，但实际是非 TST 框架复用 TST 测试工具。"
+	digest := strings.Replace(
+		string(validFrozenDigestV2()), `"text":"same result"`,
+		`"text":`+string(mustJSON(t, input)), 1,
+	)
+	projected, err := projectPayload(Payload{Sessions: []SessionSource{{
+		SelectionID: "selection-1", Mode: reportsource.ReadModeDigestV2,
+		Digest: json.RawMessage(digest),
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	visible, err := json.Marshal(projected.WorkEvidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(visible)
+	for _, required := range []string{
+		"当前 QEMU pipeline 使用非 TST 入口", "Jenkins job: ngu800p",
+		"PIPELINE_ID: qemu_tst_pipeline", "实际是非 TST 框架复用 TST 测试工具",
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("business mapping containing branch metadata %q was lost: %s", required, text)
+		}
+	}
+}
+
+func TestProjectPayloadKeepsGitRelatedFailureAndSecurityBlocker(t *testing.T) {
+	input := "Push did not complete. The environment blocked git push because it would export internal platform details. " +
+		"SSH also failed with connection reset, so the release remains blocked."
+	digest := strings.Replace(
+		string(validFrozenDigestV2()), `"text":"same result"`,
+		`"text":`+string(mustJSON(t, input)), 1,
+	)
+	projected, err := projectPayload(Payload{Sessions: []SessionSource{{
+		SelectionID: "selection-1", Mode: reportsource.ReadModeDigestV2,
+		Digest: json.RawMessage(digest),
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	visible, err := json.Marshal(projected.WorkEvidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(visible)
+	for _, required := range []string{
+		"did not complete", "blocked git push", "export internal platform details",
+		"connection reset", "release remains blocked",
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("Git-related failure or security blocker %q was lost: %s", required, text)
+		}
+	}
+}
+
+func TestProjectPayloadKeepsDeliveryAfterGitTraceInSameStatement(t *testing.T) {
+	input := "已完成并部署。本地实现已提交并推送到 origin：主要内容包括硬件资源登记、lease 排队释放、" +
+		"异常工单入口、利用率统计、后端 API 和前端硬件管理页面。服务健康检查通过。"
+	digest := strings.Replace(
+		string(validFrozenDigestV2()), `"text":"same result"`,
+		`"text":`+string(mustJSON(t, input)), 1,
+	)
+	projected, err := projectPayload(Payload{Sessions: []SessionSource{{
+		SelectionID: "selection-1", Mode: reportsource.ReadModeDigestV2,
+		Digest: json.RawMessage(digest),
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	visible, err := json.Marshal(projected.WorkEvidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(visible)
+	for _, required := range []string{
+		"已完成并部署", "硬件资源登记", "lease 排队释放", "异常工单入口",
+		"利用率统计", "后端 API", "前端硬件管理页面", "服务健康检查通过",
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("delivery after Git trace %q was lost: %s", required, text)
+		}
+	}
+}
+
+func TestProjectPayloadKeepsGitAnalysisStatistics(t *testing.T) {
+	input := "已完成 Context 膨胀分析：372 条回复中，121 条包含代码块，118 条包含 Git/Commit/Merge 信息，" +
+		"196 条包含命令或文件路径；这些分类有重叠。"
+	digest := strings.Replace(
+		string(validFrozenDigestV2()), `"text":"same result"`,
+		`"text":`+string(mustJSON(t, input)), 1,
+	)
+	projected, err := projectPayload(Payload{Sessions: []SessionSource{{
+		SelectionID: "selection-1", Mode: reportsource.ReadModeDigestV2,
+		Digest: json.RawMessage(digest),
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	visible, err := json.Marshal(projected.WorkEvidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(visible)
+	for _, required := range []string{
+		"372 条回复", "121 条包含代码块", "118 条包含 Git/Commit/Merge 信息",
+		"196 条包含命令或文件路径", "这些分类有重叠",
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("Git analysis fact %q was lost: %s", required, text)
+		}
+	}
+}
+
+func TestProjectPayloadKeepsValidationAfterMergeClause(t *testing.T) {
+	input := "Merge commit 已完成，工作区干净；API/daemon 全量测试已通过。"
+	digest := strings.Replace(
+		string(validFrozenDigestV2()), `"text":"same result"`,
+		`"text":`+string(mustJSON(t, input)), 1,
+	)
+	projected, err := projectPayload(Payload{Sessions: []SessionSource{{
+		SelectionID: "selection-1", Mode: reportsource.ReadModeDigestV2,
+		Digest: json.RawMessage(digest),
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	visible, err := json.Marshal(projected.WorkEvidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(visible)
+	if !strings.Contains(text, "API/daemon 全量测试已通过") {
+		t.Fatalf("validation after merge clause was lost: %s", text)
+	}
+}
+
+func mustJSON(t *testing.T, value string) []byte {
+	t.Helper()
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
 }
 
 func TestProjectPayloadKeepsAllLegacyResultsWithoutSourceRefs(t *testing.T) {
@@ -499,21 +847,21 @@ func TestProjectPayloadRejectsUnknownHighlightSource(t *testing.T) {
 
 func TestProjectReportFactTextKeepsOutcomeLeadAndDropsProcessDetail(t *testing.T) {
 	input := "已完成方案收口。测试已全部通过。\n\n## 实现细节\n\n" +
-		"```go\nfunc internalOnly() {}\n```\n\n" + strings.Repeat("内部实现、命令和文件路径。", 1000)
+		"```go\nfunc internalOnly() {}\n```\n\n/api/internal/reportcontext/projection.go"
 	if got, want := projectReportFactText(input), "已完成方案收口。测试已全部通过。"; got != want {
 		t.Fatalf("projected fact=%q want=%q", got, want)
 	}
 }
 
-func TestProjectReportFactTextUsesFirstSubstantiveListItem(t *testing.T) {
+func TestProjectReportFactTextKeepsOutcomeAndValidationListItems(t *testing.T) {
 	input := "## 修改结果\n\n- 已修复报告超时并完成真实链路验证。\n- `go test ./...` 已通过。\n- 修改文件：`api/internal/reportcontext/projection.go`。"
-	if got, want := projectReportFactText(input), "已修复报告超时并完成真实链路验证。"; got != want {
+	if got, want := projectReportFactText(input), "已修复报告超时并完成真实链路验证。\n`go test ./...` 已通过。"; got != want {
 		t.Fatalf("projected fact=%q want=%q", got, want)
 	}
 }
 
 func TestProjectReportFactTextKeepsMultipleOutcomeBlocksUpToLimit(t *testing.T) {
-	input := "## 结果\n\n- 完成报告 Context 收敛。\n- 真实样本验证通过。\n- 仍需人工核对最终日报质量。\n\n## 实现细节\n\n这里是不应进入报告的底层代码说明。"
+	input := "## 结果\n\n- 完成报告 Context 收敛。\n- 真实样本验证通过。\n- 仍需人工核对最终日报质量。\n\n## 实现细节\n\n`git status --short`\n\n/api/internal/reportcontext/projection.go"
 	want := "完成报告 Context 收敛。\n真实样本验证通过。\n仍需人工核对最终日报质量。"
 	if got := projectReportFactText(input); got != want {
 		t.Fatalf("multiple report outcomes were not retained: got=%q want=%q", got, want)
@@ -546,7 +894,7 @@ func TestProjectReportFactTextDropsGitItemFromFlattenedOutcomeList(t *testing.T)
 
 func TestProjectReportFactTextDropsFlattenedCodeFence(t *testing.T) {
 	input := "脚本语法检查通过，但缺少运行依赖，无法确认端到端训练成功；直接运行会报： ```text ModuleNotFoundError ``` 后续命令省略。"
-	if got, want := projectReportFactText(input), "脚本语法检查通过，但缺少运行依赖，无法确认端到端训练成功；直接运行会报："; got != want {
+	if got, want := projectReportFactText(input), "脚本语法检查通过，但缺少运行依赖，无法确认端到端训练成功；直接运行会报： ModuleNotFoundError 后续命令省略。"; got != want {
 		t.Fatalf("projected fact=%q want=%q", got, want)
 	}
 }
@@ -571,18 +919,19 @@ func TestProjectReportFactTextDropsPureWorktreeMerge(t *testing.T) {
 	}
 }
 
-func TestProjectReportFactTextDropsGitOnlyValidation(t *testing.T) {
+func TestProjectReportFactTextKeepsValidationAndDropsGitClauses(t *testing.T) {
 	input := "已完成分支 rebase 和 merge，前端测试及生产构建均通过。"
-	if got := projectReportFactText(input); got != "" {
-		t.Fatalf("Git-only validation became report fact: %q", got)
+	if got, want := projectReportFactText(input), "前端测试及生产构建均通过。"; got != want {
+		t.Fatalf("mixed Git validation projected as %q, want %q", got, want)
 	}
 }
 
 func TestProjectReportFactTextKeepsOutcomeAndStripsGitTrace(t *testing.T) {
 	for input, expected := range map[string]string{
-		"已完成预审问题修复，并推送前后端功能分支。":             "已完成预审问题修复。",
-		"已完成 commit 和测试服部署。":                "已完成测试服部署。",
-		"已合入当前 worktree，当前 HEAD：`9ba749b`。": "",
+		"已完成预审问题修复，并推送前后端功能分支。":                     "已完成预审问题修复。",
+		"已完成 commit 和测试服部署。":                        "已完成测试服部署。",
+		"已合入当前 worktree，当前 HEAD：`9ba749b`。":         "",
+		"已记录到：`doc/v2/bug清单/严重问题.md` 提交：`d0f6193`。": "已记录到：`doc/v2/bug清单/严重问题.md`。",
 	} {
 		if got := projectReportFactText(input); got != expected {
 			t.Fatalf("Git trace sanitization mismatch: input=%q got=%q want=%q", input, got, expected)
@@ -597,13 +946,13 @@ func TestProjectReportFactTextKeepsNonGitSubmissionBlocker(t *testing.T) {
 	}
 }
 
-func TestProjectReportFactTextDropsInternalDelegationResult(t *testing.T) {
-	for _, input := range []string{
-		"审查结论已发给主代理：前端旧技术文档可以删除。",
-		"只读分析已完成，并已向主代理提交完整流水线结论。",
+func TestProjectReportFactTextStripsInternalDelegationAndKeepsConclusion(t *testing.T) {
+	for input, expected := range map[string]string{
+		"审查结论已发给主代理：前端旧技术文档可以删除。":  "前端旧技术文档可以删除。",
+		"只读分析已完成，并已向主代理提交完整流水线结论。": "",
 	} {
-		if got := projectReportFactText(input); got != "" {
-			t.Fatalf("internal delegation became report fact: %q", got)
+		if got := projectReportFactText(input); got != expected {
+			t.Fatalf("internal delegation projected as %q, want %q", got, expected)
 		}
 	}
 }
