@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -260,9 +261,16 @@ func TestProjectPayloadUsesReadableFactsAndOmitsRawGoals(t *testing.T) {
 	if evidence.Facts[0].Kind != "result" ||
 		evidence.Facts[0].Text != "same result" ||
 		evidence.Facts[0].Source != "tool_result" ||
-		len(evidence.Facts[0].Observations) != 1 ||
+		len(evidence.Facts[0].Observations) != 2 ||
 		evidence.Facts[0].Observations[0].Date != "2026-07-23" ||
-		evidence.Facts[0].Observations[0].Status != "completed" {
+		evidence.Facts[0].Observations[0].ObservedAt != "2026-07-23T09:00:00+08:00" ||
+		evidence.Facts[0].Observations[0].Category != "implementation" ||
+		evidence.Facts[0].Observations[0].Status != "completed" ||
+		evidence.Facts[0].Observations[0].OccurrenceCount != 1 ||
+		evidence.Facts[0].Observations[1].ObservedAt != "2026-07-23T10:00:00+08:00" ||
+		evidence.Facts[0].Observations[1].Category != "validation" ||
+		evidence.Facts[0].Observations[1].Status != "completed" ||
+		evidence.Facts[0].Observations[1].OccurrenceCount != 1 {
 		t.Fatalf("plain fact lost report semantics: %+v", evidence.Facts[0])
 	}
 	if evidence.Facts[2].Kind != "unresolved" || evidence.Facts[2].Text != "follow up" || evidence.Facts[2].Source != "" {
@@ -282,13 +290,40 @@ func TestProjectPayloadUsesReadableFactsAndOmitsRawGoals(t *testing.T) {
 			t.Fatalf("work evidence leaked transport or raw goal field %s: %s", forbidden, visible)
 		}
 	}
-	if !strings.Contains(visible, `"facts":[{"kind":"result","text":"same result","source":"tool_result","observations":[{"date":"2026-07-23"`) ||
+	if !strings.Contains(visible, `"facts":[{"kind":"result","text":"same result","source":"tool_result","observations":[{"date":"2026-07-23","observed_at":"2026-07-23T09:00:00+08:00","category":"implementation","status":"completed","occurrence_count":1`) ||
 		!strings.Contains(visible, `"kind":"unresolved","text":"follow up"`) {
 		t.Fatalf("work evidence is not readable object JSON: %s", visible)
 	}
 }
 
-func TestProjectPayloadKeepsFirstAndLatestResultPerSession(t *testing.T) {
+func TestAppendWorkEvidenceFactAggregatesOnlyEquivalentObservations(t *testing.T) {
+	projection := WorkEvidence{}
+	indexes := make(map[workEvidenceFactIdentity]int)
+	observationIndexes := make([]map[workEvidenceObservationIdentity]int, 0)
+	identity := workEvidenceFactIdentity{Kind: "result", Text: "same result", Source: "tool_result"}
+	appendWorkEvidenceFact(&projection, indexes, &observationIndexes, identity, WorkEvidenceObservation{
+		Date: "2026-07-23", ObservedAt: "2026-07-23T09:00:00+08:00",
+		Category: "validation", Status: "completed",
+	})
+	appendWorkEvidenceFact(&projection, indexes, &observationIndexes, identity, WorkEvidenceObservation{
+		Date: "2026-07-23", ObservedAt: "2026-07-23T10:00:00+08:00",
+		Category: "validation", Status: "completed",
+	})
+	appendWorkEvidenceFact(&projection, indexes, &observationIndexes, identity, WorkEvidenceObservation{
+		Date: "2026-07-23", ObservedAt: "2026-07-23T11:00:00+08:00",
+		Category: "validation", Status: "failed",
+	})
+
+	observations := projection.Facts[0].Observations
+	if len(observations) != 2 || observations[0].OccurrenceCount != 2 ||
+		observations[0].FirstObservedAt != "2026-07-23T09:00:00+08:00" ||
+		observations[0].ObservedAt != "2026-07-23T10:00:00+08:00" ||
+		observations[1].Status != "failed" || observations[1].OccurrenceCount != 1 {
+		t.Fatalf("observation status or occurrence evidence was lost: %+v", observations)
+	}
+}
+
+func TestProjectPayloadKeepsChronologicalCorrectionChain(t *testing.T) {
 	digest := string(validFrozenDigestV2())
 	for _, workUnitRef := range []string{"wu-1", "wu-2", "wu-3"} {
 		digest = strings.Replace(
@@ -298,13 +333,15 @@ func TestProjectPayloadKeepsFirstAndLatestResultPerSession(t *testing.T) {
 			1,
 		)
 	}
+	digest = strings.Replace(digest, `"text":"same result"`, `"text":"Digest 使用 LLM"`, 1)
 	second := strings.Index(digest, `"source_ref":"session-1","work_unit_ref":"wu-2"`)
 	if second < 0 {
 		t.Fatal("second Work Unit marker missing")
 	}
 	digest = digest[:second] + strings.Replace(
-		digest[second:], `"text":"same result"`, `"text":"middle result"`, 1,
+		digest[second:], `"text":"same result"`, `"text":"Digest 没有 LLM"`, 1,
 	)
+	digest = strings.Replace(digest, `"text":"other result"`, `"text":"最终完成 Projection"`, 1)
 	digest = strings.ReplaceAll(digest, `"category":"validation"`, `"category":"implementation"`)
 	digest = strings.ReplaceAll(digest, `"category":"investigation"`, `"category":"implementation"`)
 
@@ -324,9 +361,68 @@ func TestProjectPayloadKeepsFirstAndLatestResultPerSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(visible)
-	if !strings.Contains(text, "same result") || !strings.Contains(text, "other result") ||
-		strings.Contains(text, "middle result") || strings.Contains(text, "session-1") {
-		t.Fatalf("session projection did not keep first/latest without exposing identity: %s", text)
+	wrong := strings.Index(text, "Digest 使用 LLM")
+	correction := strings.Index(text, "Digest 没有 LLM")
+	completed := strings.Index(text, "最终完成 Projection")
+	if wrong < 0 || correction <= wrong || completed <= correction || strings.Contains(text, "session-1") {
+		t.Fatalf("chronological correction chain was lost or source identity leaked: %s", text)
+	}
+	for _, observedAt := range []string{
+		"2026-07-23T09:00:00+08:00",
+		"2026-07-23T10:00:00+08:00",
+		"2026-07-23T11:00:00+08:00",
+	} {
+		if !strings.Contains(text, observedAt) {
+			t.Fatalf("observation time %q was lost: %s", observedAt, text)
+		}
+	}
+}
+
+func TestSelectReportCheckpointsDropsSupersededProcessState(t *testing.T) {
+	candidates := []workEvidenceFactCandidate{
+		{
+			Identity: workEvidenceFactIdentity{Kind: "result", Text: "正在实现", Source: "agent_claim"},
+			Observation: WorkEvidenceObservation{
+				Date: "2026-07-23", ObservedAt: "2026-07-23T09:00:00+08:00",
+				Category: "implementation", Status: "partial",
+			},
+			SourceRef: "session-1", Sequence: 1,
+		},
+		{
+			Identity: workEvidenceFactIdentity{Kind: "result", Text: "实现完成", Source: "tool_result"},
+			Observation: WorkEvidenceObservation{
+				Date: "2026-07-23", ObservedAt: "2026-07-23T10:00:00+08:00",
+				Category: "implementation", Status: "completed",
+			},
+			SourceRef: "session-1", Sequence: 2,
+		},
+		{
+			Identity: workEvidenceFactIdentity{Kind: "result", Text: "后续验证中", Source: "agent_claim"},
+			Observation: WorkEvidenceObservation{
+				Date: "2026-07-23", ObservedAt: "2026-07-23T11:00:00+08:00",
+				Category: "validation", Status: "partial",
+			},
+			SourceRef: "session-1", Sequence: 3,
+		},
+		{
+			Identity: workEvidenceFactIdentity{Kind: "unresolved", Text: "等待人工验收"},
+			Observation: WorkEvidenceObservation{
+				Date: "2026-07-23", ObservedAt: "2026-07-23T11:00:00+08:00",
+				Category: "validation", Status: "partial",
+			},
+			SourceRef: "session-1", Sequence: 3,
+		},
+	}
+
+	selected := selectReportCheckpoints(candidates)
+	sortWorkEvidenceCandidates(selected)
+	got := make([]string, 0, len(selected))
+	for _, candidate := range selected {
+		got = append(got, candidate.Identity.Text)
+	}
+	want := []string{"实现完成", "后续验证中", "等待人工验收"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("selected checkpoints=%v want=%v", got, want)
 	}
 }
 
@@ -416,10 +512,35 @@ func TestProjectReportFactTextUsesFirstSubstantiveListItem(t *testing.T) {
 	}
 }
 
-func TestProjectReportFactTextStopsBeforeFlattenedDetailList(t *testing.T) {
+func TestProjectReportFactTextKeepsMultipleOutcomeBlocksUpToLimit(t *testing.T) {
+	input := "## 结果\n\n- 完成报告 Context 收敛。\n- 真实样本验证通过。\n- 仍需人工核对最终日报质量。\n\n## 实现细节\n\n这里是不应进入报告的底层代码说明。"
+	want := "完成报告 Context 收敛。\n真实样本验证通过。\n仍需人工核对最终日报质量。"
+	if got := projectReportFactText(input); got != want {
+		t.Fatalf("multiple report outcomes were not retained: got=%q want=%q", got, want)
+	}
+}
+
+func TestProjectReportFactTextDoesNotTruncateLongUsefulProse(t *testing.T) {
+	input := strings.Repeat("已完成可验证成果，", 150)
+	got := projectReportFactText(input)
+	if got != input {
+		t.Fatalf("useful report prose must not be truncated: got runes=%d want=%d", len([]rune(got)), len([]rune(input)))
+	}
+}
+
+func TestProjectReportFactTextKeepsFlattenedOutcomeList(t *testing.T) {
 	input := "已完成 8 项问题修复，并同步到前后端规范与唯一评审稿。 主要改进： - 增加查询预算。 - 补齐状态机。 - 修复缓存规则。"
-	if got, want := projectReportFactText(input), "已完成 8 项问题修复，并同步到前后端规范与唯一评审稿。"; got != want {
+	want := "已完成 8 项问题修复，并同步到前后端规范与唯一评审稿。 主要改进：\n增加查询预算。\n补齐状态机。\n修复缓存规则。"
+	if got := projectReportFactText(input); got != want {
 		t.Fatalf("projected fact=%q want=%q", got, want)
+	}
+}
+
+func TestProjectReportFactTextDropsGitItemFromFlattenedOutcomeList(t *testing.T) {
+	input := "完成报告事实收敛。 - 修复纠正链丢失问题。 - 当前分支：fix/report-context。 - 运行代码：main@abc123。 - 未推送远端。 - 真实样本回放通过。"
+	want := "完成报告事实收敛。\n修复纠正链丢失问题。\n真实样本回放通过。"
+	if got := projectReportFactText(input); got != want {
+		t.Fatalf("flattened Git item was not isolated: got=%q want=%q", got, want)
 	}
 }
 

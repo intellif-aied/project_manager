@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"sort"
 	"strings"
 
 	"github.com/aidashboard/api/internal/reportsource"
@@ -46,11 +47,19 @@ type workEvidenceFactIdentity struct {
 type workEvidenceFactCandidate struct {
 	Identity    workEvidenceFactIdentity
 	Observation WorkEvidenceObservation
+	SourceRef   string
+	Sequence    int
 }
 
 type workEvidenceGroupIdentity struct {
 	SourceRef string
 	Category  string
+}
+
+type workEvidenceObservationIdentity struct {
+	Date     string
+	Category string
+	Status   string
 }
 
 func projectPayloadForRepresentation(payload Payload, representation string) (Payload, error) {
@@ -114,8 +123,8 @@ func presentationProfileFor(reportType string) (PresentationProfile, error) {
 }
 
 // projectPayload produces the single immutable representation exposed to the
-// Report Agent. It only removes data when equality can be proven from the
-// frozen payload; it never ranks, summarizes, or semantically merges facts.
+// Report Agent. It compacts deterministic transport noise and exact duplicates,
+// but never ranks facts or decides which conclusion is semantically correct.
 func projectPayload(payload Payload) (Payload, error) {
 	if err := removeDuplicateLegacyDigest(&payload); err != nil {
 		return Payload{}, err
@@ -171,10 +180,8 @@ func projectDigestV2(session SessionSource) (WorkEvidence, error) {
 	sourceItemRefs := make(map[string]struct{})
 	sessionRefs := make(map[string]struct{})
 	factIndexes := make(map[workEvidenceFactIdentity]int)
-	factObservations := make([]map[WorkEvidenceObservation]struct{}, 0)
-	resultCandidates := make(map[workEvidenceGroupIdentity][]workEvidenceFactCandidate)
-	groupOrder := make([]workEvidenceGroupIdentity, 0)
-	unresolvedCandidates := make([]workEvidenceFactCandidate, 0)
+	factObservations := make([]map[workEvidenceObservationIdentity]int, 0)
+	factCandidates := make([]workEvidenceFactCandidate, 0)
 	for _, item := range digest.Items {
 		if strings.TrimSpace(item.SourceItemRef) == "" || strings.TrimSpace(item.SessionRef) == "" {
 			return WorkEvidence{}, ErrIncomplete
@@ -204,27 +211,19 @@ func projectDigestV2(session SessionSource) (WorkEvidence, error) {
 			sourceRef := strings.TrimSpace(highlight.SourceRef)
 			if sourceRef == "" {
 				hasMissingSourceRefs = true
-				// Frozen contexts created before source_ref was added keep their
-				// original one-result-per-Work-Unit behavior.
-				sourceRef = "legacy:" + highlight.WorkUnitRef
 			} else {
 				hasSourceRefs = true
 				if _, exists := sessionRefs[sourceRef]; !exists {
 					return WorkEvidence{}, ErrIncomplete
 				}
 			}
-			group := workEvidenceGroupIdentity{
-				SourceRef: sourceRef,
-				Category:  strings.TrimSpace(highlight.Category),
-			}
-			if group.Category == "" {
-				group.Category = "unknown"
-			}
-			if _, exists := resultCandidates[group]; !exists {
-				groupOrder = append(groupOrder, group)
+			category := strings.TrimSpace(highlight.Category)
+			if category == "" {
+				category = "unknown"
 			}
 			observation := WorkEvidenceObservation{
-				Date: day.Date, Status: highlight.Status,
+				Date: day.Date, ObservedAt: highlight.ActivityEndAt,
+				Category: category, Status: highlight.Status,
 			}
 			for _, statement := range highlight.ResultStatements {
 				if strings.TrimSpace(statement.Text) == "" || strings.TrimSpace(statement.Source) == "" {
@@ -234,13 +233,14 @@ func projectDigestV2(session SessionSource) (WorkEvidence, error) {
 				if text == "" {
 					continue
 				}
-				resultCandidates[group] = append(
-					resultCandidates[group],
+				factCandidates = append(
+					factCandidates,
 					workEvidenceFactCandidate{
 						Identity: workEvidenceFactIdentity{
 							Kind: "result", Text: text, Source: statement.Source,
 						},
-						Observation: observation,
+						Observation: observation, SourceRef: sourceRef,
+						Sequence: highlight.Sequence,
 					},
 				)
 			}
@@ -248,13 +248,14 @@ func projectDigestV2(session SessionSource) (WorkEvidence, error) {
 				if strings.TrimSpace(unresolved.Text) == "" {
 					return WorkEvidence{}, ErrIncomplete
 				}
-				unresolvedCandidates = append(
-					unresolvedCandidates,
+				factCandidates = append(
+					factCandidates,
 					workEvidenceFactCandidate{
 						Identity: workEvidenceFactIdentity{
 							Kind: "unresolved", Text: unresolved.Text,
 						},
-						Observation: observation,
+						Observation: observation, SourceRef: sourceRef,
+						Sequence: highlight.Sequence,
 					},
 				)
 			}
@@ -263,34 +264,12 @@ func projectDigestV2(session SessionSource) (WorkEvidence, error) {
 	if hasSourceRefs && hasMissingSourceRefs {
 		return WorkEvidence{}, ErrIncomplete
 	}
-
-	for _, group := range groupOrder {
-		candidates := distinctWorkEvidenceCandidates(resultCandidates[group])
-		if len(candidates) == 0 {
-			continue
-		}
-		if !hasSourceRefs {
-			for _, candidate := range candidates {
-				appendWorkEvidenceFact(
-					&projection, factIndexes, &factObservations,
-					candidate.Identity, candidate.Observation,
-				)
-			}
-			continue
-		}
-		appendWorkEvidenceFact(
-			&projection, factIndexes, &factObservations,
-			candidates[0].Identity, candidates[0].Observation,
-		)
-		if len(candidates) > 1 {
-			latest := candidates[len(candidates)-1]
-			appendWorkEvidenceFact(
-				&projection, factIndexes, &factObservations,
-				latest.Identity, latest.Observation,
-			)
-		}
+	if hasSourceRefs {
+		factCandidates = selectReportCheckpoints(factCandidates)
 	}
-	for _, candidate := range unresolvedCandidates {
+
+	sortWorkEvidenceCandidates(factCandidates)
+	for _, candidate := range factCandidates {
 		appendWorkEvidenceFact(
 			&projection, factIndexes, &factObservations,
 			candidate.Identity, candidate.Observation,
@@ -303,17 +282,101 @@ func projectDigestV2(session SessionSource) (WorkEvidence, error) {
 	return projection, nil
 }
 
-func distinctWorkEvidenceCandidates(values []workEvidenceFactCandidate) []workEvidenceFactCandidate {
-	result := make([]workEvidenceFactCandidate, 0, len(values))
-	seen := make(map[workEvidenceFactIdentity]struct{}, len(values))
-	for _, value := range values {
-		if _, exists := seen[value.Identity]; exists {
+// selectReportCheckpoints keeps terminal outcomes and the current non-terminal
+// state of each source/category. It never decides whether a conclusion is
+// correct; the complete reply timeline remains immutable in the Digest.
+func selectReportCheckpoints(candidates []workEvidenceFactCandidate) []workEvidenceFactCandidate {
+	selected := make([]workEvidenceFactCandidate, 0, len(candidates))
+	groups := make(map[workEvidenceGroupIdentity][]workEvidenceFactCandidate)
+	for _, candidate := range candidates {
+		if candidate.Identity.Kind == "unresolved" {
+			selected = append(selected, candidate)
 			continue
 		}
-		seen[value.Identity] = struct{}{}
-		result = append(result, value)
+		group := workEvidenceGroupIdentity{
+			SourceRef: candidate.SourceRef, Category: candidate.Observation.Category,
+		}
+		groups[group] = append(groups[group], candidate)
+		if isTerminalReportStatus(candidate.Observation.Status) {
+			selected = append(selected, candidate)
+		}
 	}
-	return result
+	for _, group := range groups {
+		sortWorkEvidenceCandidates(group)
+		var latestTerminal *workEvidenceFactCandidate
+		var latestNonTerminal *workEvidenceFactCandidate
+		for index := range group {
+			candidate := &group[index]
+			if isTerminalReportStatus(candidate.Observation.Status) {
+				latestTerminal = candidate
+				continue
+			}
+			if isReportableNonTerminalStatus(
+				candidate.Observation.Status, candidate.Observation.Category,
+			) {
+				latestNonTerminal = candidate
+			}
+		}
+		if latestNonTerminal != nil &&
+			(latestTerminal == nil || workEvidenceCandidateLess(*latestTerminal, *latestNonTerminal)) {
+			selected = append(selected, *latestNonTerminal)
+		}
+	}
+	return selected
+}
+
+func isTerminalReportStatus(status string) bool {
+	switch strings.TrimSpace(status) {
+	case "completed", "failed", "blocked":
+		return true
+	default:
+		return false
+	}
+}
+
+func isReportableNonTerminalStatus(status, category string) bool {
+	switch strings.TrimSpace(status) {
+	case "partial":
+		return category != "discussion" && category != "administrative"
+	case "unknown", "pending":
+		return category == "investigation" || category == "decision"
+	default:
+		return false
+	}
+}
+
+func sortWorkEvidenceCandidates(candidates []workEvidenceFactCandidate) {
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return workEvidenceCandidateLess(candidates[i], candidates[j])
+	})
+}
+
+func workEvidenceCandidateLess(left, right workEvidenceFactCandidate) bool {
+	if left.Observation.Date != right.Observation.Date {
+		return left.Observation.Date < right.Observation.Date
+	}
+	if left.Observation.ObservedAt != right.Observation.ObservedAt {
+		return left.Observation.ObservedAt < right.Observation.ObservedAt
+	}
+	if left.Sequence != right.Sequence {
+		return left.Sequence < right.Sequence
+	}
+	if left.Observation.Category != right.Observation.Category {
+		return left.Observation.Category < right.Observation.Category
+	}
+	if left.Observation.Status != right.Observation.Status {
+		return left.Observation.Status < right.Observation.Status
+	}
+	if left.Identity.Kind != right.Identity.Kind {
+		return left.Identity.Kind < right.Identity.Kind
+	}
+	if left.Identity.Text != right.Identity.Text {
+		return left.Identity.Text < right.Identity.Text
+	}
+	if left.Identity.Source != right.Identity.Source {
+		return left.Identity.Source < right.Identity.Source
+	}
+	return left.SourceRef < right.SourceRef
 }
 
 func projectReportFactText(value string) string {
@@ -324,7 +387,6 @@ func projectReportFactText(value string) string {
 	if unwrapped := unwrapTextEnvelope(text); unwrapped != "" {
 		text = unwrapped
 	}
-	text = stripGitTraceClauses(text)
 	if isHandoffPromptArtifact(text) {
 		return ""
 	}
@@ -341,8 +403,6 @@ func projectReportFactText(value string) string {
 	}
 	return lead
 }
-
-const maxReportFactRunes = 240
 
 func compactReportFactLead(value string) string {
 	lines := strings.Split(strings.ReplaceAll(value, "\r\n", "\n"), "\n")
@@ -370,7 +430,14 @@ func compactReportFactLead(value string) string {
 			flush()
 			continue
 		}
-		if strings.HasPrefix(line, "#") || isMarkdownTableLine(line) {
+		if strings.HasPrefix(line, "#") {
+			flush()
+			if isReportDetailHeading(strings.TrimSpace(strings.TrimLeft(line, "#"))) {
+				break
+			}
+			continue
+		}
+		if isMarkdownTableLine(line) {
 			flush()
 			continue
 		}
@@ -388,20 +455,63 @@ func compactReportFactLead(value string) string {
 		paragraph = append(paragraph, cleaned)
 	}
 	flush()
-	for _, block := range blocks {
-		if isLowInformationReportLead(block) {
-			continue
+	selected := make([]string, 0, len(blocks))
+	for _, rawBlock := range blocks {
+		for _, block := range splitFlattenedReportBlocks(stripFlattenedCodeBlock(rawBlock)) {
+			if isLowInformationReportLead(block) {
+				continue
+			}
+			block = stripGitTraceClauses(stripMarkdownLinkTargets(block))
+			if block == "" || isLowInformationReportLead(block) || isCommandOrPathOnly(block) ||
+				isPureGitOperation(block) || isInternalDelegationResult(block) ||
+				isProcessNarration(block) || isReportDetailBlock(block) {
+				continue
+			}
+			selected = append(selected, block)
 		}
-		block = stripFlattenedReportDetail(block)
-		return reportFactLeadSentences(stripMarkdownLinkTargets(block), maxReportFactRunes)
 	}
-	return ""
+	return strings.Trim(strings.ReplaceAll(strings.Join(selected, "\n"), "**", ""), "*` ")
 }
 
-func stripFlattenedReportDetail(value string) string {
+func splitFlattenedReportBlocks(value string) []string {
+	parts := strings.Split(value, " - ")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			result = append(result, part)
+		}
+	}
+	return result
+}
+
+func isReportDetailHeading(value string) bool {
+	lower := strings.ToLower(strings.TrimSpace(value))
+	return containsAnyText(lower,
+		"实现细节", "技术细节", "代码细节", "命令详情",
+		"文件清单", "完整日志", "原始输出",
+	)
+}
+
+func isReportDetailBlock(value string) bool {
+	lower := strings.ToLower(strings.TrimSpace(value))
+	for _, prefix := range []string{
+		"修改文件：", "修改文件:", "涉及文件：", "涉及文件:",
+		"文件清单：", "文件清单:", "changed files:", "files changed:",
+		"运行代码：", "运行代码:", "api 镜像：", "api 镜像:",
+		"当前主分支：", "当前主分支:", "当前 head：", "当前 head:",
+		"新 head：", "新 head:", "未推送", "not pushed",
+	} {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func stripFlattenedCodeBlock(value string) string {
 	for _, marker := range []string{
-		" ```", " ~~~", " ## ", " 主要改进：", " 核心修改：", " 主要修复：",
-		" 修改内容：", " 关键闭环：", " 主要交付：", " 证据链：", "： - ", ": - ",
+		" ```", " ~~~",
 	} {
 		if index := strings.Index(value, marker); index >= 0 {
 			prefix := strings.TrimSpace(value[:index])
@@ -533,34 +643,6 @@ func isProcessNarration(value string) bool {
 	return false
 }
 
-func reportFactLeadSentences(value string, limit int) string {
-	runes := []rune(strings.TrimSpace(value))
-	if len(runes) == 0 {
-		return ""
-	}
-	cut := 0
-	for index, value := range runes {
-		if strings.ContainsRune("。！？!?", value) ||
-			(value == '.' && index+1 < len(runes) && runes[index+1] == ' ') {
-			cut = index + 1
-			if cut >= 18 {
-				break
-			}
-		}
-		if index+1 >= limit {
-			break
-		}
-	}
-	if cut < 18 || cut > limit {
-		cut = min(limit, len(runes))
-	}
-	result := strings.TrimSpace(string(runes[:cut]))
-	if cut < len(runes) && !strings.ContainsRune("。！？!?", runes[cut-1]) {
-		result += "…"
-	}
-	return strings.Trim(strings.ReplaceAll(result, "**", ""), "*` ")
-}
-
 func stripMarkdownLinkTargets(value string) string {
 	for {
 		open := strings.Index(value, "[")
@@ -625,7 +707,7 @@ func isHandoffPromptArtifact(value string) bool {
 func appendWorkEvidenceFact(
 	projection *WorkEvidence,
 	indexes map[workEvidenceFactIdentity]int,
-	observationSets *[]map[WorkEvidenceObservation]struct{},
+	observationIndexes *[]map[workEvidenceObservationIdentity]int,
 	identity workEvidenceFactIdentity,
 	observation WorkEvidenceObservation,
 ) {
@@ -637,11 +719,37 @@ func appendWorkEvidenceFact(
 			Kind: identity.Kind, Text: identity.Text, Source: identity.Source,
 			Observations: []WorkEvidenceObservation{},
 		})
-		*observationSets = append(*observationSets, make(map[WorkEvidenceObservation]struct{}))
+		*observationIndexes = append(
+			*observationIndexes, make(map[workEvidenceObservationIdentity]int),
+		)
 	}
-	if _, exists := (*observationSets)[index][observation]; exists {
+	observationIdentity := workEvidenceObservationIdentity{
+		Date: observation.Date, Category: observation.Category, Status: observation.Status,
+	}
+	observationIndex, exists := (*observationIndexes)[index][observationIdentity]
+	if !exists {
+		observation.OccurrenceCount = 1
+		observationIndex = len(projection.Facts[index].Observations)
+		(*observationIndexes)[index][observationIdentity] = observationIndex
+		projection.Facts[index].Observations = append(
+			projection.Facts[index].Observations, observation,
+		)
 		return
 	}
-	(*observationSets)[index][observation] = struct{}{}
-	projection.Facts[index].Observations = append(projection.Facts[index].Observations, observation)
+	existing := &projection.Facts[index].Observations[observationIndex]
+	existing.OccurrenceCount++
+	if existing.FirstObservedAt == "" && existing.ObservedAt != "" &&
+		observation.ObservedAt != "" && existing.ObservedAt != observation.ObservedAt {
+		existing.FirstObservedAt = existing.ObservedAt
+	}
+	if existing.FirstObservedAt != "" && observation.ObservedAt != "" &&
+		observation.ObservedAt < existing.FirstObservedAt {
+		existing.FirstObservedAt = observation.ObservedAt
+	}
+	if existing.ObservedAt == "" ||
+		(observation.ObservedAt != "" && observation.ObservedAt >= existing.ObservedAt) {
+		existing.ObservedAt = observation.ObservedAt
+		existing.Category = observation.Category
+		existing.Status = observation.Status
+	}
 }

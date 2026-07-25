@@ -1,6 +1,6 @@
 # Agent-facing Context 收敛方向（2026-07-23）
 
-> 状态：分页和列式方案均已取消；普通对象 Projection 与离线验证完成，待测试服同配置新 Run 验收
+> 状态：分页和列式方案均已取消；成果检查点 Projection 的自动化和真实样本离线重放已完成，待测试服同配置新 Run 验收
 > 范围：托管报告 Agent 的 get_report_context(run_id) 输入
 
 ## 1. 已确认问题
@@ -30,7 +30,9 @@
 
 ### 2.4 完整 Digest 与报告事实分层
 
-原始 Session、完整 Digest WorkUnit 和冻结来源保持不变。Report Projection 不再把完整 Agent 回复直接视为日报事实，而是固定取首个有信息量的结果段，最长 240 个 Unicode 字符并在句子边界结束；同一 Session、同一工作类别只保留报告期内首个和最新结果，所有明确未解决项保留；代码块、命令、纯路径、纯 Git 操作、过程叙述和内部交接结果不进入 Agent-facing Context。该规则只作用于报告表示，不修改 Digest Revision，完整正文仍可追溯。
+原始 Session、完整 Digest WorkUnit 和冻结来源保持不变。Report Projection 不再把完整 Agent 回复直接复制到日报 Context，而是在排除代码围栏、纯命令、纯路径、纯 Git 流水和内部交接后，按原顺序完整保留单条回复中的多个成果、验证和风险段落，不按字符数截断；保留所有 `completed`/`failed`/`blocked` 结果检查点、全部明确未解决项，以及每个 Session+类别在最新终态之后的最新可报告非终态。完全相同事实仅在日期、类别和状态也相同时聚合为首次/最新时间与 `occurrence_count`；不同类别或状态分开保留，不做近似去重。Projection 只选择报告生命周期检查点，不判断结论正确性；相互矛盾的终态结论均按时间保留。该规则只作用于报告表示，不修改 Digest Revision，完整正文仍可追溯。
+
+可报告非终态不由 Agent 或开发者自由解释：`partial` 排除 `discussion`/`administrative`；`pending`/`unknown` 仅允许 `investigation`/`decision`。同一 Session+类别的最新终态之前的非终态均不进入 Context。
 
 ### 2.5 Digest 和 Projection 禁止新增 LLM
 
@@ -38,7 +40,7 @@
 
 ### 2.6 Projection 是确定性内部模块
 
-Projection 位于现有 Report Context Builder 内部，固定执行：冻结 Payload → 删除完全相同的 Digest 双写 → 校验每个 Highlight 的内部 Session 来源属于冻结 Item → 从每条结果正文提取首个有信息量的结果段 → 按 Session+工作类别保留首个和最新结果 → 保留全部未解决项 → 排除代码块、命令、纯路径、纯 Git、过程叙述、原始 Goal、交接 Prompt和内部审计引用 → 构建普通 `facts[]` → 按紧凑 `kind + text + source` 精确归并 → 保留日期/状态观察 → 冻结单份 Context。内部 `source_ref` 不进入 Agent Context。
+Projection 位于现有 Report Context Builder 内部，固定执行：冻结 Payload → 删除完全相同的 Digest 双写 → 校验每个 Highlight 的内部 Session 来源属于冻结 Item → 排除代码围栏、纯命令、纯路径、纯 Git 和内部交接，完整保留剩余多段报告事实 → 选取全部终态结果、全部未解决项和每个 Session+类别在最新终态后的最新可报告非终态 → 按日期、`observed_at`、sequence 和事实身份稳定排序 → 构建普通 `facts[]` → 按 `kind + text + source` 精确归并 → 按日期+类别+状态聚合重复 observation 的首次/最新时间和出现次数 → 冻结单份 Context。内部 `source_ref` 不进入 Agent Context。
 
 Projection 不做主题归并、不改变 Digest Revision，不创建新表、Job、Worker 或队列。语义主题归并仍由最终 Report Agent 完成；Projection 只执行上述固定报告事实规则。失败时 Run 明确失败，不回退超大 Context。
 
@@ -82,7 +84,7 @@ Projection 不做主题归并、不改变 Digest Revision，不创建新表、Jo
 固定实现顺序：
 
 1. 先消除 Report Context 中可证明的整块重复，不修改 Digest Job；
-2. 再统一报告事实表达：每条完整结果提取一个结果首段，不做主题判断或近似匹配；保留不同日期和状态观察；不把代码、命令、纯路径、纯 Git、原始 Goal、内部引用和交接 Prompt 当成报告事实；
+2. 再统一报告事实表达：每条结果在结构性去噪后完整保留多段成果、验证和风险，不按字符数截断，不做主题判断或近似匹配；按固定成果检查点规则保留终态结果、未解决项和必要的最新过程态；不把代码围栏、纯命令、纯路径、纯 Git、原始 Goal、内部引用和交接 Prompt 当成报告事实；
 3. 若单个 Digest 在确定性 Projection 后仍异常大，另行分析 Digest 内部确定性表达，不引入 LLM；
 4. 最大样本一次读取和队列指标通过后，才进入真实 Agent 验收。
 
@@ -90,7 +92,7 @@ Projection 不做主题归并、不改变 Digest Revision，不创建新表、Jo
 
 只有同时满足以下条件，才能进入下一轮代码修改：
 
-- 完整 Digest 保持可追溯，Agent-facing Projection 删除的是代码、命令、纯路径、纯 Git 和结果首段后的过程细节；
+- 完整 Digest 保持可追溯，Agent-facing Projection 排除代码围栏、纯命令、纯路径、纯 Git 和内部交接，但完整保留剩余的多段成果、验证和风险；
 - 每条保留事实仍能追溯到冻结来源；
 - 最大生产样本一次 MCP 调用不超过执行引擎限制；
 - 同输入、同模型的事实覆盖不下降；
@@ -106,6 +108,8 @@ Projection 不做主题归并、不改变 Digest Revision，不创建新表、Jo
 第二版结果首段真实 Run `6987645c-...` 已成功写回：MCP 64,103 字符，模型输入 47,665 Token，总耗时 620.7 秒。它证明单次读取和重复 Summary 写回兼容已闭环，但 347 条事实仍导致模型长时间归并并生成过长日报。
 
 第三版 Session+工作类别首末状态方案真实 Run `31808223-...` 冻结 85 条事实、22,596 bytes Context，MCP 正文 16,807 字符；配合 3,901 字符的 `aida-report@1.0.50`，约 401 秒完成写回，Summary 290 字、正文 3,430 字。多任务 Session 通过保留不同 Digest Category 降低中间成果遗漏风险。完整 Digest、数据库、队列、模型、前端、上传和 Token 统计均未修改。
+
+后续 Run `bb3d10d0-...` 使用当前 Session 验证发现首末方案将“Digest 没有 LLM”的中间纠正删除，却保留更早的相反判断。该问题证明 Projection 无法判断结论对错，首末采样已撤销。当前方案改为成果检查点；240 字首句和 1000 字单条上限均已撤销，改为结构性去噪后完整保留多段成果、验证和风险。离线重放中，当前 Session 从 10 个 Highlight 得到 4 事实/5,371 bytes；37 来源样本从 1,105 个 Highlight 得到 105 事实、105 个 observations/102,013 bytes。相较 1000 字实验版本，大样本仅增加 699 bytes（341 个 Unicode 字符），证明主要收敛来自检查点选择而非单条截断。完整 Digest 未修改，测试服真实 Agent 复验待部署后执行。
 
 真实正文仍出现少量分支、提交号、worktree 和 HEAD 信息，说明 Skill 禁止规则不能单独作为数据清洗。Projection 已固定删除纯 Git 事实，并从混合业务结果中剥离 Git 尾句；业务结果和部署结论继续保留。该增量由确定性单元测试验收，不追加昂贵的模型回归。
 

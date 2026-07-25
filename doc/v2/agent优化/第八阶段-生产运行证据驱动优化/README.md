@@ -1,6 +1,6 @@
 # 第八阶段：生产运行证据驱动优化
 
-> 状态：Session+工作类别 Projection 与精简全局 Skill 已在测试服真实写回成功；Git 轨迹确定性剥离已完成自动化，待下一次常规报告 Run 持续观察
+> 状态：首末采样已由真实纠正链证明不正确；Projection 已收敛为成果检查点，自动化和真实样本离线重放完成，待测试服真实 Agent 复验
 > 日期：2026-07-23
 > API 部署版本：`main@815938c` / `sha256:44347c49fab97e189d251cc8f84286c934063ec44ab330cf3a3c929ee1bcaf7e`
 
@@ -32,8 +32,8 @@
 - 测试服使用 `100866/aida-report@1.0.50`，Registry 正文与 API 生成正文逐字节一致，真实 Session 已确认加载该版本；
 - 真实 Run `4ba163dc-...` 已确认 Agent 只收到 `/aida-report + run_id`，完成 Skill、一次 `get_report_context` 和一次写回尝试；332,428 字符 Context 使模型处理约 7 分 30 秒，重复 Summary 写回被拒绝后 Run 超时；
 - 结果首段版真实 Run `6987645c-...` 已成功写回，重复 Summary 兼容有效；但 MCP 仍有 64,103 字符、模型输入 47,665 Token、总耗时 620.7 秒，日报仍过度展开；
-- 当前 Session+工作类别首末状态 Projection 对相同来源离线生成 91 条事实、6,144 字符事实文本；完整 Digest 不变，跨类别结果和所有未解决项保留；
-- 真实 Run `31808223-...` 冻结 85 条事实、22,596 bytes Context，MCP 正文 16,807 字符；Skill 正文 3,901 字符，模型在写回调用时输入 30,420 Token，约 401 秒完成，Summary 290 字、正文 3,430 字；Skill、Context 与写回各调用一次；
+- 旧 Session+工作类别首末状态 Projection 的真实 Run `31808223-...` 冻结 85 条事实、22,596 bytes Context，MCP 正文 16,807 字符；Skill 正文 3,901 字符，模型在写回调用时输入 30,420 Token，约 401 秒完成，Summary 290 字、正文 3,430 字；该结果只作为历史性能基线；
+- Run `bb3d10d0-...` 证明首末采样会删除中间纠正并保留更早相反判断；当前代码改为成果检查点，保留全部终态结果、全部未解决项和终态后的最新可报告状态；每条 Agent 结果采用结构性去噪，不设字符截断；当前 Session 离线重放为 4 事实/5,371 bytes，37 Slice 样本为 105 事实、105 observations/102,013 bytes；完整 Digest 不变，测试服真实 Agent 耗时和正文质量待部署后复验；
 - 真实报告仍暴露少量分支、提交号与 worktree 轨迹，因此 Projection 已增加混合结果中的 Git 尾句剥离；业务成果保留，纯 Git 事实删除，该增量由单元测试验收，不再额外消耗一次真实模型调用；
 - 原始生产载荷保存到本机 Git 仓库外的权限受控缓存，每个新流程样本同时保留 Context、原始 JSONL 和结构化 Session，不提交 Git；
 - 不修改 Agent Platform、不切换模型，不用外部平台故障掩盖 Aida 验收结果。
