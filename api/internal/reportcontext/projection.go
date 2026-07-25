@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"sort"
 	"strings"
 
 	"github.com/aidashboard/api/internal/reportsource"
@@ -46,11 +47,14 @@ type workEvidenceFactIdentity struct {
 type workEvidenceFactCandidate struct {
 	Identity    workEvidenceFactIdentity
 	Observation WorkEvidenceObservation
+	SourceRef   string
+	Sequence    int
 }
 
-type workEvidenceGroupIdentity struct {
-	SourceRef string
-	Category  string
+type workEvidenceObservationIdentity struct {
+	Date     string
+	Category string
+	Status   string
 }
 
 func projectPayloadForRepresentation(payload Payload, representation string) (Payload, error) {
@@ -114,8 +118,8 @@ func presentationProfileFor(reportType string) (PresentationProfile, error) {
 }
 
 // projectPayload produces the single immutable representation exposed to the
-// Report Agent. It only removes data when equality can be proven from the
-// frozen payload; it never ranks, summarizes, or semantically merges facts.
+// Report Agent. It compacts deterministic transport noise and exact duplicates,
+// but never ranks facts or decides which conclusion is semantically correct.
 func projectPayload(payload Payload) (Payload, error) {
 	if err := removeDuplicateLegacyDigest(&payload); err != nil {
 		return Payload{}, err
@@ -171,10 +175,8 @@ func projectDigestV2(session SessionSource) (WorkEvidence, error) {
 	sourceItemRefs := make(map[string]struct{})
 	sessionRefs := make(map[string]struct{})
 	factIndexes := make(map[workEvidenceFactIdentity]int)
-	factObservations := make([]map[WorkEvidenceObservation]struct{}, 0)
-	resultCandidates := make(map[workEvidenceGroupIdentity][]workEvidenceFactCandidate)
-	groupOrder := make([]workEvidenceGroupIdentity, 0)
-	unresolvedCandidates := make([]workEvidenceFactCandidate, 0)
+	factObservations := make([]map[workEvidenceObservationIdentity]int, 0)
+	factCandidates := make([]workEvidenceFactCandidate, 0)
 	for _, item := range digest.Items {
 		if strings.TrimSpace(item.SourceItemRef) == "" || strings.TrimSpace(item.SessionRef) == "" {
 			return WorkEvidence{}, ErrIncomplete
@@ -204,27 +206,19 @@ func projectDigestV2(session SessionSource) (WorkEvidence, error) {
 			sourceRef := strings.TrimSpace(highlight.SourceRef)
 			if sourceRef == "" {
 				hasMissingSourceRefs = true
-				// Frozen contexts created before source_ref was added keep their
-				// original one-result-per-Work-Unit behavior.
-				sourceRef = "legacy:" + highlight.WorkUnitRef
 			} else {
 				hasSourceRefs = true
 				if _, exists := sessionRefs[sourceRef]; !exists {
 					return WorkEvidence{}, ErrIncomplete
 				}
 			}
-			group := workEvidenceGroupIdentity{
-				SourceRef: sourceRef,
-				Category:  strings.TrimSpace(highlight.Category),
-			}
-			if group.Category == "" {
-				group.Category = "unknown"
-			}
-			if _, exists := resultCandidates[group]; !exists {
-				groupOrder = append(groupOrder, group)
+			category := strings.TrimSpace(highlight.Category)
+			if category == "" {
+				category = "unknown"
 			}
 			observation := WorkEvidenceObservation{
-				Date: day.Date, Status: highlight.Status,
+				Date: day.Date, ObservedAt: highlight.ActivityEndAt,
+				Category: category, Status: highlight.Status,
 			}
 			for _, statement := range highlight.ResultStatements {
 				if strings.TrimSpace(statement.Text) == "" || strings.TrimSpace(statement.Source) == "" {
@@ -234,13 +228,14 @@ func projectDigestV2(session SessionSource) (WorkEvidence, error) {
 				if text == "" {
 					continue
 				}
-				resultCandidates[group] = append(
-					resultCandidates[group],
+				factCandidates = append(
+					factCandidates,
 					workEvidenceFactCandidate{
 						Identity: workEvidenceFactIdentity{
 							Kind: "result", Text: text, Source: statement.Source,
 						},
-						Observation: observation,
+						Observation: observation, SourceRef: sourceRef,
+						Sequence: highlight.Sequence,
 					},
 				)
 			}
@@ -248,13 +243,14 @@ func projectDigestV2(session SessionSource) (WorkEvidence, error) {
 				if strings.TrimSpace(unresolved.Text) == "" {
 					return WorkEvidence{}, ErrIncomplete
 				}
-				unresolvedCandidates = append(
-					unresolvedCandidates,
+				factCandidates = append(
+					factCandidates,
 					workEvidenceFactCandidate{
 						Identity: workEvidenceFactIdentity{
 							Kind: "unresolved", Text: unresolved.Text,
 						},
-						Observation: observation,
+						Observation: observation, SourceRef: sourceRef,
+						Sequence: highlight.Sequence,
 					},
 				)
 			}
@@ -263,34 +259,8 @@ func projectDigestV2(session SessionSource) (WorkEvidence, error) {
 	if hasSourceRefs && hasMissingSourceRefs {
 		return WorkEvidence{}, ErrIncomplete
 	}
-
-	for _, group := range groupOrder {
-		candidates := distinctWorkEvidenceCandidates(resultCandidates[group])
-		if len(candidates) == 0 {
-			continue
-		}
-		if !hasSourceRefs {
-			for _, candidate := range candidates {
-				appendWorkEvidenceFact(
-					&projection, factIndexes, &factObservations,
-					candidate.Identity, candidate.Observation,
-				)
-			}
-			continue
-		}
-		appendWorkEvidenceFact(
-			&projection, factIndexes, &factObservations,
-			candidates[0].Identity, candidates[0].Observation,
-		)
-		if len(candidates) > 1 {
-			latest := candidates[len(candidates)-1]
-			appendWorkEvidenceFact(
-				&projection, factIndexes, &factObservations,
-				latest.Identity, latest.Observation,
-			)
-		}
-	}
-	for _, candidate := range unresolvedCandidates {
+	sortWorkEvidenceCandidates(factCandidates)
+	for _, candidate := range factCandidates {
 		appendWorkEvidenceFact(
 			&projection, factIndexes, &factObservations,
 			candidate.Identity, candidate.Observation,
@@ -303,17 +273,38 @@ func projectDigestV2(session SessionSource) (WorkEvidence, error) {
 	return projection, nil
 }
 
-func distinctWorkEvidenceCandidates(values []workEvidenceFactCandidate) []workEvidenceFactCandidate {
-	result := make([]workEvidenceFactCandidate, 0, len(values))
-	seen := make(map[workEvidenceFactIdentity]struct{}, len(values))
-	for _, value := range values {
-		if _, exists := seen[value.Identity]; exists {
-			continue
-		}
-		seen[value.Identity] = struct{}{}
-		result = append(result, value)
+func sortWorkEvidenceCandidates(candidates []workEvidenceFactCandidate) {
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return workEvidenceCandidateLess(candidates[i], candidates[j])
+	})
+}
+
+func workEvidenceCandidateLess(left, right workEvidenceFactCandidate) bool {
+	if left.Observation.Date != right.Observation.Date {
+		return left.Observation.Date < right.Observation.Date
 	}
-	return result
+	if left.Observation.ObservedAt != right.Observation.ObservedAt {
+		return left.Observation.ObservedAt < right.Observation.ObservedAt
+	}
+	if left.Sequence != right.Sequence {
+		return left.Sequence < right.Sequence
+	}
+	if left.Observation.Category != right.Observation.Category {
+		return left.Observation.Category < right.Observation.Category
+	}
+	if left.Observation.Status != right.Observation.Status {
+		return left.Observation.Status < right.Observation.Status
+	}
+	if left.Identity.Kind != right.Identity.Kind {
+		return left.Identity.Kind < right.Identity.Kind
+	}
+	if left.Identity.Text != right.Identity.Text {
+		return left.Identity.Text < right.Identity.Text
+	}
+	if left.Identity.Source != right.Identity.Source {
+		return left.Identity.Source < right.Identity.Source
+	}
+	return left.SourceRef < right.SourceRef
 }
 
 func projectReportFactText(value string) string {
@@ -324,17 +315,14 @@ func projectReportFactText(value string) string {
 	if unwrapped := unwrapTextEnvelope(text); unwrapped != "" {
 		text = unwrapped
 	}
-	text = stripGitTraceClauses(text)
 	if isHandoffPromptArtifact(text) {
 		return ""
 	}
-	if isInternalDelegationResult(text) || isInstructionAcknowledgement(text) {
+	text = stripInternalDelegationPrefix(text)
+	if text == "" {
 		return ""
 	}
-	if isProcessNarration(text) {
-		return ""
-	}
-	lead := stripGitTraceClauses(compactReportFactLead(text))
+	lead := stripGitTraceClauses(stripGitOnlyClauses(compactReportFactLead(text)))
 	if isPureGitOperation(lead) || isLowInformationReportLead(lead) ||
 		isInternalDelegationResult(lead) || isProcessNarration(lead) {
 		return ""
@@ -342,9 +330,8 @@ func projectReportFactText(value string) string {
 	return lead
 }
 
-const maxReportFactRunes = 240
-
 func compactReportFactLead(value string) string {
+	value = expandFlattenedMarkdownHeadings(value)
 	lines := strings.Split(strings.ReplaceAll(value, "\r\n", "\n"), "\n")
 	blocks := make([]string, 0, 4)
 	paragraph := make([]string, 0, 4)
@@ -370,13 +357,24 @@ func compactReportFactLead(value string) string {
 			flush()
 			continue
 		}
-		if strings.HasPrefix(line, "#") || isMarkdownTableLine(line) {
+		if strings.HasPrefix(line, "#") {
 			flush()
+			heading := strings.TrimSpace(strings.TrimLeft(line, "#"))
+			if isReportDetailHeading(heading) || isReportStructureHeading(heading) {
+				continue
+			}
+			line = heading
+		}
+		if isMarkdownTableLine(line) {
+			flush()
+			if tableText := normalizeMarkdownTableLine(line); tableText != "" {
+				blocks = append(blocks, tableText)
+			}
 			continue
 		}
 		cleaned, listItem := stripMarkdownListMarker(line)
 		cleaned = strings.TrimSpace(strings.TrimPrefix(cleaned, ">"))
-		if cleaned == "" || isCommandOrPathOnly(cleaned) || isPureGitOperation(cleaned) {
+		if cleaned == "" || isCommandOrPathOnly(cleaned) {
 			flush()
 			continue
 		}
@@ -388,29 +386,149 @@ func compactReportFactLead(value string) string {
 		paragraph = append(paragraph, cleaned)
 	}
 	flush()
-	for _, block := range blocks {
-		if isLowInformationReportLead(block) {
-			continue
+	selected := make([]string, 0, len(blocks))
+	for _, rawBlock := range blocks {
+		for _, block := range splitFlattenedReportBlocks(removeFlattenedCodeSpans(rawBlock)) {
+			if isLowInformationReportLead(block) {
+				continue
+			}
+			block = stripGitTraceClauses(stripGitOnlyClauses(stripMarkdownLinkTargets(block)))
+			if block == "" || isLowInformationReportLead(block) || isCommandOrPathOnly(block) ||
+				isPureGitOperation(block) || isInternalDelegationResult(block) ||
+				isInstructionAcknowledgement(block) || isProcessNarration(block) ||
+				isReportDetailBlock(block) {
+				continue
+			}
+			selected = append(selected, block)
 		}
-		block = stripFlattenedReportDetail(block)
-		return reportFactLeadSentences(stripMarkdownLinkTargets(block), maxReportFactRunes)
 	}
-	return ""
+	return strings.Trim(strings.ReplaceAll(strings.Join(selected, "\n"), "**", ""), "*` ")
 }
 
-func stripFlattenedReportDetail(value string) string {
-	for _, marker := range []string{
-		" ```", " ~~~", " ## ", " 主要改进：", " 核心修改：", " 主要修复：",
-		" 修改内容：", " 关键闭环：", " 主要交付：", " 证据链：", "： - ", ": - ",
-	} {
-		if index := strings.Index(value, marker); index >= 0 {
-			prefix := strings.TrimSpace(value[:index])
-			if len([]rune(prefix)) >= 18 && !isLowInformationReportLead(prefix) {
-				value = prefix
-			}
+func expandFlattenedMarkdownHeadings(value string) string {
+	for _, marker := range []string{" ###### ", " ##### ", " #### ", " ### ", " ## "} {
+		value = strings.ReplaceAll(value, marker, "\n"+strings.TrimSpace(marker)+" ")
+	}
+	return value
+}
+
+func isReportStructureHeading(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "结果", "修改结果", "主要结果", "工作结果", "完成", "完成情况", "验证", "测试", "风险", "阻塞", "失败", "当前状态", "状态", "工作总结", "总结", "结论":
+		return true
+	default:
+		return false
+	}
+}
+
+func splitFlattenedReportBlocks(value string) []string {
+	parts := strings.Split(value, " - ")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			result = append(result, part)
 		}
 	}
-	return strings.TrimSpace(value)
+	return result
+}
+
+func isReportDetailHeading(value string) bool {
+	lower := strings.ToLower(strings.TrimSpace(value))
+	return containsAnyText(lower,
+		"实现细节", "技术细节", "代码细节", "命令详情",
+		"文件清单", "完整日志", "原始输出",
+	)
+}
+
+func isReportDetailBlock(value string) bool {
+	lower := strings.ToLower(strings.TrimSpace(value))
+	for _, prefix := range []string{
+		"修改文件：", "修改文件:", "涉及文件：", "涉及文件:",
+		"文件清单：", "文件清单:", "changed files:", "files changed:",
+		"运行代码：", "运行代码:", "api 镜像：", "api 镜像:",
+		"当前分支：", "当前分支:", "分支：", "分支:", "branch:",
+		"当前主分支：", "当前主分支:", "当前 head：", "当前 head:",
+		"新 head：", "新 head:", "new head:", "base:", "未推送", "not pushed",
+	} {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func removeFlattenedCodeSpans(value string) string {
+	var result strings.Builder
+	for cursor := 0; cursor < len(value); {
+		start, marker := nextCodeFence(value, cursor)
+		if start < 0 {
+			result.WriteString(value[cursor:])
+			break
+		}
+		result.WriteString(value[cursor:start])
+		contentStart := start + len(marker)
+		endOffset := strings.Index(value[contentStart:], marker)
+		if endOffset < 0 {
+			// An unmatched marker must not hide the rest of a business result.
+			result.WriteString(value[contentStart:])
+			break
+		}
+		contentEnd := contentStart + endOffset
+		if content := flattenedFenceFacts(value[contentStart:contentEnd]); content != "" {
+			result.WriteByte(' ')
+			result.WriteString(content)
+			result.WriteByte(' ')
+		} else {
+			result.WriteByte(' ')
+		}
+		cursor = contentEnd + len(marker)
+	}
+	return strings.Join(strings.Fields(result.String()), " ")
+}
+
+func flattenedFenceFacts(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	fields := strings.Fields(value)
+	language := strings.ToLower(strings.TrimSpace(fields[0]))
+	if language == "text" || language == "plaintext" || language == "txt" {
+		return strings.TrimSpace(strings.TrimPrefix(value, fields[0]))
+	}
+	for _, codeLanguage := range []string{
+		"bash", "sh", "shell", "zsh", "fish", "powershell", "ps1", "cmd", "bat",
+		"go", "golang", "python", "py", "javascript", "js", "typescript", "ts",
+		"jsx", "tsx", "java", "kotlin", "scala", "c", "cpp", "c++", "csharp", "cs",
+		"rust", "ruby", "php", "swift", "sql", "groovy", "lua", "r",
+		"json", "json5", "yaml", "yml", "toml", "xml", "html", "css", "scss",
+		"dockerfile", "makefile", "ini", "diff", "patch", "mermaid", "sshconfig", "gitignore",
+	} {
+		if language == codeLanguage {
+			return ""
+		}
+	}
+	// A flattened fence without a recognized language is ambiguous. Preserve it
+	// as ordinary text so the transport shape cannot silently remove facts.
+	return value
+}
+
+func nextCodeFence(value string, start int) (int, string) {
+	index := -1
+	marker := ""
+	for _, candidate := range []string{"```", "~~~"} {
+		candidateIndex := strings.Index(value[start:], candidate)
+		if candidateIndex < 0 {
+			continue
+		}
+		candidateIndex += start
+		if index < 0 || candidateIndex < index {
+			index = candidateIndex
+			marker = candidate
+		}
+	}
+	return index, marker
 }
 
 func stripMarkdownListMarker(value string) (string, bool) {
@@ -434,14 +552,30 @@ func isMarkdownTableLine(value string) bool {
 	return strings.HasPrefix(trimmed, "|") && strings.Count(trimmed, "|") >= 2
 }
 
+func normalizeMarkdownTableLine(value string) string {
+	cells := strings.Split(strings.TrimSpace(value), "|")
+	kept := make([]string, 0, len(cells))
+	for _, cell := range cells {
+		cell = strings.TrimSpace(cell)
+		if cell == "" || strings.Trim(cell, "-: ") == "" {
+			continue
+		}
+		kept = append(kept, cell)
+	}
+	return strings.Join(kept, "；")
+}
+
 func isCommandOrPathOnly(value string) bool {
-	lower := strings.ToLower(strings.TrimSpace(strings.Trim(value, "`")))
+	trimmed := strings.TrimSpace(strings.Trim(value, "`"))
+	lower := strings.ToLower(trimmed)
 	for _, prefix := range []string{
 		"$ ", "curl ", "go test ", "pytest ", "pnpm ", "npm ", "yarn ",
 		"docker ", "kubectl ", "make ", "git ", "ssh ",
 	} {
 		if strings.HasPrefix(lower, prefix) {
-			return true
+			return !containsAnyText(trimmed,
+				"，", "。", "；", "：", "不会", "只负责", "必须", "结果", "通过", "失败", "风险", "说明",
+			)
 		}
 	}
 	return strings.HasPrefix(lower, "/") && !strings.ContainsAny(lower, "，。；：,;: ")
@@ -453,14 +587,18 @@ func isPureGitOperation(value string) bool {
 		lower = strings.ReplaceAll(lower, negative, "")
 	}
 	if !containsAnyText(lower,
-		"git ", "commit", "merge", "rebase", "cherry-pick", "提交号", "提交：", "提交 `", "分支",
-		"worktree", "工作树", "已合入", "合并", "推送", "变基", "当前 head", "新 head",
+		"git add", "git commit", "git push", "git merge", "git rebase",
+		"committed", "commit:", "commit `", "merge commit", "merged", "merge:",
+		"rebase", "cherry-pick", "提交号", "提交：", "提交 `", "worktree", "工作树",
+		"已合入", "合并", "推送", "变基", "pushed", "nothing pushed", "working tree",
 	) {
 		return false
 	}
 	return !containsAnyText(lower,
 		"修复", "实现", "开发", "设计", "部署", "发布", "上线",
-		"回滚", "冲突", "解决", "定位", "分析", "文档", "方案", "功能", "故障",
+		"回滚", "冲突", "解决", "定位", "分析", "文档", "方案", "故障", "记录",
+		"验证", "测试", "通过", "validation", "test", "tests", "passed", "build", "lint",
+		"失败", "风险", "阻塞", "异常", "blocked", "failed", "failure", "error", "denied", "reset",
 	)
 }
 
@@ -469,10 +607,11 @@ func isLowInformationReportLead(value string) bool {
 	if trimmed == "" {
 		return true
 	}
-	if len([]rune(trimmed)) <= 24 && containsAnyText(strings.ToLower(trimmed),
-		"可以", "好的", "没问题", "已处理", "处理好了", "已经完成", "完成了", "已结束", "结论如下", "结果如下",
-	) {
-		return true
+	if len([]rune(trimmed)) <= 24 {
+		switch strings.ToLower(trimmed) {
+		case "可以", "好的", "没问题", "已处理", "处理好了", "已经完成", "完成了", "已结束", "结论如下", "结果如下":
+			return true
+		}
 	}
 	return len([]rune(trimmed)) <= 80 &&
 		(strings.HasSuffix(value, "如下：") || strings.HasSuffix(value, "如下:"))
@@ -482,6 +621,49 @@ func isInternalDelegationResult(value string) bool {
 	lower := strings.ToLower(value)
 	return containsAnyText(lower, "主代理", "父代理", "父任务", "主任务") &&
 		containsAnyText(lower, "发给", "同步给", "交给", "回传", "发送给", "提交给", "向主代理提交")
+}
+
+func stripInternalDelegationPrefix(value string) string {
+	if !isInternalDelegationResult(value) {
+		return value
+	}
+	text := value
+	for {
+		if !isInternalDelegationResult(text) {
+			return strings.TrimSpace(text)
+		}
+		target := -1
+		for _, marker := range []string{"主代理", "父代理", "父任务", "主任务"} {
+			if index := strings.Index(text, marker); index >= 0 && (target < 0 || index < target) {
+				target = index
+			}
+		}
+		if target < 0 {
+			return strings.TrimSpace(text)
+		}
+		clauseStart := 0
+		if index := strings.LastIndexAny(text[:target], "。！？!?\n"); index >= 0 {
+			clauseStart = index + 1
+		}
+		rest := text[target:]
+		delimiter := -1
+		for _, marker := range []string{"：", ":", "，", ","} {
+			if index := strings.Index(rest, marker); index >= 0 && (delimiter < 0 || index < delimiter) {
+				delimiter = index + len(marker)
+			}
+		}
+		sentenceEnd := len(rest)
+		for _, marker := range []string{"。", "！", "？", "!", "?", "\n"} {
+			if index := strings.Index(rest, marker); index >= 0 && index+len(marker) < sentenceEnd {
+				sentenceEnd = index + len(marker)
+			}
+		}
+		if delimiter >= 0 && delimiter <= sentenceEnd {
+			text = text[:clauseStart] + rest[delimiter:]
+			continue
+		}
+		text = text[:clauseStart] + rest[sentenceEnd:]
+	}
 }
 
 func stripGitTraceClauses(value string) string {
@@ -495,9 +677,9 @@ func stripGitTraceClauses(value string) string {
 	lower := strings.ToLower(text)
 	cut := false
 	for _, marker := range []string{
-		"并已提交、推送", "并提交、推送", "提交并推送", "并已推送", "并推送",
 		"，当前 head", "；当前 head", ", current head", "; current head",
 		"，新 head", "；新 head", " - 新 worktree", " - worktree", " - 分支：", " - 分支:",
+		" 提交：", " 提交:",
 	} {
 		if index := strings.Index(lower, marker); index >= 0 {
 			text = strings.TrimSpace(text[:index])
@@ -515,6 +697,45 @@ func stripGitTraceClauses(value string) string {
 	return strings.TrimSpace(text)
 }
 
+func stripGitOnlyClauses(value string) string {
+	text := strings.TrimSpace(value)
+	if text == "" {
+		return ""
+	}
+	lower := strings.ToLower(text)
+	if !containsAnyText(lower,
+		"git add", "git commit", "git push", "git merge", "git rebase",
+		"committed", "commit:", "commit `", "merge commit", "merged", "merge:",
+		"rebase", "cherry-pick", "提交号", "提交：", "提交 `", "worktree", "工作树",
+		"已合入", "合并", "推送", "变基", "pushed", "nothing pushed", "working tree",
+	) {
+		return text
+	}
+	terminal := ""
+	if runes := []rune(text); len(runes) > 0 && strings.ContainsRune("。！？!?", runes[len(runes)-1]) {
+		terminal = string(runes[len(runes)-1])
+	}
+	clauses := strings.FieldsFunc(text, func(value rune) bool {
+		return strings.ContainsRune("，,；;", value)
+	})
+	kept := make([]string, 0, len(clauses))
+	for _, clause := range clauses {
+		clause = strings.TrimSpace(clause)
+		if clause == "" || isPureGitOperation(clause) {
+			continue
+		}
+		kept = append(kept, clause)
+	}
+	result := strings.TrimSpace(strings.Join(kept, "，"))
+	if result == "" {
+		return ""
+	}
+	if terminal != "" && !strings.HasSuffix(result, terminal) {
+		result = strings.TrimRight(result, "。！？!?") + terminal
+	}
+	return result
+}
+
 func isInstructionAcknowledgement(value string) bool {
 	lower := strings.ToLower(value)
 	return containsAnyText(lower, "已完整阅读 agents.md", "已阅读 agents.md", "后续任务我会严格遵守")
@@ -527,38 +748,14 @@ func isProcessNarration(value string) bool {
 		"只读分析结论如下", "只读检查结果如下", "审查结论如下",
 	} {
 		if strings.HasPrefix(lower, prefix) {
-			return true
+			return !containsAnyText(lower,
+				"已完成", "完成了", "修复", "实现", "验证", "测试", "部署", "发布",
+				"回滚", "定位", "发现", "确认", "通过", "失败", "风险", "阻塞",
+				"交付", "产出", "已新增", "新增了", "已删除", "删除了", "已调整", "调整了",
+			)
 		}
 	}
 	return false
-}
-
-func reportFactLeadSentences(value string, limit int) string {
-	runes := []rune(strings.TrimSpace(value))
-	if len(runes) == 0 {
-		return ""
-	}
-	cut := 0
-	for index, value := range runes {
-		if strings.ContainsRune("。！？!?", value) ||
-			(value == '.' && index+1 < len(runes) && runes[index+1] == ' ') {
-			cut = index + 1
-			if cut >= 18 {
-				break
-			}
-		}
-		if index+1 >= limit {
-			break
-		}
-	}
-	if cut < 18 || cut > limit {
-		cut = min(limit, len(runes))
-	}
-	result := strings.TrimSpace(string(runes[:cut]))
-	if cut < len(runes) && !strings.ContainsRune("。！？!?", runes[cut-1]) {
-		result += "…"
-	}
-	return strings.Trim(strings.ReplaceAll(result, "**", ""), "*` ")
 }
 
 func stripMarkdownLinkTargets(value string) string {
@@ -615,17 +812,20 @@ func isHandoffPromptArtifact(value string) bool {
 	}
 	prefix = strings.ToLower(prefix)
 	introducesPayload := strings.Contains(prefix, "下面这段") || strings.Contains(prefix, "以下内容") ||
+		strings.Contains(prefix, "以下提示词") || strings.Contains(prefix, "下面提示词") ||
 		strings.Contains(prefix, `[{"text": "下面这段`) || strings.Contains(prefix, `[{"text":"下面这段`)
 	transfersPayload := strings.Contains(prefix, "直接") || strings.Contains(prefix, "复制") ||
 		strings.Contains(prefix, "发给") || strings.Contains(prefix, "交给")
-	targetsModel := strings.Contains(prefix, "模型") || strings.Contains(prefix, "agent")
-	return introducesPayload && transfersPayload && targetsModel
+	targetsExecutor := strings.Contains(prefix, "模型") || strings.Contains(prefix, "agent") ||
+		strings.Contains(prefix, "另一个会话") || strings.Contains(prefix, "新会话") ||
+		strings.Contains(prefix, "下一个会话") || strings.Contains(prefix, "测试会话")
+	return introducesPayload && transfersPayload && targetsExecutor
 }
 
 func appendWorkEvidenceFact(
 	projection *WorkEvidence,
 	indexes map[workEvidenceFactIdentity]int,
-	observationSets *[]map[WorkEvidenceObservation]struct{},
+	observationIndexes *[]map[workEvidenceObservationIdentity]int,
 	identity workEvidenceFactIdentity,
 	observation WorkEvidenceObservation,
 ) {
@@ -637,11 +837,37 @@ func appendWorkEvidenceFact(
 			Kind: identity.Kind, Text: identity.Text, Source: identity.Source,
 			Observations: []WorkEvidenceObservation{},
 		})
-		*observationSets = append(*observationSets, make(map[WorkEvidenceObservation]struct{}))
+		*observationIndexes = append(
+			*observationIndexes, make(map[workEvidenceObservationIdentity]int),
+		)
 	}
-	if _, exists := (*observationSets)[index][observation]; exists {
+	observationIdentity := workEvidenceObservationIdentity{
+		Date: observation.Date, Category: observation.Category, Status: observation.Status,
+	}
+	observationIndex, exists := (*observationIndexes)[index][observationIdentity]
+	if !exists {
+		observation.OccurrenceCount = 1
+		observationIndex = len(projection.Facts[index].Observations)
+		(*observationIndexes)[index][observationIdentity] = observationIndex
+		projection.Facts[index].Observations = append(
+			projection.Facts[index].Observations, observation,
+		)
 		return
 	}
-	(*observationSets)[index][observation] = struct{}{}
-	projection.Facts[index].Observations = append(projection.Facts[index].Observations, observation)
+	existing := &projection.Facts[index].Observations[observationIndex]
+	existing.OccurrenceCount++
+	if existing.FirstObservedAt == "" && existing.ObservedAt != "" &&
+		observation.ObservedAt != "" && existing.ObservedAt != observation.ObservedAt {
+		existing.FirstObservedAt = existing.ObservedAt
+	}
+	if existing.FirstObservedAt != "" && observation.ObservedAt != "" &&
+		observation.ObservedAt < existing.FirstObservedAt {
+		existing.FirstObservedAt = observation.ObservedAt
+	}
+	if existing.ObservedAt == "" ||
+		(observation.ObservedAt != "" && observation.ObservedAt >= existing.ObservedAt) {
+		existing.ObservedAt = observation.ObservedAt
+		existing.Category = observation.Category
+		existing.Status = observation.Status
+	}
 }

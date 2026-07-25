@@ -1,6 +1,6 @@
 # Agent-facing Context 收敛方向（2026-07-23）
 
-> 状态：分页和列式方案均已取消；普通对象 Projection 与离线验证完成，待测试服同配置新 Run 验收
+> 状态：分页、列式和成果检查点筛选均已取消；“有效事实完整覆盖 + 确定性结构去噪”的自动化和 31 份生产样本离线重放已完成；本轮不进入 Agent 验证
 > 范围：托管报告 Agent 的 get_report_context(run_id) 输入
 
 ## 1. 已确认问题
@@ -30,7 +30,9 @@
 
 ### 2.4 完整 Digest 与报告事实分层
 
-原始 Session、完整 Digest WorkUnit 和冻结来源保持不变。Report Projection 不再把完整 Agent 回复直接视为日报事实，而是固定取首个有信息量的结果段，最长 240 个 Unicode 字符并在句子边界结束；同一 Session、同一工作类别只保留报告期内首个和最新结果，所有明确未解决项保留；代码块、命令、纯路径、纯 Git 操作、过程叙述和内部交接结果不进入 Agent-facing Context。该规则只作用于报告表示，不修改 Digest Revision，完整正文仍可追溯。
+原始 Session、完整 Digest WorkUnit 和冻结来源保持不变。Report Projection 不把完整 Agent 回复原样复制到日报 Context，而是对每个包含有效报告事实的 Work Unit 做确定性结构去噪：删除已知代码围栏、纯命令、纯路径、纯 Git 流水、传输包装和内部交接/执行过程话术；Markdown 标题与表格分隔语法规范化但表格事实保留；完整保留成果、验证、失败、风险和未解决事项，不按字符数截断。扁平文本围栏按出现顺序成对解析，只删除已知代码或序列化语言正文；围栏前后正文继续读取，`text/plaintext/txt` 和未知类型正文保留，未闭合围栏不截断后文。Git 只删除可独立识别的纯操作片段，混合业务结果无法安全拆分时整段保留。`status`、`category` 和时间先后只参与排序与表达，不作为删除整个 Work Unit 的依据；相互矛盾的业务结论均按时间保留。完全相同事实仅在日期、类别和状态也相同时聚合为首次/最新时间与 `occurrence_count`；不同类别或状态分开保留，不做近似去重。该规则只作用于报告表示，不修改 Digest Revision，完整正文仍可追溯。
+
+Projection 的完整性不是 Digest 原文逐字复制：代码、工具过程和内部流水可以删除；但任何会改变“做了什么、结果如何、如何验证、是否失败或阻塞、还有什么未解决”的正文都必须保留。技术细节章节的噪声被删除后，解析必须继续读取其后的结果、验证和风险章节，禁止遇到详情标题后直接截断整条回复。
 
 ### 2.5 Digest 和 Projection 禁止新增 LLM
 
@@ -38,7 +40,7 @@
 
 ### 2.6 Projection 是确定性内部模块
 
-Projection 位于现有 Report Context Builder 内部，固定执行：冻结 Payload → 删除完全相同的 Digest 双写 → 校验每个 Highlight 的内部 Session 来源属于冻结 Item → 从每条结果正文提取首个有信息量的结果段 → 按 Session+工作类别保留首个和最新结果 → 保留全部未解决项 → 排除代码块、命令、纯路径、纯 Git、过程叙述、原始 Goal、交接 Prompt和内部审计引用 → 构建普通 `facts[]` → 按紧凑 `kind + text + source` 精确归并 → 保留日期/状态观察 → 冻结单份 Context。内部 `source_ref` 不进入 Agent Context。
+Projection 位于现有 Report Context Builder 内部，固定执行：冻结 Payload → 删除完全相同的 Digest 双写 → 校验每个 Highlight 的内部 Session 来源属于冻结 Item → 对所有状态执行相同的段落级结构去噪 → 保留全部有效结果和未解决项 → 按日期、`observed_at`、sequence 和事实身份稳定排序 → 构建普通 `facts[]` → 按 `kind + text + source` 精确归并 → 按日期+类别+状态聚合重复 observation 的首次/最新时间和出现次数 → 冻结单份 Context。内部 `source_ref` 不进入 Agent Context。
 
 Projection 不做主题归并、不改变 Digest Revision，不创建新表、Job、Worker 或队列。语义主题归并仍由最终 Report Agent 完成；Projection 只执行上述固定报告事实规则。失败时 Run 明确失败，不回退超大 Context。
 
@@ -82,7 +84,7 @@ Projection 不做主题归并、不改变 Digest Revision，不创建新表、Jo
 固定实现顺序：
 
 1. 先消除 Report Context 中可证明的整块重复，不修改 Digest Job；
-2. 再统一报告事实表达：每条完整结果提取一个结果首段，不做主题判断或近似匹配；保留不同日期和状态观察；不把代码、命令、纯路径、纯 Git、原始 Goal、内部引用和交接 Prompt 当成报告事实；
+2. 再统一报告事实表达：每条结果在段落级结构去噪后完整保留成果、验证、失败、风险和未解决事项，不按字符数截断，不做主题判断、状态筛选或近似匹配；不把代码围栏、纯命令、纯路径、纯 Git、原始 Goal、内部引用和交接 Prompt 当成报告事实；
 3. 若单个 Digest 在确定性 Projection 后仍异常大，另行分析 Digest 内部确定性表达，不引入 LLM；
 4. 最大样本一次读取和队列指标通过后，才进入真实 Agent 验收。
 
@@ -90,7 +92,7 @@ Projection 不做主题归并、不改变 Digest Revision，不创建新表、Jo
 
 只有同时满足以下条件，才能进入下一轮代码修改：
 
-- 完整 Digest 保持可追溯，Agent-facing Projection 删除的是代码、命令、纯路径、纯 Git 和结果首段后的过程细节；
+- 完整 Digest 保持可追溯，Agent-facing Projection 排除代码围栏、纯命令、纯路径、纯 Git 和内部交接，但完整保留剩余的多段成果、验证和风险；
 - 每条保留事实仍能追溯到冻结来源；
 - 最大生产样本一次 MCP 调用不超过执行引擎限制；
 - 同输入、同模型的事实覆盖不下降；
@@ -107,7 +109,9 @@ Projection 不做主题归并、不改变 Digest Revision，不创建新表、Jo
 
 第三版 Session+工作类别首末状态方案真实 Run `31808223-...` 冻结 85 条事实、22,596 bytes Context，MCP 正文 16,807 字符；配合 3,901 字符的 `aida-report@1.0.50`，约 401 秒完成写回，Summary 290 字、正文 3,430 字。多任务 Session 通过保留不同 Digest Category 降低中间成果遗漏风险。完整 Digest、数据库、队列、模型、前端、上传和 Token 统计均未修改。
 
-真实正文仍出现少量分支、提交号、worktree 和 HEAD 信息，说明 Skill 禁止规则不能单独作为数据清洗。Projection 已固定删除纯 Git 事实，并从混合业务结果中剥离 Git 尾句；业务结果和部署结论继续保留。该增量由确定性单元测试验收，不追加昂贵的模型回归。
+后续 Run `bb3d10d0-...` 和生产样本审计证明，首末及成果检查点方案都会删除无法由规则判断正误的独立事实，因此两者均已撤销。240 字首句和 1000 字单条上限也不再使用。当前实现按段落删除确定性结构噪声，所有状态使用相同规则。15 个本机 Codex Session 共 45,598,852 raw bytes、30,181 events，Digest→Projection 结构验收 15/15 通过；309 条 ResultStatement 中 304 条有效结果进入 Projection，5 条确定性噪声过滤。31 份保存的生产 Context 中，8,713 条 ResultStatement 有 8,626 条有效结果进入 Projection，87 条过滤项为过程话术、指令确认或结构噪声；精确归并后的 `occurrence_count` 合计仍为 8,626。完整 Context 从 16,518,069 bytes 降到 1,401,694 bytes，缩小 91.51%，最大输出 208,787 bytes。逐条复核发现并修复了扁平围栏、Git 截断和 Git 分析统计误判三类段内业务事实丢失，终态业务误删为 0。完整 Digest 未修改；测试服两个真实 Run 已验证 Context 冻结和单次 MCP 读取，外部模型失败不作为本轮 Projection 结论。
+
+真实正文仍出现少量分支、提交号、worktree 和 HEAD 信息，说明 Skill 禁止规则不能单独作为数据清洗。Projection 固定删除纯 Git 事实和可独立分离的 Git 片段；混合结果中只要同时存在功能、验证、部署、失败或交付清单，就保留业务句，禁止从“提交并推送”等关键词开始截断全部后文。无法安全拆分时允许少量 Git 痕迹随业务事实保留。该规则由确定性单元测试和生产样本逐条审计验收，不追加昂贵的模型回归。
 
 测试服真实 Agent 验收通过前，不提交发布申请，不部署生产。
 
