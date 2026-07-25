@@ -99,6 +99,7 @@ func main() {
 	}
 	canonicalSyncH := handler.NewCanonicalSyncHandler(canonicalSyncService)
 	reportH := handler.NewReportHandler(database)
+	reportImageH := handler.NewReportImageHandler(minioStore)
 	reportSourceConfig, err := reportsource.ProductConfig().Normalized()
 	if err != nil {
 		log.Fatalf("Invalid report source digest configuration: %v", err)
@@ -337,6 +338,7 @@ func main() {
 	r.With(handler.CLIAuthMiddleware(database, cfg.AIHubSecret, aihubClient)).Post("/api/v1/session-syncs/{generationId}/finalize", sessionSyncH.Finalize)
 	r.With(handler.CLIAuthMiddleware(database, cfg.AIHubSecret, aihubClient)).Post("/api/v1/session-syncs/{generationId}/abort", sessionSyncH.Abort)
 	r.With(handler.CLIAuthMiddleware(database, cfg.AIHubSecret, aihubClient)).Post("/api/v1/sessions/batch", handler.LegacySessionBatchUploadDisabled)
+	r.Get("/api/v1/report-images/{name}", reportImageH.Get)
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(handler.AuthMiddleware(database, cfg.AIHubSecret, aihubClient))
@@ -420,6 +422,7 @@ func main() {
 		r.Delete("/documents/{id}", docH.Delete)
 
 		r.Get("/reports", reportH.List)
+		r.Post("/report-images", reportImageH.Upload)
 		r.Get("/reports/mine", reportH.ListMine)
 		r.Get("/reports/today", reportH.GetOrCreateToday)
 		r.Post("/reports/today/managed-agent-runs", managedAgentH.StartReportRun)

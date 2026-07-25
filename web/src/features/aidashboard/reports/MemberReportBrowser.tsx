@@ -2,10 +2,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Alert, App, Button, Card, Empty, Select, Space, Table, Tag, Tooltip } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { CopyOutlined, DownOutlined, LeftOutlined, RightOutlined, UpOutlined } from "@ant-design/icons";
+import { CopyOutlined, LeftOutlined, RightOutlined } from "@ant-design/icons";
+import dayjs from "dayjs";
 
 import type { MemberPersonalReport } from "../api/types";
 import { MarkdownViewer } from "@/shared/components/MarkdownViewer/MarkdownViewer";
+import { reportContentSummary } from "./utils/reportSummary";
 
 const roleLabels: Record<string, string> = {
   director: "总监", pm: "PM", team_leader: "TL", employee: "员工", admin: "管理员"
@@ -24,16 +26,8 @@ type MemberReportBrowserProps<T extends { content: string; next_day_plan?: strin
   emptyPeriodLabel?: string;
 };
 
-function textPreview(value?: string) {
-  return value
-    ?.replace(/```[\s\S]*?```/g, " ")
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
-    .replace(/^\s{0,3}#{1,6}\s*/gm, "")
-    .replace(/-{3,}/g, " ")
-    .replace(/[>*_`|]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+function formatMemberUpdatedAt(value?: string) {
+  return value ? dayjs(value).format("YYYY-MM-DD HH:mm") : "";
 }
 
 async function copyText(value: string) {
@@ -163,6 +157,11 @@ function MemberReportContentList<T extends { content: string; next_day_plan?: st
   });
   const submittedCount = available.length;
   const missingCount = filtered.length - submittedCount;
+  const submittedNames = available.map((item) => item.user_name).join("、");
+  const missingNames = filtered
+    .filter((item) => !item.report_id)
+    .map((item) => item.user_name)
+    .join("、");
   const currentIndex = available.findIndex((item) => item.report_id === effectiveSelectedID);
   const currentItem = currentIndex >= 0 ? available[currentIndex] : undefined;
 
@@ -205,11 +204,19 @@ function MemberReportContentList<T extends { content: string; next_day_plan?: st
 
   return (
     <Card
-      className="member-report-content-list"
+      className="member-report-content-list reports-inline-content-list reports-member-content-list"
       title={
         <div className="member-report-content-list__title">
           <span>{contentListTitle}</span>
-          <small>已提交 {submittedCount} 人 · 未提交 {missingCount} 人</small>
+          <small className="member-report-submission-summary">
+            <span className="is-submitted" title={submittedNames || undefined}>
+              <b>已提交 {submittedCount} 人</b>{submittedNames ? `：${submittedNames}` : ""}
+            </span>
+            <i aria-hidden="true">·</i>
+            <span className={missingCount > 0 ? "has-missing" : undefined} title={missingNames || undefined}>
+              <b>未提交 {missingCount} 人</b>{missingNames ? `：${missingNames}` : ""}
+            </span>
+          </small>
         </div>
       }
       extra={
@@ -228,29 +235,44 @@ function MemberReportContentList<T extends { content: string; next_day_plan?: st
         <div className="member-report-content-list__loading">正在加载成员{reportLabel}…</div>
       ) : filtered.length === 0 ? (
         <Empty description={`${emptyPeriodLabel}暂无成员${reportLabel}`} />
+      ) : available.length === 0 ? (
+        <Empty description={`${emptyPeriodLabel}暂无已提交成员${reportLabel}`} />
       ) : (
         <div className="member-report-content-list__items">
-          {filtered.map((item) => {
+          {available.map((item) => {
             const isExpanded = Boolean(item.report_id) && item.report_id === effectiveSelectedID;
-            const preview = textPreview(item.content_preview);
+            const preview = reportContentSummary(item.content_preview ?? "");
+            const memberContext = item.team_name || item.department_name || "直属部门";
             return (
               <article
                 className={`member-report-content-item${isExpanded ? " is-expanded" : ""}${item.has_report ? "" : " is-missing"}`}
                 key={item.user_id}
               >
                 <header className="member-report-content-item__head">
-                  <div>
-                    <div className="member-report-content-item__identity">
+                  <button
+                    className="member-report-content-item__summary"
+                    type="button"
+                    disabled={!item.report_id}
+                    aria-expanded={item.report_id ? isExpanded : undefined}
+                    onClick={() => item.report_id && toggleReport(item.report_id)}
+                  >
+                    <span className="member-report-content-item__date">
                       <strong>{item.user_name}</strong>
-                      <span>{roleLabels[item.role] ?? item.role}</span>
-                      <span>{item.team_name || "直属部门"}</span>
-                    </div>
-                    {item.saved_at ? (
-                      <small>{new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(item.saved_at))}</small>
-                    ) : null}
-                  </div>
-                  <div className="member-report-content-item__actions">
-                    {item.has_report ? <Tag color="green">已提交</Tag> : <Tag>未提交</Tag>}
+                      <small>{roleLabels[item.role] ?? item.role}</small>
+                    </span>
+                    <span className="member-report-content-item__overview">
+                      <span className="member-report-content-item__identity">
+                        <span>{memberContext}</span>
+                      </span>
+                      <span className={`member-report-content-item__preview${preview ? "" : " member-report-content-item__preview--empty"}`}>
+                        {preview || (item.has_report ? `${reportLabel}已提交，查看全文获取完整内容。` : `本期尚未提交${reportLabel}`)}
+                      </span>
+                      <small>
+                        {item.saved_at ? `更新于 ${formatMemberUpdatedAt(item.saved_at)}` : "暂无更新时间"}
+                      </small>
+                    </span>
+                  </button>
+                  <div className="member-report-content-item__actions" role="group" aria-label={`成员${reportLabel}操作`}>
                     {item.report_id ? (
                       <Button
                         className="member-report-content-item__toggle"
@@ -259,21 +281,16 @@ function MemberReportContentList<T extends { content: string; next_day_plan?: st
                         aria-expanded={isExpanded}
                         onClick={() => toggleReport(item.report_id!)}
                       >
-                        {isExpanded ? <UpOutlined /> : <DownOutlined />}
-                        {isExpanded ? "收起" : "展开"}
+                        {isExpanded ? "收起正文" : "查看全文"}
                       </Button>
-                    ) : null}
+                    ) : (
+                      <span className="member-report-content-item__missing-state">未提交</span>
+                    )}
                   </div>
                 </header>
-                {item.has_report ? (
-                  <p className="member-report-content-item__preview">
-                    {preview || `${reportLabel}已提交，展开后查看完整内容。`}
-                  </p>
-                ) : null}
                 {isExpanded ? (
                   <div className="member-report-content-item__detail">
                     <div className="member-report-content-item__detail-bar">
-                      <span>{reportLabel}全文</span>
                       <Tooltip title="复制全文（保留 Markdown 格式）">
                         <Button
                           className="member-report-content-item__copy"

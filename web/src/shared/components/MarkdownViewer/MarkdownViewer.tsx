@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import Viewer from "@toast-ui/editor/viewer";
 import "@toast-ui/editor/toastui-editor-viewer.css";
+import "@fontsource-variable/noto-sans-sc";
 
 import "./MarkdownViewer.css";
 

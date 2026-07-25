@@ -347,17 +347,9 @@
   min-height: 0;
 }
 
-.console-report-editor-layout__content-input.ant-input {
+.console-report-editor-layout__content-input {
   height: clamp(260px, calc(100dvh - 430px), 360px);
   min-height: 220px;
-  padding: 12px;
-  border: 1px solid #e6edf5;
-  border-radius: 8px;
-  color: #172033;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-  font-size: 13px;
-  line-height: 1.6;
-  resize: vertical;
 }
 
 .console-report-editor-layout__next-day-heading {
@@ -381,7 +373,7 @@
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.08);
 }
 
-.console-report-management.is-ai-generating .console-report-editor-layout__content-input.ant-input,
+.console-report-management.is-ai-generating .console-report-editor-layout__content-input,
 .console-report-management.is-ai-generating
   .console-report-editor-layout__next-day-input.ant-input {
   border-color: #e2eaf3;

@@ -1,12 +1,22 @@
 .markdown-viewer {
+  max-width: 100%;
+  color: #334155;
+  font-family: "Noto Sans SC Variable", "Noto Sans SC", -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
   font-size: 14px;
-  line-height: 1.7;
-  color: rgba(0, 0, 0, 0.88);
+  font-weight: 400;
+  line-height: 1.78;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
 }
 
 .markdown-viewer .toastui-editor-contents {
-  font-size: 14px;
-  line-height: 1.7;
+  max-width: 100%;
+  color: inherit;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  overflow-wrap: anywhere;
 }
 
 .markdown-viewer .toastui-editor-contents > :first-child {
@@ -17,15 +27,101 @@
   margin-bottom: 0;
 }
 
+.markdown-viewer .toastui-editor-contents h1,
+.markdown-viewer .toastui-editor-contents h2,
+.markdown-viewer .toastui-editor-contents h3,
+.markdown-viewer .toastui-editor-contents h4 {
+  color: #1e293b;
+  font-family: inherit;
+  font-weight: 600;
+  line-height: 1.45;
+  border-bottom: 0;
+}
+
+.markdown-viewer .toastui-editor-contents h1 { margin: 24px 0 12px; font-size: 22px; }
+.markdown-viewer .toastui-editor-contents h2 { margin: 22px 0 10px; font-size: 18px; }
+.markdown-viewer .toastui-editor-contents h3 { margin: 18px 0 8px; font-size: 16px; }
+.markdown-viewer .toastui-editor-contents h4 { margin: 16px 0 8px; font-size: 14px; }
+
 .markdown-viewer .toastui-editor-contents p,
 .markdown-viewer .toastui-editor-contents ul,
 .markdown-viewer .toastui-editor-contents ol,
 .markdown-viewer .toastui-editor-contents pre,
-.markdown-viewer .toastui-editor-contents blockquote {
+.markdown-viewer .toastui-editor-contents blockquote,
+.markdown-viewer .toastui-editor-contents table {
   margin-top: 0;
-  margin-bottom: 10px;
+  margin-bottom: 12px;
 }
 
 .markdown-viewer .toastui-editor-contents li + li {
-  margin-top: 4px;
+  margin-top: 5px;
+}
+
+.markdown-viewer .toastui-editor-contents a {
+  color: #2563eb;
+  text-decoration-color: rgba(37, 99, 235, 0.3);
+  text-underline-offset: 3px;
+}
+
+.markdown-viewer .toastui-editor-contents blockquote {
+  padding: 10px 14px;
+  color: #475569;
+  background: #f8fafc;
+  border-left: 3px solid #93b4e8;
+  border-radius: 0 8px 8px 0;
+}
+
+.markdown-viewer .toastui-editor-contents code {
+  color: #be123c;
+  font-family: SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 0.9em;
+  background: #f8eef2;
+  border-radius: 4px;
+}
+
+.markdown-viewer .toastui-editor-contents pre {
+  max-width: 100%;
+  padding: 14px 16px;
+  overflow-x: auto;
+  background: #f6f8fb;
+  border: 1px solid #e3eaf2;
+  border-radius: 8px;
+}
+
+.markdown-viewer .toastui-editor-contents pre code {
+  color: #334155;
+  background: transparent;
+}
+
+.markdown-viewer .toastui-editor-contents table {
+  width: 100%;
+  font-size: 13px;
+  border: 1px solid #dfe7f0;
+  border-radius: 8px;
+}
+
+.markdown-viewer .toastui-editor-contents th,
+.markdown-viewer .toastui-editor-contents td {
+  padding: 9px 11px;
+  color: #334155;
+  text-align: left;
+  border-color: #e3eaf2;
+}
+
+.markdown-viewer .toastui-editor-contents th {
+  color: #334155;
+  font-weight: 600;
+  background: #f1f5f9;
+}
+
+.markdown-viewer .toastui-editor-contents img {
+  max-width: 100%;
+  height: auto;
+  border: 1px solid #e1e8f0;
+  border-radius: 8px;
+}
+
+.markdown-viewer .toastui-editor-contents hr {
+  margin: 22px 0;
+  border-color: #e5ebf2;
 }

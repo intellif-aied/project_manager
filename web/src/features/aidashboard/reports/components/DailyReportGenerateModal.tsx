@@ -26,6 +26,8 @@ import type {
   TeamReport
 } from "../../api/types";
 import { ReportAIGenerateControls, ReportAISettingsPanel } from "./ReportAIGenerateControls";
+import { MarkdownEditor } from "@/shared/components/MarkdownEditor/MarkdownEditor";
+import { MarkdownViewer } from "@/shared/components/MarkdownViewer/MarkdownViewer";
 import { businessDateKey } from "@/shared/utils/businessTime";
 
 import "./DailyReportGenerateModal.css";
@@ -454,33 +456,32 @@ export function DailyReportGenerateModal({
             ) : shouldShowEditor ? (
               <div className="console-report-editor-layout">
                 <div className="console-report-editor-layout__main">
-                  <div className="console-session-modal__section">
-                    <strong>报告正文</strong>
-                  </div>
-                  <TextArea
-                    className="console-report-editor-layout__content-input"
-                    rows={18}
-                    readOnly={readOnly || aiGenerating}
-                    value={editorContent}
-                    onChange={(event) => {
-                      if (readOnly || aiGenerating) return;
-                      setContent(event.target.value);
-                      setContentTouched(true);
-                    }}
-                    placeholder="请输入报告内容"
-                  />
+                  {readOnly ? (
+                    <MarkdownViewer value={editorContent} />
+                  ) : (
+                    <MarkdownEditor
+                      className="console-report-editor-layout__content-input"
+                      height="min(46vh, 360px)"
+                      disabled={aiGenerating}
+                      value={editorContent}
+                      onChange={(value) => {
+                        setContent(value);
+                        setContentTouched(true);
+                      }}
+                    />
+                  )}
                   <div className="console-session-modal__section console-report-editor-layout__next-day-heading">
                     <strong>明日计划（可选）</strong>
                   </div>
                   <TextArea
                     className="console-report-editor-layout__next-day-input"
                     rows={2}
-                    autoSize={{ minRows: 2, maxRows: 2 }}
+                    autoSize={{ minRows: 2, maxRows: 6 }}
                     readOnly={readOnly || aiGenerating}
                     value={editorNextDayPlan}
                     onChange={(event) => {
                       if (readOnly || aiGenerating) return;
-                      setNextDayPlan(event.target.value.split(/\r?\n/).slice(0, 2).join("\n"));
+                      setNextDayPlan(event.target.value);
                       setNextDayPlanTouched(true);
                     }}
                     placeholder="请输入明日计划"
