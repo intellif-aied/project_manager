@@ -234,7 +234,7 @@ func TestManagedAgentRunStatusSyncerFailsCompletedReportSessionWithoutWriteback(
 		WillReturnRows(managedRunStatusRows().
 			AddRow("run-report", "", "session-report", "running", "report_agent_run", "", []byte(`{}`), startedAt))
 	mock.ExpectExec("UPDATE ai_runs SET").
-		WithArgs("failed", outputRefWithoutResult{status: "completed", taskID: "session-report", sessionID: "session-report", errText: reportWritebackMissingErrorMessage}, nil, reportWritebackMissingErrorMessage, now, "REPORT_WRITEBACK_MISSING", "run-report").
+		WithArgs("failed", outputRefWithoutResult{status: "completed", taskID: "session-report", sessionID: "session-report", errText: reportAgentFailureErrorMessage}, nil, reportAgentFailureErrorMessage, now, "REPORT_WRITEBACK_MISSING", "run-report").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	syncer := NewManagedAgentRunStatusSyncer(db, NewManagedAgentClient(platform.URL, "platform-token"))
@@ -309,7 +309,7 @@ func TestManagedAgentRunStatusSyncerAllowsCompletedReportSessionWithWriteback(t 
 	}
 }
 
-func TestManagedAgentRunStatusSyncerFailsPlatformFailedSession(t *testing.T) {
+func TestManagedAgentRunStatusSyncerHidesPlatformFailedSessionDetails(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
@@ -328,7 +328,7 @@ func TestManagedAgentRunStatusSyncerFailsPlatformFailedSession(t *testing.T) {
 		WillReturnRows(managedRunStatusRows().
 			AddRow("run-failed", "", "session-failed", "running", "report_agent_run", "", []byte(`{}`), startedAt))
 	mock.ExpectExec("UPDATE ai_runs SET").
-		WithArgs("failed", outputRefWithoutResult{status: "failed", taskID: "session-failed", sessionID: "session-failed", errText: "tool execution failed"}, nil, "tool execution failed", now, "AGENT_EXECUTION_FAILED", "run-failed").
+		WithArgs("failed", outputRefWithoutResult{status: "failed", taskID: "session-failed", sessionID: "session-failed", errText: reportAgentFailureErrorMessage, forbiddenText: "tool execution failed"}, nil, reportAgentFailureErrorMessage, now, "AGENT_EXECUTION_FAILED", "run-failed").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	syncer := NewManagedAgentRunStatusSyncer(db, NewManagedAgentClient(platform.URL, "platform-token"))
@@ -410,6 +410,50 @@ func TestManagedAgentRunStatusSyncerHidesEarlyInfrastructureFailure(t *testing.T
 			now,
 			"AGENT_EXECUTION_FAILED",
 			"run-failed",
+		).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	syncer := NewManagedAgentRunStatusSyncer(db, NewManagedAgentClient(platform.URL, "platform-token"))
+	if err := syncer.RunOnce(t.Context(), now); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestManagedAgentRunStatusSyncerHidesUpstreamModelFailureDetails(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	now := time.Date(2026, 7, 25, 9, 0, 0, 0, time.UTC)
+	startedAt := now.Add(-5 * time.Minute)
+	upstreamError := "API Error: 500 Internal Server Error. Received Model Group=anthropic/GLM-5.2-FP8; Available Model Group Fallbacks=None"
+	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		payload, _ := json.Marshal(map[string]any{
+			"task_id": "session-model-failed", "status": "failed", "error": upstreamError,
+			"started_at": startedAt.Unix(), "finished_at": now.Unix(),
+		})
+		_, _ = w.Write(payload)
+	}))
+	defer platform.Close()
+
+	mock.ExpectQuery(managedRunSyncQueryPattern).
+		WithArgs(100).
+		WillReturnRows(managedRunStatusRows().
+			AddRow("run-model-failed", "", "session-model-failed", "running", "report_agent_run", "", []byte(`{}`), startedAt))
+	mock.ExpectExec("UPDATE ai_runs SET").
+		WithArgs(
+			"failed",
+			outputRefWithoutResult{status: "failed", taskID: "session-model-failed", sessionID: "session-model-failed", errText: reportAgentFailureErrorMessage, forbiddenText: "GLM-5.2-FP8"},
+			nil,
+			reportAgentFailureErrorMessage,
+			now,
+			"AGENT_EXECUTION_FAILED",
+			"run-model-failed",
 		).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 

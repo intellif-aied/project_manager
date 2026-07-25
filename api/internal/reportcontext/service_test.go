@@ -178,7 +178,7 @@ func TestProjectPayloadForRepresentationKeepsHistoricalRunShape(t *testing.T) {
 	}
 }
 
-func TestProjectPayloadForRepresentationFallsBackToFrozenDigest(t *testing.T) {
+func TestProjectPayloadForRepresentationRejectsIncompleteProjection(t *testing.T) {
 	digest := json.RawMessage(strings.Replace(
 		string(validFrozenDigestV2()),
 		`"work_unit_ref":"wu-3"`,
@@ -191,18 +191,8 @@ func TestProjectPayloadForRepresentationFallsBackToFrozenDigest(t *testing.T) {
 		Sources:  Sources{SessionDigest: digest},
 	}
 
-	projected, err := projectPayloadForRepresentation(payload, RepresentationWorkEvidence)
-	if err != nil {
-		t.Fatalf("projection mismatch must fall back to the frozen digest: %v", err)
-	}
-	if len(projected.Sessions) != 1 || projected.WorkEvidence != nil {
-		t.Fatalf("frozen digest fallback was not preserved: %+v", projected)
-	}
-	if len(projected.Sources.SessionDigest) != 0 {
-		t.Fatal("fallback must still remove a byte-identical duplicate digest")
-	}
-	if projected.PresentationProfile == nil {
-		t.Fatal("fallback must retain the report presentation profile")
+	if _, err := projectPayloadForRepresentation(payload, RepresentationWorkEvidence); !errors.Is(err, ErrIncomplete) {
+		t.Fatalf("incomplete Projection must fail instead of exposing the frozen Digest, got %v", err)
 	}
 }
 
@@ -560,6 +550,97 @@ func TestProjectPayloadKeepsBusinessFactsAfterFlattenedCodeFences(t *testing.T) 
 		if strings.Contains(text, noise) {
 			t.Fatalf("flattened code noise %q leaked into Projection: %s", noise, text)
 		}
+	}
+}
+
+func TestProjectPayloadPreservesBusinessFactsAcrossMultilineFences(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		input     string
+		required  []string
+		forbidden []string
+	}{
+		"text fence": {
+			input:    "确认日期筛选异常。\n```text\nperiod_start=2026-07-16\n```\n修复后验证通过。",
+			required: []string{"确认日期筛选异常", "period_start=2026-07-16", "修复后验证通过"},
+		},
+		"unknown fence": {
+			input:    "形成业务规则。\n```decision\n审批失败时保留原状态。\n```\n专项测试通过。",
+			required: []string{"形成业务规则", "审批失败时保留原状态", "专项测试通过"},
+		},
+		"unclosed fence": {
+			input:    "已完成缓存修复。\n```go\nfunc cacheFix() {}\n未闭合围栏后的验证仍然通过。",
+			required: []string{"已完成缓存修复", "未闭合围栏后的验证仍然通过"},
+		},
+		"known code fence": {
+			input:     "已完成缓存修复。\n```go\nfunc cacheFix() {}\n```\n12 项测试通过。",
+			required:  []string{"已完成缓存修复", "12 项测试通过"},
+			forbidden: []string{"func cacheFix"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			text := projectSingleResultText(t, testCase.input)
+			for _, required := range testCase.required {
+				if !strings.Contains(text, required) {
+					t.Fatalf("business fact %q was lost: %s", required, text)
+				}
+			}
+			for _, forbidden := range testCase.forbidden {
+				if strings.Contains(text, forbidden) {
+					t.Fatalf("known code %q leaked into Projection: %s", forbidden, text)
+				}
+			}
+		})
+	}
+}
+
+func TestProjectPayloadDoesNotTreatBusinessLanguageAsGitTrace(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		input     string
+		required  []string
+		forbidden []string
+	}{
+		"data merge": {
+			input: "完成两个数据源合并。", required: []string{"完成两个数据源合并"},
+		},
+		"message delivery": {
+			input: "完成消息推送。", required: []string{"完成消息推送"},
+		},
+		"form submission failure": {
+			input: "表单 提交：失败，需要修复。", required: []string{"表单", "失败", "需要修复"},
+		},
+		"mixed file metadata and validation": {
+			input: "修改文件：config.go；验证失败，需要回滚。", required: []string{"验证失败", "需要回滚"},
+		},
+		"git followed by validation": {
+			input: "已执行 git commit 和 git push，随后 12 项验证全部通过。", required: []string{"12 项验证全部通过"},
+		},
+		"deployment with commit metadata": {
+			input:     "已完成提交、测试服部署和验收。\n功能提交：`94a058f`\n发布记录提交：`65054c0`\n测试服 API 健康检查通过\n回退镜像已保留。",
+			required:  []string{"已完成", "测试服部署和验收", "测试服 API 健康检查通过", "回退镜像已保留"},
+			forbidden: []string{"94a058f", "65054c0"},
+		},
+		"branch metadata inside result": {
+			input:     "代码改造与回归测试完成，完整测试通过。当前改动位于 `fix/report-context-readable-facts`，尚未部署测试服。",
+			required:  []string{"代码改造与回归测试完成", "完整测试通过", "尚未部署测试服"},
+			forbidden: []string{"fix/report-context-readable-facts"},
+		},
+		"pure git": {
+			input: "已执行 git commit 和 git push，提交号为 abc123。", forbidden: []string{"git commit", "abc123"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			text := projectSingleResultText(t, testCase.input)
+			for _, required := range testCase.required {
+				if !strings.Contains(text, required) {
+					t.Fatalf("business fact %q was lost: %s", required, text)
+				}
+			}
+			for _, forbidden := range testCase.forbidden {
+				if strings.Contains(text, forbidden) {
+					t.Fatalf("Git trace %q was retained: %s", forbidden, text)
+				}
+			}
+		})
 	}
 }
 
@@ -1064,6 +1145,29 @@ func TestProjectPayloadRejectsIncompleteFactAndSourceIdentity(t *testing.T) {
 			}
 		})
 	}
+}
+
+func projectSingleResultText(t *testing.T, input string) string {
+	t.Helper()
+	digest := strings.Replace(
+		string(validFrozenDigestV2()), `"text":"same result"`,
+		`"text":`+string(mustJSON(t, input)), 1,
+	)
+	projected, err := projectPayload(Payload{Sessions: []SessionSource{{
+		SelectionID: "selection-1", Mode: reportsource.ReadModeDigestV2,
+		Digest: json.RawMessage(digest),
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projected.WorkEvidence == nil {
+		t.Fatal("work evidence missing")
+	}
+	texts := make([]string, 0, len(projected.WorkEvidence.Facts))
+	for _, fact := range projected.WorkEvidence.Facts {
+		texts = append(texts, fact.Text)
+	}
+	return strings.Join(texts, "\n")
 }
 
 func validFrozenDigestV2() json.RawMessage {

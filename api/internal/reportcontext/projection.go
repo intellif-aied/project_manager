@@ -3,7 +3,6 @@ package reportcontext
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"sort"
 	"strings"
 
@@ -68,13 +67,7 @@ func projectPayloadForRepresentation(payload Payload, representation string) (Pa
 		}
 		projected, err := projectPayload(payload)
 		if err != nil {
-			if !errors.Is(err, ErrIncomplete) {
-				return Payload{}, err
-			}
-			projected = payload
-			if err := removeDuplicateLegacyDigest(&projected); err != nil {
-				return Payload{}, err
-			}
+			return Payload{}, err
 		}
 		projected.PresentationProfile = &profile
 		return projected, nil
@@ -322,7 +315,7 @@ func projectReportFactText(value string) string {
 	if text == "" {
 		return ""
 	}
-	lead := stripGitTraceClauses(stripGitOnlyClauses(compactReportFactLead(text)))
+	lead := stripGitOnlyClauses(projectReportFactBlocks(text))
 	if isPureGitOperation(lead) || isLowInformationReportLead(lead) ||
 		isInternalDelegationResult(lead) || isProcessNarration(lead) {
 		return ""
@@ -330,12 +323,12 @@ func projectReportFactText(value string) string {
 	return lead
 }
 
-func compactReportFactLead(value string) string {
+func projectReportFactBlocks(value string) string {
+	value = projectFencedContent(value)
 	value = expandFlattenedMarkdownHeadings(value)
 	lines := strings.Split(strings.ReplaceAll(value, "\r\n", "\n"), "\n")
 	blocks := make([]string, 0, 4)
 	paragraph := make([]string, 0, 4)
-	inFence := false
 	flush := func() {
 		text := strings.Join(strings.Fields(strings.Join(paragraph, " ")), " ")
 		paragraph = paragraph[:0]
@@ -345,14 +338,6 @@ func compactReportFactLead(value string) string {
 	}
 	for _, rawLine := range lines {
 		line := strings.TrimSpace(rawLine)
-		if strings.HasPrefix(line, "```") || strings.HasPrefix(line, "~~~") {
-			flush()
-			inFence = !inFence
-			continue
-		}
-		if inFence {
-			continue
-		}
 		if line == "" {
 			flush()
 			continue
@@ -388,11 +373,11 @@ func compactReportFactLead(value string) string {
 	flush()
 	selected := make([]string, 0, len(blocks))
 	for _, rawBlock := range blocks {
-		for _, block := range splitFlattenedReportBlocks(removeFlattenedCodeSpans(rawBlock)) {
+		for _, block := range splitFlattenedReportBlocks(rawBlock) {
 			if isLowInformationReportLead(block) {
 				continue
 			}
-			block = stripGitTraceClauses(stripGitOnlyClauses(stripMarkdownLinkTargets(block)))
+			block = stripGitOnlyClauses(stripMarkdownLinkTargets(block))
 			if block == "" || isLowInformationReportLead(block) || isCommandOrPathOnly(block) ||
 				isPureGitOperation(block) || isInternalDelegationResult(block) ||
 				isInstructionAcknowledgement(block) || isProcessNarration(block) ||
@@ -452,13 +437,17 @@ func isReportDetailBlock(value string) bool {
 		"新 head：", "新 head:", "new head:", "base:", "未推送", "not pushed",
 	} {
 		if strings.HasPrefix(lower, prefix) {
-			return true
+			return !containsAnyText(lower,
+				"修复", "实现", "开发", "设计", "部署", "发布", "上线", "回滚",
+				"解决", "定位", "分析", "验证", "测试", "通过", "失败", "风险",
+				"阻塞", "异常", "交付", "完成", "结果",
+			)
 		}
 	}
 	return false
 }
 
-func removeFlattenedCodeSpans(value string) string {
+func projectFencedContent(value string) string {
 	var result strings.Builder
 	for cursor := 0; cursor < len(value); {
 		start, marker := nextCodeFence(value, cursor)
@@ -470,12 +459,13 @@ func removeFlattenedCodeSpans(value string) string {
 		contentStart := start + len(marker)
 		endOffset := strings.Index(value[contentStart:], marker)
 		if endOffset < 0 {
-			// An unmatched marker must not hide the rest of a business result.
+			// An unmatched marker is ambiguous. Preserve everything after it so a
+			// malformed code block cannot hide later business facts.
 			result.WriteString(value[contentStart:])
 			break
 		}
 		contentEnd := contentStart + endOffset
-		if content := flattenedFenceFacts(value[contentStart:contentEnd]); content != "" {
+		if content := reportableFenceContent(value[contentStart:contentEnd]); content != "" {
 			result.WriteByte(' ')
 			result.WriteString(content)
 			result.WriteByte(' ')
@@ -484,10 +474,10 @@ func removeFlattenedCodeSpans(value string) string {
 		}
 		cursor = contentEnd + len(marker)
 	}
-	return strings.Join(strings.Fields(result.String()), " ")
+	return result.String()
 }
 
-func flattenedFenceFacts(value string) string {
+func reportableFenceContent(value string) string {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return ""
@@ -497,6 +487,15 @@ func flattenedFenceFacts(value string) string {
 	if language == "text" || language == "plaintext" || language == "txt" {
 		return strings.TrimSpace(strings.TrimPrefix(value, fields[0]))
 	}
+	if isKnownCodeFenceLanguage(language) {
+		return ""
+	}
+	// Unknown and unlabelled fences are evidence, not code by definition. Keep
+	// them intact rather than guessing their business value.
+	return value
+}
+
+func isKnownCodeFenceLanguage(language string) bool {
 	for _, codeLanguage := range []string{
 		"bash", "sh", "shell", "zsh", "fish", "powershell", "ps1", "cmd", "bat",
 		"go", "golang", "python", "py", "javascript", "js", "typescript", "ts",
@@ -506,12 +505,10 @@ func flattenedFenceFacts(value string) string {
 		"dockerfile", "makefile", "ini", "diff", "patch", "mermaid", "sshconfig", "gitignore",
 	} {
 		if language == codeLanguage {
-			return ""
+			return true
 		}
 	}
-	// A flattened fence without a recognized language is ambiguous. Preserve it
-	// as ordinary text so the transport shape cannot silently remove facts.
-	return value
+	return false
 }
 
 func nextCodeFence(value string, start int) (int, string) {
@@ -586,12 +583,7 @@ func isPureGitOperation(value string) bool {
 	for _, negative := range []string{"未提交", "未推送", "未部署", "未合并", "未变基"} {
 		lower = strings.ReplaceAll(lower, negative, "")
 	}
-	if !containsAnyText(lower,
-		"git add", "git commit", "git push", "git merge", "git rebase",
-		"committed", "commit:", "commit `", "merge commit", "merged", "merge:",
-		"rebase", "cherry-pick", "提交号", "提交：", "提交 `", "worktree", "工作树",
-		"已合入", "合并", "推送", "变基", "pushed", "nothing pushed", "working tree",
-	) {
+	if !containsExplicitGitTrace(lower) {
 		return false
 	}
 	return !containsAnyText(lower,
@@ -666,49 +658,13 @@ func stripInternalDelegationPrefix(value string) string {
 	}
 }
 
-func stripGitTraceClauses(value string) string {
-	text := strings.TrimSpace(value)
-	for _, replacement := range [][2]string{
-		{" commit 和", ""}, {" commit及", ""}, {" commit、", ""},
-		{" Commit 和", ""}, {" Commit及", ""}, {" Commit、", ""},
-	} {
-		text = strings.ReplaceAll(text, replacement[0], replacement[1])
-	}
-	lower := strings.ToLower(text)
-	cut := false
-	for _, marker := range []string{
-		"，当前 head", "；当前 head", ", current head", "; current head",
-		"，新 head", "；新 head", " - 新 worktree", " - worktree", " - 分支：", " - 分支:",
-		" 提交：", " 提交:",
-	} {
-		if index := strings.Index(lower, marker); index >= 0 {
-			text = strings.TrimSpace(text[:index])
-			cut = true
-			break
-		}
-	}
-	if cut {
-		text = strings.TrimRight(text, "，,；;：: ")
-		runes := []rune(text)
-		if len(runes) > 0 && !strings.ContainsRune("。！？!?", runes[len(runes)-1]) {
-			text += "。"
-		}
-	}
-	return strings.TrimSpace(text)
-}
-
 func stripGitOnlyClauses(value string) string {
-	text := strings.TrimSpace(value)
+	text := strings.TrimSpace(stripInlineGitMetadata(value))
 	if text == "" {
 		return ""
 	}
 	lower := strings.ToLower(text)
-	if !containsAnyText(lower,
-		"git add", "git commit", "git push", "git merge", "git rebase",
-		"committed", "commit:", "commit `", "merge commit", "merged", "merge:",
-		"rebase", "cherry-pick", "提交号", "提交：", "提交 `", "worktree", "工作树",
-		"已合入", "合并", "推送", "变基", "pushed", "nothing pushed", "working tree",
-	) {
+	if !containsExplicitGitTrace(lower) {
 		return text
 	}
 	terminal := ""
@@ -734,6 +690,64 @@ func stripGitOnlyClauses(value string) string {
 		result = strings.TrimRight(result, "。！？!?") + terminal
 	}
 	return result
+}
+
+func containsExplicitGitTrace(value string) bool {
+	if containsAnyText(value,
+		"git add", "git commit", "git push", "git merge", "git rebase",
+		"committed", "commit:", "commit `", "merge commit", "merged", "merge:",
+		"rebase", "cherry-pick", "提交号", "commit hash", "worktree", "工作树",
+		"提交并推送", "当前分支", "切换分支", "创建分支", "变基",
+		"当前 head", "新 head", "new head", "pushed", "nothing pushed", "working tree",
+	) {
+		return true
+	}
+	if strings.Contains(value, "推送") && containsAnyText(value, "分支", "origin", "远端", "代码仓库") {
+		return true
+	}
+	return strings.Contains(value, "合并") && containsAnyText(value, "分支", " main", " master")
+}
+
+func stripInlineGitMetadata(value string) string {
+	hasReleaseGitMetadata := containsAnyText(strings.ToLower(value),
+		"功能提交 `", "功能提交：`", "功能提交:`",
+		"发布记录提交 `", "发布记录提交：`", "发布记录提交:`",
+		"源码提交 `", "源码提交：`", "源码提交:`",
+	)
+	for _, replacement := range [][2]string{
+		{" commit 和", ""}, {" commit及", ""}, {" commit、", ""},
+		{" Commit 和", ""}, {" Commit及", ""}, {" Commit、", ""},
+	} {
+		value = strings.ReplaceAll(value, replacement[0], replacement[1])
+	}
+	for _, marker := range []string{
+		" 提交：`", " 提交:`", " 当前 head：`", " 当前 head:`",
+		" 新 head：`", " 新 head:`", " current head: `", " new head: `",
+		"功能提交 `", "发布记录提交 `", "源码提交 `", "提交号 `",
+		"功能提交：`", "功能提交:`", "发布记录提交：`", "发布记录提交:`",
+		"源码提交：`", "源码提交:`", "提交号：`", "提交号:`",
+		"在同一分支 `", "当前分支 `", "当前改动位于 `",
+	} {
+		for {
+			lower := strings.ToLower(value)
+			start := strings.Index(lower, marker)
+			if start < 0 {
+				break
+			}
+			contentStart := start + len(marker)
+			endOffset := strings.Index(value[contentStart:], "`")
+			if endOffset < 0 {
+				break
+			}
+			suffix := strings.TrimLeft(value[contentStart+endOffset+1:], " \t、，,；;")
+			value = value[:start] + suffix
+		}
+	}
+	if hasReleaseGitMetadata {
+		value = strings.ReplaceAll(value, "已完成提交、", "已完成")
+		value = strings.ReplaceAll(value, "完成提交、", "完成")
+	}
+	return strings.TrimSpace(value)
 }
 
 func isInstructionAcknowledgement(value string) bool {
