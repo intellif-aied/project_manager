@@ -139,9 +139,7 @@ func (s *ManagedAgentRunStatusSyncer) refreshRun(ctx context.Context, run manage
 	errMsg := ""
 	if status == "failed" && strings.TrimSpace(task.Error) != "" {
 		if run.isReportAgentRun() {
-			if strings.EqualFold(strings.TrimSpace(task.Error), managedInfrastructureFailure) {
-				log.Printf("managed agent report run %s upstream failure: %s", run.ID, task.Error)
-			}
+			log.Printf("managed agent report run %s upstream failure: %s", run.ID, task.Error)
 			status, errMsg = normalizeManagedAgentFailure(task)
 		} else {
 			errMsg = task.Error
@@ -168,7 +166,7 @@ func normalizeManagedAgentFailure(task *ManagedTaskStatus) (string, string) {
 	}
 	errorMessage := strings.TrimSpace(task.Error)
 	if !strings.EqualFold(errorMessage, managedInfrastructureFailure) {
-		return "failed", errorMessage
+		return "failed", reportAgentFailureErrorMessage
 	}
 	if task.StartedAt > 0 && task.FinishedAt >= task.StartedAt &&
 		time.Duration(task.FinishedAt-task.StartedAt)*time.Second >= ManagedAgentInfrastructureTimeout {
@@ -217,6 +215,11 @@ func (s *ManagedAgentRunStatusSyncer) isTimedOut(run managedAgentRunStatusRow, n
 }
 
 func (s *ManagedAgentRunStatusSyncer) updateRunStatus(ctx context.Context, run managedAgentRunStatusRow, task *ManagedTaskStatus, status string, errorMessage string, now time.Time) error {
+	reportWritebackMissing := run.isReportAgentRun() && status == "failed" && errorMessage == reportWritebackMissingErrorMessage
+	if reportWritebackMissing {
+		log.Printf("managed agent report run %s upstream failure: %s", run.ID, reportWritebackMissingErrorMessage)
+		errorMessage = reportAgentFailureErrorMessage
+	}
 	output := map[string]any{
 		"task_id":   run.ExternalTaskID,
 		"status":    status,
@@ -280,7 +283,7 @@ func (s *ManagedAgentRunStatusSyncer) updateRunStatus(ctx context.Context, run m
 				errorCode = "AGENT_EXECUTION_TIMEOUT"
 			case "failed":
 				errorCode = "AGENT_EXECUTION_FAILED"
-				if errorMessage == reportWritebackMissingErrorMessage {
+				if reportWritebackMissing {
 					errorCode = "REPORT_WRITEBACK_MISSING"
 				}
 			}
