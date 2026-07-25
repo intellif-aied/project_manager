@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"io"
 	"net/http"
 	"regexp"
@@ -38,6 +39,11 @@ func (h *ReportImageHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxReportImageSize+(1<<20))
 	file, header, err := r.FormFile("file")
 	if err != nil {
+		var maxBytesError *http.MaxBytesError
+		if errors.As(err, &maxBytesError) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "图片不能超过 5MB"})
+			return
+		}
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请选择要上传的图片"})
 		return
 	}

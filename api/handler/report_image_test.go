@@ -80,3 +80,21 @@ func TestReportImageUploadRejectsFilesOverFiveMegabytes(t *testing.T) {
 		t.Fatalf("response=%s", recorder.Body.String())
 	}
 }
+
+func TestReportImageUploadReportsFriendlyErrorWhenRequestExceedsReaderLimit(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	largePNG := append(
+		[]byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'},
+		bytes.Repeat([]byte{0}, int(maxReportImageSize+(2<<20)))...,
+	)
+	NewReportImageHandler(&reportImageMemoryStore{}).Upload(
+		recorder,
+		reportImageUploadRequest(t, "very-large.png", largePNG),
+	)
+	if recorder.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "5MB") {
+		t.Fatalf("response=%s", recorder.Body.String())
+	}
+}
