@@ -151,4 +151,101 @@ func TestEnsureDigestLocksSessionBeforeDigestRevision(t *testing.T) {
 	if jobs != 1 {
 		t.Fatalf("Digest jobs = %d, want 1", jobs)
 	}
+
+	if _, err := database.ExecContext(ctx, `
+		DELETE FROM session_processing_jobs j
+		USING session_slice_digest_revisions d
+		WHERE j.target_digest_revision_id = d.id
+			AND d.session_content_slice_id = $1
+			AND d.content_projection_revision_id = $2`, sliceID, projectionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, `
+		DELETE FROM session_slice_digest_revisions
+		WHERE session_content_slice_id = $1 AND content_projection_revision_id = $2`,
+		sliceID, projectionID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, `
+		UPDATE session_sources
+		SET active_generation_id = $2, active_content_projection_revision_id = $3
+		WHERE id = $1`, sourceID, generationID, projectionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, `
+		UPDATE session_content_projection_revisions
+		SET content_indexed_cursor = 1 WHERE id = $1`, projectionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, `
+		UPDATE sessions SET content_status = 'available' WHERE id = $1`, sessionID); err != nil {
+		t.Fatal(err)
+	}
+
+	reconcilerBlocker, err := database.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reconcilerBlocker.Rollback()
+	if err := sessionsync.LockSessionForUpdate(ctx, reconcilerBlocker, sessionID); err != nil {
+		t.Fatal(err)
+	}
+	reconciler, err := NewReconciler(database, DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	type reconcileOutcome struct {
+		created int
+		err     error
+	}
+	reconcileOutcomes := make(chan reconcileOutcome, 1)
+	go func() {
+		created, reconcileErr := reconciler.RunOnce(ctx)
+		reconcileOutcomes <- reconcileOutcome{created: created, err: reconcileErr}
+	}()
+
+	deadline = time.Now().Add(5 * time.Second)
+	for {
+		var waiting int
+		if err := database.QueryRowContext(ctx, `
+			SELECT count(*) FROM pg_stat_activity
+			WHERE wait_event_type = 'Lock'
+				AND query LIKE '%SELECT id FROM sessions%FOR UPDATE%'`,
+		).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Digest Reconciler did not wait on the Session lock")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if err := database.QueryRowContext(ctx, `
+		SELECT count(*) FROM session_slice_digest_revisions
+		WHERE session_content_slice_id = $1 AND content_projection_revision_id = $2`,
+		sliceID, projectionID,
+	).Scan(&revisions); err != nil {
+		t.Fatal(err)
+	}
+	if revisions != 0 {
+		t.Fatalf("Reconciler created a Digest Revision before the Session lock: %d", revisions)
+	}
+	if err := reconcilerBlocker.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case outcome := <-reconcileOutcomes:
+		if outcome.err != nil {
+			t.Fatal(outcome.err)
+		}
+		if outcome.created != 1 {
+			t.Fatalf("Reconciler created %d jobs, want 1", outcome.created)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Digest Reconciler did not finish after the Session lock was released")
+	}
 }

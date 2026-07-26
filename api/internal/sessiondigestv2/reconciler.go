@@ -5,7 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"log"
+	"sort"
 	"time"
+
+	"github.com/aidashboard/api/internal/sessionsync"
 )
 
 // Reconciler discovers fully indexed immutable slices after upload and content
@@ -105,6 +108,21 @@ func (r *Reconciler) RunOnce(ctx context.Context) (int, error) {
 	}
 	if err := rows.Close(); err != nil {
 		return 0, err
+	}
+	sessionIDs := make([]string, 0, len(candidates))
+	seenSessions := make(map[string]struct{}, len(candidates))
+	for _, item := range candidates {
+		if _, exists := seenSessions[item.sessionID]; exists {
+			continue
+		}
+		seenSessions[item.sessionID] = struct{}{}
+		sessionIDs = append(sessionIDs, item.sessionID)
+	}
+	sort.Strings(sessionIDs)
+	for _, sessionID := range sessionIDs {
+		if err := sessionsync.LockSessionForUpdate(ctx, tx, sessionID); err != nil {
+			return 0, err
+		}
 	}
 
 	created := 0
