@@ -239,6 +239,30 @@ func (c *Compactor) finalize(ctx context.Context, options Options) error {
 	if state.Phase != "swapped" {
 		return fmt.Errorf("finalize requires swapped phase, current phase is %s", state.Phase)
 	}
+	if state.SourceTable != SourceTable || state.ShadowTable != ShadowTable || state.ArchiveTable != ArchiveTable {
+		return fmt.Errorf(
+			"finalize table identity mismatch: source=%s shadow=%s archive=%s",
+			state.SourceTable, state.ShadowTable, state.ArchiveTable,
+		)
+	}
+	archiveExists, err := c.tableExists(ctx, tx, ArchiveTable)
+	if err != nil {
+		return err
+	}
+	if !archiveExists {
+		return errors.New("finalize requires the archive table")
+	}
+	var sourceHasPayload bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_schema = 'public' AND table_name = $1 AND column_name = 'content_payload'
+		)`, SourceTable).Scan(&sourceHasPayload); err != nil {
+		return err
+	}
+	if sourceHasPayload {
+		return errors.New("finalize requires the current table without content_payload")
+	}
 	if _, err := tx.ExecContext(ctx, `
 		LOCK TABLE "session_content_events", "session_content_events_payload_archive"
 		IN ACCESS EXCLUSIVE MODE`); err != nil {
@@ -252,22 +276,8 @@ func (c *Compactor) finalize(ctx context.Context, options Options) error {
 	if err != nil {
 		return err
 	}
-	if !archiveTriggerExists || !currentTriggerExists {
-		return errors.New("finalize requires both rollback-window mirror triggers")
-	}
-	report := Report{}
-	if err := c.populateDeepVerification(ctx, tx, &report, ArchiveTable, SourceTable); err != nil {
-		return err
-	}
-	if report.MissingRows != 0 || report.ExtraRows != 0 || report.MismatchedRows != 0 {
-		return fmt.Errorf("rollback-window tables differ: missing=%d extra=%d mismatch=%d",
-			report.MissingRows, report.ExtraRows, report.MismatchedRows)
-	}
-	if err := c.dropMirrorTriggerTx(ctx, tx, ArchiveTable); err != nil {
-		return err
-	}
-	if err := c.dropNamedMirrorTriggerTx(ctx, tx, SourceTable, RollbackMirrorTrigger); err != nil {
-		return err
+	if archiveTriggerExists || currentTriggerExists {
+		return errors.New("finalize requires rollback-window mirror triggers to be removed")
 	}
 	if _, err := tx.ExecContext(ctx, `
 		DROP TABLE "session_content_events_payload_archive";

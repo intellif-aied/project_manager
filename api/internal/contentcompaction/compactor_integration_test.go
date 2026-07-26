@@ -319,6 +319,29 @@ func TestCompactorBoundedCopyMirrorCutoverRollbackAndFinalizeIntegration(t *test
 	}); err == nil {
 		t.Fatal("finalize accepted an incorrect archive confirmation")
 	}
+	if _, err := compactor.Run(ctx, Options{
+		Action: ActionFinalize, Apply: true, ConfirmDrop: ArchiveTable,
+	}); err == nil || !strings.Contains(err.Error(), "mirror triggers to be removed") {
+		t.Fatalf("finalize with rollback triggers error=%v", err)
+	}
+	if _, err := database.Exec(`
+		DROP TRIGGER IF EXISTS trg_mirror_session_content_events_compaction
+			ON session_content_events_payload_archive;
+		DROP TRIGGER IF EXISTS trg_mirror_session_content_events_rollback
+			ON session_content_events`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`ALTER TABLE session_content_events ADD COLUMN content_payload jsonb`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := compactor.Run(ctx, Options{
+		Action: ActionFinalize, Apply: true, ConfirmDrop: ArchiveTable,
+	}); err == nil || !strings.Contains(err.Error(), "without content_payload") {
+		t.Fatalf("finalize with current payload column error=%v", err)
+	}
+	if _, err := database.Exec(`ALTER TABLE session_content_events DROP COLUMN content_payload`); err != nil {
+		t.Fatal(err)
+	}
 	finalized, err := compactor.Run(ctx, Options{
 		Action: ActionFinalize, Apply: true, ConfirmDrop: ArchiveTable,
 	})
