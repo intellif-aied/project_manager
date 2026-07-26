@@ -58,7 +58,7 @@ import {
   claimExpiredSnapshotRefresh,
   getTokenAnalyticsPreset,
   getTokenAnalyticsPresetRange,
-  shouldRetryTokenAnalyticsSnapshotQuery
+  tokenAnalyticsSnapshotChildQueryOptions
 } from "../tokenAnalyticsView";
 import type {
   TokenAnalyticsDatePreset,
@@ -345,7 +345,7 @@ export function TokenAnalyticsPage({
     queryFn: () =>
       fetchTokenAnalyticsTrends({ ...overviewFilters, query_snapshot_token: snapshotToken! }),
     enabled: Boolean(snapshotToken),
-    retry: shouldRetryTokenAnalyticsSnapshotQuery
+    ...tokenAnalyticsSnapshotChildQueryOptions
   });
   const rankingsQuery = useQuery({
     queryKey: ["token-analytics-rankings", snapshotToken, rankingGroup],
@@ -356,7 +356,7 @@ export function TokenAnalyticsPage({
         group_by: rankingGroup
       }),
     enabled: Boolean(snapshotToken),
-    retry: shouldRetryTokenAnalyticsSnapshotQuery
+    ...tokenAnalyticsSnapshotChildQueryOptions
   });
   const modelRankingsQuery = useQuery({
     queryKey: ["token-analytics-model-rankings", snapshotToken],
@@ -367,7 +367,7 @@ export function TokenAnalyticsPage({
         group_by: "model"
       }),
     enabled: !isPersonalView && Boolean(snapshotToken),
-    retry: shouldRetryTokenAnalyticsSnapshotQuery
+    ...tokenAnalyticsSnapshotChildQueryOptions
   });
   const peopleRankingsQuery = useQuery({
     queryKey: ["token-analytics-people-rankings", snapshotToken],
@@ -378,7 +378,7 @@ export function TokenAnalyticsPage({
         group_by: "user"
       }),
     enabled: scope === "management" && !isMemberDetail && Boolean(snapshotToken),
-    retry: shouldRetryTokenAnalyticsSnapshotQuery
+    ...tokenAnalyticsSnapshotChildQueryOptions
   });
   const teamOptionsQuery = useQuery({
     queryKey: ["token-analytics-team-options", scopeSnapshotToken],
@@ -389,7 +389,7 @@ export function TokenAnalyticsPage({
         group_by: "team"
       }),
     enabled: canFilterByTeam && Boolean(scopeSnapshotToken),
-    retry: shouldRetryTokenAnalyticsSnapshotQuery
+    ...tokenAnalyticsSnapshotChildQueryOptions
   });
   const overviewSessionsQuery = useQuery({
     queryKey: ["token-analytics-overview-sessions", snapshotToken],
@@ -401,7 +401,7 @@ export function TokenAnalyticsPage({
         page_size: "1"
       }),
     enabled: isPersonalView && Boolean(snapshotToken),
-    retry: shouldRetryTokenAnalyticsSnapshotQuery
+    ...tokenAnalyticsSnapshotChildQueryOptions
   });
   const sessionsQuery = useQuery({
     queryKey: ["token-analytics-sessions", sessionSnapshotToken, page, pageSize],
@@ -414,7 +414,7 @@ export function TokenAnalyticsPage({
       }),
     enabled: isPersonalView && Boolean(sessionSnapshotToken),
     placeholderData: (previous) => previous,
-    retry: shouldRetryTokenAnalyticsSnapshotQuery
+    ...tokenAnalyticsSnapshotChildQueryOptions
   });
 
   const refreshExpiredSnapshot = useCallback(

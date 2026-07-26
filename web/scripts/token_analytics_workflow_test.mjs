@@ -10,6 +10,8 @@ const root = process.cwd();
 const viewPath = resolve(root, "src/features/aidashboard/tokens/tokenAnalyticsView.ts");
 const pagePath = resolve(root, "src/features/aidashboard/tokens/pages/TokenAnalyticsPage.tsx");
 const apiTypesPath = resolve(root, "src/features/aidashboard/api/types.ts");
+const apiClientPath = resolve(root, "src/features/aidashboard/api/client.ts");
+const httpClientPath = resolve(root, "src/shared/request/httpClient.ts");
 const memberPagePath = resolve(
   root,
   "src/features/aidashboard/tokens/pages/TokenMemberAnalyticsPage.tsx"
@@ -22,6 +24,8 @@ const pageCssPath = resolve(
 const viewSource = readFileSync(viewPath, "utf8");
 const pageSource = readFileSync(pagePath, "utf8");
 const apiTypesSource = readFileSync(apiTypesPath, "utf8");
+const apiClientSource = readFileSync(apiClientPath, "utf8");
+const httpClientSource = readFileSync(httpClientPath, "utf8");
 const memberPageSource = readFileSync(memberPagePath, "utf8");
 const pageCssSource = readFileSync(pageCssPath, "utf8");
 
@@ -39,7 +43,8 @@ const {
   getTokenAnalyticsPreset,
   getTokenAnalyticsPresetRange,
   isTokenAnalyticsDateRange,
-  shouldRetryTokenAnalyticsSnapshotQuery
+  shouldRetryTokenAnalyticsSnapshotQuery,
+  tokenAnalyticsSnapshotChildQueryOptions
 } = await import(tempModuleUrl);
 
 const claimedSnapshotRefreshes = new Set();
@@ -73,6 +78,19 @@ assert.equal(
   shouldRetryTokenAnalyticsSnapshotQuery(0, new Error("network error")),
   true,
   "ordinary transient failures should keep the existing retry policy"
+);
+assert.deepEqual(
+  {
+    refetchOnMount: tokenAnalyticsSnapshotChildQueryOptions.refetchOnMount,
+    refetchOnReconnect: tokenAnalyticsSnapshotChildQueryOptions.refetchOnReconnect,
+    refetchOnWindowFocus: tokenAnalyticsSnapshotChildQueryOptions.refetchOnWindowFocus
+  },
+  {
+    refetchOnMount: false,
+    refetchOnReconnect: false,
+    refetchOnWindowFocus: false
+  },
+  "snapshot child queries must wait for Summary to refresh instead of racing with an old token"
 );
 
 assert.deepEqual(
@@ -142,6 +160,21 @@ assert.match(
   pageSource,
   /refreshExpiredSnapshot\(\s*sessionSnapshotToken,[\s\S]*sessionSummaryQuery\.refetch/,
   "filtered Session failures should rebuild the filtered Summary snapshot"
+);
+assert.equal(
+  (pageSource.match(/\.\.\.tokenAnalyticsSnapshotChildQueryOptions/g) ?? []).length,
+  7,
+  "every snapshot child query should use the non-racing refresh policy"
+);
+assert.match(
+  apiClientSource,
+  /silentErrorCodes:\s*\["QUERY_SNAPSHOT_EXPIRED"\]/,
+  "expired snapshot recovery must not expose its internal 410 as a user-facing error"
+);
+assert.match(
+  httpClientSource,
+  /silentErrorCodes\?\.includes\(payloadCode\)/,
+  "the request client should suppress only explicitly declared business error codes"
 );
 assert.ok(
   (pageSource.match(/onDateRangeChange=\{setDateRange\}/g) ?? []).length === 1,

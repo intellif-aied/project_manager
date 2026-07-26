@@ -44,6 +44,13 @@ export function shouldRetryTokenAnalyticsSnapshotQuery(failureCount: number, err
   return !isQuerySnapshotExpired(error) && failureCount < 3;
 }
 
+export const tokenAnalyticsSnapshotChildQueryOptions = {
+  retry: shouldRetryTokenAnalyticsSnapshotQuery,
+  refetchOnMount: false,
+  refetchOnReconnect: false,
+  refetchOnWindowFocus: false
+} as const;
+
 function shiftDateKey(value: string, days: number) {
   const date = new Date(`${value}T00:00:00Z`);
   date.setUTCDate(date.getUTCDate() + days);

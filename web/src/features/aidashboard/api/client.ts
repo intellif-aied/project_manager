@@ -970,13 +970,18 @@ export const fetchTokenAnalyticsCapability = () =>
 export const fetchTokenAnalyticsSummary = (params: TokenAnalyticsFilters) =>
   unwrap(api.get<TokenAnalyticsSummary>("/token-analytics/summary", params));
 
+const tokenAnalyticsSnapshotRequestOptions = {
+  silentErrorCodes: ["QUERY_SNAPSHOT_EXPIRED"]
+} as const;
+
 export const fetchTokenAnalyticsTrends = (
   params: TokenAnalyticsFilters & { query_snapshot_token: string }
 ) =>
   unwrap(
     api.get<{ query_snapshot_token: string; items: TokenAnalyticsTrendPoint[] }>(
       "/token-analytics/trends",
-      params
+      params,
+      tokenAnalyticsSnapshotRequestOptions
     )
   );
 
@@ -991,7 +996,7 @@ export const fetchTokenAnalyticsRankings = (
       query_snapshot_token: string;
       group_by: string;
       items: TokenAnalyticsRankingItem[];
-    }>("/token-analytics/rankings", params)
+    }>("/token-analytics/rankings", params, tokenAnalyticsSnapshotRequestOptions)
   );
 
 export const fetchTokenAnalyticsSessions = (
@@ -1009,7 +1014,7 @@ export const fetchTokenAnalyticsSessions = (
       total: number;
       page: number;
       page_size: number;
-    }>("/token-analytics/sessions", params)
+    }>("/token-analytics/sessions", params, tokenAnalyticsSnapshotRequestOptions)
   );
 
 export const fetchPriceBooks = () => unwrap(api.get<PriceBook[]>("/admin/price-books"));

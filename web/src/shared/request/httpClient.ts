@@ -78,14 +78,24 @@ function normalizeApiResponse<T>(payload: unknown): ApiResponse<T> {
   return { code: 0, msg: "", data: payload as T };
 }
 
-function handleHttpError(error: AxiosError, skipErrorHandler?: boolean) {
+function handleHttpError(
+  error: AxiosError,
+  skipErrorHandler?: boolean,
+  silentErrorCodes?: readonly string[]
+) {
   const status = error.response?.status;
   const payload = error.response?.data;
   const message = getPayloadMessage(payload) ?? getErrorMessage(error);
+  const payloadCode =
+    payload && typeof payload === "object" && typeof (payload as { code?: unknown }).code === "string"
+      ? (payload as { code: string }).code
+      : undefined;
+  const suppressErrorFeedback =
+    Boolean(skipErrorHandler) || Boolean(payloadCode && silentErrorCodes?.includes(payloadCode));
 
   if (status === 401) {
     clearAuthSession();
-    if (!skipErrorHandler) {
+    if (!suppressErrorFeedback) {
       feedback.message()?.warning("登录已失效，请重新登录");
     }
     if (window.location.pathname !== "/login") {
@@ -97,13 +107,13 @@ function handleHttpError(error: AxiosError, skipErrorHandler?: boolean) {
 
   if (status === 403) {
     const forbiddenMessage = getPayloadMessage(payload) ?? "暂无访问权限";
-    if (!skipErrorHandler) {
+    if (!suppressErrorFeedback) {
       feedback.message()?.error(forbiddenMessage);
     }
     throw new HttpError(forbiddenMessage, { status, payload });
   }
 
-  if (!skipErrorHandler) {
+  if (!suppressErrorFeedback) {
     if (status && status >= 500) {
       feedback.message()?.error("服务异常，请稍后重试");
     } else if (error.code === "ECONNABORTED") {
@@ -119,7 +129,7 @@ function handleHttpError(error: AxiosError, skipErrorHandler?: boolean) {
 export async function request<T>(
   config: AxiosRequestConfig & RequestOptions
 ): Promise<ApiResponse<T>> {
-  const { skipErrorHandler, ...axiosConfig } = config;
+  const { skipErrorHandler, silentErrorCodes, ...axiosConfig } = config;
 
   try {
     const response = await httpClient.request<unknown>(axiosConfig);
@@ -135,7 +145,7 @@ export async function request<T>(
     return payload;
   } catch (error) {
     if (axios.isAxiosError(error)) {
-      handleHttpError(error, skipErrorHandler);
+      handleHttpError(error, skipErrorHandler, silentErrorCodes);
     }
     throw error;
   }

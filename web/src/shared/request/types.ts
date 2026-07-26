@@ -6,6 +6,7 @@ export interface ApiResponse<T> {
 
 export interface RequestOptions {
   skipErrorHandler?: boolean;
+  silentErrorCodes?: readonly string[];
 }
 
 export class HttpError extends Error {
