@@ -135,6 +135,9 @@ func (p *Processor) processChunk(ctx context.Context, job sessionsync.Processing
 		return err
 	}
 	defer tx.Rollback()
+	if err := sessionsync.LockSessionForUpdate(ctx, tx, chunk.SessionID); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "usage-revision:"+chunk.GenerationID); err != nil {
 		return err
 	}
@@ -857,6 +860,9 @@ func (p *Processor) processActivation(ctx context.Context, job sessionsync.Proce
 		return err
 	}
 	defer tx.Rollback()
+	if err := sessionsync.LockSessionForUpdate(ctx, tx, job.SessionID); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "usage-revision:"+job.GenerationID.String); err != nil {
 		return err
 	}

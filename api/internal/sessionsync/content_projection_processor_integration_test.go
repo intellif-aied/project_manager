@@ -28,6 +28,10 @@ func TestContentProjectionProcessorOrdersAndActivatesIntegration(t *testing.T) {
 	userID := int64(990014)
 	fixture := createProjectionFixture(t, database, userID, "projection-order")
 	defer cleanupSyncIntegrationUser(t, database, userID)
+	previousUploadAt := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	if _, err := database.Exec(`UPDATE sessions SET uploaded_at = $2 WHERE id = $1`, fixture.sessionID, previousUploadAt); err != nil {
+		t.Fatal(err)
+	}
 	processor, err := NewContentProjectionProcessor(database, fixture.store)
 	if err != nil {
 		t.Fatal(err)
@@ -60,12 +64,26 @@ func TestContentProjectionProcessorOrdersAndActivatesIntegration(t *testing.T) {
 		t.Fatalf("status=%s cursor=%d eventCount=%d rows=%d", status, cursor, eventCount, rows)
 	}
 	var contentStatus string
+	var uploadedAt time.Time
 	if err := database.QueryRow(`
-		SELECT content_status FROM sessions WHERE id = $1`, fixture.sessionID).Scan(&contentStatus); err != nil {
+		SELECT content_status, uploaded_at FROM sessions WHERE id = $1`, fixture.sessionID).Scan(&contentStatus, &uploadedAt); err != nil {
 		t.Fatal(err)
 	}
 	if contentStatus != string(ContentAvailable) {
 		t.Fatalf("content_status=%s want=%s", contentStatus, ContentAvailable)
+	}
+	if !uploadedAt.After(previousUploadAt) {
+		t.Fatalf("uploaded_at=%s must be after previous value %s", uploadedAt, previousUploadAt)
+	}
+	if err := processor.Process(context.Background(), fixture.activationJob); err != nil {
+		t.Fatalf("duplicate activation: %v", err)
+	}
+	var duplicateUploadedAt time.Time
+	if err := database.QueryRow(`SELECT uploaded_at FROM sessions WHERE id = $1`, fixture.sessionID).Scan(&duplicateUploadedAt); err != nil {
+		t.Fatal(err)
+	}
+	if !duplicateUploadedAt.Equal(uploadedAt) {
+		t.Fatalf("duplicate activation changed uploaded_at from %s to %s", uploadedAt, duplicateUploadedAt)
 	}
 	var catalogStatus, catalogSummary string
 	var catalogEvents int64
@@ -100,6 +118,60 @@ func TestContentProjectionProcessorOrdersAndActivatesIntegration(t *testing.T) {
 	if summary != "before\uFFFDafter" || !payloadIsNull || !eventMatchesChunkHash {
 		t.Fatalf("summary=%q payload_null=%v hash_matches_chunk=%v",
 			summary, payloadIsNull, eventMatchesChunkHash)
+	}
+
+	previousIncrementalUploadAt := time.Date(2026, 7, 2, 0, 0, 0, 0, time.UTC)
+	if _, err := database.Exec(`UPDATE sessions SET uploaded_at = $2 WHERE id = $1`, fixture.sessionID, previousIncrementalUploadAt); err != nil {
+		t.Fatal(err)
+	}
+	incrementalContent := []byte("{\"type\":\"assistant\",\"timestamp\":\"2026-07-14T01:02:00Z\"}\n")
+	incrementalStart := fixture.endCursor
+	incrementalEnd := incrementalStart + int64(len(incrementalContent))
+	incrementalObjectKey := fmt.Sprintf("fixture/%s/incremental", fixture.activationJob.GenerationID.String)
+	fixture.store[incrementalObjectKey] = incrementalContent
+	var incrementalChunkID string
+	if err := database.QueryRow(`
+		INSERT INTO session_upload_chunks (
+			generation_id, start_cursor, end_cursor, start_line, end_line,
+			content_sha256, content_epoch, event_start_at, event_end_at,
+			raw_object_key, object_status
+		) VALUES ($1, $2, $3, 3, 3, $4, 0, $5, $5, $6, 'available')
+		RETURNING id`, fixture.activationJob.GenerationID.String, incrementalStart, incrementalEnd,
+		HashBytes(incrementalContent), time.Date(2026, 7, 14, 1, 2, 0, 0, time.UTC), incrementalObjectKey,
+	).Scan(&incrementalChunkID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`
+		UPDATE session_source_generations SET expected_cursor = $2 WHERE id = $1`,
+		fixture.activationJob.GenerationID.String, incrementalEnd); err != nil {
+		t.Fatal(err)
+	}
+	incrementalJob := ProcessingJob{
+		Type: JobIndexContentChunk, SessionID: fixture.sessionID,
+		GenerationID:     fixture.activationJob.GenerationID,
+		ChunkID:          sql.NullString{String: incrementalChunkID, Valid: true},
+		TargetRevisionID: fixture.activationJob.TargetRevisionID,
+		ContentEpoch:     fixture.activationJob.ContentEpoch,
+	}
+	if err := processor.Process(context.Background(), incrementalJob); err != nil {
+		t.Fatalf("process active revision append: %v", err)
+	}
+	var incrementalUploadedAt time.Time
+	if err := database.QueryRow(`SELECT uploaded_at FROM sessions WHERE id = $1`, fixture.sessionID).Scan(&incrementalUploadedAt); err != nil {
+		t.Fatal(err)
+	}
+	if !incrementalUploadedAt.After(previousIncrementalUploadAt) {
+		t.Fatalf("incremental uploaded_at=%s must be after previous value %s", incrementalUploadedAt, previousIncrementalUploadAt)
+	}
+	if err := processor.Process(context.Background(), incrementalJob); err != nil {
+		t.Fatalf("duplicate active revision append: %v", err)
+	}
+	var duplicateIncrementalUploadedAt time.Time
+	if err := database.QueryRow(`SELECT uploaded_at FROM sessions WHERE id = $1`, fixture.sessionID).Scan(&duplicateIncrementalUploadedAt); err != nil {
+		t.Fatal(err)
+	}
+	if !duplicateIncrementalUploadedAt.Equal(incrementalUploadedAt) {
+		t.Fatalf("duplicate active append changed uploaded_at from %s to %s", incrementalUploadedAt, duplicateIncrementalUploadedAt)
 	}
 }
 

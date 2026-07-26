@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"sync"
 	"testing"
@@ -116,6 +117,100 @@ func TestProcessorCodexCumulativeAcrossChunksIntegration(t *testing.T) {
 	}
 	if busy, err := ContributionBackfillForegroundBusy(context.Background(), database); err != nil || !busy {
 		t.Fatalf("backfill queue pressure busy=%t err=%v", busy, err)
+	}
+}
+
+func TestProcessorLocksSessionBeforeUsageRevisionIntegration(t *testing.T) {
+	database := openUsageIntegrationDatabase(t)
+	fixture := newUsageFixture(t, database, 990040, "usage-session-lock-order", "claude-code")
+	defer fixture.cleanup(t)
+	fixture.appendChunk(t, readUsageFixture(t, "claude_monotonic.jsonl"))
+
+	processorURL, err := url.Parse(os.Getenv("AIDA_TEST_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := processorURL.Query()
+	query.Set("application_name", "usage-session-lock-order-test")
+	processorURL.RawQuery = query.Encode()
+	processorDatabase, err := projectdb.Connect(processorURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer processorDatabase.Close()
+	processorDatabase.SetMaxOpenConns(1)
+
+	blocker, err := database.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Rollback()
+	var lockedSessionID string
+	if err := blocker.QueryRow(`SELECT id FROM sessions WHERE id = $1 FOR UPDATE`, fixture.sessionID).Scan(&lockedSessionID); err != nil {
+		t.Fatal(err)
+	}
+
+	processor, err := NewProcessor(processorDatabase, fixture.store, "5m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		result <- processor.Process(context.Background(), fixture.jobs[0])
+	}()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		select {
+		case processErr := <-result:
+			t.Fatalf("processor returned before waiting for the session lock: %v", processErr)
+		default:
+		}
+		var waiting bool
+		if err := database.QueryRow(`
+			SELECT EXISTS (
+				SELECT 1 FROM pg_stat_activity
+				WHERE application_name = 'usage-session-lock-order-test'
+					AND wait_event_type = 'Lock'
+			)`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("processor did not wait for the locked session")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	probe, err := database.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var revisionLockAvailable bool
+	if err := probe.QueryRow(
+		`SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0))`,
+		"usage-revision:"+fixture.generationID,
+	).Scan(&revisionLockAvailable); err != nil {
+		_ = probe.Rollback()
+		t.Fatal(err)
+	}
+	_ = probe.Rollback()
+	if !revisionLockAvailable {
+		t.Fatal("usage revision lock was acquired before the session lock")
+	}
+
+	if err := blocker.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case processErr := <-result:
+		if processErr != nil {
+			t.Fatal(processErr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("processor did not finish after the session lock was released")
 	}
 }
 

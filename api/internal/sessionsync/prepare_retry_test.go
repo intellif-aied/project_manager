@@ -9,9 +9,9 @@ import (
 	"github.com/lib/pq"
 )
 
-func TestRetryPrepareAfterDeadlockSucceeds(t *testing.T) {
+func TestRetryPostgresConflictSucceedsAfterDeadlocks(t *testing.T) {
 	attempts := 0
-	result, err := retryPrepareAfterDeadlockWithDelays(context.Background(), func() ([]PrepareSourceResponse, error) {
+	result, err := retryPostgresConflictWithDelays(context.Background(), func() ([]PrepareSourceResponse, error) {
 		attempts++
 		if attempts < 3 {
 			return nil, &pq.Error{Code: "40P01"}
@@ -23,10 +23,24 @@ func TestRetryPrepareAfterDeadlockSucceeds(t *testing.T) {
 	}
 }
 
-func TestRetryPrepareAfterDeadlockDoesNotRetryOtherErrors(t *testing.T) {
+func TestRetryPostgresConflictSucceedsAfterSerializationFailures(t *testing.T) {
+	attempts := 0
+	result, err := retryPostgresConflictWithDelays(context.Background(), func() ([]PrepareSourceResponse, error) {
+		attempts++
+		if attempts < 3 {
+			return nil, &pq.Error{Code: "40001"}
+		}
+		return []PrepareSourceResponse{{SessionRef: "session-1"}}, nil
+	}, []time.Duration{0, 0})
+	if err != nil || attempts != 3 || len(result) != 1 || result[0].SessionRef != "session-1" {
+		t.Fatalf("attempts=%d result=%+v err=%v", attempts, result, err)
+	}
+}
+
+func TestRetryPostgresConflictDoesNotRetryOtherErrors(t *testing.T) {
 	attempts := 0
 	wantErr := errors.New("ordinary failure")
-	_, err := retryPrepareAfterDeadlockWithDelays(context.Background(), func() ([]PrepareSourceResponse, error) {
+	_, err := retryPostgresConflictWithDelays(context.Background(), func() ([]PrepareSourceResponse, error) {
 		attempts++
 		return nil, wantErr
 	}, []time.Duration{0, 0})
@@ -35,10 +49,10 @@ func TestRetryPrepareAfterDeadlockDoesNotRetryOtherErrors(t *testing.T) {
 	}
 }
 
-func TestRetryPrepareAfterDeadlockStopsWhenContextIsCancelled(t *testing.T) {
+func TestRetryPostgresConflictStopsWhenContextIsCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	attempts := 0
-	_, err := retryPrepareAfterDeadlockWithDelays(ctx, func() ([]PrepareSourceResponse, error) {
+	_, err := retryPostgresConflictWithDelays(ctx, func() ([]PrepareSourceResponse, error) {
 		attempts++
 		cancel()
 		return nil, &pq.Error{Code: "40P01"}

@@ -110,7 +110,7 @@ func NewSyncService(database *sql.DB) (*SyncService, error) {
 }
 
 func (s *SyncService) Prepare(ctx context.Context, userID string, request PrepareSessionRequest) ([]PrepareSourceResponse, error) {
-	return retryPrepareAfterDeadlock(ctx, func() ([]PrepareSourceResponse, error) {
+	return retryPostgresConflict(ctx, func() ([]PrepareSourceResponse, error) {
 		return s.prepareOnce(ctx, userID, request)
 	})
 }
@@ -469,6 +469,12 @@ func (s *SyncService) Finalize(ctx context.Context, userID, generationID string,
 		request.PrefixCheckpointAlgorithmVersion != PrefixCheckpointAlgorithm || !validSHA256(request.PrefixCheckpointHash) {
 		return FinalizeResponse{}, ErrFinalizeConflict
 	}
+	return retryPostgresConflict(ctx, func() (FinalizeResponse, error) {
+		return s.finalizeOnce(ctx, userID, generationID, request)
+	})
+}
+
+func (s *SyncService) finalizeOnce(ctx context.Context, userID, generationID string, request FinalizeRequest) (FinalizeResponse, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return FinalizeResponse{}, err

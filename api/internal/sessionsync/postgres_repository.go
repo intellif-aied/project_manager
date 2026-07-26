@@ -84,6 +84,15 @@ func (r *PostgresChunkRepository) CommitChunk(
 	ctx context.Context,
 	request CommitChunkRequest,
 ) (ChunkDecision, error) {
+	return retryPostgresConflict(ctx, func() (ChunkDecision, error) {
+		return r.commitChunkOnce(ctx, request)
+	})
+}
+
+func (r *PostgresChunkRepository) commitChunkOnce(
+	ctx context.Context,
+	request CommitChunkRequest,
+) (ChunkDecision, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return ChunkDecision{}, err

@@ -118,6 +118,15 @@ func (p *ContentProjectionProcessor) processChunk(ctx context.Context, job Proce
 		contentStatus != ContentAvailable && contentStatus != ContentCleared {
 		return ErrStaleContentEpoch
 	}
+	var generationStatus string
+	var generationHighWater int64
+	if err := tx.QueryRowContext(ctx, `
+		SELECT status, expected_cursor
+		FROM session_source_generations
+		WHERE id = $1
+		FOR UPDATE`, job.GenerationID.String).Scan(&generationStatus, &generationHighWater); err != nil {
+		return err
+	}
 
 	revisionID, err := resolveContentRevision(ctx, tx, job)
 	if err != nil {
@@ -189,6 +198,12 @@ func (p *ContentProjectionProcessor) processChunk(ctx context.Context, job Proce
 	}
 	if _, err := reportsourcecatalog.ReconcileRevision(ctx, tx, revisionID, 20); err != nil {
 		return err
+	}
+	if revisionStatus == "active" && generationStatus == "active" && chunk.EndCursor == generationHighWater {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE sessions SET uploaded_at = now(), updated_at = now() WHERE id = $1`, job.SessionID); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }
@@ -316,11 +331,11 @@ func (p *ContentProjectionProcessor) processActivation(ctx context.Context, job 
 			return ErrProjectionUnavailable
 		}
 	}
-	if contentStatus != ContentAvailable {
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE sessions SET content_status = 'available', updated_at = now() WHERE id = $1`, job.SessionID); err != nil {
-			return err
-		}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE sessions
+		SET content_status = 'available', uploaded_at = now(), updated_at = now()
+		WHERE id = $1`, job.SessionID); err != nil {
+		return err
 	}
 	if _, err := reportsourcecatalog.ReconcileRevision(ctx, tx, job.TargetRevisionID.String, 100); err != nil {
 		return err

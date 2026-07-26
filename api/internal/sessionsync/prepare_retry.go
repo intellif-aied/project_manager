@@ -8,23 +8,20 @@ import (
 	"github.com/lib/pq"
 )
 
-var prepareDeadlockRetryDelays = []time.Duration{50 * time.Millisecond, 100 * time.Millisecond}
+var postgresConflictRetryDelays = []time.Duration{50 * time.Millisecond, 100 * time.Millisecond}
 
-func retryPrepareAfterDeadlock(
-	ctx context.Context,
-	operation func() ([]PrepareSourceResponse, error),
-) ([]PrepareSourceResponse, error) {
-	return retryPrepareAfterDeadlockWithDelays(ctx, operation, prepareDeadlockRetryDelays)
+func retryPostgresConflict[T any](ctx context.Context, operation func() (T, error)) (T, error) {
+	return retryPostgresConflictWithDelays(ctx, operation, postgresConflictRetryDelays)
 }
 
-func retryPrepareAfterDeadlockWithDelays(
+func retryPostgresConflictWithDelays[T any](
 	ctx context.Context,
-	operation func() ([]PrepareSourceResponse, error),
+	operation func() (T, error),
 	delays []time.Duration,
-) ([]PrepareSourceResponse, error) {
+) (T, error) {
 	for attempt := 0; ; attempt++ {
 		result, err := operation()
-		if err == nil || !isPostgresDeadlock(err) || attempt >= len(delays) {
+		if err == nil || !isPostgresConflict(err) || attempt >= len(delays) {
 			return result, err
 		}
 
@@ -32,13 +29,18 @@ func retryPrepareAfterDeadlockWithDelays(
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return nil, ctx.Err()
+			var zero T
+			return zero, ctx.Err()
 		case <-timer.C:
 		}
 	}
 }
 
-func isPostgresDeadlock(err error) bool {
+func isPostgresConflict(err error) bool {
 	var pqErr *pq.Error
-	return errors.As(err, &pqErr) && string(pqErr.Code) == "40P01"
+	if !errors.As(err, &pqErr) {
+		return false
+	}
+	code := string(pqErr.Code)
+	return code == "40P01" || code == "40001"
 }
