@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/aidashboard/api/internal/observability"
+	"github.com/aidashboard/api/internal/sessionsync"
 )
 
 const (
@@ -143,6 +144,13 @@ func (c *Coordinator) EnsureDigest(
 		return EnsureResult{}, err
 	}
 	defer tx.Rollback()
+	// Keep every Session-scoped writer on the same lock order. Digest job
+	// insertion takes a foreign-key lock on sessions, so acquiring it only
+	// after locking a Digest Revision can deadlock with Usage activation,
+	// which locks Session before Generation and Metrics Revision.
+	if err := sessionsync.LockSessionForUpdate(ctx, tx, identity.SessionID); err != nil {
+		return EnsureResult{}, err
+	}
 
 	var revisionID, status string
 	var failureClass, errorCode sql.NullString
