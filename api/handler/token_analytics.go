@@ -134,6 +134,11 @@ func writeTokenAnalyticsError(w http.ResponseWriter, err error) {
 			"code":  "QUERY_SNAPSHOT_EXPIRED",
 			"error": "query snapshot expired; restart from summary",
 		})
+	case errors.Is(err, tokenanalytics.ErrSnapshotBusy):
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"code":  "TOKEN_SNAPSHOT_BUSY",
+			"error": "token analytics is temporarily busy; retry later",
+		})
 	default:
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}

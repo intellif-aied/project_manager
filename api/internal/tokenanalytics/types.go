@@ -11,6 +11,7 @@ var (
 	ErrInvalidFilter    = errors.New("invalid token analytics filter")
 	ErrSnapshotExpired  = errors.New("token analytics query snapshot expired")
 	ErrSnapshotMismatch = errors.New("token analytics query snapshot does not match filters")
+	ErrSnapshotBusy     = errors.New("token analytics query snapshot is temporarily busy")
 )
 
 type Actor struct {

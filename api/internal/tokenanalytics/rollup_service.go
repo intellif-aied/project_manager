@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
+	"math/rand"
 	"strconv"
 	"strings"
 	"time"
@@ -15,16 +17,27 @@ import (
 
 const rollupSnapshotVersion = "rollup-v2"
 
-var snapshotRetryDelays = []time.Duration{50 * time.Millisecond, 150 * time.Millisecond}
+var snapshotRetryDelays = []time.Duration{
+	50 * time.Millisecond,
+	150 * time.Millisecond,
+	350 * time.Millisecond,
+}
 
 func (s *Service) createSnapshot(ctx context.Context, actor Actor, raw Filters) (Snapshot, error) {
 	for attempt := 0; ; attempt++ {
 		snapshot, err := s.createSnapshotOnce(ctx, actor, raw)
-		if err == nil || !isSerializationConflict(err) || attempt >= len(snapshotRetryDelays) {
+		if err == nil || !isSerializationConflict(err) {
 			return snapshot, err
 		}
+		if attempt >= len(snapshotRetryDelays) {
+			log.Printf("token snapshot serialization retries exhausted scope=%s attempts=%d: %v",
+				raw.Scope, attempt+1, err)
+			return Snapshot{}, ErrSnapshotBusy
+		}
 
-		timer := time.NewTimer(snapshotRetryDelays[attempt])
+		baseDelay := snapshotRetryDelays[attempt]
+		jitter := time.Duration(rand.Int63n(int64(baseDelay/4) + 1))
+		timer := time.NewTimer(baseDelay + jitter)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -44,7 +57,7 @@ func (s *Service) createSnapshotOnce(ctx context.Context, actor Actor, raw Filte
 	if err != nil {
 		return Snapshot{}, err
 	}
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
 	if err != nil {
 		return Snapshot{}, err
 	}

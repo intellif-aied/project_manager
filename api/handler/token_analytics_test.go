@@ -83,6 +83,7 @@ func TestTokenAnalyticsSnapshotErrorsHaveStableCodes(t *testing.T) {
 	}{
 		{err: tokenanalytics.ErrSnapshotMismatch, status: http.StatusBadRequest, wantCode: "QUERY_SNAPSHOT_MISMATCH"},
 		{err: tokenanalytics.ErrSnapshotExpired, status: http.StatusGone, wantCode: "QUERY_SNAPSHOT_EXPIRED"},
+		{err: tokenanalytics.ErrSnapshotBusy, status: http.StatusServiceUnavailable, wantCode: "TOKEN_SNAPSHOT_BUSY"},
 		{err: tokenanalytics.ErrForbidden, status: http.StatusForbidden},
 		{err: tokenanalytics.ErrInvalidFilter, status: http.StatusBadRequest},
 		{err: errors.New("database unavailable"), status: http.StatusInternalServerError},

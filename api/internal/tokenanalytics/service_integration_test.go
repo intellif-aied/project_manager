@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -252,6 +253,50 @@ func TestTokenAnalyticsOrganizationPricingAndSnapshotIntegration(t *testing.T) {
 		t.Fatal("expected superseded published price to remain immutable")
 	}
 	assertTokenAnalyticsSnapshotScale(t, database, fixture)
+}
+
+func TestTokenAnalyticsConcurrentManagementSnapshots(t *testing.T) {
+	database := openAnalyticsIntegrationDatabase(t)
+	fixture := newAnalyticsFixture(t, database)
+	defer fixture.cleanup(t)
+
+	fixture.insertUsageComponent(t, "first", analyticsEmployeeID, 1_000_000)
+	if _, err := pricing.NewService(database).Recalculate(context.Background(), pricing.RecalculateFilter{}); err != nil {
+		t.Fatal(err)
+	}
+
+	service := NewService(database)
+	actor := Actor{ID: analyticsAdminID, Role: "admin"}
+	filters := []Filters{
+		{Scope: "management", From: fixture.activityDate, To: fixture.activityDate},
+		{Scope: "management", From: fixture.activityDate, To: fixture.activityDate, DepartmentID: fixture.departmentID},
+		{Scope: "management", From: fixture.activityDate, To: fixture.activityDate, TeamID: fixture.teamOneID},
+		{Scope: "management", From: fixture.activityDate, To: fixture.activityDate, UserID: "991103"},
+	}
+
+	const requestCount = 24
+	start := make(chan struct{})
+	errorsByRequest := make(chan error, requestCount)
+	var waitGroup sync.WaitGroup
+	for request := 0; request < requestCount; request++ {
+		filter := filters[request%len(filters)]
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			<-start
+			_, err := service.CreateSummary(context.Background(), actor, filter)
+			errorsByRequest <- err
+		}()
+	}
+	close(start)
+	waitGroup.Wait()
+	close(errorsByRequest)
+
+	for err := range errorsByRequest {
+		if err != nil {
+			t.Fatalf("concurrent management snapshot failed: %v", err)
+		}
+	}
 }
 
 func assertTokenAnalyticsSnapshotScale(t *testing.T, database *sql.DB, fixture *analyticsFixture) {
