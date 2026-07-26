@@ -1,7 +1,7 @@
 # AIDA-BUG-20260719-009：Token 查询快照并发序列化冲突
 
 > 优先级：P1
-> 状态：代码已修复，待测试服部署与生产验收
+> 状态：已修复并发布生产，真实并发验收通过
 > 环境：生产
 > 发现时间：2026-07-19
 
@@ -65,4 +65,6 @@ GET /api/v1/token-analytics/summary?scope=management&from=2026-07-17&to=2026-07-
 - HTTP 层已固定映射为 `503 + TOKEN_SNAPSHOT_BUSY`。
 - 单元测试覆盖事务隔离级别、四次事务尝试后稳定失败和错误原文不泄露。
 - 独立 PostgreSQL 临时库中，全局、部门、小组、个人四种过滤条件共 24 个并发 Summary 全部成功。
-- 尚未部署测试服或生产；生产 24 小时观察仍未执行。
+- 测试服与生产均已部署。生产内部测试账号覆盖四种合法管理过滤条件，24 个并发 Summary 全部返回 200；同一快照 Token 的 Trends、Rankings、Sessions 均返回 200。
+- 生产发布后日志未出现 `40001`、HTTP 500、`TOKEN_SNAPSHOT_BUSY`、panic 或 deadlock；PostgreSQL 无 Lock 等待类型。
+- 生产 24 小时持续观察尚未完成，不影响本次实时验收结论。
