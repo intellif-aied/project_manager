@@ -174,11 +174,12 @@ Begin transaction
   -> Commit 或 Rollback 自动释放锁
 ```
 
-代码核对结果：Chunk、Finalize 和 Content Projection 已按 Session 在前的顺序加锁，不重复改造。以下三个入口必须在现有 advisory lock 和任何 Generation、Metrics Revision 或 Digest Revision 行锁之前调用 `LockSessionForUpdate`：
+代码核对结果：Chunk、Finalize 和 Content Projection 已按 Session 在前的顺序加锁，不重复改造。以下四个入口必须在现有 advisory lock 和任何 Generation、Metrics Revision 或 Digest Revision 行锁之前调用 `LockSessionForUpdate`：
 
 1. Usage Processor 的 Chunk 解析事务；
 2. Usage Processor 的 Metrics Revision 激活事务；
-3. Digest Coordinator 的 `EnsureDigest` 事务。
+3. Digest Coordinator 的 `EnsureDigest` 事务；
+4. Digest V2 Reconciler 创建 Revision 和后台 Job 的事务；批量 Session 按 ID 固定顺序加锁。
 
 同一 Session 的上传、Projection 和 Usage 数据库写入按统一顺序串行；对象下载和内容解析继续在事务外执行。不同 Session 和用户不共享行锁，保持并发。
 
@@ -263,7 +264,7 @@ Generation active
 
 ### 7.4 Session 关联写入入口遗漏
 
-Usage 的 Chunk 解析、Metrics Revision 激活和 Digest Coordinator 的 Job 入队必须全部改为 Session 在前。只修改其中一部分或只增加重试不能关闭问题。
+Usage 的 Chunk 解析、Metrics Revision 激活、Digest Coordinator 和 Digest V2 Reconciler 的 Job 入队必须全部改为 Session 在前。只修改其中一部分或只增加重试不能关闭问题。
 
 ### 7.5 回滚
 
@@ -295,12 +296,13 @@ Usage 的 Chunk 解析、Metrics Revision 激活和 Digest Coordinator 的 Job �
 7. Finalize 与 Usage Revision Activation 并发不出现死锁；
 8. 同一 Session 的 Usage 与上传事务按 Session 在前的顺序执行；
 9. Digest Coordinator 在 Digest Revision 和 Job 之前获取 Session 锁；
-10. 不同 Session 可以并发；
-11. `40P01/40001` 前两次失败后成功，只产生一份业务数据；
-12. 第三次仍失败时返回错误，不无限重试；
-13. 其他错误不重试；
-14. Codex、Claude Code Token Golden 完全不变；
-15. Subagent/Fork 父子归属、去重和总 Token 不变。
+10. Digest V2 Reconciler 批量按固定 Session 顺序加锁后才创建 Revision 和 Job；
+11. 不同 Session 可以并发；
+12. `40P01/40001` 前两次失败后成功，只产生一份业务数据；
+13. 第三次仍失败时返回错误，不无限重试；
+14. 其他错误不重试；
+15. Codex、Claude Code Token Golden 完全不变；
+16. Subagent/Fork 父子归属、去重和总 Token 不变。
 
 ## 10. 测试服与生产验收
 
@@ -338,7 +340,7 @@ PostgreSQL 日志没有新增 deadlock detected
 
 ```text
 真实 PostgreSQL 并发测试稳定复现
-  -> 统一 Usage、Digest Coordinator 与上传的 Session 行锁顺序
+  -> 统一 Usage、Digest Coordinator、Digest V2 Reconciler 与上传的 Session 行锁顺序
   -> 接入有限数据库冲突重试
   -> 修正 Projection 激活时 uploaded_at
   -> API 与 Token Golden 全量回归
@@ -383,7 +385,9 @@ Usage 全量数据库集成测试仍有一条既有断言失败：`TestProcessor
 1. `4e9c28b` 首次真实上传暴露 Digest Coordinator 与 Usage Activation 的第二条反向锁序，记录 1 次 `deadlock detected`，未将该轮判为通过；
 2. `55cda31` 补齐 Digest Coordinator 的 Session-first 锁顺序，并增加真实 PostgreSQL 测试 `TestEnsureDigestLocksSessionBeforeDigestRevision`。
 
-最终生产镜像为 `20260726-55cda31-upload-consistency`，digest 为 `sha256:97fb8237cf3341828ca8cb57212585d96afa304d3e548c05d4b6738d101f5c0b`。生产测试账号 `307/t05` 使用两条隔离的真实 Codex Session 副本完成：
+首次关闭时的生产镜像为 `20260726-55cda31-upload-consistency`。2026-07-26 旧 Payload 归档表清理后的真实上传又暴露 Digest V2 Reconciler 直接创建后台 Job 时未先锁 Session，产生相同的 Session/Generation 反向锁序。提交 `c35c93f` 已补齐该入口，并将批量 Session 按 ID 固定顺序加锁；对应真实 PostgreSQL 并发测试已加入同一锁顺序测试。
+
+最终生产镜像为 `20260726-c35c93f-archive-finalize`，digest 为 `sha256:ae56d8d1390a0b0a9d1222d554cb0838756f877fe0646ffb87412926c310e9be`。生产测试账号 `307/t05` 使用隔离的真实 Codex Session 副本完成：
 
 - 两条全新 Session 并发首次上传成功；
 - 一条 Session 增量上传成功，`uploaded_at` 和 `last_activity_at` 按新内容更新；
