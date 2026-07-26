@@ -1,7 +1,7 @@
 # AIDA-BUG-20260725-018：Aida 上传成功但 Session 不可见并触发数据库死锁
 
 > 优先级：P0
-> 状态：测试服真实上传验收通过，待提交和生产发布
+> 状态：生产发布与真实上传验收通过，已关闭
 > 发现日期：2026-07-25
 > 影响范围：Aida CLI 增量上传、Session 列表、Content Projection、Token Usage 后台处理
 
@@ -82,12 +82,29 @@ Usage 持有 generation，等待 sessions
 
 PostgreSQL 终止其中一个事务后，Chunk 返回 500；其余请求继续等待，上传耗时线性增加。
 
+### 2.4 首次生产验收发现的第二条反向锁序
+
+2026-07-26 首次发布 `4e9c28b` 后，用生产测试账号执行两条全新 Session 并发上传。上传本身成功，但 PostgreSQL 在发布后的真实链路中记录到一次新的死锁：
+
+```text
+Digest Coordinator
+  -> 已锁 Digest Revision
+  -> 插入 session_processing_jobs 时通过外键等待 Session
+
+Usage Activation
+  -> 已锁 Session
+  -> 等待 Generation / Metrics Revision
+```
+
+这证明 P0 最初只覆盖 Usage 两个入口仍不完整。最终修复把 `Digest Coordinator.EnsureDigest` 也纳入同一规则：事务开始后先锁 Session，再读取或创建 Digest Revision、再创建或提权 Digest Job。修复提交为 `55cda31`。
+
 ## 3. 代码事实与差距
 
 | 需求/验收项 | 当前能力 | 代码证据 | 差距 | 最小改动 |
 | --- | --- | --- | --- | --- |
 | CLI 成功后当天列表可见 | Generation 和 Projection 已持久化 | `content_projection_processor.go` | 增量成功不更新 `uploaded_at` | Projection 激活时更新 `uploaded_at` |
 | 上传不得与 Token 后台处理死锁 | Chunk、Finalize、Projection 已先锁 Session | `postgres_repository.go`、`sync_service.go`、`content_projection_processor.go` | Usage 先锁 Generation/Revision，后写 Session 关联数据 | Usage 改为先锁 Session，再执行现有锁和写入 |
+| Digest 后台入队不得与 Usage 激活死锁 | Digest Job 通过外键关联 Session 和 Generation | `sessiondigestv2/coordinator.go` | Coordinator 原先先锁 Digest Revision，插入 Job 时才获取 Session 外键锁 | `EnsureDigest` 事务先锁 Session，再处理 Revision 和 Job |
 | 瞬时数据库冲突不得直接返回 500 | Prepare 已有限重试 `40P01` | `prepare_retry.go` | Chunk、Finalize 未复用 | 统一数据库冲突重试 |
 | Token 数值和 Fork 归属不变 | Usage Revision 链路已运行 | `usage/processor.go` | 无 | 不修改解析、归属、聚合和去重 |
 | CLI 只在服务端 ready 后成功 | CLI 已等待 Generation、Content、Projection | `daemon/session_sync_client.go` | 无 | 不修改成功判定 |
@@ -157,10 +174,11 @@ Begin transaction
   -> Commit 或 Rollback 自动释放锁
 ```
 
-代码核对结果：Chunk、Finalize 和 Content Projection 已按 Session 在前的顺序加锁，不重复改造。以下两个 Usage 事务必须在现有 `usage-revision:<generation_id>` advisory lock 和任何业务表行锁之前调用 `LockSessionForUpdate`：
+代码核对结果：Chunk、Finalize 和 Content Projection 已按 Session 在前的顺序加锁，不重复改造。以下三个入口必须在现有 advisory lock 和任何 Generation、Metrics Revision 或 Digest Revision 行锁之前调用 `LockSessionForUpdate`：
 
 1. Usage Processor 的 Chunk 解析事务；
-2. Usage Processor 的 Metrics Revision 激活事务。
+2. Usage Processor 的 Metrics Revision 激活事务；
+3. Digest Coordinator 的 `EnsureDigest` 事务。
 
 同一 Session 的上传、Projection 和 Usage 数据库写入按统一顺序串行；对象下载和内容解析继续在事务外执行。不同 Session 和用户不共享行锁，保持并发。
 
@@ -213,6 +231,7 @@ Generation active
 - Session 管理页和产品页的上报时间、日期筛选与排序；
 - Content Projection Worker；
 - Token Usage Worker 的并发执行。
+- Digest Coordinator 的数据库锁顺序和后台 Job 入队。
 
 ### 6.2 明确不影响
 
@@ -220,7 +239,7 @@ Generation active
 - Subagent/Fork Token 归属与去重；
 - Token Analytics 汇总和成本；
 - Session 原始 JSONL 和 MinIO 对象；
-- Digest、Report Projection 和报告生成；
+- Digest 内容、版本、Worker 容量、Report Projection 和报告生成结果；
 - Report Skill、MCP 和 Agent；
 - 前端代码；
 - 数据库 migration 和历史数据结构；
@@ -242,9 +261,9 @@ Generation active
 
 仅重试 PostgreSQL 已回滚的 `40P01/40001`。现有 Chunk 唯一身份、cursor CAS 和事务原子性继续负责幂等。自动化必须证明重试后只有一个 Chunk、一组 Processing Job 和一份 Token Contribution。
 
-### 7.4 Usage 入口遗漏
+### 7.4 Session 关联写入入口遗漏
 
-Usage 的 Chunk 解析和 Metrics Revision 激活两个事务必须同时改为 Session 在前。只修改其中一个或只增加重试不能关闭问题。
+Usage 的 Chunk 解析、Metrics Revision 激活和 Digest Coordinator 的 Job 入队必须全部改为 Session 在前。只修改其中一部分或只增加重试不能关闭问题。
 
 ### 7.5 回滚
 
@@ -258,9 +277,10 @@ Usage 的 Chunk 解析和 Metrics Revision 激活两个事务必须同时改为 
 | --- | --- | --- | --- | --- | --- |
 | 1 | 稳定复现死锁 | Session Sync、Usage 集成测试 | 真实 PostgreSQL 和受控并发屏障复现 Chunk/Usage 锁冲突 | 修复前稳定出现 `40P01` | 独立测试库 |
 | 2 | 消除死锁 | `sessionsync/session_lock.go`、`usage/processor.go` | 新增 `LockSessionForUpdate`，Usage 两类事务先锁 Session | 上传与 Usage 并发测试无死锁 | 任务 1 |
-| 3 | 屏蔽瞬时冲突 | `prepare_retry.go`、Chunk、Finalize | 复用固定三次冲突重试 | 只重试 `40P01/40001`，无重复数据 | 任务 2 |
-| 4 | 当天可见 | `content_projection_processor.go` | Projection 激活时更新 `uploaded_at` | 增量 Session 可由当天列表查询 | 无 |
-| 5 | 全量回归 | API、Token Golden、Session Sync 集成测试 | 完整测试和真实上传 | Token、Fork、内容、报告来源无回归 | 任务 2 至 4 |
+| 3 | 补齐 Digest 锁顺序 | `sessiondigestv2/coordinator.go` | `EnsureDigest` 先锁 Session，再处理 Digest Revision 和 Job | Digest 入队与 Usage 激活并发无死锁 | 任务 1 |
+| 4 | 屏蔽瞬时冲突 | `prepare_retry.go`、Chunk、Finalize | 复用固定三次冲突重试 | 只重试 `40P01/40001`，无重复数据 | 任务 2 |
+| 5 | 当天可见 | `content_projection_processor.go` | Projection 激活时更新 `uploaded_at` | 增量 Session 可由当天列表查询 | 无 |
+| 6 | 全量回归 | API、Token Golden、Session Sync 集成测试 | 完整测试和真实上传 | Token、Fork、内容、报告来源无回归 | 任务 2 至 5 |
 
 ## 9. 自动化测试
 
@@ -274,12 +294,13 @@ Usage 的 Chunk 解析和 Metrics Revision 激活两个事务必须同时改为 
 6. Chunk 与 Usage Chunk Processor 并发不出现 `40P01`；
 7. Finalize 与 Usage Revision Activation 并发不出现死锁；
 8. 同一 Session 的 Usage 与上传事务按 Session 在前的顺序执行；
-9. 不同 Session 可以并发；
-10. `40P01/40001` 前两次失败后成功，只产生一份业务数据；
-11. 第三次仍失败时返回错误，不无限重试；
-12. 其他错误不重试；
-13. Codex、Claude Code Token Golden 完全不变；
-14. Subagent/Fork 父子归属、去重和总 Token 不变。
+9. Digest Coordinator 在 Digest Revision 和 Job 之前获取 Session 锁；
+10. 不同 Session 可以并发；
+11. `40P01/40001` 前两次失败后成功，只产生一份业务数据；
+12. 第三次仍失败时返回错误，不无限重试；
+13. 其他错误不重试；
+14. Codex、Claude Code Token Golden 完全不变；
+15. Subagent/Fork 父子归属、去重和总 Token 不变。
 
 ## 10. 测试服与生产验收
 
@@ -307,7 +328,7 @@ PostgreSQL 日志没有新增 deadlock detected
 - 不引入 Redis、River、Temporal 或分布式锁；
 - 不修改 Token 解析和统计口径；
 - 不重新生成历史 Token Revision；
-- 不修改 Digest 或报告生成流程；
+- 不修改 Digest 内容、版本、Worker 容量或报告生成业务流程；Digest Coordinator 只调整数据库锁顺序；
 - 不通过降低 Worker 并发掩盖死锁；
 - 不依赖 CLI 重试掩盖服务端 500；
 - 不把数据库存在当作用户可见验收通过；
@@ -317,7 +338,7 @@ PostgreSQL 日志没有新增 deadlock detected
 
 ```text
 真实 PostgreSQL 并发测试稳定复现
-  -> 统一 Usage 与上传的 Session 行锁顺序
+  -> 统一 Usage、Digest Coordinator 与上传的 Session 行锁顺序
   -> 接入有限数据库冲突重试
   -> 修正 Projection 激活时 uploaded_at
   -> API 与 Token Golden 全量回归
@@ -356,3 +377,20 @@ Usage 全量数据库集成测试仍有一条既有断言失败：`TestProcessor
 - Token 保持 `37291` 和 `414129`；
 - 重复上传后 `uploaded_at`、Chunk 数和 Token 均未变化；
 - API `/session-chunks/batch` 500 为 0，PostgreSQL `deadlock detected` 为 0。
+
+2026-07-26 生产发布经历两次 API 镜像切换：
+
+1. `4e9c28b` 首次真实上传暴露 Digest Coordinator 与 Usage Activation 的第二条反向锁序，记录 1 次 `deadlock detected`，未将该轮判为通过；
+2. `55cda31` 补齐 Digest Coordinator 的 Session-first 锁顺序，并增加真实 PostgreSQL 测试 `TestEnsureDigestLocksSessionBeforeDigestRevision`。
+
+最终生产镜像为 `20260726-55cda31-upload-consistency`，digest 为 `sha256:97fb8237cf3341828ca8cb57212585d96afa304d3e548c05d4b6738d101f5c0b`。生产测试账号 `307/t05` 使用两条隔离的真实 Codex Session 副本完成：
+
+- 两条全新 Session 并发首次上传成功；
+- 一条 Session 增量上传成功，`uploaded_at` 和 `last_activity_at` 按新内容更新；
+- 无变化重复上传成功，`uploaded_at`、Generation 数和事件数不漂移；
+- 两条 Session 均能从 2026-07-26 当天列表查询，状态为 `available`；
+- 两条 Session 均满足 `expected_cursor = content_indexed_cursor`，事件计数与 Projection 计数一致；
+- 每条 Session 只有一个 active Generation；
+- 最终镜像启动后的 Session Sync 500 为 0，PostgreSQL `deadlock detected` 为 0。
+
+代码、自动化、测试服和生产真实链路均满足关闭条件，本问题于 2026-07-26 关闭。
