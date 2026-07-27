@@ -1694,7 +1694,8 @@ func TestReportAgentRepairRequestRefreshesManagedStartPromptTemplate(t *testing.
 		Name:                defaultReportAgentName,
 		Description:         defaultReportAgentDescription,
 		Engine:              "claude-code",
-		DefaultModelID:      defaults.ModelID,
+		DefaultModelID:      defaults.ReportModelID,
+		ShareModelAccess:    true,
 		Instructions:        strings.Replace(defaultReportAgentInstructions(reportMCPCredentialSlot), "{{aida_deployment}}", "https://aida.example.com", 1),
 		StartPromptTemplate: oldTemplate,
 		CredentialSlots:     []model.ManagedCredentialSlot{{Name: reportMCPCredentialSlot, Required: true}},
@@ -1759,6 +1760,9 @@ func TestResolveAndRepairDefaultReportAgentRefreshesManagedPromptBeforeRun(t *te
 	}
 	if agent.StartPromptTemplate != h.reportAgentStartPromptTemplate() {
 		t.Fatalf("in-memory start prompt was not refreshed: %q", agent.StartPromptTemplate)
+	}
+	if !agent.ShareModelAccess {
+		t.Fatal("repairing unrelated fields must preserve shared model access")
 	}
 }
 

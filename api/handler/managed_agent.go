@@ -1042,7 +1042,7 @@ func (h *ManagedAgentHandler) CreateDefaultReportAgent(w http.ResponseWriter, r 
 					writeManagedAgentError(w, err)
 					return
 				}
-				existing = managedAgentFromUpsertRequest(patch)
+				existing = managedAgentFromUpsertRequestPreserving(patch, existing)
 			}
 		}
 		if !hasExactSkillRef(existing.Skills, systemSkillRef) {
@@ -1145,6 +1145,14 @@ func managedAgentFromUpsertRequest(req model.UpsertManagedAgentRequest) model.Ma
 		MCPBindings:         req.MCPBindings,
 		ShareModelAccess:    req.ShareModelAccess != nil && *req.ShareModelAccess,
 	}
+}
+
+func managedAgentFromUpsertRequestPreserving(req model.UpsertManagedAgentRequest, existing model.ManagedAgent) model.ManagedAgent {
+	updated := managedAgentFromUpsertRequest(req)
+	if req.ShareModelAccess == nil {
+		updated.ShareModelAccess = existing.ShareModelAccess
+	}
+	return updated
 }
 
 func (h *ManagedAgentHandler) reportMCPURL() string {
@@ -1550,7 +1558,7 @@ func (h *ManagedAgentHandler) resolveAndRepairReportAgent(ctx context.Context, c
 			if _, err := client.UpdateMyAgent(ctx, agent.AgentID, platformManagedAgentRequest(patch)); err != nil {
 				return err
 			}
-			*agent = managedAgentFromUpsertRequest(patch)
+			*agent = managedAgentFromUpsertRequestPreserving(patch, *agent)
 		}
 	}
 	if !hasExactSkillRef(agent.Skills, expected) {
