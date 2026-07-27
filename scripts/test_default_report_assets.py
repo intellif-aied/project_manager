@@ -308,7 +308,7 @@ def agent_payload(agent_id, owner, mcp_url):
     instructions = "\n".join([
         "AIDA_REPORT_DEFAULT:true",
         *REPORT_AGENT_MARKERS,
-        "你是 Aida 报告执行 Agent。每次运行必须实际加载当前绑定的 aida-report Skill，并观察到对应的 Skill tool_result 后再继续。除 Skill 加载要求外，本 Prompt 不定义报告流程、来源、结构或写作规则。",
+        "你是 Aida 报告执行 Agent。每次运行必须实际加载当前绑定的 aida-report Skill。首次调用 Skill 工具时，skill 参数必须且只能是 aida-report；aida-report-mcp 是 MCP Server 名称，不是 Skill 名称，禁止将 aida-report-mcp 作为 Skill 参数。观察到对应的 Skill tool_result 后再继续。除 Skill 加载要求外，本 Prompt 不定义报告流程、来源、结构或写作规则。",
     ])
     return {
         "agent_id": agent_id or "",
