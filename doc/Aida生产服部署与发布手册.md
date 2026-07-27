@@ -61,7 +61,7 @@ Report Skill/MCP 的 slug、MCP 协议版本、凭据槽、默认 Agent 文案�
 
 1. 冻结源码提交和发布范围；
 2. 记录当前容器、镜像、配置、migration、Skill/MCP 和 CLI 分发；
-3. 完整备份 PostgreSQL、配置和回退镜像；
+3. 按变更类型准备回退：涉及 API、migration、数据写入或清理时，完整备份 PostgreSQL、配置和回退镜像；仅 Web 静态前端发布时，记录当前 Web 镜像和配置即可，不备份 PostgreSQL；
 4. 构建并推送不可变 API/Web 镜像；
 5. 先更新 API 并执行正向 migration；
 6. 验证 Digest、队列和报告读取；
