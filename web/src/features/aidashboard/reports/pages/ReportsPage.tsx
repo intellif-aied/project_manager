@@ -19,7 +19,7 @@ import {
 import type { MenuProps } from "antd";
 import type { Dayjs } from "dayjs";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { useParams, useSearchParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import dayjs from "dayjs";
 
 import { useAuth } from "@/shared/auth/authContext";
@@ -40,8 +40,12 @@ import {
   deleteReport,
   deleteTeamReport
 } from "../../api/client";
-import { DailyReportGenerateModal, type DailyGenerateScope } from "../components/DailyReportGenerateModal";
+import {
+  DailyReportGenerateModal,
+  type DailyGenerateScope
+} from "../components/DailyReportGenerateModal";
 import { MemberReportBrowser } from "../MemberReportBrowser";
+import { ReportWorkspaceHeader } from "../components/ReportWorkspaceHeader";
 import { reportContentSummary } from "../utils/reportSummary";
 import type {
   DailyReport,
@@ -111,7 +115,12 @@ function reportDateParts(value: string) {
   const date = dayjs(value);
   const today = dayjs().startOf("day");
   const distance = today.diff(date.startOf("day"), "day");
-  const relative = distance === 0 ? "今天" : distance === 1 ? "昨天" : ["周日", "周一", "周二", "周三", "周四", "周五", "周六"][date.day()];
+  const relative =
+    distance === 0
+      ? "今天"
+      : distance === 1
+        ? "昨天"
+        : ["周日", "周一", "周二", "周三", "周四", "周五", "周六"][date.day()];
   return {
     date: date.format("MM月DD日"),
     context: `${relative} · ${date.format("YYYY")}`
@@ -154,6 +163,7 @@ export function ReportsPage() {
   const { user } = useAuth();
   const { message, modal } = App.useApp();
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [dateRange, setDateRange] = useState<[Dayjs, Dayjs] | null>(null);
   const [memberDate, setMemberDate] = useState<Dayjs>(() => dayjs());
@@ -170,7 +180,8 @@ export function ReportsPage() {
     staleTime: 60_000
   });
   const effectiveDepartmentID = canSelectDepartment
-    ? selectedDepartmentID ?? departmentsQuery.data?.[0]?.id : undefined;
+    ? (selectedDepartmentID ?? departmentsQuery.data?.[0]?.id)
+    : undefined;
 
   const deleteMutation = useMutation({
     mutationFn: ({
@@ -196,12 +207,16 @@ export function ReportsPage() {
         void queryClient.invalidateQueries({ queryKey: ["reports", "dashboard-today"] });
       } else if (scope === "team") {
         queryClient.removeQueries({ queryKey: ["team-report-today"] });
-        queryClient.removeQueries({ queryKey: ["reports", "daily", "manage-modal", "team-report"] });
+        queryClient.removeQueries({
+          queryKey: ["reports", "daily", "manage-modal", "team-report"]
+        });
         void queryClient.invalidateQueries({ queryKey: ["team-report-today"] });
         void queryClient.invalidateQueries({ queryKey: ["team-report-sources"] });
       } else {
         queryClient.removeQueries({ queryKey: ["department-report-today"] });
-        queryClient.removeQueries({ queryKey: ["reports", "daily", "manage-modal", "department-report"] });
+        queryClient.removeQueries({
+          queryKey: ["reports", "daily", "manage-modal", "department-report"]
+        });
         void queryClient.invalidateQueries({ queryKey: ["department-report-today"] });
         void queryClient.invalidateQueries({ queryKey: ["department-report-sources"] });
       }
@@ -252,9 +267,27 @@ export function ReportsPage() {
   const from = dateRange?.[0].format("YYYY-MM-DD");
   const to = dateRange?.[1].format("YYYY-MM-DD");
   const openLabel =
-    activeTab === "team" ? "填写小组日报" : activeTab === "department" ? "填写部门日报" : "填写日报";
+    activeTab === "team"
+      ? "填写小组日报"
+      : activeTab === "department"
+        ? "填写部门日报"
+        : "填写日报";
   const canOpenCurrentReport =
     activeTab !== "member" && (activeTab !== "team" || user?.role === "team_leader");
+  const workspaceTitle =
+    activeTab === "member"
+      ? user?.role === "director" || user?.role === "admin"
+        ? "部门成员日报"
+        : "小组成员日报"
+      : activeTab === "team"
+        ? "小组日报"
+        : activeTab === "department"
+          ? "部门日报"
+          : "我的日报";
+  const workspaceDescription =
+    activeTab === "member"
+      ? "先确认成员提交情况，再展开阅读已提交日报。"
+      : "选择日期范围查看历史记录，当前日报通过右侧操作统一生成和编辑。";
 
   const handleTabChange = (value: DailyTab) => {
     setSearchParams((current) => {
@@ -281,11 +314,27 @@ export function ReportsPage() {
       className="reports-page aidashboard-list"
       showNav={false}
     >
-      <Card className="reports-control-card">
-        <Space wrap style={{ width: "100%", justifyContent: "space-between" }}>
+      <ReportWorkspaceHeader
+        periodLabel="日报"
+        scopeLabel={workspaceTitle}
+        description={workspaceDescription}
+        controls={
           <Space wrap>
+            <Segmented
+              className="report-workspace-period-switch"
+              value="daily"
+              options={[
+                { label: "日报", value: "daily" },
+                { label: "周报", value: "weekly" }
+              ]}
+              onChange={(value) => value === "weekly" && navigate("/reports/weekly")}
+            />
             {options.length > 1 ? (
-              <Segmented value={activeTab} onChange={(value) => handleTabChange(value as DailyTab)} options={options} />
+              <Segmented
+                value={activeTab}
+                onChange={(value) => handleTabChange(value as DailyTab)}
+                options={options}
+              />
             ) : null}
             {activeTab === "member" ? (
               <DatePicker
@@ -294,7 +343,10 @@ export function ReportsPage() {
                 onChange={(value) => value && setMemberDate(value)}
               />
             ) : (
-              <RangePicker value={dateRange} onChange={(value) => setDateRange(value as [Dayjs, Dayjs] | null)} />
+              <RangePicker
+                value={dateRange}
+                onChange={(value) => setDateRange(value as [Dayjs, Dayjs] | null)}
+              />
             )}
             {canSelectDepartment && (activeTab === "member" || activeTab === "department") ? (
               <Select
@@ -302,12 +354,17 @@ export function ReportsPage() {
                 value={effectiveDepartmentID}
                 loading={departmentsQuery.isLoading}
                 placeholder="选择部门"
-                options={(departmentsQuery.data ?? []).map((item) => ({ label: item.name, value: item.id }))}
+                options={(departmentsQuery.data ?? []).map((item) => ({
+                  label: item.name,
+                  value: item.id
+                }))}
                 onChange={setSelectedDepartmentID}
               />
             ) : null}
           </Space>
-          {canOpenCurrentReport ? (
+        }
+        action={
+          canOpenCurrentReport ? (
             <Button
               type="primary"
               icon={<EditOutlined />}
@@ -322,16 +379,20 @@ export function ReportsPage() {
             >
               {openLabel}
             </Button>
-          ) : null}
-        </Space>
-      </Card>
+          ) : null
+        }
+      />
       {activeTab === "personal" ? (
         <PersonalDailyTable
           key={`personal:${from ?? ""}:${to ?? ""}`}
           from={from}
           to={to}
           onEdit={(record) =>
-            setGenerateTarget({ scope: "personal", reportId: record.id, reportDate: record.report_date })
+            setGenerateTarget({
+              scope: "personal",
+              reportId: record.id,
+              reportDate: record.report_date
+            })
           }
           onDelete={(record) => confirmDelete("personal", record.id)}
         />
@@ -342,7 +403,11 @@ export function ReportsPage() {
           from={from}
           to={to}
           onEdit={(record) =>
-            setGenerateTarget({ scope: "team", reportId: record.id, reportDate: record.report_date })
+            setGenerateTarget({
+              scope: "team",
+              reportId: record.id,
+              reportDate: record.report_date
+            })
           }
           onDelete={(record) => confirmDelete("team", record.id)}
         />
@@ -409,10 +474,18 @@ function MemberDailyTable({
     enabled: !requireDepartmentId || Boolean(departmentId)
   });
   return (
-    <MemberReportBrowser items={reportsQuery.data ?? []} loading={reportsQuery.isLoading}
-      error={reportsQuery.isError ? errorMessage(reportsQuery.error) : undefined} showNextDayPlan
-      queryKey={`daily:${date}`} fetchDetail={fetchMemberDailyReport} displayMode="content-list"
-      contentListTitle={user?.role === "director" || user?.role === "admin" ? "部门成员日报" : "小组成员日报"} />
+    <MemberReportBrowser
+      items={reportsQuery.data ?? []}
+      loading={reportsQuery.isLoading}
+      error={reportsQuery.isError ? errorMessage(reportsQuery.error) : undefined}
+      showNextDayPlan
+      queryKey={`daily:${date}`}
+      fetchDetail={fetchMemberDailyReport}
+      displayMode="content-list"
+      contentListTitle={
+        user?.role === "director" || user?.role === "admin" ? "部门成员日报" : "小组成员日报"
+      }
+    />
   );
 }
 
@@ -425,7 +498,10 @@ type InlineDailyRecord = {
 
 async function copyReportText(value: string) {
   if (navigator.clipboard && window.isSecureContext) {
-    const copied = await navigator.clipboard.writeText(value).then(() => true, () => false);
+    const copied = await navigator.clipboard.writeText(value).then(
+      () => true,
+      () => false
+    );
     if (copied) return;
   }
   const textarea = document.createElement("textarea");
@@ -441,7 +517,10 @@ async function copyReportText(value: string) {
   if (!copied) throw new Error("copy failed");
 }
 
-function InlineDailyContentList<TRecord extends InlineDailyRecord, TDetail extends { content: string }>({
+function InlineDailyContentList<
+  TRecord extends InlineDailyRecord,
+  TDetail extends { content: string }
+>({
   title,
   items,
   total,
@@ -504,12 +583,17 @@ function InlineDailyContentList<TRecord extends InlineDailyRecord, TDetail exten
           ))}
         </div>
       )}
-      {!error && !loading && total > 0 ? <Pagination className="reports-inline-content-list__pagination" {...pagination(total)} /> : null}
+      {!error && !loading && total > 0 ? (
+        <Pagination className="reports-inline-content-list__pagination" {...pagination(total)} />
+      ) : null}
     </Card>
   );
 }
 
-function InlineDailyContentItem<TRecord extends InlineDailyRecord, TDetail extends { content: string }>({
+function InlineDailyContentItem<
+  TRecord extends InlineDailyRecord,
+  TDetail extends { content: string }
+>({
   record,
   title,
   fetchDetail,
@@ -597,10 +681,16 @@ function InlineDailyContentItem<TRecord extends InlineDailyRecord, TDetail exten
 
   const reportBody = (
     <>
-      {detailQuery.isLoading ? <div className="member-report-content-item__loading">正在加载日报全文…</div> : null}
+      {detailQuery.isLoading ? (
+        <div className="member-report-content-item__loading">正在加载日报全文…</div>
+      ) : null}
       {detailQuery.isError ? <Alert type="error" showIcon message="日报加载失败" /> : null}
-      {!detailQuery.isLoading && !detailQuery.isError && detailQuery.data?.content?.trim() ? <MarkdownViewer value={detailQuery.data.content} /> : null}
-      {!detailQuery.isLoading && !detailQuery.isError && !detailQuery.data?.content?.trim() ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无日报内容" /> : null}
+      {!detailQuery.isLoading && !detailQuery.isError && detailQuery.data?.content?.trim() ? (
+        <MarkdownViewer value={detailQuery.data.content} />
+      ) : null}
+      {!detailQuery.isLoading && !detailQuery.isError && !detailQuery.data?.content?.trim() ? (
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无日报内容" />
+      ) : null}
       <div className="member-report-content-item__plan">
         <strong>明日计划</strong>
         <p>{record.next_day_plan?.trim() || "未填写"}</p>
@@ -612,9 +702,7 @@ function InlineDailyContentItem<TRecord extends InlineDailyRecord, TDetail exten
   const contentSummary = reportContentSummary(detailQuery.data?.content ?? "");
   const summary = contentSummary || preview;
   const summaryText = summary || (detailQuery.isLoading ? "正在读取正文摘要…" : "展开查看日报正文");
-  const actionItems: MenuProps["items"] = [
-    { key: "edit", label: "编辑", icon: <EditOutlined /> }
-  ];
+  const actionItems: MenuProps["items"] = [{ key: "edit", label: "编辑", icon: <EditOutlined /> }];
   if (canDelete) {
     actionItems.push({ key: "delete", label: "删除", icon: <DeleteOutlined />, danger: true });
   }
@@ -644,14 +732,22 @@ function InlineDailyContentItem<TRecord extends InlineDailyRecord, TDetail exten
                 {meta ? <span>{meta}</span> : null}
               </span>
             ) : null}
-            <span className={`member-report-content-item__preview${summary ? "" : " member-report-content-item__preview--empty"}`}>
+            <span
+              className={`member-report-content-item__preview${summary ? "" : " member-report-content-item__preview--empty"}`}
+            >
               {summaryText}
             </span>
             <small>更新于 {formatDateTime(record.updated_at)}</small>
           </span>
         </button>
         <div className="member-report-content-item__actions" role="group" aria-label="日报操作">
-          <Button className="member-report-content-item__toggle" type="text" size="small" aria-expanded={expanded} onClick={toggleReport}>
+          <Button
+            className="member-report-content-item__toggle"
+            type="text"
+            size="small"
+            aria-expanded={expanded}
+            onClick={toggleReport}
+          >
             {expanded ? "收起正文" : "查看全文"}
           </Button>
           <Dropdown
@@ -666,7 +762,12 @@ function InlineDailyContentItem<TRecord extends InlineDailyRecord, TDetail exten
               }
             }}
           >
-            <Button className="member-report-content-item__more" type="text" size="small" aria-label="更多操作">
+            <Button
+              className="member-report-content-item__more"
+              type="text"
+              size="small"
+              aria-label="更多操作"
+            >
               更多
               <DownOutlined />
             </Button>
@@ -677,7 +778,15 @@ function InlineDailyContentItem<TRecord extends InlineDailyRecord, TDetail exten
         <div className="member-report-content-item__detail">
           <div className="member-report-content-item__detail-bar">
             <Tooltip title="复制全文（保留 Markdown 格式）">
-              <Button className="member-report-content-item__copy" type="text" size="small" icon={<CopyOutlined />} aria-label="复制日报全文" disabled={!detailQuery.data?.content?.trim()} onClick={() => void copyCurrentReport()} />
+              <Button
+                className="member-report-content-item__copy"
+                type="text"
+                size="small"
+                icon={<CopyOutlined />}
+                aria-label="复制日报全文"
+                disabled={!detailQuery.data?.content?.trim()}
+                onClick={() => void copyCurrentReport()}
+              />
             </Tooltip>
           </div>
           {reportBody}
@@ -701,7 +810,9 @@ function InlineDailyContentItem<TRecord extends InlineDailyRecord, TDetail exten
               返回
             </Button>
             <div className="member-report-mobile-detail__identity">
-              <strong id={`inline-daily-mobile-title-${record.id}`}>{formatDate(record.report_date)}</strong>
+              <strong id={`inline-daily-mobile-title-${record.id}`}>
+                {formatDate(record.report_date)}
+              </strong>
               <span>{meta}</span>
             </div>
             <Button
@@ -757,7 +868,9 @@ function PersonalDailyTable({
       items={reportsQuery.data?.items ?? []}
       total={reportsQuery.data?.total ?? 0}
       loading={reportsQuery.isLoading}
-      error={reportsQuery.isError ? `我的日报加载失败：${errorMessage(reportsQuery.error)}` : undefined}
+      error={
+        reportsQuery.isError ? `我的日报加载失败：${errorMessage(reportsQuery.error)}` : undefined
+      }
       pagination={tablePagination}
       fetchDetail={fetchReport}
       renderStatus={() => null}
@@ -801,14 +914,18 @@ function TeamDailyTable({
       items={reportsQuery.data?.items ?? []}
       total={reportsQuery.data?.total ?? 0}
       loading={reportsQuery.isLoading}
-      error={reportsQuery.isError ? `小组日报加载失败：${errorMessage(reportsQuery.error)}` : undefined}
+      error={
+        reportsQuery.isError ? `小组日报加载失败：${errorMessage(reportsQuery.error)}` : undefined
+      }
       pagination={tablePagination}
       fetchDetail={fetchTeamReport}
       renderStatus={() => null}
       renderMeta={(record) =>
         `${teamStatusText(record)} · 共 ${record.member_count} 人 · 已提交 ${record.submitted_count} · 未提交 ${record.missing_count}`
       }
-      renderPreview={(record) => record.next_day_plan?.trim() ? `明日计划：${record.next_day_plan.trim()}` : ""}
+      renderPreview={(record) =>
+        record.next_day_plan?.trim() ? `明日计划：${record.next_day_plan.trim()}` : ""
+      }
       onEdit={onEdit}
       onDelete={onDelete}
       canDelete={(record) => record.leader_id === user?.id}
@@ -853,12 +970,18 @@ function DepartmentDailyTable({
       items={reportsQuery.data?.items ?? []}
       total={reportsQuery.data?.total ?? 0}
       loading={reportsQuery.isLoading}
-      error={reportsQuery.isError ? `部门日报加载失败：${errorMessage(reportsQuery.error)}` : undefined}
+      error={
+        reportsQuery.isError ? `部门日报加载失败：${errorMessage(reportsQuery.error)}` : undefined
+      }
       pagination={tablePagination}
       fetchDetail={(id) => fetchDepartmentReport(id, departmentId)}
       renderStatus={() => null}
-      renderMeta={(record) => `共 ${record.team_count} 个小组 · 已提交 ${record.submitted_team_count} · 未提交 ${record.missing_team_count}`}
-      renderPreview={(record) => record.next_day_plan?.trim() ? `明日计划：${record.next_day_plan.trim()}` : ""}
+      renderMeta={(record) =>
+        `共 ${record.team_count} 个小组 · 已提交 ${record.submitted_team_count} · 未提交 ${record.missing_team_count}`
+      }
+      renderPreview={(record) =>
+        record.next_day_plan?.trim() ? `明日计划：${record.next_day_plan.trim()}` : ""
+      }
       onEdit={onEdit}
       onDelete={onDelete}
     />
@@ -878,7 +1001,6 @@ function PersonalDailyReportDetailContent({
   id?: string;
   embedded?: boolean;
 }) {
-
   const reportQuery = useQuery({
     queryKey: ["reports", "daily", "personal-detail", id],
     queryFn: () => fetchReport(id ?? ""),
@@ -890,7 +1012,12 @@ function PersonalDailyReportDetailContent({
   const content = (
     <>
       {reportQuery.isError ? (
-        <Alert type="error" showIcon message="个人日报加载失败" description={errorMessage(reportQuery.error)} />
+        <Alert
+          type="error"
+          showIcon
+          message="个人日报加载失败"
+          description={errorMessage(reportQuery.error)}
+        />
       ) : !report ? (
         <Card loading={reportQuery.isLoading} />
       ) : (
@@ -903,7 +1030,11 @@ function PersonalDailyReportDetailContent({
             </Space>
           </Card>
           <Card title="日报正文">
-            {report.content.trim() ? <MarkdownViewer value={report.content} /> : <Empty description="暂无日报内容" />}
+            {report.content.trim() ? (
+              <MarkdownViewer value={report.content} />
+            ) : (
+              <Empty description="暂无日报内容" />
+            )}
           </Card>
         </Space>
       )}
@@ -915,7 +1046,15 @@ function PersonalDailyReportDetailContent({
   }
 
   return (
-    <PagePanel title="个人日报详情" breadcrumbs={[{ title: "报告" }, { title: "日报", path: dailyReportsPath("personal") }, { title: "个人日报详情" }]} showNav={false}>
+    <PagePanel
+      title="个人日报详情"
+      breadcrumbs={[
+        { title: "报告" },
+        { title: "日报", path: dailyReportsPath("personal") },
+        { title: "个人日报详情" }
+      ]}
+      showNav={false}
+    >
       {content}
     </PagePanel>
   );
@@ -927,13 +1066,7 @@ export function TeamDailyReportDetailPage() {
   return <TeamDailyReportContent id={id} />;
 }
 
-function TeamDailyReportContent({
-  id,
-  embedded = false
-}: {
-  id?: string;
-  embedded?: boolean;
-}) {
+function TeamDailyReportContent({ id, embedded = false }: { id?: string; embedded?: boolean }) {
   const reportQuery = useQuery({
     queryKey: ["reports", "daily", "team-detail", id],
     queryFn: () => fetchTeamReport(id ?? ""),
@@ -945,7 +1078,12 @@ function TeamDailyReportContent({
   const content = (
     <>
       {reportQuery.isError ? (
-        <Alert type="error" showIcon message="小组日报加载失败" description={errorMessage(reportQuery.error)} />
+        <Alert
+          type="error"
+          showIcon
+          message="小组日报加载失败"
+          description={errorMessage(reportQuery.error)}
+        />
       ) : !report ? (
         <Card loading={reportQuery.isLoading} />
       ) : (
@@ -954,13 +1092,24 @@ function TeamDailyReportContent({
             <Space size="large" wrap>
               <Text>日期：{formatDate(report.report_date)}</Text>
               <Text>小组：{report.team_name}</Text>
-              <Text>状态：{report.status === "submitted" ? "已发送" : report.status === "saved" && report.submitted_at ? "已保存，未发送最新修改" : "已保存"}</Text>
+              <Text>
+                状态：
+                {report.status === "submitted"
+                  ? "已发送"
+                  : report.status === "saved" && report.submitted_at
+                    ? "已保存，未发送最新修改"
+                    : "已保存"}
+              </Text>
               <Text>发送时间：{formatDateTime(report.submitted_at)}</Text>
               <Text>更新时间：{formatDateTime(report.updated_at)}</Text>
             </Space>
           </Card>
           <Card title="小组日报正文">
-            {report.content.trim() ? <MarkdownViewer value={report.content} /> : <Empty description="暂无小组日报内容" />}
+            {report.content.trim() ? (
+              <MarkdownViewer value={report.content} />
+            ) : (
+              <Empty description="暂无小组日报内容" />
+            )}
           </Card>
         </Space>
       )}
@@ -972,7 +1121,15 @@ function TeamDailyReportContent({
   }
 
   return (
-    <PagePanel title="小组日报详情" breadcrumbs={[{ title: "报告" }, { title: "日报", path: dailyReportsPath("team") }, { title: "小组日报详情" }]} showNav={false}>
+    <PagePanel
+      title="小组日报详情"
+      breadcrumbs={[
+        { title: "报告" },
+        { title: "日报", path: dailyReportsPath("team") },
+        { title: "小组日报详情" }
+      ]}
+      showNav={false}
+    >
       {content}
     </PagePanel>
   );
@@ -991,7 +1148,6 @@ function DepartmentDailyReportContent({
   id?: string;
   embedded?: boolean;
 }) {
-
   const reportQuery = useQuery({
     queryKey: ["reports", "daily", "department-detail", id],
     queryFn: () => fetchDepartmentReport(id ?? ""),
@@ -1003,7 +1159,12 @@ function DepartmentDailyReportContent({
   const content = (
     <>
       {reportQuery.isError ? (
-        <Alert type="error" showIcon message="部门日报加载失败" description={errorMessage(reportQuery.error)} />
+        <Alert
+          type="error"
+          showIcon
+          message="部门日报加载失败"
+          description={errorMessage(reportQuery.error)}
+        />
       ) : !report ? (
         <Card loading={reportQuery.isLoading} />
       ) : (
@@ -1011,12 +1172,18 @@ function DepartmentDailyReportContent({
           <Card>
             <Space size="large" wrap>
               <Text>日期：{formatDate(report.report_date)}</Text>
-              <Text>状态：{report.status === "saved" || report.archived_at ? "已保存" : "暂无报告"}</Text>
+              <Text>
+                状态：{report.status === "saved" || report.archived_at ? "已保存" : "暂无报告"}
+              </Text>
               <Text>更新时间：{formatDateTime(report.updated_at)}</Text>
             </Space>
           </Card>
           <Card title="部门日报正文">
-            {report.content.trim() ? <MarkdownViewer value={report.content} /> : <Empty description="暂无部门日报内容" />}
+            {report.content.trim() ? (
+              <MarkdownViewer value={report.content} />
+            ) : (
+              <Empty description="暂无部门日报内容" />
+            )}
           </Card>
         </Space>
       )}
@@ -1028,7 +1195,15 @@ function DepartmentDailyReportContent({
   }
 
   return (
-    <PagePanel title="部门日报详情" breadcrumbs={[{ title: "报告" }, { title: "日报", path: dailyReportsPath("department") }, { title: "部门日报详情" }]} showNav={false}>
+    <PagePanel
+      title="部门日报详情"
+      breadcrumbs={[
+        { title: "报告" },
+        { title: "日报", path: dailyReportsPath("department") },
+        { title: "部门日报详情" }
+      ]}
+      showNav={false}
+    >
       {content}
     </PagePanel>
   );

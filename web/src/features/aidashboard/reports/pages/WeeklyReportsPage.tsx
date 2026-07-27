@@ -28,7 +28,7 @@ import {
   FileTextOutlined
 } from "@ant-design/icons";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import dayjs from "dayjs";
 
 import {
@@ -70,6 +70,7 @@ import { MarkdownViewer } from "@/shared/components/MarkdownViewer/MarkdownViewe
 import { MarkdownEditor } from "@/shared/components/MarkdownEditor/MarkdownEditor";
 import { PagePanel } from "@/shared/components/PagePanel/PagePanel";
 import { MemberReportBrowser } from "../MemberReportBrowser";
+import { ReportWorkspaceHeader } from "../components/ReportWorkspaceHeader";
 import { reportContentSummary } from "../utils/reportSummary";
 
 import "../components/DailyReportGenerateModal.css";
@@ -122,9 +123,10 @@ function weeklyRangeParts(weekStart: string) {
   const start = dayjs(weekStart);
   const end = start.add(6, "day");
   return {
-    date: start.month() === end.month()
-      ? `${start.format("MM/DD")}–${end.format("DD")}`
-      : `${start.format("MM/DD")}–${end.format("MM/DD")}`,
+    date:
+      start.month() === end.month()
+        ? `${start.format("MM/DD")}–${end.format("DD")}`
+        : `${start.format("MM/DD")}–${end.format("MM/DD")}`,
     context: `${start.format("YYYY")} · 周报`
   };
 }
@@ -693,14 +695,14 @@ function WeeklyReportEditorModal({
                     <MarkdownViewer value={editorContent} />
                   ) : (
                     <MarkdownEditor
-                    className="console-report-editor-layout__content-input"
-                    height="min(46vh, 360px)"
-                    disabled={aiGenerating}
-                    value={editorContent}
-                    onChange={(value) => {
-                      setContent(value);
-                      setContentTouched(true);
-                    }}
+                      className="console-report-editor-layout__content-input"
+                      height="min(46vh, 360px)"
+                      disabled={aiGenerating}
+                      value={editorContent}
+                      onChange={(value) => {
+                        setContent(value);
+                        setContentTouched(true);
+                      }}
                     />
                   )}
                 </div>
@@ -760,6 +762,7 @@ export function WeeklyReportsPage() {
   const { message, modal } = App.useApp();
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
   const [roleTab, setRoleTab] = useState<"mine" | "member" | "team" | "department">("mine");
   const [memberWeekStart, setMemberWeekStart] = useState(() => weekStartOf(dayjs()));
   const [selectedDepartmentID, setSelectedDepartmentID] = useState<string>();
@@ -774,7 +777,9 @@ export function WeeklyReportsPage() {
   const notificationWeekStart = searchParams.get("week_start");
   const notificationTarget =
     searchParams.get("open") === "report" &&
-    (notificationTab === "mine" || notificationTab === "team" || notificationTab === "department") &&
+    (notificationTab === "mine" ||
+      notificationTab === "team" ||
+      notificationTab === "department") &&
     notificationWeekStart
       ? {
           scope: notificationTab,
@@ -861,9 +866,7 @@ export function WeeklyReportsPage() {
     notificationTab === "department"
       ? notificationTab
       : roleTab;
-  const activeTab = tabOptions.some((item) => item.value === requestedTab)
-    ? requestedTab
-    : "mine";
+  const activeTab = tabOptions.some((item) => item.value === requestedTab) ? requestedTab : "mine";
   const currentWeekStart = weekStartOf(dayjs());
   const openLabel =
     activeTab === "team"
@@ -871,6 +874,20 @@ export function WeeklyReportsPage() {
       : activeTab === "department"
         ? "填写部门周报"
         : "填写周报";
+  const workspaceTitle =
+    activeTab === "member"
+      ? user.role === "director" || user.role === "admin"
+        ? "部门成员周报"
+        : "小组成员周报"
+      : activeTab === "team"
+        ? "小组周报"
+        : activeTab === "department"
+          ? "部门周报"
+          : "我的周报";
+  const workspaceDescription =
+    activeTab === "member"
+      ? "先确认本周成员提交情况，再展开阅读已提交周报。"
+      : "选择报告范围查看历史周报，当前周报通过右侧操作统一生成和编辑。";
   const invalidateWeekly = () => {
     void queryClient.invalidateQueries({ queryKey: ["reports", "weekly"] });
   };
@@ -887,11 +904,14 @@ export function WeeklyReportsPage() {
   const closeModalTarget = () => {
     setModalTarget(null);
     if (!notificationTarget) return;
-    setSearchParams((current) => {
-      const next = new URLSearchParams(current);
-      for (const key of ["open", "week_start", "department_id"]) next.delete(key);
-      return next;
-    }, { replace: true });
+    setSearchParams(
+      (current) => {
+        const next = new URLSearchParams(current);
+        for (const key of ["open", "week_start", "department_id"]) next.delete(key);
+        return next;
+      },
+      { replace: true }
+    );
   };
 
   return (
@@ -902,9 +922,21 @@ export function WeeklyReportsPage() {
       className="reports-page aidashboard-list"
       showNav={false}
     >
-      <Card className="reports-control-card">
-        <Space wrap style={{ width: "100%", justifyContent: "space-between" }}>
+      <ReportWorkspaceHeader
+        periodLabel="周报"
+        scopeLabel={workspaceTitle}
+        description={workspaceDescription}
+        controls={
           <Space wrap>
+            <Segmented
+              className="report-workspace-period-switch"
+              value="weekly"
+              options={[
+                { label: "日报", value: "daily" },
+                { label: "周报", value: "weekly" }
+              ]}
+              onChange={(value) => value === "daily" && navigate("/reports")}
+            />
             {tabOptions.length > 1 ? (
               <Segmented
                 value={activeTab}
@@ -936,7 +968,9 @@ export function WeeklyReportsPage() {
               />
             ) : null}
           </Space>
-          {activeTab !== "member" ? (
+        }
+        action={
+          activeTab !== "member" ? (
             <Button
               type="primary"
               icon={<FileTextOutlined />}
@@ -953,9 +987,9 @@ export function WeeklyReportsPage() {
             >
               {openLabel}
             </Button>
-          ) : null}
-        </Space>
-      </Card>
+          ) : null
+        }
+      />
 
       {activeTab === "mine" ? (
         <PersonalWeeklyRecordsTable
@@ -1237,9 +1271,7 @@ function InlineWeeklyContentItem<TRecord extends InlineWeeklyRecord>({
   const contentSummary = reportContentSummary(detailQuery.data?.content ?? "");
   const summary = contentSummary || preview;
   const summaryText = summary || (detailQuery.isLoading ? "正在读取正文摘要…" : "展开查看周报正文");
-  const actionItems: MenuProps["items"] = [
-    { key: "edit", label: "编辑", icon: <EditOutlined /> }
-  ];
+  const actionItems: MenuProps["items"] = [{ key: "edit", label: "编辑", icon: <EditOutlined /> }];
   if (canDelete) {
     actionItems.push({ key: "delete", label: "删除", icon: <DeleteOutlined />, danger: true });
   }
@@ -1269,7 +1301,9 @@ function InlineWeeklyContentItem<TRecord extends InlineWeeklyRecord>({
                 <span>{meta}</span>
               </span>
             ) : null}
-            <span className={`member-report-content-item__preview${summary ? "" : " member-report-content-item__preview--empty"}`}>
+            <span
+              className={`member-report-content-item__preview${summary ? "" : " member-report-content-item__preview--empty"}`}
+            >
               {summaryText}
             </span>
             <small>更新于 {formatDateTime(record.updated_at)}</small>
@@ -1297,7 +1331,12 @@ function InlineWeeklyContentItem<TRecord extends InlineWeeklyRecord>({
               }
             }}
           >
-            <Button className="member-report-content-item__more" type="text" size="small" aria-label="更多操作">
+            <Button
+              className="member-report-content-item__more"
+              type="text"
+              size="small"
+              aria-label="更多操作"
+            >
               更多
               <DownOutlined />
             </Button>
@@ -1440,7 +1479,9 @@ function MemberWeeklyTable({
       fetchDetail={fetchMemberWeeklyReport}
       displayMode="content-list"
       reportLabel="周报"
-      contentListTitle={user?.role === "director" || user?.role === "admin" ? "部门成员周报" : "小组成员周报"}
+      contentListTitle={
+        user?.role === "director" || user?.role === "admin" ? "部门成员周报" : "小组成员周报"
+      }
       emptyPeriodLabel="本周"
     />
   );
