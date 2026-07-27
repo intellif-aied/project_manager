@@ -115,6 +115,7 @@ func main() {
 	managedAgentDefaults := handler.ManagedAgentDefaults{
 		Engine:             cfg.ManagedAgentDefaultEngine,
 		ModelID:            cfg.ManagedAgentDefaultModelID,
+		ReportModelID:      cfg.ManagedAgentReportModelID,
 		ReportSkillOwner:   cfg.ManagedAgentReportSkillOwner,
 		ReportSkillVersion: cfg.ManagedAgentReportSkillVersion,
 		ReportMCPURL:       cfg.ManagedAgentReportMCPURL,

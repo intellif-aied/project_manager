@@ -10,14 +10,13 @@ import {
   SolutionOutlined,
   TeamOutlined
 } from "@ant-design/icons";
+import { Navigate } from "react-router-dom";
 
 import { AIAssetsPage } from "@/features/aidashboard/ai-assets/pages/AIAssetsPage";
 import { AgentCreatePage } from "@/features/aidashboard/ai-assets/pages/AgentCreatePage";
 import { AgentEditPage } from "@/features/aidashboard/ai-assets/pages/AgentEditPage";
 import { AgentRunPage } from "@/features/aidashboard/ai-assets/pages/AgentRunPage";
 import { AgentScheduleFormPage } from "@/features/aidashboard/ai-assets/pages/AgentScheduleFormPage";
-import { MCPCreatePage } from "@/features/aidashboard/ai-assets/pages/MCPCreatePage";
-import { SkillCreatePage } from "@/features/aidashboard/ai-assets/pages/SkillCreatePage";
 import { DashboardPage } from "@/features/aidashboard/dashboard/DashboardPage";
 import { OrganizationPage } from "@/features/aidashboard/organization/pages/OrganizationPage";
 import { OrganizationUserEditPage } from "@/features/aidashboard/organization/pages/OrganizationUserEditPage";
@@ -229,7 +228,7 @@ export const appRoutes: AppRoute[] = [
     title: "新建 Skill",
     hideInMenu: true,
     roles: ["admin", "director", "pm", "team_leader", "employee"],
-    element: <SkillCreatePage />
+    element: <Navigate to="/ai-assets" replace />
   },
   {
     path: "/ai-assets/agents/new",
@@ -271,7 +270,7 @@ export const appRoutes: AppRoute[] = [
     title: "新建 MCP Server",
     hideInMenu: true,
     roles: ["admin", "director", "pm", "team_leader", "employee"],
-    element: <MCPCreatePage />
+    element: <Navigate to="/ai-assets" replace />
   },
   {
     path: "/notifications",

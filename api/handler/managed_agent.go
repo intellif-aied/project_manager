@@ -77,6 +77,7 @@ var reportSystemPromptKeys = map[string]struct{}{
 type ManagedAgentDefaults struct {
 	Engine                         string
 	ModelID                        string
+	ReportModelID                  string
 	ReportSkillOwner               string
 	ReportSkillSlug                string
 	ReportSkillVersion             string
@@ -123,6 +124,10 @@ func normalizeManagedAgentDefaults(defaults ManagedAgentDefaults) ManagedAgentDe
 	defaults.ModelID = strings.TrimSpace(defaults.ModelID)
 	if defaults.ModelID == "" {
 		defaults.ModelID = "MiniMax-M2.5"
+	}
+	defaults.ReportModelID = strings.TrimSpace(defaults.ReportModelID)
+	if defaults.ReportModelID == "" {
+		defaults.ReportModelID = "deepseek-v4-flash"
 	}
 	defaults.ReportSkillOwner = strings.TrimSpace(defaults.ReportSkillOwner)
 	defaults.ReportSkillSlug = strings.TrimSpace(defaults.ReportSkillSlug)
@@ -623,6 +628,10 @@ func platformManagedAgentRequest(req model.UpsertManagedAgentRequest) model.Upse
 	return req
 }
 
+func boolPointer(value bool) *bool {
+	return &value
+}
+
 func (h *ManagedAgentHandler) mergeManagedAgentProfiles(ctx context.Context, userID string, agents []model.ManagedAgent) []model.ManagedAgent {
 	if h.db == nil || strings.TrimSpace(userID) == "" || len(agents) == 0 {
 		return agents
@@ -1003,7 +1012,9 @@ func (h *ManagedAgentHandler) CreateDefaultReportAgent(w http.ResponseWriter, r 
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return
 	}
-	client := h.clientForRequest(r)
+	// The configured client is the dedicated platform account for system report
+	// assets. The request user's platform token must not own or fund this Agent.
+	client := h.client
 	systemSkill, err := h.resolveSystemReportSkill(r.Context(), client)
 	if err != nil {
 		writeManagedAgentError(w, err)
@@ -1016,11 +1027,7 @@ func (h *ManagedAgentHandler) CreateDefaultReportAgent(w http.ResponseWriter, r 
 		writeManagedAgentError(w, err)
 		return
 	}
-	existing, found, err := h.selectReportAgentForUser(r.Context(), u.ID, agentsResp.Agents)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
+	existing, found := h.selectDefaultReportAgent(agentsResp.Agents)
 	if found {
 		if h.defaults.ReportAssetRepair {
 			var patch model.UpsertManagedAgentRequest
@@ -1136,6 +1143,7 @@ func managedAgentFromUpsertRequest(req model.UpsertManagedAgentRequest) model.Ma
 		Skills:              req.Skills,
 		MCPServers:          req.MCPServers,
 		MCPBindings:         req.MCPBindings,
+		ShareModelAccess:    req.ShareModelAccess != nil && *req.ShareModelAccess,
 	}
 }
 
@@ -1246,7 +1254,8 @@ func (h *ManagedAgentHandler) defaultReportAgentRequest(reportSkill model.Manage
 		Name:                h.defaults.ReportAgentName,
 		Description:         h.defaults.ReportAgentDescription,
 		Engine:              h.defaults.Engine,
-		DefaultModelID:      h.defaults.ModelID,
+		DefaultModelID:      h.defaults.ReportModelID,
+		ShareModelAccess:    boolPointer(true),
 		Instructions:        h.reportAgentInstructions(),
 		StartPromptTemplate: h.reportAgentStartPromptTemplate(),
 		CredentialSlots: []model.ManagedCredentialSlot{{
@@ -1431,8 +1440,12 @@ func (h *ManagedAgentHandler) repairedDefaultReportAgentRequest(agent model.Mana
 		req.Engine = h.defaults.Engine
 		changed = true
 	}
-	if strings.TrimSpace(req.DefaultModelID) == "" {
-		req.DefaultModelID = h.defaults.ModelID
+	if strings.TrimSpace(req.DefaultModelID) != h.defaults.ReportModelID {
+		req.DefaultModelID = h.defaults.ReportModelID
+		changed = true
+	}
+	if !agent.ShareModelAccess {
+		req.ShareModelAccess = boolPointer(true)
 		changed = true
 	}
 	if !hasCredentialSlot(req.CredentialSlots, h.defaults.ReportMCPCredentialSlot) {
@@ -2360,17 +2373,15 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 	}
 
 	client := h.clientForRequest(r)
-	if agentID == "default" {
+	isSystemDefault := agentID == "default"
+	if isSystemDefault {
+		client = h.client
 		agentsResp, err := client.ListMyAgents(r.Context())
 		if err != nil {
 			writeManagedAgentError(w, err)
 			return
 		}
-		selected, found, err := h.selectReportAgentForUser(r.Context(), u.ID, agentsResp.Agents)
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
+		selected, found := h.selectDefaultReportAgent(agentsResp.Agents)
 		if !found {
 			writeJSON(w, http.StatusOK, map[string]any{
 				"available": false,
@@ -2483,6 +2494,9 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 	// An omitted per-run model_id must remain omitted. The managed platform then
 	// resolves the Agent's saved default model together with its provider binding.
 	modelID := strings.TrimSpace(req.ModelID)
+	if isSystemDefault {
+		modelID = h.defaults.ReportModelID
+	}
 	inputRef := map[string]any{
 		"trigger_source":  "manual",
 		"report_type":     req.ReportType,
@@ -2544,6 +2558,9 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 		"credential_overrides":          copyStringMap(runtimeOverrides),
 		"report_mcp_slots":              sortedStringKeys(reportSlots),
 		"report_context_representation": reportcontext.RepresentationWorkEvidence,
+	}
+	if isSystemDefault {
+		executionInput["system_report_account"] = true
 	}
 	result, err := h.reportSource.CreateReportRun(r.Context(), reportsource.RunSubmissionRequest{
 		UserID: u.ID, ReportType: req.ReportType, Period: contextPeriod,

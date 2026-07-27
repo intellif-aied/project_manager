@@ -28,6 +28,11 @@ const agentAssets = readFileSync(
   resolve(root, "src/features/aidashboard/ai-assets/utils/agentAssets.ts"),
   "utf8"
 );
+const aiAssetsPage = readFileSync(
+  resolve(root, "src/features/aidashboard/ai-assets/pages/AIAssetsPage.tsx"),
+  "utf8"
+);
+const routes = readFileSync(resolve(root, "src/router/routes.tsx"), "utf8");
 const agentRunPage = readFileSync(
   resolve(root, "src/features/aidashboard/ai-assets/pages/AgentRunPage.tsx"),
   "utf8"
@@ -250,6 +255,26 @@ assert.match(
   agentAssets,
   /"report_source_selection_id"/,
   "report source selection id is an Aida-managed prompt key"
+);
+assert.match(
+  agentAssets,
+  /new Set<AssetTab>\(\["agents", "schedules", "runs"\]\)/,
+  "personal Skill and MCP tabs must not be addressable"
+);
+assert.match(
+  aiAssetsPage,
+  /const PERSONAL_RESOURCE_MANAGEMENT_VISIBLE = false/,
+  "personal Skill and MCP management must stay hidden"
+);
+assert.match(
+  routes,
+  /path: "\/ai-assets\/skills\/new"[\s\S]*?element: <Navigate to="\/ai-assets" replace \/>/,
+  "the legacy Skill create URL must redirect to AI assets"
+);
+assert.match(
+  routes,
+  /path: "\/ai-assets\/mcp\/new"[\s\S]*?element: <Navigate to="\/ai-assets" replace \/>/,
+  "the legacy MCP create URL must redirect to AI assets"
 );
 assert.doesNotMatch(
   agentRunPage,

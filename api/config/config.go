@@ -29,6 +29,7 @@ type Config struct {
 	ManagedAgentToken              string
 	ManagedAgentDefaultEngine      string
 	ManagedAgentDefaultModelID     string
+	ManagedAgentReportModelID      string
 	ManagedAgentReportSkillOwner   string
 	ManagedAgentReportSkillVersion string
 	ManagedAgentReportMCPURL       string
@@ -72,6 +73,7 @@ func Load() *Config {
 		ManagedAgentToken:              getEnv("MANAGED_AGENT_TOKEN", ""),
 		ManagedAgentDefaultEngine:      getEnv("MANAGED_AGENT_DEFAULT_ENGINE", "claude-code"),
 		ManagedAgentDefaultModelID:     getEnv("MANAGED_AGENT_DEFAULT_MODEL_ID", "MiniMax-M2.5"),
+		ManagedAgentReportModelID:      getEnv("MANAGED_AGENT_REPORT_MODEL_ID", "deepseek-v4-flash"),
 		ManagedAgentReportSkillOwner:   getEnv("MANAGED_AGENT_REPORT_SKILL_OWNER", ""),
 		ManagedAgentReportSkillVersion: getEnv("MANAGED_AGENT_REPORT_SKILL_VERSION", ""),
 		ManagedAgentReportMCPURL:       getEnv("MANAGED_AGENT_REPORT_MCP_URL", ""),

@@ -933,6 +933,7 @@ type ManagedAgent struct {
 	ManagedVersion      int                     `json:"managed_version,omitempty"`
 	Archived            bool                    `json:"archived"`
 	IsPublic            bool                    `json:"is_public"`
+	ShareModelAccess    bool                    `json:"share_model_access"`
 	Skills              []ManagedSkillRef       `json:"skills,omitempty"`
 	MCPServers          []ManagedMCPServer      `json:"mcp_servers,omitempty"`
 	MCPBindings         []ManagedMCPBinding     `json:"mcp_bindings,omitempty"`
@@ -971,6 +972,7 @@ type UpsertManagedAgentRequest struct {
 	Skills              []ManagedSkillRef       `json:"skills"`
 	MCPServers          []ManagedMCPServer      `json:"mcp_servers"`
 	MCPBindings         []ManagedMCPBinding     `json:"mcp_bindings"`
+	ShareModelAccess    *bool                   `json:"share_model_access,omitempty"`
 	BusinessType        string                  `json:"business_type,omitempty"`
 	ReportTypes         []string                `json:"report_types,omitempty"`
 }

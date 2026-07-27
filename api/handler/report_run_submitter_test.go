@@ -23,6 +23,9 @@ func TestReportRunSubmitterOnlySendsRunIDAsReportIdentity(t *testing.T) {
 
 	var submitted service.CreateManagedSessionRequest
 	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer platform-token" {
+			t.Fatalf("platform authorization = %q", got)
+		}
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/credential/list":
 			writeJSON(w, http.StatusOK, model.ListManagedCredentialsResponse{Credentials: []model.ManagedCredential{{
@@ -64,8 +67,9 @@ func TestReportRunSubmitterOnlySendsRunIDAsReportIdentity(t *testing.T) {
 			"report_source_selection_id": "selection-1",
 		},
 		ExecutionInput: map[string]any{
-			"initial_message":     "请强调已经确认的风险",
-			"start_prompt_values": map[string]any{"custom": "legacy-value"},
+			"initial_message":       "请强调已经确认的风险",
+			"start_prompt_values":   map[string]any{"custom": "legacy-value"},
+			"system_report_account": true,
 		},
 	})
 	if err != nil {
@@ -129,7 +133,9 @@ func TestReportRunSubmitterFailsUnknownExternalStateWithoutRetry(t *testing.T) {
 	}
 	defer database.Close()
 	sessionCalls := 0
+	var platformAuthorization string
 	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		platformAuthorization = r.Header.Get("Authorization")
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/credential/list":
 			writeJSON(w, http.StatusOK, model.ListManagedCredentialsResponse{Credentials: []model.ManagedCredential{{
@@ -174,6 +180,9 @@ func TestReportRunSubmitterFailsUnknownExternalStateWithoutRetry(t *testing.T) {
 	}
 	if sessionCalls != 1 {
 		t.Fatalf("session calls = %d", sessionCalls)
+	}
+	if platformAuthorization == "Bearer platform-token" || platformAuthorization == "" {
+		t.Fatalf("custom report Agent must keep the request user's platform identity: %q", platformAuthorization)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

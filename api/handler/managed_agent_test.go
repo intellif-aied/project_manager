@@ -75,6 +75,7 @@ func testManagedAgentDefaults() ManagedAgentDefaults {
 	return ManagedAgentDefaults{
 		Engine:             "claude-code",
 		ModelID:            "MiniMax-M2.5",
+		ReportModelID:      "deepseek-v4-flash",
 		ReportSkillOwner:   "100866",
 		ReportSkillVersion: testReportSkillVersion,
 		ReportMCPSlug:      "aida-report-mcp",
@@ -1358,6 +1359,9 @@ func TestCreateDefaultReportAgentCreatesWhenOnlyOrdinaryAgentExists(t *testing.T
 	var createdAgent model.UpsertManagedAgentRequest
 	ordinaryAgent := model.ManagedAgent{AgentID: "agent-generic", Name: "通用 Agent", Engine: "codex"}
 	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer platform-token" {
+			t.Fatalf("system report asset authorization = %q", got)
+		}
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/my/agents":
 			writeJSON(w, http.StatusOK, model.ListManagedAgentsResponse{Agents: []model.ManagedAgent{ordinaryAgent}})
@@ -1381,9 +1385,6 @@ func TestCreateDefaultReportAgentCreatesWhenOnlyOrdinaryAgentExists(t *testing.T
 	}))
 	defer platform.Close()
 
-	mock.ExpectQuery("SELECT agent_id, business_type, report_types").
-		WithArgs("307", "agent-generic").
-		WillReturnRows(sqlmock.NewRows([]string{"agent_id", "business_type", "report_types", "is_default_report"}))
 	mock.ExpectExec("UPDATE managed_agent_profiles").
 		WithArgs("307", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -1405,8 +1406,11 @@ func TestCreateDefaultReportAgentCreatesWhenOnlyOrdinaryAgentExists(t *testing.T
 	if createdAgent.AgentID == "" || createdAgent.Name != defaultReportAgentName {
 		t.Fatalf("created agent request=%#v", createdAgent)
 	}
-	if createdAgent.Engine != "claude-code" || createdAgent.DefaultModelID != "MiniMax-M2.5" {
+	if createdAgent.Engine != "claude-code" || createdAgent.DefaultModelID != "deepseek-v4-flash" {
 		t.Fatalf("engine/model = %q/%q", createdAgent.Engine, createdAgent.DefaultModelID)
+	}
+	if createdAgent.ShareModelAccess == nil || !*createdAgent.ShareModelAccess {
+		t.Fatalf("system report Agent must share dedicated model access: %#v", createdAgent.ShareModelAccess)
 	}
 	if createdAgent.Description != defaultReportAgentDescription {
 		t.Fatalf("description = %q", createdAgent.Description)
@@ -1575,16 +1579,23 @@ func TestCreateDefaultReportAgentReturnsExistingReportAgent(t *testing.T) {
 	defer db.Close()
 
 	existing := model.ManagedAgent{
-		AgentID:         "agent-report",
-		Name:            "我的报告 Agent",
-		Description:     "custom report agent",
-		Engine:          "codex",
-		CredentialSlots: []model.ManagedCredentialSlot{{Name: reportMCPCredentialSlot, Required: true}},
-		Skills:          []model.ManagedSkillRef{{Owner: "100866", Slug: service.ReportSkillSlug, Version: testReportSkillVersion}},
-		MCPServers:      []model.ManagedMCPServer{{Name: service.ReportMCPSlug, URL: "https://aida.example.com/api/v1/mcp/reports", CredentialSlot: reportMCPCredentialSlot, AuthHeader: "Authorization", AuthScheme: "Bearer"}},
+		AgentID:             "agent-report",
+		Name:                "我的报告 Agent",
+		Description:         "custom report agent",
+		Engine:              "codex",
+		Instructions:        strings.Replace(defaultReportAgentInstructions(reportMCPCredentialSlot), "{{aida_deployment}}", "https://aida.example.com", 1),
+		StartPromptTemplate: defaultReportAgentStartPromptTemplate(reportMCPCredentialSlot),
+		DefaultModelID:      "deepseek-v4-flash",
+		ShareModelAccess:    true,
+		CredentialSlots:     []model.ManagedCredentialSlot{{Name: reportMCPCredentialSlot, Required: true}},
+		Skills:              []model.ManagedSkillRef{{Owner: "100866", Slug: service.ReportSkillSlug, Version: testReportSkillVersion}},
+		MCPServers:          []model.ManagedMCPServer{{Name: service.ReportMCPSlug, URL: "https://aida.example.com/api/v1/mcp/reports", CredentialSlot: reportMCPCredentialSlot, AuthHeader: "Authorization", AuthScheme: "Bearer", Headers: map[string]string{managedReportMCPToolsetHeader: managedReportMCPToolset}}},
 	}
 	postCalled := false
 	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer platform-token" {
+			t.Fatalf("system report asset authorization = %q", got)
+		}
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/my/agents":
 			writeJSON(w, http.StatusOK, model.ListManagedAgentsResponse{Agents: []model.ManagedAgent{existing}})
@@ -1614,10 +1625,6 @@ func TestCreateDefaultReportAgentReturnsExistingReportAgent(t *testing.T) {
 	}))
 	defer platform.Close()
 
-	mock.ExpectQuery("SELECT agent_id, business_type, report_types").
-		WithArgs("307", "agent-report").
-		WillReturnRows(sqlmock.NewRows([]string{"agent_id", "business_type", "report_types", "is_default_report"}).
-			AddRow("agent-report", managedAgentBusinessReport, []byte(`["personal_daily"]`), false))
 	mock.ExpectExec("UPDATE managed_agent_profiles").
 		WithArgs("307", "agent-report").
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -1661,8 +1668,11 @@ func TestReportAgentRepairRequestDoesNotOverwriteCustomInstructions(t *testing.T
 	}
 	h := NewManagedAgentHandlerWithDefaults(nil, nil, testManagedAgentDefaults())
 	repairReq, changed := h.repairedDefaultReportAgentRequest(existing, model.ManagedSkillRef{Owner: "100866", Slug: service.ReportSkillSlug, Version: testReportSkillVersion})
-	if !changed || repairReq.DefaultModelID != "MiniMax-M2.5" || !h.hasReportMCPServer(repairReq.MCPServers) || !hasCredentialSlot(repairReq.CredentialSlots, reportMCPCredentialSlot) {
+	if !changed || repairReq.DefaultModelID != "deepseek-v4-flash" || !h.hasReportMCPServer(repairReq.MCPServers) || !hasCredentialSlot(repairReq.CredentialSlots, reportMCPCredentialSlot) {
 		t.Fatalf("repair request = %#v changed=%v", repairReq, changed)
+	}
+	if repairReq.ShareModelAccess == nil || !*repairReq.ShareModelAccess {
+		t.Fatalf("repair must enable dedicated model sharing: %#v", repairReq.ShareModelAccess)
 	}
 	if repairReq.Engine != "codex" {
 		t.Fatalf("custom engine should not be overwritten, got %q", repairReq.Engine)
@@ -1685,7 +1695,7 @@ func TestReportAgentRepairRequestRefreshesManagedStartPromptTemplate(t *testing.
 		Description:         defaultReportAgentDescription,
 		Engine:              "claude-code",
 		DefaultModelID:      defaults.ModelID,
-		Instructions:        defaultReportAgentInstructions(reportMCPCredentialSlot),
+		Instructions:        strings.Replace(defaultReportAgentInstructions(reportMCPCredentialSlot), "{{aida_deployment}}", "https://aida.example.com", 1),
 		StartPromptTemplate: oldTemplate,
 		CredentialSlots:     []model.ManagedCredentialSlot{{Name: reportMCPCredentialSlot, Required: true}},
 		Skills:              []model.ManagedSkillRef{{Owner: "100866", Slug: service.ReportSkillSlug, Version: testReportSkillVersion}},

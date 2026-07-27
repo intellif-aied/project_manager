@@ -13,7 +13,7 @@ export type AssetTab = "agents" | "skills" | "mcp" | "schedules" | "runs";
 export const AI_ASSETS_HOME = "/ai-assets";
 export const AI_ASSETS_TAB_QUERY_PARAM = "tab";
 
-const AI_ASSET_TABS = new Set<AssetTab>(["agents", "skills", "mcp", "schedules", "runs"]);
+const AI_ASSET_TABS = new Set<AssetTab>(["agents", "schedules", "runs"]);
 
 export function isAssetTab(value?: string | null): value is AssetTab {
   return Boolean(value && AI_ASSET_TABS.has(value as AssetTab));
@@ -110,12 +110,16 @@ export interface ManagedMCPResourceSelection extends ManagedMCPBinding {
 export function buildAgentResourcePayload(selection: {
   skills?: ManagedSkillRef[];
   mcps?: ManagedMCPResourceSelection[];
-}): Pick<UpsertManagedAgentPayload, "skills" | "mcp_bindings" | "credential_slots" | "default_bindings"> {
-  const skills = selection.skills?.map((item) => ({
-    ...(item.owner ? { owner: item.owner } : {}),
-    slug: item.slug,
-    version: item.version
-  })) ?? [];
+}): Pick<
+  UpsertManagedAgentPayload,
+  "skills" | "mcp_bindings" | "credential_slots" | "default_bindings"
+> {
+  const skills =
+    selection.skills?.map((item) => ({
+      ...(item.owner ? { owner: item.owner } : {}),
+      slug: item.slug,
+      version: item.version
+    })) ?? [];
 
   const usedSlots = new Set<string>();
   const credentialSlots: ManagedCredentialSlot[] = [];

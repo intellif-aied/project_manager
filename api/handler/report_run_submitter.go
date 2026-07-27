@@ -45,6 +45,11 @@ func (s *ReportRunSubmitter) Submit(
 		return reportrun.SubmissionResult{}, prepareSubmissionError(err)
 	}
 	client := s.client.WithToken(token)
+	if runBool(run.ExecutionInput, "system_report_account") {
+		// Default report credentials and Sessions belong to the configured
+		// dedicated account. The current user's token is only the MCP secret value.
+		client = s.client
+	}
 	credentialID, err := s.findOrCreateCredential(ctx, client, run, token)
 	if err != nil {
 		return reportrun.SubmissionResult{}, prepareSubmissionError(err)
@@ -180,6 +185,11 @@ func prepareSubmissionError(err error) error {
 func runString(values map[string]any, key string) string {
 	value, _ := values[key].(string)
 	return strings.TrimSpace(value)
+}
+
+func runBool(values map[string]any, key string) bool {
+	value, _ := values[key].(bool)
+	return value
 }
 
 func runStringMap(values map[string]any, key string) map[string]string {

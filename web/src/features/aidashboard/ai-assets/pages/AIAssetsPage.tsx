@@ -14,18 +14,7 @@ import {
   StarOutlined,
   ToolOutlined
 } from "@ant-design/icons";
-import {
-  Alert,
-  App,
-  Button,
-  Dropdown,
-  Empty,
-  Modal,
-  Popconfirm,
-  Space,
-  Tabs,
-  Tag
-} from "antd";
+import { Alert, App, Button, Dropdown, Empty, Modal, Popconfirm, Space, Tabs, Tag } from "antd";
 import type { MenuProps, TableProps } from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
@@ -81,6 +70,8 @@ import {
 } from "../utils/agentAssets";
 
 import "./AIAssetsPage.css";
+
+const PERSONAL_RESOURCE_MANAGEMENT_VISIBLE = false;
 
 const WEEKDAY_OPTIONS = [
   { label: "周一", value: 1 },
@@ -283,11 +274,13 @@ export function AIAssetsPage() {
   const skillsQuery = useQuery({
     queryKey: ["managed-skills", "mine"],
     queryFn: () => fetchManagedSkills(),
+    enabled: PERSONAL_RESOURCE_MANAGEMENT_VISIBLE,
     staleTime: 60_000
   });
   const mcpQuery = useQuery({
     queryKey: ["managed-mcp", "mine"],
     queryFn: () => fetchManagedMCPEntries(),
+    enabled: PERSONAL_RESOURCE_MANAGEMENT_VISIBLE,
     staleTime: 60_000
   });
   const agentsQuery = useQuery({
@@ -456,18 +449,22 @@ export function AIAssetsPage() {
   });
 
   const createAssetItems: MenuProps["items"] = [
-    {
-      key: "skill",
-      icon: <ToolOutlined />,
-      label: "新建 Skill",
-      disabled: platformBlocked
-    },
-    {
-      key: "mcp",
-      icon: <ApiOutlined />,
-      label: "新建 MCP",
-      disabled: platformBlocked
-    },
+    ...(PERSONAL_RESOURCE_MANAGEMENT_VISIBLE
+      ? [
+          {
+            key: "skill",
+            icon: <ToolOutlined />,
+            label: "新建 Skill",
+            disabled: platformBlocked
+          },
+          {
+            key: "mcp",
+            icon: <ApiOutlined />,
+            label: "新建 MCP",
+            disabled: platformBlocked
+          }
+        ]
+      : []),
     {
       key: "schedule",
       icon: <ClockCircleOutlined />,
@@ -702,7 +699,8 @@ export function AIAssetsPage() {
       title: "MCP",
       dataIndex: "mcp_bindings",
       width: 120,
-      render: (items: ManagedMCPBinding[] | undefined, record) => (items?.length ?? 0) + (record.mcp_servers?.length ?? 0)
+      render: (items: ManagedMCPBinding[] | undefined, record) =>
+        (items?.length ?? 0) + (record.mcp_servers?.length ?? 0)
     },
     {
       title: "状态",
@@ -1083,7 +1081,10 @@ export function AIAssetsPage() {
                 value={agent.current_version_id || agent.managed_version || "-"}
               />
               <MobileMeta label="Skill" value={agent.skills?.length ?? 0} />
-              <MobileMeta label="MCP" value={(agent.mcp_bindings?.length ?? 0) + (agent.mcp_servers?.length ?? 0)} />
+              <MobileMeta
+                label="MCP"
+                value={(agent.mcp_bindings?.length ?? 0) + (agent.mcp_servers?.length ?? 0)}
+              />
             </div>
             <div className="ai-assets-mobile-card__actions">
               <Button
@@ -1420,7 +1421,7 @@ export function AIAssetsPage() {
   return (
     <PagePanel
       title="我的 AI 资产"
-      description="管理 Managed Agent 平台中的 Skill、MCP 和个人 Agent"
+      description="管理个人 Agent、定时报告任务和运行记录"
       breadcrumbs={[{ title: "系统" }, { title: "我的 AI 资产" }]}
       className="ai-assets-page aidashboard-list"
       actions={operations}
@@ -1432,28 +1433,32 @@ export function AIAssetsPage() {
           loading={agentsQuery.isLoading}
           metric={{ key: "agents", title: "Agents", value: agents.length, description: "我的" }}
         />
-        <RequirementMetricCard
-          tone="primary"
-          icon={<ToolOutlined />}
-          loading={skillsQuery.isLoading}
-          metric={{
-            key: "skills",
-            title: "Skills",
-            value: visibleSkills.length,
-            description: "我的"
-          }}
-        />
-        <RequirementMetricCard
-          tone="info"
-          icon={<CloudServerOutlined />}
-          loading={mcpQuery.isLoading}
-          metric={{
-            key: "mcp",
-            title: "MCP",
-            value: visibleMCPEntries.length,
-            description: "我的"
-          }}
-        />
+        {PERSONAL_RESOURCE_MANAGEMENT_VISIBLE ? (
+          <>
+            <RequirementMetricCard
+              tone="primary"
+              icon={<ToolOutlined />}
+              loading={skillsQuery.isLoading}
+              metric={{
+                key: "skills",
+                title: "Skills",
+                value: visibleSkills.length,
+                description: "我的"
+              }}
+            />
+            <RequirementMetricCard
+              tone="info"
+              icon={<CloudServerOutlined />}
+              loading={mcpQuery.isLoading}
+              metric={{
+                key: "mcp",
+                title: "MCP",
+                value: visibleMCPEntries.length,
+                description: "我的"
+              }}
+            />
+          </>
+        ) : null}
         <RequirementMetricCard
           tone="warning"
           icon={<ClockCircleOutlined />}
@@ -1501,48 +1506,52 @@ export function AIAssetsPage() {
               </>
             )
           },
-          {
-            key: "skills",
-            label: "我的 Skills",
-            children: (
-              <>
-                <div className="ai-assets-table-card ai-assets-table-card--desktop">
-                  <ResourceTable<ManagedSkill>
-                    rowKey={(record) =>
-                      record.skill_id || refKey(record.owner, record.slug, record.version)
-                    }
-                    columns={skillColumns}
-                    dataSource={visibleSkills}
-                    loading={skillsQuery.isLoading}
-                    pagination={aiAssetsTablePagination(visibleSkills.length)}
-                    locale={{ emptyText: skillEmptyState }}
-                  />
-                </div>
-                {skillMobileList}
-              </>
-            )
-          },
-          {
-            key: "mcp",
-            label: "我的 MCP",
-            children: (
-              <>
-                <div className="ai-assets-table-card ai-assets-table-card--desktop">
-                  <ResourceTable<ManagedMCPEntry>
-                    rowKey={(record) =>
-                      record.entry_id || refKey(record.owner, record.slug, record.version)
-                    }
-                    columns={mcpColumns}
-                    dataSource={visibleMCPEntries}
-                    loading={mcpQuery.isLoading}
-                    pagination={aiAssetsTablePagination(visibleMCPEntries.length)}
-                    locale={{ emptyText: mcpEmptyState }}
-                  />
-                </div>
-                {mcpMobileList}
-              </>
-            )
-          },
+          ...(PERSONAL_RESOURCE_MANAGEMENT_VISIBLE
+            ? [
+                {
+                  key: "skills",
+                  label: "我的 Skills",
+                  children: (
+                    <>
+                      <div className="ai-assets-table-card ai-assets-table-card--desktop">
+                        <ResourceTable<ManagedSkill>
+                          rowKey={(record) =>
+                            record.skill_id || refKey(record.owner, record.slug, record.version)
+                          }
+                          columns={skillColumns}
+                          dataSource={visibleSkills}
+                          loading={skillsQuery.isLoading}
+                          pagination={aiAssetsTablePagination(visibleSkills.length)}
+                          locale={{ emptyText: skillEmptyState }}
+                        />
+                      </div>
+                      {skillMobileList}
+                    </>
+                  )
+                },
+                {
+                  key: "mcp",
+                  label: "我的 MCP",
+                  children: (
+                    <>
+                      <div className="ai-assets-table-card ai-assets-table-card--desktop">
+                        <ResourceTable<ManagedMCPEntry>
+                          rowKey={(record) =>
+                            record.entry_id || refKey(record.owner, record.slug, record.version)
+                          }
+                          columns={mcpColumns}
+                          dataSource={visibleMCPEntries}
+                          loading={mcpQuery.isLoading}
+                          pagination={aiAssetsTablePagination(visibleMCPEntries.length)}
+                          locale={{ emptyText: mcpEmptyState }}
+                        />
+                      </div>
+                      {mcpMobileList}
+                    </>
+                  )
+                }
+              ]
+            : []),
           {
             key: "schedules",
             label: "定时报告任务",
