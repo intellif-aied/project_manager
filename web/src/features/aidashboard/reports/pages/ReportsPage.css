@@ -544,7 +544,7 @@
 
 .member-report-content-item__summary {
   display: grid;
-  grid-template-columns: 110px minmax(0, 1fr);
+  grid-template-columns: 144px minmax(0, 1fr);
   flex: 1 1 auto;
   gap: 18px;
   min-width: 0;
@@ -573,10 +573,11 @@
 
 .member-report-content-item__date strong {
   color: #172033;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   line-height: 1.35;
+  white-space: nowrap;
 }
 
 .member-report-content-item__date small,
@@ -585,6 +586,11 @@
   font-size: 11px;
   font-variant-numeric: tabular-nums;
   line-height: 1.4;
+}
+
+.member-report-content-item__date-context {
+  display: flex;
+  align-items: center;
 }
 
 .member-report-content-item__overview > small {
@@ -1733,7 +1739,7 @@
   }
 
   .member-report-content-item__summary {
-    grid-template-columns: 110px minmax(0, 1fr);
+    grid-template-columns: 132px minmax(0, 1fr);
     gap: 12px;
   }
 

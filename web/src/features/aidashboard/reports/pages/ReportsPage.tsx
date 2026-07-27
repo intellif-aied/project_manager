@@ -113,17 +113,9 @@ function formatDate(value?: string) {
 
 function reportDateParts(value: string) {
   const date = dayjs(value);
-  const today = dayjs().startOf("day");
-  const distance = today.diff(date.startOf("day"), "day");
-  const relative =
-    distance === 0
-      ? "今天"
-      : distance === 1
-        ? "昨天"
-        : ["周日", "周一", "周二", "周三", "周四", "周五", "周六"][date.day()];
   return {
-    date: date.format("MM月DD日"),
-    context: `${relative} · ${date.format("YYYY")}`
+    date: date.format("YYYY年MM月DD日"),
+    weekday: ["周日", "周一", "周二", "周三", "周四", "周五", "周六"][date.day()]
   };
 }
 
@@ -699,6 +691,7 @@ function InlineDailyContentItem<
   );
 
   const dateParts = reportDateParts(record.report_date);
+  const updatedTime = record.updated_at ? dayjs(record.updated_at).format("HH:mm") : "";
   const contentSummary = reportContentSummary(detailQuery.data?.content ?? "");
   const summary = contentSummary || preview;
   const summaryText = summary || (detailQuery.isLoading ? "正在读取正文摘要…" : "展开查看日报正文");
@@ -722,8 +715,13 @@ function InlineDailyContentItem<
           onClick={toggleReport}
         >
           <span className="member-report-content-item__date">
+            <span className="member-report-content-item__date-context">
+              <small>
+                {dateParts.weekday}
+                {updatedTime ? ` · 更新 ${updatedTime}` : ""}
+              </small>
+            </span>
             <strong>{dateParts.date}</strong>
-            <small>{dateParts.context}</small>
           </span>
           <span className="member-report-content-item__overview">
             {status || meta ? (
