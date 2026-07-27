@@ -60,12 +60,39 @@ const pageSizeOptions = [10, 20, 50, 100];
 
 type DailyTab = "personal" | "member" | "team" | "department";
 
+interface DailyGenerateTarget {
+  scope: DailyGenerateScope;
+  reportId?: string;
+  reportDate?: string;
+  departmentId?: string;
+  readOnly?: boolean;
+  allowDateSwitch?: boolean;
+}
+
 function isDailyTab(value: string | null): value is DailyTab {
   return value === "personal" || value === "member" || value === "team" || value === "department";
 }
 
 function dailyReportsPath(tab: DailyTab) {
   return `/reports/daily?tab=${tab}`;
+}
+
+function dailyNotificationTarget(searchParams: URLSearchParams): DailyGenerateTarget | null {
+  if (searchParams.get("open") !== "report") return null;
+  const tab = searchParams.get("tab");
+  if (tab !== "personal" && tab !== "team" && tab !== "department") return null;
+  return {
+    scope: tab,
+    reportId: searchParams.get("report_id") || undefined,
+    reportDate: searchParams.get("date") || undefined,
+    departmentId: searchParams.get("department_id") || undefined
+  };
+}
+
+function clearDailyNotificationParams(searchParams: URLSearchParams) {
+  const next = new URLSearchParams(searchParams);
+  for (const key of ["open", "date", "report_id", "department_id"]) next.delete(key);
+  return next;
 }
 
 function errorMessage(error: unknown) {
@@ -131,14 +158,9 @@ export function ReportsPage() {
   const [dateRange, setDateRange] = useState<[Dayjs, Dayjs] | null>(null);
   const [memberDate, setMemberDate] = useState<Dayjs>(() => dayjs());
   const [selectedDepartmentID, setSelectedDepartmentID] = useState<string>();
-  const [generateTarget, setGenerateTarget] = useState<{
-    scope: DailyGenerateScope;
-    reportId?: string;
-    reportDate?: string;
-    departmentId?: string;
-    readOnly?: boolean;
-    allowDateSwitch?: boolean;
-  } | null>(null);
+  const [generateTarget, setGenerateTarget] = useState<DailyGenerateTarget | null>(null);
+  const notificationTarget = dailyNotificationTarget(searchParams);
+  const activeGenerateTarget = notificationTarget ?? generateTarget;
 
   const canSelectDepartment = user?.role === "admin";
   const departmentsQuery = useQuery({
@@ -236,10 +258,17 @@ export function ReportsPage() {
 
   const handleTabChange = (value: DailyTab) => {
     setSearchParams((current) => {
-      const next = new URLSearchParams(current);
+      const next = clearDailyNotificationParams(current);
       next.set("tab", value);
       return next;
     });
+    setGenerateTarget(null);
+  };
+
+  const closeGenerateTarget = () => {
+    setGenerateTarget(null);
+    if (!notificationTarget) return;
+    setSearchParams((current) => clearDailyNotificationParams(current), { replace: true });
   };
 
   if (!user) return null;
@@ -343,16 +372,16 @@ export function ReportsPage() {
           onDelete={(record) => confirmDelete("department", record.id, effectiveDepartmentID)}
         />
       ) : null}
-      {generateTarget ? (
+      {activeGenerateTarget ? (
         <DailyReportGenerateModal
           open
-          scope={generateTarget.scope}
-          departmentId={generateTarget.departmentId}
-          reportId={generateTarget.reportId}
-          reportDate={generateTarget.reportDate}
-          readOnly={generateTarget.readOnly}
-          allowDateSwitch={generateTarget.allowDateSwitch}
-          onClose={() => setGenerateTarget(null)}
+          scope={activeGenerateTarget.scope}
+          departmentId={activeGenerateTarget.departmentId}
+          reportId={activeGenerateTarget.reportId}
+          reportDate={activeGenerateTarget.reportDate}
+          readOnly={activeGenerateTarget.readOnly}
+          allowDateSwitch={activeGenerateTarget.allowDateSwitch}
+          onClose={closeGenerateTarget}
           onDone={() => {
             void queryClient.invalidateQueries({ queryKey: ["reports", "daily"] });
             void queryClient.invalidateQueries({ queryKey: ["reports"] });

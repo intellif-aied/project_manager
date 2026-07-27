@@ -30,6 +30,20 @@
   overflow: hidden;
 }
 
+.console-report-workflow-modal
+  .console-report-workflow-modal__footer:not(.is-ai-generating)
+  > .ant-space-item:first-child {
+  flex: 0 0 auto;
+  overflow: visible;
+}
+
+.console-report-workflow-modal
+  .console-report-workflow-modal__footer:not(.is-ai-generating)
+  .report-ai-generate-shell {
+  display: flex;
+  width: auto;
+}
+
 .report-ai-generate-controls {
   flex: 0 0 auto;
 }

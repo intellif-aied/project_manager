@@ -117,6 +117,16 @@ function isReportAgentUnavailable(
   return "available" in response && response.available === false;
 }
 
+function reportRunErrorMessage(error: unknown) {
+  if (error instanceof HttpError && error.payload && typeof error.payload === "object") {
+    const code = (error.payload as { code?: unknown }).code;
+    if (code === "REPORT_SOURCE_UNAVAILABLE") {
+      return "所选日期暂无可用 Session。请先上传当天 Session，或手动选择其他 Session 后重试。";
+    }
+  }
+  return errorMessage(error);
+}
+
 function confirmDefaultReportInitialization() {
   return new Promise<boolean>((resolve) => {
     Modal.confirm({
@@ -262,7 +272,7 @@ function ReportAIGenerateControlsState({
     },
     onError: (err: unknown) => {
       if (err instanceof Error && err.message === "__AIDA_REPORT_AI_CANCELLED__") return;
-      const text = errorMessage(err);
+      const text = reportRunErrorMessage(err);
       setLastOutcome({ type: "error", text });
     },
     onSettled: () => setInitializingDefault(false)

@@ -28,6 +28,7 @@ import {
   FileTextOutlined
 } from "@ant-design/icons";
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useSearchParams } from "react-router-dom";
 import dayjs from "dayjs";
 
 import {
@@ -758,6 +759,7 @@ export function WeeklyReportsPage() {
   const { user } = useAuth();
   const { message, modal } = App.useApp();
   const queryClient = useQueryClient();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [roleTab, setRoleTab] = useState<"mine" | "member" | "team" | "department">("mine");
   const [memberWeekStart, setMemberWeekStart] = useState(() => weekStartOf(dayjs()));
   const [selectedDepartmentID, setSelectedDepartmentID] = useState<string>();
@@ -768,6 +770,21 @@ export function WeeklyReportsPage() {
     allowWeekSwitch?: boolean;
     departmentId?: string;
   } | null>(null);
+  const notificationTab = searchParams.get("tab");
+  const notificationWeekStart = searchParams.get("week_start");
+  const notificationTarget =
+    searchParams.get("open") === "report" &&
+    (notificationTab === "mine" || notificationTab === "team" || notificationTab === "department") &&
+    notificationWeekStart
+      ? {
+          scope: notificationTab,
+          weekStart: notificationWeekStart,
+          mode: "edit" as const,
+          allowWeekSwitch: false,
+          departmentId: searchParams.get("department_id") || undefined
+        }
+      : null;
+  const activeModalTarget = notificationTarget ?? modalTarget;
 
   const canSelectDepartment = user?.role === "admin";
   const departmentsQuery = useQuery({
@@ -837,7 +854,16 @@ export function WeeklyReportsPage() {
               { label: "小组成员周报", value: "member" }
             ]
           : [{ label: "我的周报记录", value: "mine" }];
-  const activeTab = tabOptions.some((item) => item.value === roleTab) ? roleTab : "mine";
+  const requestedTab =
+    notificationTab === "mine" ||
+    notificationTab === "member" ||
+    notificationTab === "team" ||
+    notificationTab === "department"
+      ? notificationTab
+      : roleTab;
+  const activeTab = tabOptions.some((item) => item.value === requestedTab)
+    ? requestedTab
+    : "mine";
   const currentWeekStart = weekStartOf(dayjs());
   const openLabel =
     activeTab === "team"
@@ -847,6 +873,25 @@ export function WeeklyReportsPage() {
         : "填写周报";
   const invalidateWeekly = () => {
     void queryClient.invalidateQueries({ queryKey: ["reports", "weekly"] });
+  };
+  const changeRoleTab = (value: "mine" | "member" | "team" | "department") => {
+    setRoleTab(value);
+    setModalTarget(null);
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.set("tab", value);
+      for (const key of ["open", "week_start", "department_id"]) next.delete(key);
+      return next;
+    });
+  };
+  const closeModalTarget = () => {
+    setModalTarget(null);
+    if (!notificationTarget) return;
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      for (const key of ["open", "week_start", "department_id"]) next.delete(key);
+      return next;
+    }, { replace: true });
   };
 
   return (
@@ -863,7 +908,9 @@ export function WeeklyReportsPage() {
             {tabOptions.length > 1 ? (
               <Segmented
                 value={activeTab}
-                onChange={(value) => setRoleTab(value as "mine" | "member" | "team" | "department")}
+                onChange={(value) =>
+                  changeRoleTab(value as "mine" | "member" | "team" | "department")
+                }
                 options={tabOptions}
               />
             ) : null}
@@ -949,37 +996,37 @@ export function WeeklyReportsPage() {
         />
       ) : null}
 
-      {modalTarget?.scope === "mine" ? (
+      {activeModalTarget?.scope === "mine" ? (
         <PersonalWeeklyReportModal
           open
-          weekStart={modalTarget.weekStart}
-          weekEnd={weekEndOf(modalTarget.weekStart)}
-          readOnly={modalTarget.mode === "view"}
-          allowWeekSwitch={modalTarget.allowWeekSwitch}
-          onClose={() => setModalTarget(null)}
+          weekStart={activeModalTarget.weekStart}
+          weekEnd={weekEndOf(activeModalTarget.weekStart)}
+          readOnly={activeModalTarget.mode === "view"}
+          allowWeekSwitch={activeModalTarget.allowWeekSwitch}
+          onClose={closeModalTarget}
           onDone={invalidateWeekly}
         />
       ) : null}
-      {modalTarget?.scope === "team" ? (
+      {activeModalTarget?.scope === "team" ? (
         <TeamWeeklyReportModal
           open
-          weekStart={modalTarget.weekStart}
-          weekEnd={weekEndOf(modalTarget.weekStart)}
-          readOnly={modalTarget.mode === "view"}
-          allowWeekSwitch={modalTarget.allowWeekSwitch}
-          onClose={() => setModalTarget(null)}
+          weekStart={activeModalTarget.weekStart}
+          weekEnd={weekEndOf(activeModalTarget.weekStart)}
+          readOnly={activeModalTarget.mode === "view"}
+          allowWeekSwitch={activeModalTarget.allowWeekSwitch}
+          onClose={closeModalTarget}
           onDone={invalidateWeekly}
         />
       ) : null}
-      {modalTarget?.scope === "department" ? (
+      {activeModalTarget?.scope === "department" ? (
         <DepartmentWeeklyReportModal
           open
-          weekStart={modalTarget.weekStart}
-          weekEnd={weekEndOf(modalTarget.weekStart)}
-          readOnly={modalTarget.mode === "view"}
-          allowWeekSwitch={modalTarget.allowWeekSwitch}
-          departmentId={modalTarget.departmentId}
-          onClose={() => setModalTarget(null)}
+          weekStart={activeModalTarget.weekStart}
+          weekEnd={weekEndOf(activeModalTarget.weekStart)}
+          readOnly={activeModalTarget.mode === "view"}
+          allowWeekSwitch={activeModalTarget.allowWeekSwitch}
+          departmentId={activeModalTarget.departmentId}
+          onClose={closeModalTarget}
           onDone={invalidateWeekly}
         />
       ) : null}

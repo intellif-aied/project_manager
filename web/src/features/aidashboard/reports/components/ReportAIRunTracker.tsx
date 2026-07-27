@@ -14,6 +14,7 @@ import {
   useReportAIRunStore,
   type ReportAIRunEntry
 } from "../reportAIRunTracking";
+import { reportNotificationDestination } from "../reportNotificationNavigation";
 
 function reportName(reportType: ReportType) {
   if (reportType === "personal_weekly") return "个人周报";
@@ -22,17 +23,6 @@ function reportName(reportType: ReportType) {
   if (reportType === "department_daily") return "部门日报";
   if (reportType === "department_weekly") return "部门周报";
   return "日报";
-}
-
-function reportDestination(reportType: ReportType) {
-  if (reportType.endsWith("_weekly")) return "/reports/weekly";
-  if (reportType === "team_daily") return "/reports/daily?tab=team";
-  if (reportType === "department_daily") return "/reports/daily?tab=department";
-  return "/reports/daily?tab=personal";
-}
-
-function reportActionLabel(reportType: ReportType) {
-  return reportType.endsWith("_weekly") ? "查看周报" : "查看日报";
 }
 
 function periodLabel(entry: ReportAIRunEntry) {
@@ -103,7 +93,7 @@ export function ReportAIRunTracker() {
       if (!isTerminalRun(run) || !run || handledRunIds.current.has(run.id)) return;
       handledRunIds.current.add(run.id);
       const key = `report-ai-run:${run.id}`;
-      const destination = reportDestination(entry.reportType);
+      const destination = reportNotificationDestination(entry, run);
       const name = reportName(entry.reportType);
       const openReport = () => {
         notification.destroy(key);
@@ -125,7 +115,7 @@ export function ReportAIRunTracker() {
           description: `${periodLabel(entry)} 的报告已经生成完成，可以打开查看或继续编辑。`,
           actions: (
             <Button type="primary" size="small" onClick={openReport}>
-              {reportActionLabel(entry.reportType)}
+              打开报告
             </Button>
           ),
           duration: false,

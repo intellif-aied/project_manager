@@ -1,8 +1,10 @@
 /* global console, process */
 
 import assert from "node:assert/strict";
+import { Buffer } from "node:buffer";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import ts from "typescript";
 
 const root = process.cwd();
 const controls = readFileSync(
@@ -11,6 +13,14 @@ const controls = readFileSync(
 );
 const runTracking = readFileSync(
   resolve(root, "src/features/aidashboard/reports/reportAIRunTracking.ts"),
+  "utf8"
+);
+const runTracker = readFileSync(
+  resolve(root, "src/features/aidashboard/reports/components/ReportAIRunTracker.tsx"),
+  "utf8"
+);
+const notificationNavigation = readFileSync(
+  resolve(root, "src/features/aidashboard/reports/reportNotificationNavigation.ts"),
   "utf8"
 );
 const client = readFileSync(resolve(root, "src/features/aidashboard/api/client.ts"), "utf8");
@@ -30,6 +40,10 @@ const dailyReportModal = readFileSync(
   resolve(root, "src/features/aidashboard/reports/components/DailyReportGenerateModal.tsx"),
   "utf8"
 );
+const reportsPage = readFileSync(
+  resolve(root, "src/features/aidashboard/reports/pages/ReportsPage.tsx"),
+  "utf8"
+);
 const weeklyReportsPage = readFileSync(
   resolve(root, "src/features/aidashboard/reports/pages/WeeklyReportsPage.tsx"),
   "utf8"
@@ -39,6 +53,51 @@ const dashboardPage = readFileSync(
   "utf8"
 );
 const businessTime = readFileSync(resolve(root, "src/shared/utils/businessTime.ts"), "utf8");
+
+const notificationNavigationModule = await import(
+  `data:text/javascript;base64,${Buffer.from(
+    ts.transpileModule(notificationNavigation, {
+      compilerOptions: {
+        module: ts.ModuleKind.ES2022,
+        target: ts.ScriptTarget.ES2022,
+        importsNotUsedAsValues: ts.ImportsNotUsedAsValues.Remove
+      }
+    }).outputText
+  ).toString("base64")}`
+);
+const { reportNotificationDestination } = notificationNavigationModule;
+
+const personalDailyEntry = {
+  reportType: "personal_daily",
+  period: { date: "2026-07-26" },
+  target: { type: "self" }
+};
+assert.equal(
+  reportNotificationDestination(personalDailyEntry, {
+    status: "succeeded",
+    business_id: "report-123",
+    output_ref_json: { report_id: "report-fallback" }
+  }),
+  "/reports/daily?tab=personal&open=report&date=2026-07-26&report_id=report-123",
+  "successful daily notifications must open the exact report and period"
+);
+assert.equal(
+  reportNotificationDestination(personalDailyEntry, { status: "failed" }),
+  "/reports/daily?tab=personal&open=report&date=2026-07-26",
+  "failed daily notifications must open the exact period for retry"
+);
+assert.equal(
+  reportNotificationDestination(
+    {
+      reportType: "department_weekly",
+      period: { week_start: "2026-07-20", week_end: "2026-07-26" },
+      target: { type: "department", department_id: "department-1" }
+    },
+    { status: "succeeded", business_id: "weekly-report-1" }
+  ),
+  "/reports/weekly?tab=department&open=report&week_start=2026-07-20&department_id=department-1",
+  "weekly notifications must open the exact scope and week"
+);
 
 assert.match(
   controls,
@@ -97,9 +156,44 @@ assert.match(
   "large context warning must be advisory and must not expose Digest state"
 );
 assert.match(
+  controls,
+  /code === "REPORT_SOURCE_UNAVAILABLE"/,
+  "report generation must map the stable source-unavailable error code"
+);
+assert.match(
+  controls,
+  /所选日期暂无可用 Session。请先上传当天 Session，或手动选择其他 Session 后重试。/,
+  "source-unavailable errors must show an actionable Chinese message"
+);
+assert.match(
+  controls,
+  /const text = reportRunErrorMessage\(err\)/,
+  "report submission errors must use the report error-code mapper"
+);
+assert.match(
   runTracking,
   /largeContextWarningShown/,
   "large context warning marker must survive a page refresh"
+);
+assert.match(
+  runTracker,
+  /reportNotificationDestination\(entry, run\)/,
+  "terminal Run notifications must use the report deep-link contract"
+);
+assert.doesNotMatch(
+  runTracker,
+  /return "\/reports\/weekly"|return "\/reports\/daily/,
+  "Run notifications must not fall back to report list-only destinations"
+);
+assert.match(
+  reportsPage,
+  /activeGenerateTarget = notificationTarget \?\? generateTarget/,
+  "daily notification links must open the existing report editor"
+);
+assert.match(
+  weeklyReportsPage,
+  /activeModalTarget = notificationTarget \?\? modalTarget/,
+  "weekly notification links must open the existing report editor"
 );
 assert.doesNotMatch(controls, /mock_large_report_context|largeReportContextMockEnabled/);
 assert.doesNotMatch(
