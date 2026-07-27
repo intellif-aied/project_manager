@@ -1,7 +1,6 @@
 import {
   BarChartOutlined,
   BellOutlined,
-  CalendarOutlined,
   DashboardOutlined,
   FileDoneOutlined,
   RobotOutlined,
@@ -139,16 +138,16 @@ export const appRoutes: AppRoute[] = [
   },
   {
     path: "/reports",
-    title: "日报",
-    hideInMenu: true,
+    title: "报告",
+    icon: <FileDoneOutlined />,
+    menuGroup: "工作空间",
+    menuOrder: 30,
     element: <ReportsPage />
   },
   {
     path: "/reports/daily",
     title: "日报",
-    icon: <FileDoneOutlined />,
-    menuGroup: "工作空间",
-    menuOrder: 30,
+    hideInMenu: true,
     element: <DailyReportsPage />
   },
   {
@@ -172,9 +171,7 @@ export const appRoutes: AppRoute[] = [
   {
     path: "/reports/weekly",
     title: "周报",
-    icon: <CalendarOutlined />,
-    menuGroup: "工作空间",
-    menuOrder: 31,
+    hideInMenu: true,
     roles: ["admin", "director", "pm", "team_leader", "employee"],
     element: <WeeklyReportsPage />
   },
