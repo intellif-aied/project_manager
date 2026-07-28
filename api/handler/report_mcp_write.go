@@ -32,9 +32,10 @@ type reportAIRun struct {
 }
 
 type writeReportResultArgs struct {
-	RunID   string `json:"run_id"`
-	Content string `json:"content"`
-	Summary string `json:"summary,omitempty"`
+	RunID     string `json:"run_id"`
+	Content   string `json:"content"`
+	Summary   string `json:"summary,omitempty"`
+	BriefHash string `json:"brief_hash,omitempty"`
 }
 
 type writeReportFailureArgs struct {
@@ -68,9 +69,24 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 	if err != nil {
 		return nil, err
 	}
+	briefSchemaVersion := ""
+	acceptedBriefHash := ""
 	content, normalizedSummary, err := prepareReportResultContent(run.ContextRepresentation, args.Summary, args.Content)
 	if err != nil {
 		return nil, err
+	}
+	if h.briefEnabled && reportType == reportTypePersonalDaily {
+		if h.reportBrief == nil {
+			return nil, errMCPInternal
+		}
+		storedBrief, briefErr := h.reportBrief.ValidateForWrite(
+			r.Context(), u.ID, args.RunID, strings.TrimSpace(args.BriefHash), normalizedSummary, content,
+		)
+		if briefErr != nil {
+			return nil, mapReportBriefError(briefErr)
+		}
+		briefSchemaVersion = storedBrief.Payload.SchemaVersion
+		acceptedBriefHash = storedBrief.BriefHash
 	}
 	if content == "" {
 		return nil, mcpErr("INVALID_ARGUMENT", "content is required")
@@ -166,6 +182,10 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 		"target":             target,
 		"summary":            normalizedSummary,
 		"report_result_hash": resultHash,
+	}
+	if acceptedBriefHash != "" {
+		outputPayload["brief_schema_version"] = briefSchemaVersion
+		outputPayload["brief_hash"] = acceptedBriefHash
 	}
 	copyReportRunMetadata(outputPayload, run.InputRef)
 	outputRef, _ := json.Marshal(outputPayload)

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/aidashboard/api/internal/reportbrief"
 )
 
 const (
@@ -209,9 +211,10 @@ func reportMCPTools() []map[string]any {
 				"type":     "object",
 				"required": []string{"run_id", "content"},
 				"properties": map[string]any{
-					"run_id":  map[string]any{"type": "string"},
-					"content": map[string]any{"type": "string"},
-					"summary": map[string]any{"type": "string"},
+					"run_id":     map[string]any{"type": "string"},
+					"content":    map[string]any{"type": "string"},
+					"summary":    map[string]any{"type": "string"},
+					"brief_hash": map[string]any{"type": "string"},
 				},
 			},
 		},
@@ -232,23 +235,86 @@ func reportMCPTools() []map[string]any {
 }
 
 func reportMCPToolsForToolset(toolset string) []map[string]any {
+	return reportMCPToolsForToolsetWithBrief(toolset, false)
+}
+
+func reportMCPToolsForToolsetWithBrief(toolset string, briefEnabled bool) []map[string]any {
 	tools := reportMCPTools()
 	if strings.TrimSpace(toolset) != managedReportMCPToolset {
 		return tools
 	}
-	allowed := map[string]struct{}{
-		toolGetReportContext:   {},
-		toolWriteReportResult:  {},
-		toolWriteReportFailure: {},
+	names := []string{toolGetReportContext}
+	if briefEnabled {
+		tools = append(tools, reportBriefTool())
+		names = append(names, toolWriteReportBrief)
 	}
-	filtered := make([]map[string]any, 0, len(allowed))
+	names = append(names, toolWriteReportResult, toolWriteReportFailure)
+	byName := make(map[string]map[string]any, len(tools))
 	for _, tool := range tools {
 		name, _ := tool["name"].(string)
-		if _, ok := allowed[name]; ok {
+		byName[name] = tool
+	}
+	filtered := make([]map[string]any, 0, len(names))
+	for _, name := range names {
+		if tool, ok := byName[name]; ok {
 			filtered = append(filtered, tool)
 		}
 	}
 	return filtered
+}
+
+func reportBriefTool() map[string]any {
+	factRefs := map[string]any{
+		"type": "array", "minItems": 1,
+		"items": map[string]any{"type": "string", "pattern": reportbrief.FactRefJSONPattern},
+	}
+	deliverable := map[string]any{
+		"type":     "object",
+		"required": []string{"result", "state", "environment", "validation", "next_action", "fact_refs"},
+		"properties": map[string]any{
+			"result":      map[string]any{"type": "string"},
+			"state":       map[string]any{"type": "string", "enum": reportbrief.ValidStates()},
+			"environment": map[string]any{"type": "string", "enum": reportbrief.ValidEnvironments()},
+			"validation":  map[string]any{"type": "string"},
+			"next_action": map[string]any{"type": "string"},
+			"fact_refs":   factRefs,
+		},
+	}
+	workstream := map[string]any{
+		"type":     "object",
+		"required": []string{"title", "objective", "deliverables"},
+		"properties": map[string]any{
+			"title":     map[string]any{"type": "string"},
+			"objective": map[string]any{"type": "string"},
+			"deliverables": map[string]any{
+				"type": "array", "minItems": 1, "maxItems": reportbrief.MaxDeliverables, "items": deliverable,
+			},
+		},
+	}
+	excluded := map[string]any{
+		"type": "object", "required": []string{"fact_ref", "reason"},
+		"properties": map[string]any{
+			"fact_ref": map[string]any{"type": "string", "pattern": reportbrief.FactRefJSONPattern},
+			"reason":   map[string]any{"type": "string", "enum": reportbrief.ValidExclusionReasons()},
+		},
+	}
+	return map[string]any{
+		"name":        toolWriteReportBrief,
+		"description": "Validate and freeze the first semantic pass for a managed personal daily report. Every Report Context fact_ref must be included in a deliverable or explicitly excluded. The accepted Brief returned by this tool is the only source for final writing.",
+		"inputSchema": map[string]any{
+			"type": "object", "required": []string{"run_id", "workstreams", "excluded_facts", "no_reportable_work"},
+			"properties": map[string]any{
+				"run_id": map[string]any{"type": "string"},
+				"workstreams": map[string]any{
+					"type": "array", "maxItems": reportbrief.MaxWorkstreams, "items": workstream,
+				},
+				"excluded_facts": map[string]any{
+					"type": "array", "items": excluded,
+				},
+				"no_reportable_work": map[string]any{"type": "boolean"},
+			},
+		},
+	}
 }
 
 // periodArgs mirrors the period JSON shape shared by read/write tools.

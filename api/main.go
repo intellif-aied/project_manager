@@ -16,6 +16,7 @@ import (
 	"github.com/aidashboard/api/internal/contentreader"
 	"github.com/aidashboard/api/internal/observability"
 	"github.com/aidashboard/api/internal/pricing"
+	"github.com/aidashboard/api/internal/reportbrief"
 	"github.com/aidashboard/api/internal/reportcontext"
 	"github.com/aidashboard/api/internal/reportrun"
 	"github.com/aidashboard/api/internal/reportsource"
@@ -112,6 +113,7 @@ func main() {
 	}
 	reportSourceH := handler.NewReportSourceHandler(reportSourceService)
 	reportContextService := reportcontext.NewService(database, reportSourceService)
+	reportBriefService := reportbrief.NewService(database, reportContextService)
 	managedAgentDefaults := handler.ManagedAgentDefaults{
 		Engine:             cfg.ManagedAgentDefaultEngine,
 		ModelID:            cfg.ManagedAgentDefaultModelID,
@@ -128,6 +130,7 @@ func main() {
 	dailyReportMCPH := handler.NewReportMCPHandler(database)
 	dailyReportMCPH.ConfigureReportSourceSelection(reportSourceService)
 	dailyReportMCPH.ConfigureReportContext(reportContextService)
+	dailyReportMCPH.ConfigureReportBrief(reportBriefService, cfg.ReportTwoPassEnabled)
 	schedulerCtx, stopScheduler := context.WithCancel(context.Background())
 	defer stopScheduler()
 	metrics, err := observability.New(database, observability.WorkerCounts{

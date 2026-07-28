@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/aidashboard/api/internal/biztime"
+	"github.com/aidashboard/api/internal/reportbrief"
 	"github.com/aidashboard/api/internal/reportcontext"
 	"github.com/aidashboard/api/internal/reportsource"
 	"github.com/aidashboard/api/model"
@@ -27,6 +28,7 @@ const (
 	toolGetRequirements    = "get_requirements"
 	toolGetExistingReport  = "get_existing_report"
 	toolGetReportInventory = "get_report_inventory"
+	toolWriteReportBrief   = "write_report_brief"
 	toolWriteReportResult  = "write_report_result"
 	toolWriteReportFailure = "write_report_failure"
 
@@ -56,6 +58,8 @@ type ReportMCPHandler struct {
 	db            *sql.DB
 	reportSource  *reportsource.Service
 	reportContext *reportcontext.Service
+	reportBrief   *reportbrief.Service
+	briefEnabled  bool
 }
 
 func NewReportMCPHandler(db *sql.DB) *ReportMCPHandler {
@@ -68,6 +72,11 @@ func (h *ReportMCPHandler) ConfigureReportSourceSelection(service *reportsource.
 
 func (h *ReportMCPHandler) ConfigureReportContext(service *reportcontext.Service) {
 	h.reportContext = service
+}
+
+func (h *ReportMCPHandler) ConfigureReportBrief(service *reportbrief.Service, enabled bool) {
+	h.reportBrief = service
+	h.briefEnabled = enabled
 }
 
 type mcpRequest struct {
@@ -124,7 +133,7 @@ func (h *ReportMCPHandler) Serve(w http.ResponseWriter, r *http.Request) {
 	case "ping":
 		result = map[string]any{}
 	case "tools/list":
-		result = map[string]any{"tools": reportMCPToolsForToolset(r.Header.Get(managedReportMCPToolsetHeader))}
+		result = map[string]any{"tools": reportMCPToolsForToolsetWithBrief(r.Header.Get(managedReportMCPToolsetHeader), h.briefEnabled)}
 	case "tools/call":
 		result, err = h.callTool(r, req.Params)
 	default:
@@ -188,6 +197,11 @@ func (h *ReportMCPHandler) callTool(r *http.Request, rawParams json.RawMessage) 
 		return h.toolGetExistingReport(ctx, r, params.Arguments)
 	case toolGetReportInventory:
 		return h.toolGetReportInventory(ctx, r, params.Arguments)
+	case toolWriteReportBrief:
+		if !h.briefEnabled {
+			return nil, fmt.Errorf("unknown tool: %s", params.Name)
+		}
+		return h.toolWriteReportBrief(r, params.Arguments)
 	case toolWriteReportResult:
 		return h.toolWriteReportResult(r, params.Arguments)
 	case toolWriteReportFailure:

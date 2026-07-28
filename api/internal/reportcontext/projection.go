@@ -3,6 +3,7 @@ package reportcontext
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 
@@ -124,6 +125,11 @@ func projectPayload(payload Payload) (Payload, error) {
 	workEvidence, err := projectDigestV2(payload.Sessions[0])
 	if err != nil {
 		return Payload{}, err
+	}
+	if payload.Run.ReportType == ReportTypePersonalDaily {
+		for index := range workEvidence.Facts {
+			workEvidence.Facts[index].FactRef = fmt.Sprintf("fact-%03d", index+1)
+		}
 	}
 	payload.WorkEvidence = &workEvidence
 	payload.Sessions = nil
@@ -259,7 +265,6 @@ func projectDigestV2(session SessionSource) (WorkEvidence, error) {
 			candidate.Identity, candidate.Observation,
 		)
 	}
-
 	if len(projection.Facts) == 0 && digest.ReportPeriod.ResultWorkUnitCount > 0 {
 		return WorkEvidence{}, ErrIncomplete
 	}

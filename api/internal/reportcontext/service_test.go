@@ -201,6 +201,7 @@ func TestProjectPayloadRemovesOnlyProvablyDuplicateLegacyDigest(t *testing.T) {
 	payload := Payload{
 		Sessions: []SessionSource{{SelectionID: "selection-1", Mode: "digest_v2", Digest: digest}},
 		Sources:  Sources{SessionDigest: digest},
+		Run:      Run{ReportType: ReportTypePersonalDaily},
 	}
 
 	if err := removeDuplicateLegacyDigest(&payload); err != nil {
@@ -230,9 +231,31 @@ func TestProjectPayloadRemovesOnlyProvablyDuplicateLegacyDigest(t *testing.T) {
 	}
 }
 
+func TestProjectPayloadDoesNotAddFactRefsToOtherReportTypes(t *testing.T) {
+	digest := validFrozenDigestV2()
+	payload := Payload{
+		Run:      Run{ReportType: ReportTypePersonalWeekly},
+		Sessions: []SessionSource{{SelectionID: "selection-1", Mode: "digest_v2", Digest: digest}},
+		Sources:  Sources{SessionDigest: digest},
+	}
+
+	projected, err := projectPayload(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(projected.WorkEvidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), `"fact_ref"`) {
+		t.Fatalf("non-personal-daily projection changed: %s", encoded)
+	}
+}
+
 func TestProjectPayloadUsesReadableFactsAndOmitsRawGoals(t *testing.T) {
 	digest := validFrozenDigestV2()
 	payload := Payload{
+		Run:      Run{ReportType: ReportTypePersonalDaily},
 		Sessions: []SessionSource{{SelectionID: "selection-1", Mode: "digest_v2", Digest: digest}},
 		Sources:  Sources{SessionDigest: digest},
 	}
@@ -249,6 +272,7 @@ func TestProjectPayloadUsesReadableFactsAndOmitsRawGoals(t *testing.T) {
 		t.Fatalf("report-bearing facts were lost: %+v", evidence.Facts)
 	}
 	if evidence.Facts[0].Kind != "result" ||
+		evidence.Facts[0].FactRef != "fact-001" ||
 		evidence.Facts[0].Text != "same result" ||
 		evidence.Facts[0].Source != "tool_result" ||
 		len(evidence.Facts[0].Observations) != 2 ||
@@ -263,7 +287,7 @@ func TestProjectPayloadUsesReadableFactsAndOmitsRawGoals(t *testing.T) {
 		evidence.Facts[0].Observations[1].OccurrenceCount != 1 {
 		t.Fatalf("plain fact lost report semantics: %+v", evidence.Facts[0])
 	}
-	if evidence.Facts[2].Kind != "unresolved" || evidence.Facts[2].Text != "follow up" || evidence.Facts[2].Source != "" {
+	if evidence.Facts[2].FactRef != "fact-003" || evidence.Facts[2].Kind != "unresolved" || evidence.Facts[2].Text != "follow up" || evidence.Facts[2].Source != "" {
 		t.Fatalf("unresolved fact was lost: %+v", evidence.Facts[2])
 	}
 	encoded, err := json.Marshal(evidence)
@@ -280,8 +304,8 @@ func TestProjectPayloadUsesReadableFactsAndOmitsRawGoals(t *testing.T) {
 			t.Fatalf("work evidence leaked transport or raw goal field %s: %s", forbidden, visible)
 		}
 	}
-	if !strings.Contains(visible, `"facts":[{"kind":"result","text":"same result","source":"tool_result","observations":[{"date":"2026-07-23","observed_at":"2026-07-23T09:00:00+08:00","category":"implementation","status":"completed","occurrence_count":1`) ||
-		!strings.Contains(visible, `"kind":"unresolved","text":"follow up"`) {
+	if !strings.Contains(visible, `"facts":[{"fact_ref":"fact-001","kind":"result","text":"same result","source":"tool_result","observations":[{"date":"2026-07-23","observed_at":"2026-07-23T09:00:00+08:00","category":"implementation","status":"completed","occurrence_count":1`) ||
+		!strings.Contains(visible, `"fact_ref":"fact-003","kind":"unresolved","text":"follow up"`) {
 		t.Fatalf("work evidence is not readable object JSON: %s", visible)
 	}
 }

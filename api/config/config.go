@@ -33,6 +33,7 @@ type Config struct {
 	ManagedAgentReportSkillOwner   string
 	ManagedAgentReportSkillVersion string
 	ManagedAgentReportMCPURL       string
+	ReportTwoPassEnabled           bool
 	AIDAPublicBaseURL              string
 	AIDAInternalMetricsAddr        string
 	EnablePublicRegister           bool
@@ -77,6 +78,7 @@ func Load() *Config {
 		ManagedAgentReportSkillOwner:   getEnv("MANAGED_AGENT_REPORT_SKILL_OWNER", ""),
 		ManagedAgentReportSkillVersion: getEnv("MANAGED_AGENT_REPORT_SKILL_VERSION", ""),
 		ManagedAgentReportMCPURL:       getEnv("MANAGED_AGENT_REPORT_MCP_URL", ""),
+		ReportTwoPassEnabled:           getEnv("REPORT_TWO_PASS_ENABLED", "false") == "true",
 		AIDAPublicBaseURL:              getEnv("AIDA_PUBLIC_BASE_URL", ""),
 		AIDAInternalMetricsAddr:        getEnv("AIDA_INTERNAL_METRICS_ADDR", ":9091"),
 		EnablePublicRegister:           getEnv("ENABLE_PUBLIC_REGISTER", "false") == "true",

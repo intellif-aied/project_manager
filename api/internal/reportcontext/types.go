@@ -210,6 +210,7 @@ type WorkEvidencePeriod struct {
 }
 
 type WorkEvidenceFact struct {
+	FactRef      string                    `json:"fact_ref,omitempty"`
 	Kind         string                    `json:"kind"`
 	Text         string                    `json:"text"`
 	Source       string                    `json:"source,omitempty"`
