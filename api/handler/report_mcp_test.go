@@ -853,7 +853,7 @@ func TestReportMCPWriteReportFailureUsesRunIDOnly(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id", "business_type", "agent_id", "model_id", "status", "execution_stage", "input_ref_json", "execution_input_json", "output_ref_json", "created_at"}).
 			AddRow("run-failed", reportAgentRunBusinessType, "agent-1", "MiniMax-M2.5", "running", "agent_running", []byte(`{"report_type":"personal_daily","period":{"date":"2026-07-23"},"target":{"type":"self","user_id":"u-1"}}`), []byte(`{}`), []byte(`{}`), time.Now()))
 	mock.ExpectExec("(?s)UPDATE ai_runs.*status = 'failed'").
-		WithArgs("AGENT_REPORTED_FAILURE: boom", "AGENT_REPORTED_FAILURE", "run-failed", "u-1").
+		WithArgs("报告生成未完成，请重新生成", "AGENT_REPORTED_FAILURE", "run-failed", "u-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	req := newReportMCPRequest("tools/call", map[string]any{
@@ -877,6 +877,54 @@ func TestReportMCPWriteReportFailureUsesRunIDOnly(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestReportMCPQualityRetryExhaustionRequiresDegradedResult(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	h := NewReportMCPHandler(db)
+	h.ConfigureReportBrief(&recordingReportBriefService{degradedReason: "brief_retry_exhausted"}, true)
+	mock.ExpectQuery("SELECT id::text, business_type").
+		WithArgs("run-degraded", "u-1").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "business_type", "agent_id", "model_id", "status", "execution_stage", "input_ref_json", "execution_input_json", "output_ref_json", "created_at"}).
+			AddRow("run-degraded", reportAgentRunBusinessType, "agent-1", "deepseek-v4-flash", "running", "agent_running", []byte(`{"report_type":"personal_daily","period":{"date":"2026-07-24"},"target":{"type":"self","user_id":"u-1"}}`), []byte(`{}`), []byte(`{}`), time.Now()))
+
+	req := newReportMCPRequest("tools/call", map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "write_report_failure",
+			"arguments": map[string]any{
+				"run_id":        "run-degraded",
+				"error_code":    "REPORT_BRIEF_RETRY_EXHAUSTED",
+				"error_message": "quality retry exhausted",
+			},
+		},
+	})
+	req = requestWithUser(req, &model.User{ID: "u-1", Role: "employee"})
+	rec := httptest.NewRecorder()
+	h.Serve(rec, req)
+	if code := reportMCPError(t, rec); code != "REPORT_DEGRADED_RESULT_REQUIRED" {
+		t.Fatalf("expected REPORT_DEGRADED_RESULT_REQUIRED, got %s body=%s", code, rec.Body.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReportQualityRetryExhaustedCodes(t *testing.T) {
+	for _, value := range []string{"REPORT_BRIEF_RETRY_EXHAUSTED", "BRIEF_RETRY_EXHAUSTED", "REPORT_RESULT_RETRY_EXHAUSTED"} {
+		if !isReportQualityRetryExhausted(value, "") {
+			t.Fatalf("expected %q to be treated as quality exhaustion", value)
+		}
+	}
+	if isReportQualityRetryExhausted("REPORT_SOURCE_UNAVAILABLE", "source missing") {
+		t.Fatal("source failures must not enter quality degradation")
 	}
 }
 

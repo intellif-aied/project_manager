@@ -7,11 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/aidashboard/api/internal/reportbrief"
 	"github.com/aidashboard/api/internal/reportcontext"
 	"github.com/aidashboard/api/internal/reportsource"
 	"github.com/aidashboard/api/model"
@@ -77,6 +79,8 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 	}
 	briefSchemaVersion := ""
 	acceptedBriefHash := ""
+	degradedReason := ""
+	degradedContentReplaced := false
 	content, normalizedSummary, err := prepareReportResultContent(reportType, run.ContextRepresentation, args.Summary, args.Content)
 	if err != nil {
 		return nil, err
@@ -85,14 +89,33 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 		if h.reportBrief == nil {
 			return nil, errMCPInternal
 		}
-		storedBrief, briefErr := h.reportBrief.ValidateForWrite(
-			r.Context(), u.ID, args.RunID, strings.TrimSpace(args.BriefHash), normalizedSummary, content,
-		)
-		if briefErr != nil {
-			return nil, mapReportBriefError(briefErr)
+		if strings.TrimSpace(args.BriefHash) == "" {
+			degradedReason, err = h.reportBrief.DegradedWriteReason(r.Context(), u.ID, args.RunID)
+			if err != nil {
+				return nil, mapReportBriefError(err)
+			}
+			if !reportbrief.ReaderFacingTextSafe(normalizedSummary) || !reportbrief.ReaderFacingTextSafe(content) {
+				content, normalizedSummary, err = prepareReportResultContent(
+					reportType,
+					run.ContextRepresentation,
+					"1. 已根据本期工作记录生成日报，请检查并补充。",
+					"### 工作记录\n\n本期工作内容已完成整理，请结合实际情况检查并补充。",
+				)
+				if err != nil {
+					return nil, err
+				}
+				degradedContentReplaced = true
+			}
+		} else {
+			storedBrief, briefErr := h.reportBrief.ValidateForWrite(
+				r.Context(), u.ID, args.RunID, strings.TrimSpace(args.BriefHash), normalizedSummary, content,
+			)
+			if briefErr != nil {
+				return nil, mapReportBriefError(briefErr)
+			}
+			briefSchemaVersion = storedBrief.Payload.SchemaVersion
+			acceptedBriefHash = storedBrief.BriefHash
 		}
-		briefSchemaVersion = storedBrief.Payload.SchemaVersion
-		acceptedBriefHash = storedBrief.BriefHash
 	}
 	if content == "" {
 		return nil, mcpErr("INVALID_ARGUMENT", "content is required")
@@ -193,6 +216,13 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 		outputPayload["brief_schema_version"] = briefSchemaVersion
 		outputPayload["brief_hash"] = acceptedBriefHash
 	}
+	if degradedReason != "" {
+		outputPayload["report_generation_degraded"] = true
+		outputPayload["report_generation_degraded_reason"] = degradedReason
+		if degradedContentReplaced {
+			outputPayload["report_generation_degraded_content_replaced"] = true
+		}
+	}
 	copyReportRunMetadata(outputPayload, run.InputRef)
 	outputRef, _ := json.Marshal(outputPayload)
 	finalizeResult, err := tx.ExecContext(ctx, `
@@ -226,6 +256,7 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 		"product_status":       "ai_generated",
 		"origin":               "ai",
 		"updated_by_user":      false,
+		"degraded":             degradedReason != "",
 	}), nil
 }
 
@@ -338,8 +369,13 @@ func (h *ReportMCPHandler) toolWriteReportFailure(r *http.Request, rawArgs json.
 	if errorCode == "" {
 		errorCode = "AGENT_REPORTED_FAILURE"
 	}
-	formatted := errorMessage
-	formatted = errorCode + ": " + errorMessage
+	if h.briefEnabled && h.reportBrief != nil && isReportQualityRetryExhausted(errorCode, errorMessage) {
+		if _, degradedErr := h.reportBrief.DegradedWriteReason(r.Context(), u.ID, args.RunID); degradedErr == nil {
+			return nil, mcpErr("REPORT_DEGRADED_RESULT_REQUIRED", "report quality checks cannot fail the run; call write_report_result without brief_hash")
+		}
+	}
+	log.Printf("report Agent failure run_id=%s user_id=%s error_code=%s detail=%q", args.RunID, u.ID, errorCode, errorMessage)
+	formatted := "报告生成未完成，请重新生成"
 	failureResult, err := h.db.ExecContext(r.Context(), `
 		UPDATE ai_runs
 		SET status = 'failed',
@@ -364,6 +400,11 @@ func (h *ReportMCPHandler) toolWriteReportFailure(r *http.Request, rawArgs json.
 		"status":    "failed",
 		"retryable": true,
 	}), nil
+}
+
+func isReportQualityRetryExhausted(errorCode, errorMessage string) bool {
+	value := strings.ToUpper(strings.TrimSpace(errorCode) + " " + strings.TrimSpace(errorMessage))
+	return strings.Contains(value, "BRIEF_RETRY_EXHAUSTED") || strings.Contains(value, "RESULT_RETRY_EXHAUSTED")
 }
 
 func resolveRunReportIdentity(u *model.User, run *reportAIRun) (string, string, string, string, reportTarget, error) {

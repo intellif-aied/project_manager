@@ -13,10 +13,12 @@ import (
 )
 
 type recordingReportBriefService struct {
-	runID        string
-	draft        reportbrief.Draft
-	rejectDetail string
-	rejectErr    error
+	runID          string
+	draft          reportbrief.Draft
+	rejectDetail   string
+	rejectErr      error
+	degradedReason string
+	degradedErr    error
 }
 
 func (s *recordingReportBriefService) RejectInvalid(_ context.Context, _, runID, details string) (reportbrief.Stored, error) {
@@ -36,6 +38,16 @@ func (s *recordingReportBriefService) Accept(_ context.Context, _, runID string,
 
 func (*recordingReportBriefService) ValidateForWrite(context.Context, string, string, string, string, string) (reportbrief.Stored, error) {
 	return reportbrief.Stored{}, nil
+}
+
+func (s *recordingReportBriefService) DegradedWriteReason(context.Context, string, string) (string, error) {
+	if s.degradedErr != nil {
+		return "", s.degradedErr
+	}
+	if s.degradedReason == "" {
+		return "", reportbrief.ErrNotFound
+	}
+	return s.degradedReason, nil
 }
 
 func TestReportRunTokenBindsUserAndRun(t *testing.T) {

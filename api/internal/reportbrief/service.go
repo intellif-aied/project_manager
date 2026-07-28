@@ -195,6 +195,37 @@ func (s *Service) ValidateForWrite(ctx context.Context, userID, runID, briefHash
 	return stored, nil
 }
 
+func (s *Service) DegradedWriteReason(ctx context.Context, userID, runID string) (string, error) {
+	if s == nil || s.db == nil || strings.TrimSpace(userID) == "" || strings.TrimSpace(runID) == "" {
+		return "", ErrInvalid
+	}
+	var briefAttempts, resultAttempts int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT a.brief_invalid_attempts, a.result_invalid_attempts
+		FROM report_run_generation_attempts a
+		JOIN ai_runs r ON r.id = a.run_id
+		WHERE a.run_id = $1::uuid AND r.user_id = $2 AND r.business_type = 'report_agent_run'`,
+		runID, userID,
+	).Scan(&briefAttempts, &resultAttempts)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", err
+	}
+	if briefAttempts > MaxBriefInvalidAttempts {
+		return "brief_retry_exhausted", nil
+	}
+	if resultAttempts > MaxResultInvalidAttempts {
+		return "result_retry_exhausted", nil
+	}
+	return "", ErrNotFound
+}
+
+func ReaderFacingTextSafe(value string) bool {
+	return len(validateTextIssues("text", normalizeText(value), 0, MaxPayloadBytes)) == 0
+}
+
 func (s *Service) rejectInvalidBrief(ctx context.Context, userID, runID string, validationErr error) (Stored, error) {
 	if !errors.Is(validationErr, ErrInvalid) {
 		return Stored{}, validationErr
@@ -278,17 +309,16 @@ func (s *Service) loadStored(ctx context.Context, userID, runID string) (Stored,
 }
 
 var (
-	factRefPattern          = regexp.MustCompile(FactRefJSONPattern)
-	uuidPattern             = regexp.MustCompile(`(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b`)
-	privateIPPattern        = regexp.MustCompile(`\b(?:10\.|192\.168\.|172\.(?:1[6-9]|2[0-9]|3[01])\.)[0-9]{1,3}\.[0-9]{1,3}\b`)
-	longHexPattern          = regexp.MustCompile(`(?i)\b[0-9a-f]{7,64}\b`)
-	rawCodePattern          = regexp.MustCompile(`\bREPORT_[A-Z0-9_]+\b`)
-	pascalIdentifierPattern = regexp.MustCompile(`\b[A-Z][a-z0-9]+(?:[A-Z][A-Za-z0-9]*)+\b`)
-	absUnixPathPattern      = regexp.MustCompile(`(?:^|\s)/(?:home|tmp|var|etc|opt|usr)/[^\s]+`)
-	absWindowsPathPattern   = regexp.MustCompile(`(?i)\b[A-Z]:\\[^\s]+`)
-	internalRoutePattern    = regexp.MustCompile(`(?:^|[\s(\x60])/[A-Za-z][A-Za-z0-9_-]*(?:/[A-Za-z0-9_.{}:-]+)*`)
-	networkPortPattern      = regexp.MustCompile(`(?i)(?:udp|tcp|port|端口)\s*[:：]?\s*[0-9]{2,5}\b`)
-	commandFlagPattern      = regexp.MustCompile(`(?:^|\s)--[A-Za-z][A-Za-z0-9-]*\b`)
+	factRefPattern        = regexp.MustCompile(FactRefJSONPattern)
+	uuidPattern           = regexp.MustCompile(`(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b`)
+	privateIPPattern      = regexp.MustCompile(`\b(?:10\.|192\.168\.|172\.(?:1[6-9]|2[0-9]|3[01])\.)[0-9]{1,3}\.[0-9]{1,3}\b`)
+	longHexPattern        = regexp.MustCompile(`(?i)\b[0-9a-f]{7,64}\b`)
+	rawCodePattern        = regexp.MustCompile(`\bREPORT_[A-Z0-9_]+\b`)
+	absUnixPathPattern    = regexp.MustCompile(`(?:^|\s)/(?:home|tmp|var|etc|opt|usr)/[^\s]+`)
+	absWindowsPathPattern = regexp.MustCompile(`(?i)\b[A-Z]:\\[^\s]+`)
+	internalRoutePattern  = regexp.MustCompile(`(?:^|[\s(\x60])/[A-Za-z][A-Za-z0-9_-]*(?:/[A-Za-z0-9_.{}:-]+)*`)
+	networkPortPattern    = regexp.MustCompile(`(?i)(?:udp|tcp|port|端口)\s*[:：]?\s*[0-9]{2,5}\b`)
+	commandFlagPattern    = regexp.MustCompile(`(?:^|\s)--[A-Za-z][A-Za-z0-9-]*\b`)
 )
 
 var validStates = valueSet(ValidStates())
@@ -456,7 +486,7 @@ func validateTextIssues(path, value string, minRunes, maxRunes int) []string {
 		label   string
 	}{
 		{uuidPattern, "UUID"}, {privateIPPattern, "private IP"}, {longHexPattern, "hash"},
-		{rawCodePattern, "raw error code"}, {pascalIdentifierPattern, "internal identifier"},
+		{rawCodePattern, "raw error code"},
 		{absUnixPathPattern, "absolute path"}, {absWindowsPathPattern, "absolute path"},
 		{internalRoutePattern, "internal route"}, {networkPortPattern, "network port"},
 		{commandFlagPattern, "command-line flag"},

@@ -109,6 +109,21 @@ assert.match(
   /startReportAgentRun\(\s*"default"/,
   "reports must run the default Report Agent"
 );
+assert.doesNotMatch(
+  controls,
+  /run\.error_message\s*\|\|/,
+  "report controls must not expose raw Agent platform errors"
+);
+assert.match(
+  controls,
+  /日报生成未完成，请重新生成/,
+  "report controls must show a stable business failure message"
+);
+assert.doesNotMatch(
+  runTracker,
+  /run\.error_message\s*\|\|/,
+  "background report notifications must not expose raw Agent platform errors"
+);
 assert.match(
   controls,
   /createDefaultReportAgent\(\)/,
