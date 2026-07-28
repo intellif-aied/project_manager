@@ -125,7 +125,7 @@ func TestReportContextBuildRequestMapsAllReportTargets(t *testing.T) {
 	}
 }
 
-func TestBuildReportRunMessageUsesRunIDOnly(t *testing.T) {
+func TestBuildReportRunMessageUsesCredentialBoundIdentity(t *testing.T) {
 	message := buildReportRunMessage(map[string]string{
 		"report_type":                "personal_daily",
 		"period_json":                `{"date":"2026-07-01"}`,
@@ -136,7 +136,7 @@ func TestBuildReportRunMessageUsesRunIDOnly(t *testing.T) {
 		"mcp_url":                    "https://aida.example.com/api/v1/mcp/reports",
 	}, "请重点关注风险", reportMCPCredentialSlot)
 
-	if message != "/aida-report\nrun_id=run-report\n\n用户补充说明：\n请重点关注风险" {
+	if message != "/aida-report\n\n用户补充说明：\n请重点关注风险" {
 		t.Fatalf("run message=%q", message)
 	}
 	for _, forbidden := range []string{"report_type", "period_json", "calendar_context_json", "target_json", "report_source_selection_id", "mcp_url", "get_report_context", reportMCPCredentialSlot, "write_report_result"} {
@@ -155,7 +155,7 @@ func TestBuildReportRunMessageUsesFrozenContextWithoutSelection(t *testing.T) {
 		"run_id":                "run-department-weekly",
 	}, "", reportMCPCredentialSlot)
 
-	if message != "/aida-report\nrun_id=run-department-weekly" {
+	if message != "/aida-report" {
 		t.Fatalf("fallback run message=%q", message)
 	}
 }
@@ -214,7 +214,7 @@ func TestDefaultReportAgentInstructionsContainProtocolOnly(t *testing.T) {
 			t.Fatalf("agent instructions repeat Skill protocol %q: %q", forbidden, instructions)
 		}
 	}
-	if got := defaultReportAgentStartPromptTemplate(reportMCPCredentialSlot); got != "/aida-report\nrun_id={{ run_id }}" {
+	if got := defaultReportAgentStartPromptTemplate(reportMCPCredentialSlot); got != "/aida-report" {
 		t.Fatalf("start prompt=%q", got)
 	}
 }
@@ -1690,7 +1690,7 @@ func TestReportAgentRepairRequestDoesNotOverwriteCustomInstructions(t *testing.T
 func TestReportAgentRepairRequestRefreshesManagedStartPromptTemplate(t *testing.T) {
 	defaults := testManagedAgentDefaults()
 	h := NewManagedAgentHandlerWithDefaults(nil, nil, defaults)
-	oldTemplate := strings.Replace(defaultReportAgentStartPromptTemplate(reportMCPCredentialSlot), "run_id={{ run_id }}", "report_type={{ report_type }}\nperiod={{ period_json }}\ncalendar_context={{ calendar_context_json }}\ntarget={{ target_json }}\nreport_source_selection_id={{ report_source_selection_id }}\nrun_id={{ run_id }}", 1)
+	oldTemplate := "/aida-report\nreport_type={{ report_type }}\nperiod={{ period_json }}\ncalendar_context={{ calendar_context_json }}\ntarget={{ target_json }}\nreport_source_selection_id={{ report_source_selection_id }}\nrun_id={{ run_id }}"
 	existing := model.ManagedAgent{
 		AgentID:             "agent-default",
 		Name:                defaultReportAgentName,
@@ -1712,8 +1712,8 @@ func TestReportAgentRepairRequestRefreshesManagedStartPromptTemplate(t *testing.
 	if repairReq.StartPromptTemplate != h.reportAgentStartPromptTemplate() {
 		t.Fatalf("start prompt = %q", repairReq.StartPromptTemplate)
 	}
-	if !strings.Contains(repairReq.StartPromptTemplate, "run_id={{ run_id }}") || strings.Contains(repairReq.StartPromptTemplate, "report_type={{ report_type }}") {
-		t.Fatalf("refreshed start prompt did not converge on run_id-only identity: %q", repairReq.StartPromptTemplate)
+	if repairReq.StartPromptTemplate != "/aida-report" {
+		t.Fatalf("refreshed start prompt did not converge on credential-bound identity: %q", repairReq.StartPromptTemplate)
 	}
 }
 
@@ -1748,7 +1748,7 @@ func TestResolveAndRepairDefaultReportAgentRefreshesManagedPromptBeforeRun(t *te
 		Engine:              "claude-code",
 		DefaultModelID:      defaults.ModelID,
 		Instructions:        defaultReportAgentInstructions(reportMCPCredentialSlot),
-		StartPromptTemplate: strings.Replace(defaultReportAgentStartPromptTemplate(reportMCPCredentialSlot), "run_id={{ run_id }}", "report_type={{ report_type }}\nperiod={{ period_json }}\ncalendar_context={{ calendar_context_json }}\ntarget={{ target_json }}\nreport_source_selection_id={{ report_source_selection_id }}\nrun_id={{ run_id }}", 1),
+		StartPromptTemplate: "/aida-report\nreport_type={{ report_type }}\nperiod={{ period_json }}\ncalendar_context={{ calendar_context_json }}\ntarget={{ target_json }}\nreport_source_selection_id={{ report_source_selection_id }}\nrun_id={{ run_id }}",
 		CredentialSlots:     []model.ManagedCredentialSlot{{Name: reportMCPCredentialSlot, Required: true}},
 		Skills:              []model.ManagedSkillRef{{Owner: "100866", Slug: service.ReportSkillSlug, Version: testReportSkillVersion}},
 		MCPServers:          []model.ManagedMCPServer{h.defaultReportMCPServer()},
@@ -1757,7 +1757,7 @@ func TestResolveAndRepairDefaultReportAgentRefreshesManagedPromptBeforeRun(t *te
 	if err := h.resolveAndRepairReportAgent(context.Background(), h.client, &agent, true); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(updated.StartPromptTemplate, "run_id={{ run_id }}") || strings.Contains(updated.StartPromptTemplate, "target={{ target_json }}") {
+	if updated.StartPromptTemplate != "/aida-report" {
 		t.Fatalf("updated start prompt = %q", updated.StartPromptTemplate)
 	}
 	if agent.StartPromptTemplate != h.reportAgentStartPromptTemplate() {
@@ -2206,7 +2206,7 @@ func TestDailyReportIntegrationReturnsMCPAndSkill(t *testing.T) {
 func TestReportPromptDoesNotExposeResolvedTargetIDs(t *testing.T) {
 	target := reportTarget{Type: "department", DepartmentID: "11111111-1111-4111-8111-111111111111"}
 	values := reportAgentStartPromptValues("run-1")
-	if len(values) != 1 || values["run_id"] != "run-1" {
+	if len(values) != 0 {
 		t.Fatalf("report start prompt values=%#v", values)
 	}
 	message := fallbackReportRunMessage()
@@ -2215,14 +2215,14 @@ func TestReportPromptDoesNotExposeResolvedTargetIDs(t *testing.T) {
 	}
 }
 
-func TestMergeReportStartPromptValuesSendsOnlyRunID(t *testing.T) {
+func TestMergeReportStartPromptValuesSendsNoReportIdentity(t *testing.T) {
 	values, reserved, ok := mergeReportStartPromptValues(
 		reportAgentStartPromptValues("run-1"),
 		map[string]string{"custom": "value"},
 		"用户补充",
 		reportMCPCredentialSlot,
 	)
-	if !ok || reserved != "" || len(values) != 1 || values["run_id"] != "run-1" {
+	if !ok || reserved != "" || len(values) != 0 {
 		t.Fatalf("values=%#v reserved=%q ok=%v", values, reserved, ok)
 	}
 	if _, _, ok := mergeReportStartPromptValues(

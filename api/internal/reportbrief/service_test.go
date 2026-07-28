@@ -251,3 +251,33 @@ func TestRejectInvalidBriefStopsAfterCorrectionBudget(t *testing.T) {
 		t.Fatalf("error=%v, want retry exhausted with details", err)
 	}
 }
+
+func TestRejectMalformedBriefUsesRunChecksAndCorrectionBudget(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	service := &Service{db: db}
+	const (
+		runID  = "00000000-0000-4000-8000-000000000001"
+		userID = "307"
+	)
+
+	mock.ExpectQuery("SELECT business_type, status").
+		WithArgs(runID, userID).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"business_type", "status", "execution_stage", "model_id", "report_context_representation",
+		}).AddRow("report_agent_run", "running", "agent_running", "deepseek-v4-flash", "work_evidence"))
+	mock.ExpectQuery("INSERT INTO report_run_generation_attempts").
+		WithArgs(runID, userID, MaxBriefInvalidAttempts+1).
+		WillReturnRows(sqlmock.NewRows([]string{"brief_invalid_attempts"}).AddRow(3))
+
+	_, err = service.RejectInvalid(context.Background(), userID, runID, "brief_json is malformed")
+	if !errors.Is(err, ErrBriefRetryExhausted) || !strings.Contains(err.Error(), "brief_json is malformed") {
+		t.Fatalf("error=%v, want retry exhausted with malformed JSON details", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}

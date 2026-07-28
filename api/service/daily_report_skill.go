@@ -75,7 +75,7 @@ func ReportSkillMarkdownWithConfig(data ReportSkillTemplateData) string {
 	data = normalizeReportSkillTemplateData(data)
 	return fmt.Sprintf(`---
 name: aida-report
-description: Generate and write one Chinese Aida daily or weekly report from a frozen Report Context identified by run_id.
+description: Generate and write one Chinese Aida daily or weekly report from the frozen Report Context bound to this run.
 ---
 
 # Aida Report Skill
@@ -84,8 +84,8 @@ Create one reader-facing Chinese report. The frozen Context is the only evidence
 
 ## 1. Execute the run
 
-1. Read only run_id from the run input.
-2. Use the bound %s MCP with the injected %s credential. Call get_report_context exactly once with {"run_id": run_id}. Never ask for credentials, construct authorization, or call the URL manually.
+1. Use the bound %s MCP with the injected %s credential. The credential already identifies the current user and Report Run; never copy, infer, or send run_id in a tool call.
+2. Call get_report_context exactly once with {}. Never ask for credentials, construct authorization, or call the URL manually.
 3. Read the complete returned Context. Do not call any legacy source tool, rescan Sessions, or request fallback data. If Context cannot be read, call write_report_failure.
 4. If run.report_type is personal_daily and write_report_brief is available, execute the mandatory Report Brief flow in section 2. If that tool is unavailable, or for every other report type, use the unchanged direct composition flow in sections 3 and 4.
 5. Do not emit progress narration, create files, run shell commands, or use unrelated tools between Report MCP calls.
@@ -104,7 +104,9 @@ For personal_daily, perform two distinct semantic passes in this same Agent Sess
 - Use reader-facing Chinese. Use 报告/日报/周报 for business objects and never use 报表. Preserve Report Agent, Report MCP, Report Context, Skill, Agent, and MCP exactly when needed. Never write 报告Agent, 报告MCP, or 深链.
 - Describe user-visible effects instead of technical labels: for example, write 点击通知直接打开对应报告 instead of a deep-link term.
 - Omit component/class names, raw error codes, source fields, telemetry, hosts, ports, account identifiers, UUIDs, hashes, paths, commands, credentials, and repository details.
-- Call write_report_brief with run_id, workstreams, excluded_facts, and no_reportable_work. If it returns REPORT_BRIEF_INVALID, correct every reported violation together and retry without reading Context again. You may correct an invalid Brief at most twice. If it returns REPORT_BRIEF_RETRY_EXHAUSTED or any other error, call write_report_failure.
+- Build exactly this inner JSON shape: {"workstreams":[{"title":"...","objective":"...","deliverables":[{"result":"...","state":"released|validated|completed|in_progress|blocked","environment":"production|test|development|none","validation":"...","next_action":"...","fact_refs":["fact-001"]}]}],"excluded_facts":[{"fact_ref":"fact-002","reason":"preparation|discussion|trace|duplicate|low_reader_value"}],"no_reportable_work":false}.
+- Use the exact field names above. Never use name instead of title. Every string field must be a non-empty string; never use null. reason, state, and environment must use one exact English enum value shown above and must not be translated.
+- Serialize that one inner object as a JSON string, then call write_report_brief with {"brief_json":"<serialized inner JSON object>"}. Do not send run_id or expand the inner Brief into tool arguments. If it returns REPORT_BRIEF_INVALID, correct every reported violation together and retry without reading Context again. You may correct an invalid Brief at most twice. If it returns REPORT_BRIEF_RETRY_EXHAUSTED or any other error, call write_report_failure with an error_message.
 
 ### Pass 2: compose only from the accepted Brief
 
@@ -112,7 +114,7 @@ For personal_daily, perform two distinct semantic passes in this same Agent Sess
 - Use one descriptive level-two heading per workstream. Organize headings by work objective, never by state labels such as 生产上线, 测试完成, or 开发完成.
 - Preserve every deliverable's state and environment. If a workstream mixes released and test-only work, describe them separately and mention a supported pending release once.
 - Produce summary as one non-empty plain-text paragraph without a heading or list. Produce content as non-empty Markdown without 工作总结.
-- Call write_report_result with {"run_id": run_id, "brief_hash": accepted_brief.brief_hash, "summary": summary, "content": markdown}. If it returns REPORT_RESULT_INVALID, correct every reported violation together using only the accepted Brief and retry once. If it returns REPORT_RESULT_RETRY_EXHAUSTED or any other error, call write_report_failure.
+- Call write_report_result with {"brief_hash": accepted_brief.brief_hash, "summary": summary, "content": markdown}. If it returns REPORT_RESULT_INVALID, correct every reported violation together using only the accepted Brief and retry once. If it returns REPORT_RESULT_RETRY_EXHAUSTED or any other error, call write_report_failure with an error_message.
 
 ## 3. Direct flow: interpret the evidence
 
@@ -133,7 +135,7 @@ For personal_daily, perform two distinct semantic passes in this same Agent Sess
 - Produce summary as one non-empty plain-text paragraph without a heading or list. It states the period's objectives, core outcomes, and overall state without repeating every body heading.
 - Produce content as non-empty Markdown without 工作总结. Add 风险与待处理 only when evidence explicitly supports it. Do not duplicate a fact across sections.
 - If there is no reportable fact, set summary to 本期无可核验的工作记录 and state only that in content.
-- Call write_report_result exactly once with {"run_id": run_id, "summary": summary, "content": markdown}. On generation failure call write_report_failure. Pass no report identity field other than run_id.
+- Call write_report_result exactly once with {"summary": summary, "content": markdown}. On generation failure call write_report_failure with an error_message. Never pass a report identity field; the bound credential supplies it.
 
 ## 5. Keep internals private
 

@@ -12,13 +12,17 @@ func TestReportSkillMarkdownUsesReportBriefForPersonalDaily(t *testing.T) {
 	}
 	required := []string{
 		"frozen Context is the only evidence source",
-		"Call get_report_context exactly once with {\"run_id\": run_id}",
+		"credential already identifies the current user and Report Run",
+		"Call get_report_context exactly once with {}",
 		"If that tool is unavailable, or for every other report type, use the unchanged direct composition flow",
 		"## 2. Mandatory personal daily Report Brief",
 		"two distinct semantic passes in this same Agent Session",
 		"Every fact_ref must be included in at least one deliverable or excluded",
 		"released requires explicit production evidence and environment=production",
-		"Call write_report_brief with run_id, workstreams, excluded_facts, and no_reportable_work",
+		"Build exactly this inner JSON shape",
+		"Never use name instead of title",
+		"reason, state, and environment must use one exact English enum value",
+		"call write_report_brief with {\"brief_json\":\"<serialized inner JSON object>\"}",
 		"correct every reported violation together",
 		"correct an invalid Brief at most twice",
 		"REPORT_BRIEF_RETRY_EXHAUSTED",
@@ -34,8 +38,8 @@ func TestReportSkillMarkdownUsesReportBriefForPersonalDaily(t *testing.T) {
 		"Follow presentation_profile for the current report's summary focus and grouping. It controls presentation, not evidence scope.",
 		"Git commands and metadata are trace data, not report content",
 		"## 4. Direct flow: write the report",
-		"Call write_report_result exactly once with {\"run_id\": run_id, \"summary\": summary, \"content\": markdown}",
-		"Pass no report identity field other than run_id",
+		"Call write_report_result exactly once with {\"summary\": summary, \"content\": markdown}",
+		"Never pass a report identity field",
 		"## 5. Keep internals private",
 	}
 	for _, expected := range required {

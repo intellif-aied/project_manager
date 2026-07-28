@@ -61,7 +61,12 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 	if err := decodeArguments(rawArgs, &args); err != nil {
 		return nil, err
 	}
-	run, err := h.aiRunGuard(r, args.RunID, u.ID)
+	runID, err := resolveReportRunID(r, args.RunID)
+	if err != nil {
+		return nil, err
+	}
+	args.RunID = runID
+	run, err := h.aiRunGuard(r, runID, u.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -308,10 +313,16 @@ func (h *ReportMCPHandler) toolWriteReportFailure(r *http.Request, rawArgs json.
 	if err := decodeArguments(rawArgs, &args); err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(args.RunID) == "" {
+	boundRunID, _ := r.Context().Value(reportRunIDKey).(string)
+	if strings.TrimSpace(args.RunID) == "" && strings.TrimSpace(boundRunID) == "" {
 		return nil, mcpErr("INVALID_ARGUMENT", "run_id is required")
 	}
-	run, err := h.aiRunGuard(r, args.RunID, u.ID)
+	runID, err := resolveReportRunID(r, args.RunID)
+	if err != nil {
+		return nil, err
+	}
+	args.RunID = runID
+	run, err := h.aiRunGuard(r, runID, u.ID)
 	if err != nil {
 		return nil, err
 	}

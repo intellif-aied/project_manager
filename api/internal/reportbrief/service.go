@@ -128,6 +128,28 @@ func (s *Service) Accept(ctx context.Context, userID, runID string, draft Draft)
 	return Stored{Payload: payload, BriefHash: briefHash, ContextHash: storedContext.Hash}, nil
 }
 
+// RejectInvalid records a malformed Report Brief that could not be decoded into
+// a Draft. Keeping this inside the service applies the same run ownership,
+// writable-state, and retry-budget rules as structurally valid Drafts.
+func (s *Service) RejectInvalid(ctx context.Context, userID, runID, details string) (Stored, error) {
+	if s == nil || s.db == nil || strings.TrimSpace(userID) == "" || strings.TrimSpace(runID) == "" {
+		return Stored{}, ErrInvalid
+	}
+	run, err := s.loadRun(ctx, userID, runID)
+	if err != nil {
+		return Stored{}, err
+	}
+	if run.BusinessType != "report_agent_run" || run.Status != "running" || run.Stage != "agent_running" ||
+		run.Representation != reportcontext.RepresentationWorkEvidence {
+		return Stored{}, ErrRunNotWritable
+	}
+	details = strings.TrimSpace(details)
+	if details == "" {
+		details = "brief_json is invalid"
+	}
+	return s.rejectInvalidBrief(ctx, userID, runID, fmt.Errorf("%w: %s", ErrInvalid, details))
+}
+
 func (s *Service) ValidateForWrite(ctx context.Context, userID, runID, briefHash, summary, content string) (Stored, error) {
 	if s == nil || s.db == nil || strings.TrimSpace(briefHash) == "" {
 		return Stored{}, ErrNotFound

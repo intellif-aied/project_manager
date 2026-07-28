@@ -40,7 +40,7 @@ func (s *ReportRunSubmitter) Submit(
 	if err != nil {
 		return reportrun.SubmissionResult{}, prepareSubmissionError(err)
 	}
-	token, err := MintAIHubCompatibleToken(user, s.defaults.AIHubSecret)
+	token, err := MintReportRunToken(user, s.defaults.AIHubSecret, run.ID)
 	if err != nil {
 		return reportrun.SubmissionResult{}, prepareSubmissionError(err)
 	}

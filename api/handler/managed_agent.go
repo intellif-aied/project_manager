@@ -1288,7 +1288,7 @@ func defaultReportAgentInstructions(_ string) string {
 }
 
 func defaultReportAgentStartPromptTemplate(_ string) string {
-	return "/aida-report\nrun_id={{ run_id }}"
+	return "/aida-report"
 }
 
 func (h *ManagedAgentHandler) selectDefaultReportAgent(agents []model.ManagedAgent) (model.ManagedAgent, bool) {
@@ -1948,8 +1948,8 @@ func reportCalendarContextJSON(reportType, date, weekStart, weekEnd string) stri
 	return string(raw)
 }
 
-func reportAgentStartPromptValues(runID string) map[string]string {
-	return map[string]string{"run_id": strings.TrimSpace(runID)}
+func reportAgentStartPromptValues(_ string) map[string]string {
+	return map[string]string{}
 }
 
 func isReportSystemPromptKey(key, credentialSlot string) bool {
@@ -1976,7 +1976,7 @@ func mergeReportStartPromptValues(systemValues map[string]string, userValues map
 }
 
 func buildReportRunMessage(startValues map[string]string, message string, _ string) string {
-	runMessage := "/aida-report\nrun_id=" + strings.TrimSpace(startValues["run_id"])
+	runMessage := "/aida-report"
 	message = strings.TrimSpace(message)
 	if message == "" || message == fallbackReportRunMessage() {
 		return runMessage

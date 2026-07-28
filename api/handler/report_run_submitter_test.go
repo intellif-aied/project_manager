@@ -14,7 +14,7 @@ import (
 	"github.com/aidashboard/api/service"
 )
 
-func TestReportRunSubmitterOnlySendsRunIDAsReportIdentity(t *testing.T) {
+func TestReportRunSubmitterKeepsReportIdentityInCredential(t *testing.T) {
 	database, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
@@ -22,16 +22,19 @@ func TestReportRunSubmitterOnlySendsRunIDAsReportIdentity(t *testing.T) {
 	defer database.Close()
 
 	var submitted service.CreateManagedSessionRequest
+	var createdCredential service.CreateManagedCredentialRequest
 	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer platform-token" {
 			t.Fatalf("platform authorization = %q", got)
 		}
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/credential/list":
-			writeJSON(w, http.StatusOK, model.ListManagedCredentialsResponse{Credentials: []model.ManagedCredential{{
-				CredentialID: "credential-1",
-				Metadata:     map[string]string{"ai_run_id": "run-identity", "purpose": "report_mcp_auth"},
-			}}})
+			writeJSON(w, http.StatusOK, model.ListManagedCredentialsResponse{})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/credential":
+			if err := json.NewDecoder(r.Body).Decode(&createdCredential); err != nil {
+				t.Fatal(err)
+			}
+			writeJSON(w, http.StatusOK, service.CreateManagedCredentialResponse{CredentialID: "credential-1"})
 		case r.Method == http.MethodPost && r.URL.Path == "/api/session":
 			if err := json.NewDecoder(r.Body).Decode(&submitted); err != nil {
 				t.Fatal(err)
@@ -75,11 +78,18 @@ func TestReportRunSubmitterOnlySendsRunIDAsReportIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if submitted.StartPromptValues["run_id"] != "run-identity" {
-		t.Fatalf("run_id=%q", submitted.StartPromptValues["run_id"])
+	if len(submitted.StartPromptValues) != 0 {
+		t.Fatalf("start prompt values must not expose report identity: %#v", submitted.StartPromptValues)
 	}
-	if len(submitted.StartPromptValues) != 1 {
-		t.Fatalf("start prompt values must contain only run_id: %#v", submitted.StartPromptValues)
+	identity, err := extractAIHubIdentityWithPolicy(createdCredential.Value, "secret", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity.UID != 305 || identity.ReportRunID != "run-identity" {
+		t.Fatalf("credential identity = %#v", identity)
+	}
+	if createdCredential.Metadata["ai_run_id"] != "run-identity" || createdCredential.Metadata["aida_user_id"] != "305" {
+		t.Fatalf("credential metadata = %#v", createdCredential.Metadata)
 	}
 	for _, key := range []string{
 		"report_type", "period_json", "calendar_context_json", "target_json",
@@ -94,7 +104,7 @@ func TestReportRunSubmitterOnlySendsRunIDAsReportIdentity(t *testing.T) {
 			t.Fatalf("legacy report identity %q leaked in message: %s", forbidden, submitted.Message)
 		}
 	}
-	if submitted.Message != "/aida-report\nrun_id=run-identity\n\n用户补充说明：\n请强调已经确认的风险" {
+	if submitted.Message != "/aida-report\n\n用户补充说明：\n请强调已经确认的风险" {
 		t.Fatalf("runtime message=%q", submitted.Message)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -102,18 +112,18 @@ func TestReportRunSubmitterOnlySendsRunIDAsReportIdentity(t *testing.T) {
 	}
 }
 
-func TestBuildReportRunMessageAlwaysCarriesRunID(t *testing.T) {
+func TestBuildReportRunMessageNeverCarriesRunID(t *testing.T) {
 	tests := []struct {
 		name    string
 		message string
 		want    string
 	}{
-		{name: "default", want: "/aida-report\nrun_id=run-identity"},
-		{name: "legacy fallback", message: fallbackReportRunMessage(), want: "/aida-report\nrun_id=run-identity"},
+		{name: "default", want: "/aida-report"},
+		{name: "legacy fallback", message: fallbackReportRunMessage(), want: "/aida-report"},
 		{
 			name:    "user instruction",
 			message: "请强调已经确认的风险",
-			want:    "/aida-report\nrun_id=run-identity\n\n用户补充说明：\n请强调已经确认的风险",
+			want:    "/aida-report\n\n用户补充说明：\n请强调已经确认的风险",
 		},
 	}
 	for _, test := range tests {

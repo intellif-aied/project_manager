@@ -2,6 +2,7 @@ package handler
 
 import (
 	"fmt"
+	"reflect"
 	"testing"
 
 	"github.com/aidashboard/api/internal/reportbrief"
@@ -25,6 +26,49 @@ func TestManagedReportToolsetIncludesBriefOnlyWhenEnabled(t *testing.T) {
 	for _, tool := range reportMCPToolsForToolsetWithBrief("", true) {
 		if tool["name"] == toolWriteReportBrief {
 			t.Fatal("legacy full toolset must not expose write_report_brief")
+		}
+	}
+}
+
+func TestManagedReportBriefToolUsesRunBoundJSONContract(t *testing.T) {
+	tool := reportBriefTool()
+	schema, ok := tool["inputSchema"].(map[string]any)
+	if !ok {
+		t.Fatalf("inputSchema type = %T", tool["inputSchema"])
+	}
+	if got, want := schema["required"], []string{"brief_json"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("required = %#v, want %#v", got, want)
+	}
+	properties, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties type = %T", schema["properties"])
+	}
+	if _, exists := properties["run_id"]; exists {
+		t.Fatal("managed Brief schema must not ask the model to repeat run_id")
+	}
+	if got := properties["brief_json"]; !reflect.DeepEqual(got, map[string]any{"type": "string"}) {
+		t.Fatalf("brief_json schema = %#v", got)
+	}
+}
+
+func TestManagedReportToolsDoNotExposeRunIDButLegacyToolsKeepIt(t *testing.T) {
+	managed := reportMCPToolsForToolsetWithBrief(managedReportMCPToolset, true)
+	for _, tool := range managed {
+		name, _ := tool["name"].(string)
+		properties := tool["inputSchema"].(map[string]any)["properties"].(map[string]any)
+		if _, exists := properties["run_id"]; exists {
+			t.Fatalf("managed tool %s exposes run_id", name)
+		}
+	}
+	legacy := reportMCPToolsForToolsetWithBrief("", true)
+	for _, tool := range legacy {
+		name, _ := tool["name"].(string)
+		if name != toolGetReportContext && name != toolWriteReportResult && name != toolWriteReportFailure {
+			continue
+		}
+		properties := tool["inputSchema"].(map[string]any)["properties"].(map[string]any)
+		if _, exists := properties["run_id"]; !exists {
+			t.Fatalf("legacy tool %s lost run_id compatibility", name)
 		}
 	}
 }

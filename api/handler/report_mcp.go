@@ -58,8 +58,14 @@ type ReportMCPHandler struct {
 	db            *sql.DB
 	reportSource  *reportsource.Service
 	reportContext *reportcontext.Service
-	reportBrief   *reportbrief.Service
+	reportBrief   reportBriefService
 	briefEnabled  bool
+}
+
+type reportBriefService interface {
+	Accept(context.Context, string, string, reportbrief.Draft) (reportbrief.Stored, error)
+	RejectInvalid(context.Context, string, string, string) (reportbrief.Stored, error)
+	ValidateForWrite(context.Context, string, string, string, string, string) (reportbrief.Stored, error)
 }
 
 func NewReportMCPHandler(db *sql.DB) *ReportMCPHandler {
@@ -74,7 +80,7 @@ func (h *ReportMCPHandler) ConfigureReportContext(service *reportcontext.Service
 	h.reportContext = service
 }
 
-func (h *ReportMCPHandler) ConfigureReportBrief(service *reportbrief.Service, enabled bool) {
+func (h *ReportMCPHandler) ConfigureReportBrief(service reportBriefService, enabled bool) {
 	h.reportBrief = service
 	h.briefEnabled = enabled
 }
@@ -150,10 +156,20 @@ func (h *ReportMCPHandler) Serve(w http.ResponseWriter, r *http.Request) {
 func (h *ReportMCPHandler) writeServeError(w http.ResponseWriter, id json.RawMessage, err error) {
 	var mcpErr *mcpErrorCode
 	if asErr(err, &mcpErr) {
-		writeMCPError(w, id, -32000, mcpErr.Message, mcpErr.Code)
+		message := mcpErr.Message
+		if reportAgentNeedsVisibleErrorCode(mcpErr.Code) {
+			message = mcpErr.Code + ": " + message
+		}
+		writeMCPError(w, id, -32000, message, mcpErr.Code)
 		return
 	}
 	writeMCPError(w, id, -32603, "internal error: "+err.Error(), errMCPInternal.Code)
+}
+
+func reportAgentNeedsVisibleErrorCode(code string) bool {
+	return strings.HasPrefix(code, "REPORT_BRIEF_") ||
+		strings.HasPrefix(code, "REPORT_RESULT_") ||
+		code == "REPORT_RUN_MISMATCH"
 }
 
 func (h *ReportMCPHandler) initializeResult(params json.RawMessage) map[string]any {
@@ -219,13 +235,17 @@ func (h *ReportMCPHandler) toolGetReportContext(ctx context.Context, r *http.Req
 	var args struct {
 		RunID string `json:"run_id"`
 	}
-	if err := json.Unmarshal(raw, &args); err != nil || strings.TrimSpace(args.RunID) == "" {
+	if err := json.Unmarshal(raw, &args); err != nil {
 		return nil, errRunNotFound
+	}
+	runID, err := resolveReportRunID(r, args.RunID)
+	if err != nil {
+		return nil, err
 	}
 	if h.reportContext == nil {
 		return nil, errMCPInternal
 	}
-	stored, err := h.reportContext.Get(ctx, u.ID, strings.TrimSpace(args.RunID))
+	stored, err := h.reportContext.Get(ctx, u.ID, runID)
 	if errors.Is(err, reportcontext.ErrNotFound) {
 		return nil, errRunNotFound
 	}
@@ -233,6 +253,22 @@ func (h *ReportMCPHandler) toolGetReportContext(ctx context.Context, r *http.Req
 		return nil, errMCPInternal
 	}
 	return mcpTextResult(json.RawMessage(stored.Payload)), nil
+}
+
+func resolveReportRunID(r *http.Request, requested string) (string, error) {
+	requested = strings.TrimSpace(requested)
+	bound, _ := r.Context().Value(reportRunIDKey).(string)
+	bound = strings.TrimSpace(bound)
+	if bound == "" {
+		if requested == "" {
+			return "", errRunNotFound
+		}
+		return requested, nil
+	}
+	if requested != "" && requested != bound {
+		return "", mcpErr("REPORT_RUN_MISMATCH", "run_id does not match the authenticated report run")
+	}
+	return bound, nil
 }
 
 // requireUser returns the authenticated user or an UNAUTHORIZED error.

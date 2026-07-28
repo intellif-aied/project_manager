@@ -10,6 +10,7 @@ import (
 )
 
 type writeReportBriefArgs struct {
+	BriefJSON        string                     `json:"brief_json"`
 	RunID            string                     `json:"run_id"`
 	Workstreams      []reportbrief.Workstream   `json:"workstreams"`
 	ExcludedFacts    []reportbrief.ExcludedFact `json:"excluded_facts"`
@@ -28,14 +29,22 @@ func (h *ReportMCPHandler) toolWriteReportBrief(r *http.Request, rawArgs json.Ra
 	if err := decodeArguments(rawArgs, &args); err != nil {
 		return nil, err
 	}
-	args.RunID = strings.TrimSpace(args.RunID)
-	if args.RunID == "" {
-		return nil, mcpErr("REPORT_BRIEF_INVALID", "run_id is required")
+	runID, err := resolveReportRunID(r, args.RunID)
+	if err != nil {
+		return nil, err
 	}
-	stored, err := h.reportBrief.Accept(r.Context(), u.ID, args.RunID, reportbrief.Draft{
+	draft := reportbrief.Draft{
 		Workstreams: args.Workstreams, ExcludedFacts: args.ExcludedFacts,
 		NoReportableWork: args.NoReportableWork,
-	})
+	}
+	if strings.TrimSpace(args.BriefJSON) != "" {
+		if err := json.Unmarshal([]byte(args.BriefJSON), &draft); err != nil {
+			_, rejectErr := h.reportBrief.RejectInvalid(r.Context(), u.ID, runID,
+				"brief_json must contain one valid Report Brief JSON object")
+			return nil, mapReportBriefError(rejectErr)
+		}
+	}
+	stored, err := h.reportBrief.Accept(r.Context(), u.ID, runID, draft)
 	if err != nil {
 		return nil, mapReportBriefError(err)
 	}
