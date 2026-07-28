@@ -55,6 +55,7 @@ func TestManagedReportWriteToolsRequireRunIDInsteadOfCopiedScope(t *testing.T) {
 
 func TestPrepareReportResultContentForWorkEvidence(t *testing.T) {
 	content, summary, err := prepareReportResultContent(
+		reportTypePersonalDaily,
 		reportcontext.RepresentationWorkEvidence,
 		"完成日报结构优化。\n  已通过验证。",
 		"\n## 日报结构优化\n\n完成实现。\n",
@@ -62,16 +63,17 @@ func TestPrepareReportResultContentForWorkEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "## 工作总结\n\n完成日报结构优化。 已通过验证。\n\n## 日报结构优化\n\n完成实现。"
+	want := "## 工作概览\n\n完成日报结构优化。 已通过验证。\n\n## 工作详情\n\n### 日报结构优化\n\n完成实现。"
 	if content != want || summary != "完成日报结构优化。 已通过验证。" {
 		t.Fatalf("content=%q summary=%q", content, summary)
 	}
 
-	_, _, err = prepareReportResultContent(reportcontext.RepresentationWorkEvidence, " ", "## 正文\n内容")
+	_, _, err = prepareReportResultContent(reportTypePersonalDaily, reportcontext.RepresentationWorkEvidence, " ", "## 正文\n内容")
 	if got, ok := err.(*mcpErrorCode); !ok || got.Code != "REPORT_SUMMARY_REQUIRED" {
 		t.Fatalf("missing summary error=%v", err)
 	}
 	content, summary, err = prepareReportResultContent(
+		reportTypePersonalDaily,
 		reportcontext.RepresentationWorkEvidence,
 		"完成日报结构优化。",
 		"\n## 工作总结\n\n完成日报结构优化。\n\n## 日报结构优化\n\n完成实现。",
@@ -79,16 +81,44 @@ func TestPrepareReportResultContentForWorkEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want = "## 工作总结\n\n完成日报结构优化。\n\n## 日报结构优化\n\n完成实现。"
+	want = "## 工作概览\n\n完成日报结构优化。\n\n## 工作详情\n\n### 日报结构优化\n\n完成实现。"
 	if content != want || summary != "完成日报结构优化。" {
 		t.Fatalf("normalized duplicate content=%q summary=%q", content, summary)
 	}
 }
 
-func TestPrepareReportResultContentKeepsHistoricalContent(t *testing.T) {
-	content, summary, err := prepareReportResultContent("", "legacy summary", "  # 历史报告\n内容  ")
+func TestPrepareReportResultContentPreservesOrderedSummary(t *testing.T) {
+	content, summary, err := prepareReportResultContent(
+		reportTypePersonalDaily,
+		reportcontext.RepresentationWorkEvidence,
+		"  1. 完成报告入口整合。\r\n\r\n2. 修复生成失败提示。  ",
+		"## 报告体验优化\n\n完成实现。",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantSummary := "1. 完成报告入口整合。\n2. 修复生成失败提示。"
+	wantContent := "## 工作概览\n\n" + wantSummary + "\n\n## 工作详情\n\n### 报告体验优化\n\n完成实现。"
+	if summary != wantSummary || content != wantContent {
+		t.Fatalf("content=%q summary=%q", content, summary)
+	}
+}
+
+func TestPrepareReportResultContentKeepsOtherReportFormats(t *testing.T) {
+	content, summary, err := prepareReportResultContent("", "", "legacy summary", "  # 历史报告\n内容  ")
 	if err != nil || content != "# 历史报告\n内容" || summary != "legacy summary" {
 		t.Fatalf("content=%q summary=%q err=%v", content, summary, err)
+	}
+
+	content, summary, err = prepareReportResultContent(
+		reportTypePersonalWeekly,
+		reportcontext.RepresentationWorkEvidence,
+		"完成周报结构优化。",
+		"## 周报结构优化\n\n完成实现。",
+	)
+	want := "## 工作总结\n\n完成周报结构优化。\n\n## 周报结构优化\n\n完成实现。"
+	if err != nil || content != want || summary != "完成周报结构优化。" {
+		t.Fatalf("weekly content=%q summary=%q err=%v", content, summary, err)
 	}
 }
 

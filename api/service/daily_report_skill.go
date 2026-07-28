@@ -97,6 +97,7 @@ For personal_daily, perform two distinct semantic passes in this same Agent Sess
 ### Pass 1: build and submit the Brief
 
 - Read every work_evidence.fact and its fact_ref. Reconstruct the smallest coherent workstreams that cover materially distinct outcomes, failures, blockers, and unresolved actions.
+- Build at most five workstreams. Before submitting the Brief, merge workstreams that serve the same reader-facing objective and remove duplicate coverage while preserving distinct states and environments.
 - Each independently deliverable result must be a separate deliverable with result, state, environment, validation, next_action, and supporting fact_refs.
 - State rules are strict: released requires explicit production evidence and environment=production; validated means test verification; completed does not imply release; preserve in_progress and blocked.
 - Put preparation without a result, internal discussion, command/trace metadata, duplicate wording, and low reader-value implementation detail in excluded_facts with the matching reason.
@@ -111,9 +112,10 @@ For personal_daily, perform two distinct semantic passes in this same Agent Sess
 ### Pass 2: compose only from the accepted Brief
 
 - After write_report_brief succeeds, treat its returned normalized Brief as the only writing source. Do not return to the original Context or reconstruct excluded facts.
-- Use one descriptive level-two heading per workstream. Organize headings by work objective, never by state labels such as 生产上线, 测试完成, or 开发完成.
+- Use exactly one descriptive level-three heading per accepted Brief workstream and keep the same order. Organize headings by work objective, never by state labels such as 生产上线, 测试完成, or 开发完成.
 - Preserve every deliverable's state and environment. If a workstream mixes released and test-only work, describe them separately and mention a supported pending release once.
-- Produce summary as one non-empty plain-text paragraph without a heading or list. Produce content as non-empty Markdown without 工作总结.
+- For personal_daily, produce summary as a Markdown ordered list with exactly one item per accepted Brief workstream in the same order. This yields 1 to 5 items. Each item is one outcome-led line including the latest supported state or remaining issue when material. Do not put blank lines between items. Do not add the 工作概览 or 工作详情 heading; the server adds both. If no_reportable_work is true, use only 本期无可核验的工作记录 without numbering.
+- Produce content as non-empty Markdown whose workstream order matches the summary order.
 - Call write_report_result with {"brief_hash": accepted_brief.brief_hash, "summary": summary, "content": markdown}. If it returns REPORT_RESULT_INVALID, correct every reported violation together using only the accepted Brief and retry once. If it returns REPORT_RESULT_RETRY_EXHAUSTED or any other error, call write_report_failure with an error_message.
 
 ## 3. Direct flow: interpret the evidence
@@ -129,11 +131,11 @@ For personal_daily, perform two distinct semantic passes in this same Agent Sess
 ## 4. Direct flow: write the report
 
 - Write an outcome-led narrative: objective, concrete outcome, only the supporting actions needed for understanding, validation, latest state, and explicit remaining issue.
-- Use one dynamic level-two heading per coherent workstream. Do not add a fixed 重点工作 heading, rank work, list conversation turns, or split sections by artifact or operation type.
+- For personal_daily, use one dynamic level-three heading per coherent workstream. For every other report type, keep level-two workstream headings. Do not add a fixed 重点工作 heading, rank work, list conversation turns, or split sections by artifact or operation type.
 - For team and department reports, synthesize shared outcomes rather than list people or lower-level submissions. Coverage and missing-report statistics are not default report content.
 - Keep an explicitly supported future action inside its workstream. Do not create independent 明日计划, 下周计划, 后续计划, 建议, or 待协调 sections.
-- Produce summary as one non-empty plain-text paragraph without a heading or list. It states the period's objectives, core outcomes, and overall state without repeating every body heading.
-- Produce content as non-empty Markdown without 工作总结. Add 风险与待处理 only when evidence explicitly supports it. Do not duplicate a fact across sections.
+- For personal_daily, use the ordered-list summary format in section 2. For every other report type, produce summary as one non-empty plain-text paragraph without a heading or list. It states the period's objectives, core outcomes, and overall state without repeating every body heading.
+- Produce content as non-empty Markdown. For personal_daily, do not add 工作概览 or 工作详情 because the server adds both, and keep workstream order aligned with the summary. Add 风险与待处理 only when evidence explicitly supports it. Do not duplicate a fact across sections.
 - If there is no reportable fact, set summary to 本期无可核验的工作记录 and state only that in content.
 - Call write_report_result exactly once with {"summary": summary, "content": markdown}. On generation failure call write_report_failure with an error_message. Never pass a report identity field; the bound credential supplies it.
 

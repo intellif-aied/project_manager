@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -76,7 +77,7 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 	}
 	briefSchemaVersion := ""
 	acceptedBriefHash := ""
-	content, normalizedSummary, err := prepareReportResultContent(run.ContextRepresentation, args.Summary, args.Content)
+	content, normalizedSummary, err := prepareReportResultContent(reportType, run.ContextRepresentation, args.Summary, args.Content)
 	if err != nil {
 		return nil, err
 	}
@@ -441,7 +442,7 @@ func (h *ReportMCPHandler) aiRunGuard(r *http.Request, runID, userID string) (*r
 	return &run, nil
 }
 
-func prepareReportResultContent(representation, summary, content string) (string, string, error) {
+func prepareReportResultContent(reportType, representation, summary, content string) (string, string, error) {
 	body := strings.TrimSpace(content)
 	if body == "" {
 		return "", "", mcpErr("INVALID_ARGUMENT", "content is required")
@@ -449,7 +450,7 @@ func prepareReportResultContent(representation, summary, content string) (string
 	if strings.TrimSpace(representation) != reportcontext.RepresentationWorkEvidence {
 		return body, summary, nil
 	}
-	normalizedSummary := strings.Join(strings.Fields(summary), " ")
+	normalizedSummary := normalizeReportSummary(summary)
 	if normalizedSummary == "" {
 		return "", "", mcpErr("REPORT_SUMMARY_REQUIRED", "summary is required for this report run")
 	}
@@ -459,7 +460,41 @@ func prepareReportResultContent(representation, summary, content string) (string
 			return "", "", mcpErr("INVALID_ARGUMENT", "content body is required after the work summary")
 		}
 	}
-	return "## 工作总结\n\n" + normalizedSummary + "\n\n" + body, normalizedSummary, nil
+	if reportType != reportTypePersonalDaily {
+		return "## 工作总结\n\n" + normalizedSummary + "\n\n" + body, normalizedSummary, nil
+	}
+	body = normalizeReportDetailHeadings(body)
+	return "## 工作概览\n\n" + normalizedSummary + "\n\n## 工作详情\n\n" + body, normalizedSummary, nil
+}
+
+func normalizeReportSummary(summary string) string {
+	normalized := strings.ReplaceAll(strings.ReplaceAll(strings.TrimSpace(summary), "\r\n", "\n"), "\r", "\n")
+	lines := make([]string, 0, 5)
+	for _, rawLine := range strings.Split(normalized, "\n") {
+		line := strings.Join(strings.Fields(rawLine), " ")
+		if line != "" {
+			lines = append(lines, line)
+		}
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	items := make([]string, 0, len(lines))
+	for _, line := range lines {
+		dot := strings.IndexByte(line, '.')
+		if dot < 1 {
+			return strings.Join(strings.Fields(normalized), " ")
+		}
+		if _, err := strconv.Atoi(line[:dot]); err != nil {
+			return strings.Join(strings.Fields(normalized), " ")
+		}
+		item := strings.TrimSpace(line[dot+1:])
+		if item == "" {
+			return strings.Join(strings.Fields(normalized), " ")
+		}
+		items = append(items, fmt.Sprintf("%d. %s", len(items)+1, item))
+	}
+	return strings.Join(items, "\n")
 }
 
 func stripLeadingWorkSummary(content string) (string, bool) {
@@ -471,16 +506,44 @@ func stripLeadingWorkSummary(content string) (string, bool) {
 			break
 		}
 	}
-	if first < 0 || strings.TrimSpace(lines[first]) != "## 工作总结" {
+	if first < 0 {
+		return strings.TrimSpace(content), false
+	}
+	firstHeading := strings.TrimSpace(lines[first])
+	if firstHeading == "## 工作详情" {
+		return strings.TrimSpace(strings.Join(lines[first+1:], "\n")), true
+	}
+	if firstHeading != "## 工作总结" && firstHeading != "## 工作概览" {
 		return strings.TrimSpace(content), false
 	}
 	for index := first + 1; index < len(lines); index++ {
 		line := strings.TrimSpace(lines[index])
-		if strings.HasPrefix(line, "## ") && line != "## 工作总结" {
+		if line == "## 工作详情" {
+			return strings.TrimSpace(strings.Join(lines[index+1:], "\n")), true
+		}
+		if strings.HasPrefix(line, "## ") && line != "## 工作总结" && line != "## 工作概览" {
 			return strings.TrimSpace(strings.Join(lines[index:], "\n")), true
 		}
 	}
 	return "", true
+}
+
+func normalizeReportDetailHeadings(content string) string {
+	lines := strings.Split(strings.ReplaceAll(strings.TrimSpace(content), "\r\n", "\n"), "\n")
+	inFence := false
+	for index, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
+			inFence = !inFence
+			continue
+		}
+		if inFence || !strings.HasPrefix(trimmed, "## ") {
+			continue
+		}
+		indentLength := len(line) - len(strings.TrimLeft(line, " \t"))
+		lines[index] = line[:indentLength] + "### " + strings.TrimPrefix(trimmed, "## ")
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
 
 func reportResultHash(content string) string {

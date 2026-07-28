@@ -217,6 +217,7 @@ export const appRoutes: AppRoute[] = [
     icon: <RobotOutlined />,
     menuGroup: "AI 管理",
     menuOrder: 50,
+    hideInMenu: true,
     roles: ["admin", "director", "pm", "team_leader", "employee"],
     element: <AIAssetsPage />
   },

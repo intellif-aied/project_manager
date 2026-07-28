@@ -23,7 +23,7 @@
 | 环境 | Skill owner | Skill | MCP | 最近验证 | 验证依据 |
 | --- | --- | --- | --- | --- | --- |
 | 生产 | 10086 | aida-report@1.0.18 | aida-report-mcp@report-v1 | 2026-07-28 | `20260728-报告Run身份绑定修复生产发布`、公共Registry及真实Run SkillRef |
-| 14.157 测试 | 100866 | aida-report@1.1.4 | aida-report-mcp@report-v1 | 2026-07-28 | `20260728-报告Run身份绑定修复测试发布`、运行环境、公共 Registry 与真实 Session SkillRef |
+| 14.157 测试 | 100866 | aida-report@1.1.7 | aida-report-mcp@report-v1 | 2026-07-28 | `20260728-个人日报概览详情层级测试发布`、运行环境、公共 Registry 与真实 Session SkillRef |
 
 规则：
 
