@@ -104,6 +104,29 @@ func TestPrepareReportResultContentPreservesOrderedSummary(t *testing.T) {
 	}
 }
 
+func TestPrepareReportResultContentSplitsInlineOrderedSummary(t *testing.T) {
+	content, summary, err := prepareReportResultContent(
+		reportTypePersonalDaily,
+		reportcontext.RepresentationWorkEvidence,
+		"1. 完成安全审计模块。 2. 完成报告 Agent 优化。 3. 完成生产运行排查。",
+		"### 工作主题\n\n完成实现。",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantSummary := "1. 完成安全审计模块。\n2. 完成报告 Agent 优化。\n3. 完成生产运行排查。"
+	if summary != wantSummary || !strings.Contains(content, "## 工作概览\n\n"+wantSummary+"\n\n## 工作详情") {
+		t.Fatalf("content=%q summary=%q", content, summary)
+	}
+}
+
+func TestNormalizeReportSummaryDoesNotSplitVersionNumbers(t *testing.T) {
+	want := "1. 完成 2.0 版本升级并通过验证。"
+	if got := normalizeReportSummary(want); got != want {
+		t.Fatalf("summary=%q, want %q", got, want)
+	}
+}
+
 func TestPrepareReportResultContentKeepsOtherReportFormats(t *testing.T) {
 	content, summary, err := prepareReportResultContent("", "", "legacy summary", "  # 历史报告\n内容  ")
 	if err != nil || content != "# 历史报告\n内容" || summary != "legacy summary" {

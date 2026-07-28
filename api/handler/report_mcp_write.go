@@ -520,6 +520,9 @@ func normalizeReportSummary(summary string) string {
 	if len(lines) == 0 {
 		return ""
 	}
+	if len(lines) == 1 {
+		lines = splitInlineOrderedSummary(lines[0])
+	}
 	items := make([]string, 0, len(lines))
 	for _, line := range lines {
 		dot := strings.IndexByte(line, '.')
@@ -536,6 +539,36 @@ func normalizeReportSummary(summary string) string {
 		items = append(items, fmt.Sprintf("%d. %s", len(items)+1, item))
 	}
 	return strings.Join(items, "\n")
+}
+
+func splitInlineOrderedSummary(line string) []string {
+	if !strings.HasPrefix(line, "1. ") {
+		return []string{line}
+	}
+	remaining := strings.TrimSpace(strings.TrimPrefix(line, "1. "))
+	items := make([]string, 0, 5)
+	for number := 2; number <= 5; number++ {
+		marker := fmt.Sprintf(" %d. ", number)
+		index := strings.Index(remaining, marker)
+		if index < 0 {
+			break
+		}
+		item := strings.TrimSpace(remaining[:index])
+		if item == "" {
+			return []string{line}
+		}
+		items = append(items, item)
+		remaining = strings.TrimSpace(remaining[index+len(marker):])
+	}
+	if len(items) == 0 || remaining == "" {
+		return []string{line}
+	}
+	items = append(items, remaining)
+	lines := make([]string, 0, len(items))
+	for index, item := range items {
+		lines = append(lines, fmt.Sprintf("%d. %s", index+1, item))
+	}
+	return lines
 }
 
 func stripLeadingWorkSummary(content string) (string, bool) {
