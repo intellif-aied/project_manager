@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -508,8 +509,13 @@ func prepareReportResultContent(reportType, representation, summary, content str
 	return "## 工作概览\n\n" + normalizedSummary + "\n\n## 工作详情\n\n" + body, normalizedSummary, nil
 }
 
+var reportSummaryItemMarkerPattern = regexp.MustCompile(`(?m)(^|[[:space:]。！？；.!?;]|\\r\\n|\\n|\\r)([1-5])\.[ \t]+`)
+
 func normalizeReportSummary(summary string) string {
 	normalized := strings.ReplaceAll(strings.ReplaceAll(strings.TrimSpace(summary), "\r\n", "\n"), "\r", "\n")
+	if items, ok := parseOrderedReportSummary(normalized); ok {
+		return formatOrderedReportSummary(items)
+	}
 	lines := make([]string, 0, 5)
 	for _, rawLine := range strings.Split(normalized, "\n") {
 		line := strings.Join(strings.Fields(rawLine), " ")
@@ -519,9 +525,6 @@ func normalizeReportSummary(summary string) string {
 	}
 	if len(lines) == 0 {
 		return ""
-	}
-	if len(lines) == 1 {
-		lines = splitInlineOrderedSummary(lines[0])
 	}
 	items := make([]string, 0, len(lines))
 	for _, line := range lines {
@@ -541,34 +544,47 @@ func normalizeReportSummary(summary string) string {
 	return strings.Join(items, "\n")
 }
 
-func splitInlineOrderedSummary(line string) []string {
-	if !strings.HasPrefix(line, "1. ") {
-		return []string{line}
+func parseOrderedReportSummary(summary string) ([]string, bool) {
+	matches := reportSummaryItemMarkerPattern.FindAllStringSubmatchIndex(summary, -1)
+	if len(matches) == 0 || reportSummaryMarkerStart(summary, matches[0]) != 0 {
+		return nil, false
 	}
-	remaining := strings.TrimSpace(strings.TrimPrefix(line, "1. "))
-	items := make([]string, 0, 5)
-	for number := 2; number <= 5; number++ {
-		marker := fmt.Sprintf(" %d. ", number)
-		index := strings.Index(remaining, marker)
-		if index < 0 {
-			break
+	items := make([]string, 0, len(matches))
+	for index, match := range matches {
+		number, err := strconv.Atoi(summary[match[4]:match[5]])
+		if err != nil || number != index+1 {
+			return nil, false
 		}
-		item := strings.TrimSpace(remaining[:index])
+		itemEnd := len(summary)
+		if index+1 < len(matches) {
+			itemEnd = reportSummaryMarkerStart(summary, matches[index+1])
+		}
+		item := strings.Join(strings.Fields(summary[match[1]:itemEnd]), " ")
 		if item == "" {
-			return []string{line}
+			return nil, false
 		}
 		items = append(items, item)
-		remaining = strings.TrimSpace(remaining[index+len(marker):])
 	}
-	if len(items) == 0 || remaining == "" {
-		return []string{line}
+	return items, true
+}
+
+func reportSummaryMarkerStart(summary string, match []int) int {
+	if match[2] == match[3] {
+		return match[0]
 	}
-	items = append(items, remaining)
+	boundary := summary[match[2]:match[3]]
+	if strings.TrimSpace(boundary) == "" || strings.HasPrefix(boundary, `\`) {
+		return match[2]
+	}
+	return match[3]
+}
+
+func formatOrderedReportSummary(items []string) string {
 	lines := make([]string, 0, len(items))
 	for index, item := range items {
 		lines = append(lines, fmt.Sprintf("%d. %s", index+1, item))
 	}
-	return lines
+	return strings.Join(lines, "\n")
 }
 
 func stripLeadingWorkSummary(content string) (string, bool) {

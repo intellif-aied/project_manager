@@ -127,6 +127,25 @@ func TestNormalizeReportSummaryDoesNotSplitVersionNumbers(t *testing.T) {
 	}
 }
 
+func TestNormalizeReportSummaryCanonicalizesPresentationFamilies(t *testing.T) {
+	want := "1. 完成方案设计。\n2. 完成开发验证。\n3. 完成生产排查。"
+	tests := map[string]string{
+		"actual line feeds":    "1. 完成方案设计。\n2. 完成开发验证。\n3. 完成生产排查。",
+		"actual CRLF":          "1. 完成方案设计。\r\n2. 完成开发验证。\r\n3. 完成生产排查。",
+		"collapsed spaces":     "1. 完成方案设计。 2. 完成开发验证。 3. 完成生产排查。",
+		"literal line feeds":   `1. 完成方案设计。\n2. 完成开发验证。\n3. 完成生产排查。`,
+		"literal CRLF":         `1. 完成方案设计。\r\n2. 完成开发验证。\r\n3. 完成生产排查。`,
+		"adjacent punctuation": "1. 完成方案设计。2. 完成开发验证。3. 完成生产排查。",
+	}
+	for name, input := range tests {
+		t.Run(name, func(t *testing.T) {
+			if got := normalizeReportSummary(input); got != want {
+				t.Fatalf("summary=%q, want %q", got, want)
+			}
+		})
+	}
+}
+
 func TestPrepareReportResultContentKeepsOtherReportFormats(t *testing.T) {
 	content, summary, err := prepareReportResultContent("", "", "legacy summary", "  # 历史报告\n内容  ")
 	if err != nil || content != "# 历史报告\n内容" || summary != "legacy summary" {
