@@ -627,8 +627,8 @@ func TestReportMCPWriteReportResultRejectsInvalidTypeStoredOnRun(t *testing.T) {
 	h := NewReportMCPHandler(db)
 	mock.ExpectQuery("SELECT id::text, business_type").
 		WithArgs("r-1", "u-1").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "business_type", "agent_id", "model_id", "status", "execution_stage", "input_ref_json", "execution_input_json", "output_ref_json", "created_at"}).
-			AddRow("r-1", reportAgentRunBusinessType, "agent-1", "MiniMax-M2.5", "running", "agent_running", []byte(`{"report_type":"invalid_type"}`), []byte(`{}`), []byte(`{}`), time.Now()))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "business_type", "agent_id", "agent_version_id", "model_id", "status", "execution_stage", "input_ref_json", "execution_input_json", "output_ref_json", "created_at"}).
+			AddRow("r-1", reportAgentRunBusinessType, "agent-1", 3, "MiniMax-M2.5", "running", "agent_running", []byte(`{"report_type":"invalid_type"}`), []byte(`{}`), []byte(`{}`), time.Now()))
 	req := newReportMCPRequest("tools/call", map[string]any{
 		"jsonrpc": "2.0",
 		"id":      1,
@@ -660,8 +660,8 @@ func TestReportMCPWriteReportResultUsesStoredRunIdentity(t *testing.T) {
 	inputRef := []byte(`{"report_type":"personal_weekly","period":{"week_start":"2026-06-08","week_end":"2026-06-14"},"target":{"type":"self","user_id":"310"}}`)
 	mock.ExpectQuery("SELECT id::text, business_type").
 		WithArgs("run-1", "310").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "business_type", "agent_id", "model_id", "status", "execution_stage", "input_ref_json", "execution_input_json", "output_ref_json", "created_at"}).
-			AddRow("run-1", reportAgentRunBusinessType, "agent-1", "MiniMax-M2.5", "running", "agent_running", inputRef, []byte(`{"report_context_representation":"work_evidence"}`), []byte(`{}`), now))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "business_type", "agent_id", "agent_version_id", "model_id", "status", "execution_stage", "input_ref_json", "execution_input_json", "output_ref_json", "created_at"}).
+			AddRow("run-1", reportAgentRunBusinessType, "agent-1", 3, "MiniMax-M2.5", "running", "agent_running", inputRef, []byte(`{"report_context_representation":"work_evidence"}`), []byte(`{}`), now))
 	mock.ExpectBegin()
 	mock.ExpectExec("(?s)UPDATE ai_runs.*execution_stage = 'writing_result'").
 		WithArgs("run-1", "310").
@@ -724,8 +724,8 @@ func TestReportMCPWriteDepartmentDailyPersistsFrozenTeamReportSources(t *testing
 	inputRef := []byte(`{"report_type":"department_daily","period":{"date":"2026-07-16"},"target":{"type":"department","department_id":"department-1"},"report_context_hash":"context-hash"}`)
 	mock.ExpectQuery("SELECT id::text, business_type").
 		WithArgs("run-1", "304").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "business_type", "agent_id", "model_id", "status", "execution_stage", "input_ref_json", "execution_input_json", "output_ref_json", "created_at"}).
-			AddRow("run-1", reportAgentRunBusinessType, "agent-1", "MiniMax-M2.5", "running", "agent_running", inputRef, []byte(`{}`), []byte(`{}`), now))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "business_type", "agent_id", "agent_version_id", "model_id", "status", "execution_stage", "input_ref_json", "execution_input_json", "output_ref_json", "created_at"}).
+			AddRow("run-1", reportAgentRunBusinessType, "agent-1", 3, "MiniMax-M2.5", "running", "agent_running", inputRef, []byte(`{}`), []byte(`{}`), now))
 
 	contextPayload := []byte(`{
 		"schema_version":"report-context/v1",
@@ -820,8 +820,8 @@ func TestReportMCPWriteReportFailureUsesRunIDOnly(t *testing.T) {
 	h := NewReportMCPHandler(db)
 	mock.ExpectQuery("SELECT id::text, business_type").
 		WithArgs("run-failed", "u-1").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "business_type", "agent_id", "model_id", "status", "execution_stage", "input_ref_json", "execution_input_json", "output_ref_json", "created_at"}).
-			AddRow("run-failed", reportAgentRunBusinessType, "agent-1", "MiniMax-M2.5", "running", "agent_running", []byte(`{"report_type":"personal_daily","period":{"date":"2026-07-23"},"target":{"type":"self","user_id":"u-1"}}`), []byte(`{}`), []byte(`{}`), time.Now()))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "business_type", "agent_id", "agent_version_id", "model_id", "status", "execution_stage", "input_ref_json", "execution_input_json", "output_ref_json", "created_at"}).
+			AddRow("run-failed", reportAgentRunBusinessType, "agent-1", 3, "MiniMax-M2.5", "running", "agent_running", []byte(`{"report_type":"personal_daily","period":{"date":"2026-07-23"},"target":{"type":"self","user_id":"u-1"}}`), []byte(`{}`), []byte(`{}`), time.Now()))
 	mock.ExpectExec("(?s)UPDATE ai_runs.*status = 'failed'").
 		WithArgs("AGENT_REPORTED_FAILURE: boom", "AGENT_REPORTED_FAILURE", "run-failed", "u-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))

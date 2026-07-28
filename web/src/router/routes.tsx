@@ -3,6 +3,7 @@ import {
   BellOutlined,
   DashboardOutlined,
   FileDoneOutlined,
+  FileSearchOutlined,
   RobotOutlined,
   SettingOutlined,
   ProjectOutlined,
@@ -17,6 +18,7 @@ import { AgentEditPage } from "@/features/aidashboard/ai-assets/pages/AgentEditP
 import { AgentRunPage } from "@/features/aidashboard/ai-assets/pages/AgentRunPage";
 import { AgentScheduleFormPage } from "@/features/aidashboard/ai-assets/pages/AgentScheduleFormPage";
 import { DashboardPage } from "@/features/aidashboard/dashboard/DashboardPage";
+import { DailyReportValuePage } from "@/features/aidashboard/daily-report-value/pages/DailyReportValuePage";
 import { OrganizationPage } from "@/features/aidashboard/organization/pages/OrganizationPage";
 import { OrganizationUserEditPage } from "@/features/aidashboard/organization/pages/OrganizationUserEditPage";
 import { ProductDocumentCreatePage } from "@/features/aidashboard/products/pages/ProductDocumentCreatePage";
@@ -210,6 +212,15 @@ export const appRoutes: AppRoute[] = [
     roles: ["admin"],
     feature: "pricing_management",
     element: <PricingManagementPage />
+  },
+  {
+    path: "/admin/daily-report-value",
+    title: "生产日报价值观察",
+    icon: <FileSearchOutlined />,
+    menuGroup: "AI 管理",
+    menuOrder: 63,
+    roles: ["admin"],
+    element: <DailyReportValuePage />
   },
   {
     path: "/ai-assets",

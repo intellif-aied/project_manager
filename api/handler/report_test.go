@@ -38,9 +38,23 @@ func TestDeleteOwnedReports(t *testing.T) {
 			}
 			defer db.Close()
 			query := "DELETE FROM " + test.table + " WHERE id = $1 AND " + test.ownerField + " = $2"
-			mock.ExpectExec(regexp.QuoteMeta(query)).
-				WithArgs(testRequirementID, test.ownerID).
-				WillReturnResult(sqlmock.NewResult(0, 1))
+			if test.table == "daily_reports" {
+				mock.ExpectBegin()
+				mock.ExpectQuery("SELECT report_date::text, managed_agent_run_id::text").
+					WithArgs(testRequirementID, test.ownerID).
+					WillReturnRows(sqlmock.NewRows([]string{"report_date", "managed_agent_run_id"}).AddRow("2026-07-23", nil))
+				mock.ExpectExec("INSERT INTO report_user_outcome_events").
+					WithArgs(testRequirementID, test.ownerID, "2026-07-23", nil, "deleted", nil, nil).
+					WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectExec(regexp.QuoteMeta(query)).
+					WithArgs(testRequirementID, test.ownerID).
+					WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectCommit()
+			} else {
+				mock.ExpectExec(regexp.QuoteMeta(query)).
+					WithArgs(testRequirementID, test.ownerID).
+					WillReturnResult(sqlmock.NewResult(0, 1))
+			}
 
 			h := NewReportHandler(db)
 			req := httptest.NewRequest(http.MethodDelete, "/reports/"+testRequirementID, nil)
@@ -172,9 +186,15 @@ func TestUpdateReportPersistsSessionIDsOnSave(t *testing.T) {
 	mock.ExpectQuery("SELECT COUNT").
 		WithArgs("user-1", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
-	mock.ExpectExec("UPDATE daily_reports SET").
+	mock.ExpectBegin()
+	mock.ExpectQuery("UPDATE daily_reports SET").
 		WithArgs("最终日报", sqlmock.AnyArg(), "report-1", "user-1").
+		WillReturnRows(sqlmock.NewRows([]string{"report_date", "content", "managed_agent_run_id"}).
+			AddRow("2026-06-24", "最终日报", nil))
+	mock.ExpectExec("INSERT INTO report_user_outcome_events").
+		WithArgs("report-1", "user-1", "2026-06-24", nil, "saved", "最终日报", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 	mock.ExpectQuery("SELECT dr.id").
 		WithArgs("report-1").
 		WillReturnRows(sqlmock.NewRows(dailyReportGetColumns()).
@@ -207,8 +227,12 @@ func TestSubmitReportSavesAndPublishesSubmittedContent(t *testing.T) {
 		WithArgs("user-1", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
 	mock.ExpectBegin()
-	mock.ExpectExec("UPDATE daily_reports SET").
+	mock.ExpectQuery("UPDATE daily_reports SET").
 		WithArgs("发送版本", sqlmock.AnyArg(), "team_leader", "report-1", "user-1").
+		WillReturnRows(sqlmock.NewRows([]string{"report_date", "content", "managed_agent_run_id"}).
+			AddRow("2026-06-24", "发送版本", nil))
+	mock.ExpectExec("INSERT INTO report_user_outcome_events").
+		WithArgs("report-1", "user-1", "2026-06-24", nil, "submitted", "发送版本", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 	mock.ExpectQuery("SELECT dr.id").

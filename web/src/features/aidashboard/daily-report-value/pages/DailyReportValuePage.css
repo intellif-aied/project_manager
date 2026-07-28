@@ -1,0 +1,56 @@
+.daily-value {
+  display: grid;
+  gap: 16px;
+}
+
+.daily-value__metric-card {
+  height: 100%;
+}
+
+.daily-value__secondary {
+  font-size: 12px;
+}
+
+.daily-value__drawer-content {
+  width: 100%;
+}
+
+.daily-value__comparison {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.daily-value__diff-pane {
+  min-height: 360px;
+  max-height: 58vh;
+  padding: 12px;
+  overflow: auto;
+  background: var(--ant-color-fill-quaternary);
+  border-radius: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  line-height: 1.7;
+}
+
+.daily-value__diff-line {
+  min-height: 1.7em;
+  padding: 0 6px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.daily-value__diff-line.is-removed,
+.daily-value__diff-line.is-changed {
+  background: color-mix(in srgb, var(--ant-color-error) 12%, transparent);
+}
+
+.daily-value__comparison > :last-child .daily-value__diff-line.is-added,
+.daily-value__comparison > :last-child .daily-value__diff-line.is-changed {
+  background: color-mix(in srgb, var(--ant-color-success) 14%, transparent);
+}
+
+@media (max-width: 768px) {
+  .daily-value__comparison {
+    grid-template-columns: 1fr;
+  }
+}
