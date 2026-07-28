@@ -20,7 +20,7 @@ import (
 
 const (
 	uploadStateFileName        = "upload-state.json"
-	uploadStateVersion         = 1
+	uploadStateVersion         = 2
 	prefixCheckpointAlgorithm  = "sha256-prefix-v1"
 	defaultSyncChunkEvents     = 500
 	defaultSyncChunkBytes      = 500 << 20
@@ -56,6 +56,7 @@ type localUploadState struct {
 
 type prepareBatchRequest struct {
 	ClientVersion string                  `json:"client_version"`
+	UploadMode    string                  `json:"upload_mode,omitempty"`
 	Sessions      []prepareSessionRequest `json:"sessions"`
 }
 
@@ -97,6 +98,7 @@ type prepareSourceResult struct {
 
 type incrementalUploadResult struct {
 	SessionRef      string
+	CWD             string
 	GenerationID    string
 	Status          string
 	UploadedChunks  int
@@ -107,6 +109,10 @@ type incrementalUploadResult struct {
 }
 
 func uploadSessionGroupIncremental(cfg *Config, items []sessionWithFile, parentSessionRef string) ([]incrementalUploadResult, error) {
+	return uploadSessionGroupIncrementalWithMode(cfg, items, parentSessionRef, uploadModePersonal)
+}
+
+func uploadSessionGroupIncrementalWithMode(cfg *Config, items []sessionWithFile, parentSessionRef, uploadMode string) ([]incrementalUploadResult, error) {
 	states, err := loadUploadStates()
 	if err != nil {
 		return nil, err
@@ -117,7 +123,7 @@ func uploadSessionGroupIncremental(cfg *Config, items []sessionWithFile, parentS
 		if parentRef == "" && index > 0 {
 			parentRef = parentSessionRef
 		}
-		result, err := uploadSessionSourceIncremental(cfg, states, item, parentRef)
+		result, err := uploadSessionSourceIncrementalWithMode(cfg, states, item, parentRef, uploadMode)
 		if err != nil {
 			return results, err
 		}
@@ -132,6 +138,16 @@ func uploadSessionSourceIncremental(
 	item sessionWithFile,
 	parentSessionRef string,
 ) (result incrementalUploadResult, returnErr error) {
+	return uploadSessionSourceIncrementalWithMode(cfg, states, item, parentSessionRef, uploadModePersonal)
+}
+
+func uploadSessionSourceIncrementalWithMode(
+	cfg *Config,
+	states *uploadStateFile,
+	item sessionWithFile,
+	parentSessionRef string,
+	uploadMode string,
+) (result incrementalUploadResult, returnErr error) {
 	session := item.info
 	if session == nil || session.SessionRef == "" || item.filePath == "" {
 		return incrementalUploadResult{}, errors.New("session metadata and source file are required")
@@ -141,25 +157,31 @@ func uploadSessionSourceIncremental(
 		return incrementalUploadResult{}, err
 	}
 	agentType := normalizedAgentType(session.AgentType)
-	if err := preflightSessionSource(item.filePath); err != nil {
-		return incrementalUploadResult{}, err
+	if uploadMode != uploadModeTeam {
+		if err := preflightSessionSource(item.filePath); err != nil {
+			return incrementalUploadResult{}, err
+		}
 	}
 	sourceKey := fmt.Sprintf("%s:%s:main", agentType, session.SessionRef)
-	stateKey := uploadStateKey(agentType, session.SessionRef, sourceKey)
+	stateKey := uploadStateKeyForMode(uploadMode, agentType, session.SessionRef, sourceKey)
 	state := states.Sources[stateKey]
-	prepared, err := prepareSessionSource(cfg, session, item.filePath, parentSessionRef, sourceKey, fileInfo.Size(), state)
+	prepared, err := prepareSessionSourceWithMode(cfg, session, item.filePath, parentSessionRef, sourceKey, fileInfo.Size(), state, uploadMode)
 	if err != nil {
 		return incrementalUploadResult{}, err
 	}
 	result = incrementalUploadResult{
-		SessionRef: session.SessionRef, GenerationID: prepared.GenerationID,
-		Status: prepared.Action, ContentStatus: prepared.ContentStatus,
+		SessionRef: session.SessionRef, CWD: session.Cwd, GenerationID: prepared.GenerationID,
+		Status: prepared.Action, ContentStatus: prepared.ContentStatus, ErrorCode: prepared.ErrorCode,
 	}
 	if prepared.Action == "content_cleared" {
 		return result, nil
 	}
 	if prepared.Action == "rejected" {
-		return incrementalUploadResult{}, fmt.Errorf("prepare rejected: %s %s", prepared.ErrorCode, prepared.NextAction)
+		if prepared.ErrorCode == "TEAM_DIRECTORY_UNMAPPED" {
+			result.Status = "unmapped"
+			return result, nil
+		}
+		return result, fmt.Errorf("prepare rejected: %s %s", prepared.ErrorCode, prepared.NextAction)
 	}
 	if prepared.GenerationID == "" || prepared.ExpectedCursor < 0 || prepared.ExpectedCursor > fileInfo.Size() {
 		return incrementalUploadResult{}, errors.New("server returned an invalid generation checkpoint")
@@ -176,6 +198,11 @@ func uploadSessionSourceIncremental(
 		delete(states.Sources, stateKey)
 		_ = saveUploadStates(states)
 	}()
+	if uploadMode == uploadModeTeam {
+		if err := preflightSessionSource(item.filePath); err != nil {
+			return incrementalUploadResult{}, err
+		}
+	}
 
 	file, err := os.Open(item.filePath)
 	if err != nil {
@@ -285,13 +312,30 @@ func prepareSessionSource(
 	localSize int64,
 	state localUploadState,
 ) (prepareSourceResult, error) {
+	return prepareSessionSourceWithMode(cfg, session, sourcePath, parentSessionRef, sourceKey, localSize, state, uploadModePersonal)
+}
+
+func prepareSessionSourceWithMode(
+	cfg *Config,
+	session *SessionInfo,
+	sourcePath string,
+	parentSessionRef, sourceKey string,
+	localSize int64,
+	state localUploadState,
+	uploadMode string,
+) (prepareSourceResult, error) {
 	prefixHash := ""
 	if state.SourceKey == sourceKey && state.LastAckedCursor >= 0 && state.PrefixCheckpointAlgorithmVersion == prefixCheckpointAlgorithm {
 		prefixHash = state.PrefixCheckpointHash
 	}
 	for attempt := 0; attempt < 3; attempt++ {
+		requestUploadMode := ""
+		if uploadMode == uploadModeTeam {
+			requestUploadMode = uploadModeTeam
+		}
 		request := prepareBatchRequest{
 			ClientVersion: Version,
+			UploadMode:    requestUploadMode,
 			Sessions: []prepareSessionRequest{{
 				SessionRef: session.SessionRef, AgentType: normalizedAgentType(session.AgentType),
 				ParentSessionRef: parentSessionRef, ForkedAt: timePointer(session.ForkedAt), ForkSource: session.ForkSource,
@@ -539,7 +583,18 @@ func loadUploadStates() (*uploadStateFile, error) {
 		return nil, fmt.Errorf("read upload state: %w", err)
 	}
 	if state.Version != uploadStateVersion {
-		return nil, fmt.Errorf("unsupported upload state version %d", state.Version)
+		if state.Version != 1 {
+			return nil, fmt.Errorf("unsupported upload state version %d", state.Version)
+		}
+		migrated := make(map[string]localUploadState, len(state.Sources))
+		for key, value := range state.Sources {
+			migrated[uploadModePersonal+"\n"+key] = value
+		}
+		state.Version = uploadStateVersion
+		state.Sources = migrated
+		if err := saveUploadStates(state); err != nil {
+			return nil, err
+		}
 	}
 	if state.Sources == nil {
 		state.Sources = map[string]localUploadState{}
@@ -584,7 +639,14 @@ func saveUploadStates(state *uploadStateFile) error {
 }
 
 func uploadStateKey(agentType, sessionRef, sourceKey string) string {
-	return agentType + "\n" + sessionRef + "\n" + sourceKey
+	return uploadStateKeyForMode(uploadModePersonal, agentType, sessionRef, sourceKey)
+}
+
+func uploadStateKeyForMode(uploadMode, agentType, sessionRef, sourceKey string) string {
+	if uploadMode == "" {
+		uploadMode = uploadModePersonal
+	}
+	return uploadMode + "\n" + agentType + "\n" + sessionRef + "\n" + sourceKey
 }
 
 func normalizedAgentType(value string) string {

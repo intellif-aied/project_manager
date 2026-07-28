@@ -33,6 +33,8 @@ type Config struct {
 const (
 	configFileName       = ".aida.yaml"
 	legacyConfigFileName = ".aidashboard.yaml"
+	uploadModePersonal   = "personal"
+	uploadModeTeam       = "team"
 )
 
 func configPath() string {
@@ -154,6 +156,8 @@ func run(args []string) int {
 			return 3
 		}
 		return cmdUpload(args[1:])
+	case "log":
+		return cmdTeamSyncLog(os.Stdout)
 	case "clients":
 		return cmdClients()
 	case "upload-client":
@@ -202,9 +206,13 @@ func writeUsage(output io.Writer) {
   login                 登录 Aida
   upload                选择并上传 Session
   upload --all          上传全部 Session
+  upload --team         按团队目录配置上传全部 Session
+  log                   查看团队模式待配置目录
   clients               检测其他受支持客户端
   upload-client         显式选择并上传其他客户端 Session
-  auto-sync enable      开启自动同步
+  auto-sync enable      开启自动同步（个人模式）
+  auto-sync enable --team
+                        开启团队模式自动同步
   auto-sync set-time    修改同步时间
   auto-sync disable     关闭自动同步
   status                检查登录、连接和自动同步状态

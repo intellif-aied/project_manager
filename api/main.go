@@ -319,6 +319,7 @@ func main() {
 	tokenAnalyticsH := handler.NewTokenAnalyticsHandler(tokenanalytics.NewService(database))
 	pricingAdminH := handler.NewPricingAdminHandler(database, pricingService)
 	teamH := handler.NewTeamHandler(database)
+	teamSyncPathH := handler.NewTeamSyncPathHandler(database)
 	departmentH := handler.NewDepartmentHandler(database)
 	followH := handler.NewFollowHandler(database)
 	dashboardH := handler.NewDashboardHandler(database)
@@ -348,6 +349,10 @@ func main() {
 		r.Use(handler.AuthMiddleware(database, cfg.AIHubSecret, aihubClient))
 
 		r.Get("/auth/me", authH.Me)
+		r.Get("/me/team-sync-paths", teamSyncPathH.List)
+		r.Post("/me/team-sync-paths", teamSyncPathH.Create)
+		r.Put("/me/team-sync-paths/{id}", teamSyncPathH.Update)
+		r.Delete("/me/team-sync-paths/{id}", teamSyncPathH.Delete)
 		r.Get("/users", authH.ListUsers)
 		r.With(handler.AdminOnly).Get("/aihub/users/search", authH.SearchAIHubUsers)
 		r.Get("/task-assignees", authH.ListTaskAssignees)

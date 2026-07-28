@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -18,10 +19,22 @@ var (
 	ErrSourceKeyConflict  = errors.New("source key conflicts with the existing source role")
 	ErrFinalizeConflict   = errors.New("generation cannot be finalized")
 	ErrInvalidSyncRequest = errors.New("invalid session sync request")
+	ErrTeamRequired       = errors.New("current user does not belong to a team")
+	ErrTeamContextChanged = errors.New("team upload context changed")
+)
+
+const (
+	UploadModePersonal = "personal"
+	UploadModeTeam     = "team"
+
+	ErrorTeamDirectoryUnmapped       = "TEAM_DIRECTORY_UNMAPPED"
+	ErrorTeamSessionIdentityConflict = "TEAM_SESSION_IDENTITY_CONFLICT"
+	ErrorTeamContextChanged          = "TEAM_CONTEXT_CHANGED"
 )
 
 type PrepareBatchRequest struct {
 	ClientVersion string                  `json:"client_version"`
+	UploadMode    string                  `json:"upload_mode,omitempty"`
 	Sessions      []PrepareSessionRequest `json:"sessions"`
 }
 
@@ -102,6 +115,33 @@ type SyncService struct {
 	db *sql.DB
 }
 
+type queryRowContexter interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func generationAccessError(ctx context.Context, database queryRowContexter, generationID, actorID string) error {
+	var uploadTeamID, actorTeamID, ownerTeamID sql.NullString
+	err := database.QueryRowContext(ctx, `
+		SELECT g.upload_team_id, actor.team_id, owner.team_id
+		FROM session_source_generations g
+		JOIN session_sources src ON src.id = g.source_id
+		JOIN sessions sess ON sess.id = src.session_id
+		JOIN users owner ON owner.id = sess.user_id
+		LEFT JOIN users actor ON actor.id = $2
+		WHERE g.id = $1`, generationID, actorID).Scan(&uploadTeamID, &actorTeamID, &ownerTeamID)
+	if err == nil && uploadTeamID.Valid && (!actorTeamID.Valid || !ownerTeamID.Valid ||
+		actorTeamID.String != uploadTeamID.String || ownerTeamID.String != uploadTeamID.String) {
+		return ErrTeamContextChanged
+	}
+	return ErrGenerationNotFound
+}
+
+type teamUploadContext struct {
+	TeamID  string
+	PathID  string
+	ActorID string
+}
+
 func NewSyncService(database *sql.DB) (*SyncService, error) {
 	if database == nil {
 		return nil, errors.New("database is required")
@@ -110,17 +150,32 @@ func NewSyncService(database *sql.DB) (*SyncService, error) {
 }
 
 func (s *SyncService) Prepare(ctx context.Context, userID string, request PrepareSessionRequest) ([]PrepareSourceResponse, error) {
+	return s.PrepareWithMode(ctx, userID, UploadModePersonal, request)
+}
+
+func (s *SyncService) PrepareWithMode(ctx context.Context, userID, uploadMode string, request PrepareSessionRequest) ([]PrepareSourceResponse, error) {
+	uploadMode = strings.TrimSpace(uploadMode)
+	if uploadMode == "" {
+		uploadMode = UploadModePersonal
+	}
+	if uploadMode != UploadModePersonal && uploadMode != UploadModeTeam {
+		return nil, fmt.Errorf("%w: unsupported upload_mode", ErrInvalidSyncRequest)
+	}
 	return retryPostgresConflict(ctx, func() ([]PrepareSourceResponse, error) {
-		return s.prepareOnce(ctx, userID, request)
+		return s.prepareOnce(ctx, userID, uploadMode, request)
 	})
 }
 
-func (s *SyncService) prepareOnce(ctx context.Context, userID string, request PrepareSessionRequest) ([]PrepareSourceResponse, error) {
+func (s *SyncService) prepareOnce(ctx context.Context, userID, uploadMode string, request PrepareSessionRequest) ([]PrepareSourceResponse, error) {
 	request.SessionRef = strings.TrimSpace(request.SessionRef)
 	request.AgentType = strings.TrimSpace(request.AgentType)
 	request.Summary = strings.ReplaceAll(strings.TrimSpace(request.Summary), "\x00", "\uFFFD")
 	request.ParentSessionRef = strings.TrimSpace(request.ParentSessionRef)
 	request.ForkSource = strings.TrimSpace(request.ForkSource)
+	request.CWD = strings.TrimSpace(request.CWD)
+	if uploadMode == UploadModeTeam && filepath.IsAbs(request.CWD) {
+		request.CWD = filepath.Clean(request.CWD)
+	}
 	if request.AgentType == "" {
 		request.AgentType = "claude_code"
 	}
@@ -134,18 +189,41 @@ func (s *SyncService) prepareOnce(ctx context.Context, userID string, request Pr
 	}
 	defer tx.Rollback()
 
-	identity := fmt.Sprintf("%q|%q|%q", userID, request.AgentType, request.SessionRef)
+	identityOwner := userID
+	var uploadContext *teamUploadContext
+	if uploadMode == UploadModeTeam {
+		resolved, ownerID, rejection, err := resolveTeamUpload(ctx, tx, userID, request)
+		if err != nil {
+			return nil, err
+		}
+		if rejection != "" {
+			return commitRejectedPrepare(tx, request, rejection)
+		}
+		uploadContext = resolved
+		identityOwner = ownerID
+	}
+
+	identity := fmt.Sprintf("%q|%q|%q", identityOwner, request.AgentType, request.SessionRef)
+	if uploadContext != nil {
+		identity = fmt.Sprintf("team:%q|%q|%q", uploadContext.TeamID, request.AgentType, request.SessionRef)
+	}
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, identity); err != nil {
 		return nil, err
 	}
 
-	sessionID, contentStatus, err := lockOrCreateSession(ctx, tx, userID, request)
+	var sessionID string
+	var contentStatus ContentStatus
+	if uploadContext == nil {
+		sessionID, contentStatus, err = lockOrCreateSession(ctx, tx, identityOwner, request)
+	} else {
+		sessionID, contentStatus, err = lockOrCreateTeamSession(ctx, tx, identityOwner, request, *uploadContext)
+	}
 	if err != nil {
 		return nil, err
 	}
 	responses := make([]PrepareSourceResponse, 0, len(request.Sources))
 	for _, sourceRequest := range request.Sources {
-		response, err := prepareSource(ctx, tx, sessionID, request.SessionRef, contentStatus, sourceRequest)
+		response, err := prepareSource(ctx, tx, sessionID, request.SessionRef, contentStatus, sourceRequest, uploadContext)
 		if err != nil {
 			return nil, err
 		}
@@ -155,6 +233,181 @@ func (s *SyncService) prepareOnce(ctx context.Context, userID string, request Pr
 		return nil, err
 	}
 	return responses, nil
+}
+
+func resolveTeamUpload(
+	ctx context.Context,
+	tx *sql.Tx,
+	actorID string,
+	request PrepareSessionRequest,
+) (*teamUploadContext, string, string, error) {
+	var teamID sql.NullString
+	if err := tx.QueryRowContext(ctx, `SELECT team_id FROM users WHERE id = $1`, actorID).Scan(&teamID); err != nil {
+		return nil, "", "", err
+	}
+	if !teamID.Valid || strings.TrimSpace(teamID.String) == "" {
+		return nil, "", "", ErrTeamRequired
+	}
+	cwd := strings.TrimSpace(request.CWD)
+	if cwd == "" || !filepath.IsAbs(cwd) {
+		return nil, "", ErrorTeamDirectoryUnmapped, nil
+	}
+	cwd = filepath.Clean(cwd)
+	var pathID, pathUserID string
+	err := tx.QueryRowContext(ctx, `
+		SELECT p.id, p.user_id
+		FROM team_sync_paths p
+		JOIN users u ON u.id = p.user_id AND u.team_id = p.team_id
+		WHERE p.team_id = $1
+			AND ($2 = p.normalized_path OR $2 LIKE p.normalized_path || '/%')
+		ORDER BY length(p.normalized_path) DESC
+		LIMIT 1`, teamID.String, cwd).Scan(&pathID, &pathUserID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, "", ErrorTeamDirectoryUnmapped, nil
+	}
+	if err != nil {
+		return nil, "", "", err
+	}
+	identity := fmt.Sprintf("team:%q|%q|%q", teamID.String, request.AgentType, request.SessionRef)
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, identity); err != nil {
+		return nil, "", "", err
+	}
+	rows, err := tx.QueryContext(ctx, `
+		SELECT s.user_id, u.team_id
+		FROM sessions s
+		JOIN users u ON u.id = s.user_id
+		WHERE s.agent_type = $1 AND s.session_ref = $2
+		FOR UPDATE OF s`, request.AgentType, request.SessionRef)
+	if err != nil {
+		return nil, "", "", err
+	}
+	defer rows.Close()
+	currentOwners := []string{}
+	hasOtherOwner := false
+	for rows.Next() {
+		var ownerID string
+		var ownerTeamID sql.NullString
+		if err := rows.Scan(&ownerID, &ownerTeamID); err != nil {
+			return nil, "", "", err
+		}
+		if ownerTeamID.Valid && ownerTeamID.String == teamID.String {
+			currentOwners = append(currentOwners, ownerID)
+		} else {
+			hasOtherOwner = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", "", err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, "", "", err
+	}
+	if len(currentOwners) > 1 {
+		return nil, "", ErrorTeamSessionIdentityConflict, nil
+	}
+	if len(currentOwners) == 0 && hasOtherOwner {
+		return nil, "", ErrorTeamContextChanged, nil
+	}
+	ownerID := pathUserID
+	if len(currentOwners) == 1 {
+		ownerID = currentOwners[0]
+	}
+	return &teamUploadContext{
+		TeamID: teamID.String, PathID: pathID, ActorID: actorID,
+	}, ownerID, "", nil
+}
+
+func commitRejectedPrepare(tx *sql.Tx, request PrepareSessionRequest, errorCode string) ([]PrepareSourceResponse, error) {
+	nextAction := "resolve the team upload configuration and retry"
+	switch errorCode {
+	case ErrorTeamDirectoryUnmapped:
+		nextAction = "configure this directory in My Tokens and retry"
+	case ErrorTeamSessionIdentityConflict:
+		nextAction = "resolve duplicate session ownership before retrying"
+	case ErrorTeamContextChanged:
+		nextAction = "the existing session owner is outside the current team"
+	}
+	responses := make([]PrepareSourceResponse, 0, len(request.Sources))
+	for _, source := range request.Sources {
+		responses = append(responses, PrepareSourceResponse{
+			SessionRef: request.SessionRef,
+			SourceKey:  strings.TrimSpace(source.SourceKey),
+			Action:     PrepareRejected,
+			ErrorCode:  errorCode,
+			NextAction: nextAction,
+		})
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return responses, nil
+}
+
+func lockOrCreateTeamSession(
+	ctx context.Context,
+	tx *sql.Tx,
+	ownerID string,
+	request PrepareSessionRequest,
+	upload teamUploadContext,
+) (string, ContentStatus, error) {
+	var sessionID string
+	var contentStatus ContentStatus
+	err := tx.QueryRowContext(ctx, `
+		SELECT id, content_status
+		FROM sessions
+		WHERE user_id = $1 AND agent_type = $2 AND session_ref = $3
+		FOR UPDATE`, ownerID, request.AgentType, request.SessionRef).Scan(&sessionID, &contentStatus)
+	if err == nil {
+		return sessionID, contentStatus, updateSessionMetadata(ctx, tx, sessionID, request)
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", "", err
+	}
+	now := time.Now().UTC()
+	startedAt := now
+	if request.StartedAt != nil && !request.StartedAt.IsZero() {
+		startedAt = request.StartedAt.UTC()
+	}
+	lastActivityAt := startedAt
+	if request.LastActivityAt != nil && !request.LastActivityAt.IsZero() {
+		lastActivityAt = request.LastActivityAt.UTC()
+	}
+	err = tx.QueryRowContext(ctx, `
+		INSERT INTO sessions (
+			session_ref, user_id, agent_type, parent_session_ref, forked_at, fork_source,
+			started_at, last_activity_at, cwd, project_name, summary, content_status,
+			team_upload_team_id, team_sync_path_id, team_uploaded_by_user_id
+		) VALUES (
+			$1, $2, $3, NULLIF($4, ''), $5, NULLIF($6, ''),
+			$7, $8, NULLIF($9, ''), NULLIF($10, ''), NULLIF($11, ''), 'uploading',
+			$12, $13, $14
+		)
+		RETURNING id, content_status`,
+		request.SessionRef, ownerID, request.AgentType, request.ParentSessionRef, request.ForkedAt, request.ForkSource,
+		startedAt, lastActivityAt, request.CWD, request.ProjectName, request.Summary,
+		upload.TeamID, upload.PathID, upload.ActorID,
+	).Scan(&sessionID, &contentStatus)
+	return sessionID, contentStatus, err
+}
+
+func updateSessionMetadata(ctx context.Context, tx *sql.Tx, sessionID string, request PrepareSessionRequest) error {
+	lastActivity := request.LastActivityAt
+	if lastActivity == nil {
+		lastActivity = request.StartedAt
+	}
+	_, err := tx.ExecContext(ctx, `
+		UPDATE sessions
+		SET parent_session_ref = COALESCE(NULLIF($1, ''), parent_session_ref),
+			forked_at = COALESCE($2::timestamptz, forked_at),
+			fork_source = COALESCE(NULLIF($3, ''), fork_source),
+			cwd = COALESCE(NULLIF($4, ''), cwd),
+			project_name = COALESCE(NULLIF($5, ''), project_name),
+			summary = COALESCE(NULLIF($6, ''), summary),
+			last_activity_at = CASE WHEN $7::timestamptz IS NULL THEN last_activity_at ELSE GREATEST(last_activity_at, $7) END,
+			updated_at = now()
+		WHERE id = $8`, request.ParentSessionRef, request.ForkedAt, request.ForkSource,
+		request.CWD, request.ProjectName, request.Summary, lastActivity, sessionID)
+	return err
 }
 
 func lockOrCreateSession(
@@ -171,23 +424,7 @@ func lockOrCreateSession(
 		WHERE user_id = $1 AND agent_type = $2 AND session_ref = $3
 		FOR UPDATE`, userID, request.AgentType, request.SessionRef).Scan(&sessionID, &contentStatus)
 	if err == nil {
-		lastActivity := request.LastActivityAt
-		if lastActivity == nil {
-			lastActivity = request.StartedAt
-		}
-		_, err = tx.ExecContext(ctx, `
-			UPDATE sessions
-			SET parent_session_ref = COALESCE(NULLIF($1, ''), parent_session_ref),
-				forked_at = COALESCE($2::timestamptz, forked_at),
-				fork_source = COALESCE(NULLIF($3, ''), fork_source),
-				cwd = COALESCE(NULLIF($4, ''), cwd),
-				project_name = COALESCE(NULLIF($5, ''), project_name),
-				summary = COALESCE(NULLIF($6, ''), summary),
-				last_activity_at = CASE WHEN $7::timestamptz IS NULL THEN last_activity_at ELSE GREATEST(last_activity_at, $7) END,
-				updated_at = now()
-			WHERE id = $8`, request.ParentSessionRef, request.ForkedAt, request.ForkSource,
-			request.CWD, request.ProjectName, request.Summary, lastActivity, sessionID)
-		return sessionID, contentStatus, err
+		return sessionID, contentStatus, updateSessionMetadata(ctx, tx, sessionID, request)
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return "", "", err
@@ -231,6 +468,7 @@ func prepareSource(
 	sessionRef string,
 	contentStatus ContentStatus,
 	request PrepareSourceRequest,
+	uploadContext *teamUploadContext,
 ) (PrepareSourceResponse, error) {
 	request.SourceRole = strings.TrimSpace(request.SourceRole)
 	request.SourceKey = strings.TrimSpace(request.SourceKey)
@@ -322,6 +560,9 @@ func prepareSource(
 		NextAction:    decision.NextAction,
 	}
 	if decision.Generation != nil {
+		if err := annotateGenerationUpload(ctx, tx, decision.Generation.ID, uploadContext); err != nil {
+			return PrepareSourceResponse{}, err
+		}
 		response.GenerationID = decision.Generation.ID
 		response.GenerationStatus = decision.Generation.Status
 		response.ExpectedCursor = decision.Generation.ExpectedCursor
@@ -329,6 +570,30 @@ func prepareSource(
 		response.PrefixCheckpointAlgorithm = decision.Generation.PrefixAlgorithm
 	}
 	return response, nil
+}
+
+func annotateGenerationUpload(ctx context.Context, tx *sql.Tx, generationID string, uploadContext *teamUploadContext) error {
+	if uploadContext == nil || generationID == "" {
+		return nil
+	}
+	result, err := tx.ExecContext(ctx, `
+		UPDATE session_source_generations
+		SET upload_team_id = $2,
+			prepared_by_user_id = $3,
+			team_sync_path_id = $4
+		WHERE id = $1 AND (upload_team_id IS NULL OR upload_team_id = $2)`,
+		generationID, uploadContext.TeamID, uploadContext.ActorID, uploadContext.PathID)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
+		return ErrTeamContextChanged
+	}
+	return nil
 }
 
 func generationCheckpoint(ctx context.Context, tx *sql.Tx, generationID sql.NullString) (*GenerationCheckpoint, error) {
@@ -487,9 +752,17 @@ func (s *SyncService) finalizeOnce(ctx context.Context, userID, generationID str
 		FROM session_source_generations g
 		JOIN session_sources src ON src.id = g.source_id
 		JOIN sessions s ON s.id = src.session_id
-		WHERE g.id = $1 AND s.user_id = $2`, generationID, userID).Scan(&sessionID, &sourceID, &sourceKey)
+		WHERE g.id = $1
+			AND (
+				(g.upload_team_id IS NULL AND s.user_id = $2)
+				OR (
+					g.upload_team_id IS NOT NULL
+					AND g.upload_team_id = (SELECT team_id FROM users WHERE id = $2)
+					AND g.upload_team_id = (SELECT team_id FROM users WHERE id = s.user_id)
+				)
+			)`, generationID, userID).Scan(&sessionID, &sourceID, &sourceKey)
 	if errors.Is(err, sql.ErrNoRows) {
-		return FinalizeResponse{}, ErrGenerationNotFound
+		return FinalizeResponse{}, generationAccessError(ctx, tx, generationID, userID)
 	}
 	if err != nil {
 		return FinalizeResponse{}, err
@@ -572,9 +845,17 @@ func (s *SyncService) finalizeOnce(ctx context.Context, userID, generationID str
 		UPDATE sessions
 		SET active_source_count = (
 			SELECT COUNT(*) FROM session_sources WHERE session_id = $1 AND active_generation_id IS NOT NULL
-		), updated_at = now()
+		),
+			content_status = CASE
+				WHEN content_status = 'upload_failed' THEN 'uploading'
+				ELSE content_status
+			END,
+			updated_at = now()
 		WHERE id = $1`, sessionID); err != nil {
 		return FinalizeResponse{}, err
+	}
+	if contentStatus == ContentUploadFailed {
+		contentStatus = ContentUploading
 	}
 
 	revisionID, err := ensureContentProjectionRevision(ctx, tx, generationID, request.DeclaredEndCursor)
@@ -627,7 +908,7 @@ func (s *SyncService) GenerationStatus(ctx context.Context, userID, generationID
 	var activeGeneration bool
 	err := s.db.QueryRowContext(ctx, `
 		SELECT g.id, sess.session_ref, g.status, sess.content_status, g.expected_cursor,
-			(src.active_generation_id = g.id),
+			COALESCE(src.active_generation_id = g.id, false),
 			COALESCE(projection.status, 'pending'),
 			COALESCE(projection.content_indexed_cursor, 0),
 			COALESCE((
@@ -654,7 +935,15 @@ func (s *SyncService) GenerationStatus(ctx context.Context, userID, generationID
 			END, created_at DESC
 			LIMIT 1
 		) projection ON true
-		WHERE g.id = $1 AND sess.user_id = $2`,
+		WHERE g.id = $1
+			AND (
+				(g.upload_team_id IS NULL AND sess.user_id = $2)
+				OR (
+					g.upload_team_id IS NOT NULL
+					AND g.upload_team_id = (SELECT team_id FROM users WHERE id = $2)
+					AND g.upload_team_id = (SELECT team_id FROM users WHERE id = sess.user_id)
+				)
+			)`,
 		generationID, userID,
 	).Scan(
 		&response.GenerationID, &response.SessionRef, &response.GenerationStatus,
@@ -662,7 +951,7 @@ func (s *SyncService) GenerationStatus(ctx context.Context, userID, generationID
 		&response.ContentProjectionStatus, &response.ContentIndexedCursor, &response.ErrorMessage,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
-		return GenerationStatusResponse{}, ErrGenerationNotFound
+		return GenerationStatusResponse{}, generationAccessError(ctx, s.db, generationID, userID)
 	}
 	if err != nil {
 		return GenerationStatusResponse{}, err
@@ -698,12 +987,20 @@ func (s *SyncService) Abort(ctx context.Context, userID, generationID string) (A
 		FROM session_source_generations g
 		JOIN session_sources src ON src.id = g.source_id
 		JOIN sessions s ON s.id = src.session_id
-		WHERE g.id = $1 AND s.user_id = $2
+		WHERE g.id = $1
+			AND (
+				(g.upload_team_id IS NULL AND s.user_id = $2)
+				OR (
+					g.upload_team_id IS NOT NULL
+					AND g.upload_team_id = (SELECT team_id FROM users WHERE id = $2)
+					AND g.upload_team_id = (SELECT team_id FROM users WHERE id = s.user_id)
+				)
+			)
 		FOR UPDATE OF g, src, s`, generationID, userID).Scan(
 		&sessionID, &sourceID, &generationStatus, &contentStatus, &activeGenerationID,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
-		return AbortResponse{}, ErrGenerationNotFound
+		return AbortResponse{}, generationAccessError(ctx, tx, generationID, userID)
 	}
 	if err != nil {
 		return AbortResponse{}, err
@@ -789,13 +1086,27 @@ func (s *SyncService) MarkAbortObjectsDeleted(ctx context.Context, userID, gener
 		FROM session_source_generations g
 		JOIN session_sources src ON src.id = g.source_id
 		JOIN sessions s ON s.id = src.session_id
-		WHERE c.generation_id = g.id AND g.id = $1 AND s.user_id = $2
+		WHERE c.generation_id = g.id AND g.id = $1
+			AND (
+				(g.upload_team_id IS NULL AND s.user_id = $2)
+				OR (
+					g.upload_team_id IS NOT NULL
+					AND g.upload_team_id = (SELECT team_id FROM users WHERE id = $2)
+					AND g.upload_team_id = (SELECT team_id FROM users WHERE id = s.user_id)
+				)
+			)
 			AND g.status = 'abandoned' AND c.object_status = 'delete_pending'`, generationID, userID)
 	if err != nil {
 		return err
 	}
-	_, err = result.RowsAffected()
-	return err
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return generationAccessError(ctx, s.db, generationID, userID)
+	}
+	return nil
 }
 
 func createContentSlice(

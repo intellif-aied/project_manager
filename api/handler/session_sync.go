@@ -74,7 +74,7 @@ func (h *SessionSyncHandler) Prepare(w http.ResponseWriter, r *http.Request) {
 
 	results := make([]sessionsync.PrepareSourceResponse, 0)
 	for _, session := range request.Sessions {
-		prepared, err := h.service.Prepare(r.Context(), u.ID, session)
+		prepared, err := h.service.PrepareWithMode(r.Context(), u.ID, request.UploadMode, session)
 		if err != nil {
 			writeSessionSyncError(w, err)
 			return
@@ -355,6 +355,10 @@ func writeSessionSyncError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST", "error": err.Error()})
 	case errors.Is(err, sessionsync.ErrSourceKeyConflict), errors.Is(err, sessionsync.ErrFinalizeConflict):
 		writeJSON(w, http.StatusConflict, map[string]string{"code": "SOURCE_CONFLICT", "error": err.Error()})
+	case errors.Is(err, sessionsync.ErrTeamRequired):
+		writeJSON(w, http.StatusConflict, map[string]string{"code": "TEAM_REQUIRED", "error": err.Error()})
+	case errors.Is(err, sessionsync.ErrTeamContextChanged):
+		writeJSON(w, http.StatusConflict, map[string]string{"code": sessionsync.ErrorTeamContextChanged, "error": err.Error()})
 	case errors.Is(err, sessionsync.ErrContentTransition), errors.Is(err, sessionsync.ErrContentLifecyclePending):
 		writeJSON(w, http.StatusConflict, map[string]string{"code": "CONTENT_STATE_CONFLICT", "error": err.Error()})
 	case errors.Is(err, sessionsync.ErrIncrementalSourceNeeded):

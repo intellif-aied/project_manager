@@ -16,7 +16,7 @@ var autoSyncNow = time.Now
 var autoSyncPlatform = runtime.GOOS
 
 const (
-	autoSyncConfigSchemaVersion = 2
+	autoSyncConfigSchemaVersion = 3
 	autoSyncTimezone            = "Asia/Shanghai"
 )
 
@@ -51,6 +51,7 @@ type autoSyncConfig struct {
 	DailyTime           string `json:"daily_time,omitempty"`
 	Timezone            string `json:"timezone,omitempty"`
 	ScheduleEffectiveAt string `json:"schedule_effective_at,omitempty"`
+	Mode                string `json:"mode,omitempty"`
 }
 
 type autoSyncSchedule struct {
@@ -113,7 +114,7 @@ func acquireAutoSyncNamedLock(name string) (func(), error) {
 func loadAutoSyncConfig() (autoSyncConfig, error) {
 	data, err := os.ReadFile(autoSyncConfigPath())
 	if os.IsNotExist(err) {
-		return autoSyncConfig{SchemaVersion: autoSyncConfigSchemaVersion, Timezone: autoSyncTimezone}, nil
+		return autoSyncConfig{SchemaVersion: autoSyncConfigSchemaVersion, Timezone: autoSyncTimezone, Mode: uploadModePersonal}, nil
 	}
 	if err != nil {
 		return autoSyncConfig{}, err
@@ -123,10 +124,12 @@ func loadAutoSyncConfig() (autoSyncConfig, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return autoSyncConfig{}, err
 	}
-	if cfg.SchemaVersion < autoSyncConfigSchemaVersion || cfg.Timezone == "" {
+	needsTimezoneMigration := cfg.SchemaVersion < 2 || cfg.Timezone == ""
+	if cfg.SchemaVersion < autoSyncConfigSchemaVersion || cfg.Timezone == "" || (cfg.Mode != uploadModePersonal && cfg.Mode != uploadModeTeam) {
 		cfg.SchemaVersion = autoSyncConfigSchemaVersion
 		cfg.Timezone = autoSyncTimezone
-		if cfg.Enabled && cfg.DailyTime != "" {
+		cfg.Mode = uploadModePersonal
+		if cfg.Enabled && cfg.DailyTime != "" && (needsTimezoneMigration || cfg.ScheduleEffectiveAt == "") {
 			if parsed, parseErr := time.Parse("15:04", cfg.DailyTime); parseErr == nil {
 				now := autoSyncBusinessTime(autoSyncNow())
 				target := time.Date(now.Year(), now.Month(), now.Day(), parsed.Hour(), parsed.Minute(), 0, 0, autoSyncLocation)
@@ -151,16 +154,20 @@ func autoSyncConfigNeedsMigration() bool {
 	var stored struct {
 		SchemaVersion int    `json:"schema_version"`
 		Timezone      string `json:"timezone"`
+		Mode          string `json:"mode"`
 	}
 	if json.Unmarshal(data, &stored) != nil {
 		return false
 	}
-	return stored.SchemaVersion < autoSyncConfigSchemaVersion || stored.Timezone == ""
+	return stored.SchemaVersion < autoSyncConfigSchemaVersion || stored.Timezone == "" || (stored.Mode != uploadModePersonal && stored.Mode != uploadModeTeam)
 }
 
 func saveAutoSyncConfig(cfg autoSyncConfig) error {
 	cfg.SchemaVersion = autoSyncConfigSchemaVersion
 	cfg.Timezone = autoSyncTimezone
+	if cfg.Mode != uploadModeTeam {
+		cfg.Mode = uploadModePersonal
+	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
@@ -383,11 +390,11 @@ func executeAutoSync() int {
 }
 
 func cmdAutoSyncCLI(args []string, input io.Reader, output io.Writer, interactive bool) int {
-	if len(args) == 1 && args[0] == "enable" && !interactive {
+	if len(args) >= 1 && args[0] == "enable" && !interactive {
 		fmt.Fprintln(output, "开启自动 Session 同步需要交互式终端，请运行 aida auto-sync enable")
 		return 2
 	}
-	if len(args) == 1 && (args[0] == "enable" || args[0] == "status" || args[0] == "set-time") {
+	if len(args) >= 1 && (args[0] == "enable" || args[0] == "status" || args[0] == "set-time") {
 		_ = ensureAutoSyncBackground()
 	}
 	return cmdAutoSync(args, input, output)
@@ -454,6 +461,9 @@ func writeAutoSyncStatus(output io.Writer) int {
 	}
 	if cfg.Enabled {
 		fmt.Fprintln(output, "自动 Session 同步：已开启")
+		if cfg.Mode == uploadModeTeam {
+			fmt.Fprintln(output, "同步模式：团队")
+		}
 		fmt.Fprintf(output, "每日同步时间：%s（北京时间）\n", cfg.DailyTime)
 	} else {
 		fmt.Fprintln(output, "自动 Session 同步：未开启")
@@ -463,9 +473,13 @@ func writeAutoSyncStatus(output io.Writer) int {
 }
 
 func cmdAutoSync(args []string, input io.Reader, output io.Writer) int {
-	if len(args) != 1 {
+	if len(args) < 1 || len(args) > 2 || (len(args) == 2 && (args[0] != "enable" || args[1] != "--team")) {
 		writeAutoSyncHelp(output)
 		return 2
+	}
+	requestedMode := uploadModePersonal
+	if len(args) == 2 && args[1] == "--team" {
+		requestedMode = uploadModeTeam
 	}
 
 	switch args[0] {
@@ -477,6 +491,13 @@ func cmdAutoSync(args []string, input io.Reader, output io.Writer) int {
 	case "execute":
 		return autoSyncExecute()
 	case "upload-all":
+		cfg, err := loadAutoSyncConfig()
+		if err != nil {
+			return 1
+		}
+		if cfg.Mode == uploadModeTeam {
+			return cmdUpload([]string{"--team"})
+		}
 		return cmdUpload([]string{"--all"})
 	case "ensure":
 		if err := ensureAutoSyncBackground(); err != nil {
@@ -493,7 +514,22 @@ func cmdAutoSync(args []string, input io.Reader, output io.Writer) int {
 			return 1
 		}
 		if cfg.Enabled {
-			fmt.Fprintf(output, "自动同步已开启，每天 %s（北京时间）\n", cfg.DailyTime)
+			if cfg.Mode != requestedMode {
+				cfg.Mode = requestedMode
+				if err := saveAutoSyncConfig(cfg); err != nil {
+					fmt.Fprintln(output, "自动同步模式修改失败，请运行 aida status 检查")
+					return 1
+				}
+				if err := autoSyncRestartBackground(); err != nil {
+					fmt.Fprintln(output, "自动同步模式已保存，但后台重启失败，请运行 aida status 检查")
+					return 1
+				}
+			}
+			if cfg.Mode == uploadModeTeam {
+				fmt.Fprintf(output, "自动同步已开启，每天 %s（北京时间），模式：团队\n", cfg.DailyTime)
+			} else {
+				fmt.Fprintf(output, "自动同步已开启，每天 %s（北京时间）\n", cfg.DailyTime)
+			}
 			return 0
 		}
 		if err := autoSyncCheckBackgroundSupport(); err != nil {
@@ -552,6 +588,7 @@ func cmdAutoSync(args []string, input io.Reader, output io.Writer) int {
 		}
 
 		cfg.Enabled = true
+		cfg.Mode = requestedMode
 		cfg.DailyTime = value
 		cfg.ScheduleEffectiveAt = effectiveAt.Format(time.RFC3339)
 		releaseStart, err := acquireAutoSyncNamedLock("start.lock")
@@ -566,7 +603,11 @@ func cmdAutoSync(args []string, input io.Reader, output io.Writer) int {
 			return 1
 		}
 		if latestConfig.Enabled {
-			fmt.Fprintf(output, "自动同步已开启，每天 %s（北京时间）\n", latestConfig.DailyTime)
+			if latestConfig.Mode == uploadModeTeam {
+				fmt.Fprintf(output, "自动同步已开启，每天 %s（北京时间），模式：团队\n", latestConfig.DailyTime)
+			} else {
+				fmt.Fprintf(output, "自动同步已开启，每天 %s（北京时间）\n", latestConfig.DailyTime)
+			}
 			return 0
 		}
 		if err := saveAutoSyncConfig(cfg); err != nil {
@@ -581,7 +622,11 @@ func cmdAutoSync(args []string, input io.Reader, output io.Writer) int {
 		}
 
 		fmt.Fprintln(output, "自动同步已开启")
-		fmt.Fprintf(output, "每天 %s（北京时间）同步 Session\n", value)
+		if cfg.Mode == uploadModeTeam {
+			fmt.Fprintf(output, "每天 %s（北京时间）同步 Session，模式：团队\n", value)
+		} else {
+			fmt.Fprintf(output, "每天 %s（北京时间）同步 Session\n", value)
+		}
 		if pastChoice != nil {
 			if *pastChoice == autoSyncStartImmediate {
 				fmt.Fprintln(output, "今天将立即同步一次")
@@ -710,7 +755,8 @@ func writeAutoSyncHelp(output io.Writer) {
   aida auto-sync <命令>
 
 命令：
-  enable      开启自动同步
+  enable          开启个人模式自动同步
+  enable --team   开启团队模式自动同步
   status      查看自动同步状态
   set-time    修改每天的同步时间
   disable     关闭自动同步

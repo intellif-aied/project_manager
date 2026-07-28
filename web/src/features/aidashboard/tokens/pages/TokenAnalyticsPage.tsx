@@ -29,6 +29,7 @@ import {
 import type { EChartsOption } from "echarts";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
 import {
@@ -79,6 +80,7 @@ interface TokenAnalyticsPageProps {
   onBack?: () => void;
   dateRange?: TokenAnalyticsDateRange;
   onDateRangeChange?: (range: TokenAnalyticsDateRange) => void;
+  toolbarExtra?: ReactNode;
 }
 
 interface TokenAnalyticsDrilldownState {
@@ -233,7 +235,8 @@ export function TokenAnalyticsPage({
   onOpenMember,
   onBack,
   dateRange: controlledDateRange,
-  onDateRangeChange
+  onDateRangeChange,
+  toolbarExtra
 }: TokenAnalyticsPageProps) {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -763,6 +766,7 @@ export function TokenAnalyticsPage({
               });
             }}
           />
+          {toolbarExtra}
           {isAdminManagement ? (
             <Select
               allowClear
