@@ -941,6 +941,16 @@ type ManagedAgent struct {
 	BusinessType        string                  `json:"business_type,omitempty"`
 	ReportTypes         []string                `json:"report_types,omitempty"`
 	IsDefaultReport     bool                    `json:"is_default_report,omitempty"`
+	Source              string                  `json:"source,omitempty"`
+	Permissions         ManagedAgentPermissions `json:"permissions"`
+}
+
+type ManagedAgentPermissions struct {
+	CanRun        bool `json:"can_run"`
+	CanSetDefault bool `json:"can_set_default"`
+	CanView       bool `json:"can_view"`
+	CanEdit       bool `json:"can_edit"`
+	CanArchive    bool `json:"can_archive"`
 }
 
 type ListManagedSkillsResponse struct {

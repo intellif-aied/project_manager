@@ -273,23 +273,33 @@ assert.match(
 );
 assert.match(
   agentAssets,
-  /new Set<AssetTab>\(\["agents", "schedules", "runs"\]\)/,
-  "personal Skill and MCP tabs must not be addressable"
+  /new Set<AssetTab>\(\["agents", "skills", "mcp", "schedules", "runs"\]\)/,
+  "personal Skill and MCP tabs must be addressable"
 );
 assert.match(
   aiAssetsPage,
-  /const PERSONAL_RESOURCE_MANAGEMENT_VISIBLE = false/,
-  "personal Skill and MCP management must stay hidden"
+  /const PERSONAL_RESOURCE_MANAGEMENT_VISIBLE = true/,
+  "personal Skill and MCP management must be visible"
 );
 assert.match(
   routes,
-  /path: "\/ai-assets\/skills\/new"[\s\S]*?element: <Navigate to="\/ai-assets" replace \/>/,
-  "the legacy Skill create URL must redirect to AI assets"
+  /path: "\/ai-assets\/skills\/new"[\s\S]*?element: <SkillCreatePage \/>/,
+  "the Skill create URL must open the Skill editor"
 );
 assert.match(
   routes,
-  /path: "\/ai-assets\/mcp\/new"[\s\S]*?element: <Navigate to="\/ai-assets" replace \/>/,
-  "the legacy MCP create URL must redirect to AI assets"
+  /path: "\/ai-assets\/mcp\/new"[\s\S]*?element: <MCPCreatePage \/>/,
+  "the MCP create URL must open the MCP editor"
+);
+assert.match(
+  aiAssetsPage,
+  /record\.permissions\?\.can_edit !== false/,
+  "system Agent editing must be permission-gated"
+);
+assert.match(
+  aiAssetsPage,
+  /record\.permissions\?\.can_set_default !== false/,
+  "system Agent must remain selectable as the report default"
 );
 assert.doesNotMatch(
   agentRunPage,

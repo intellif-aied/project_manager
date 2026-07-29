@@ -1267,6 +1267,148 @@ func TestListMyAgentsIncludeArchivedReturnsArchivedItems(t *testing.T) {
 	}
 }
 
+func TestListMyAgentsIncludesReadOnlySystemReportAgent(t *testing.T) {
+	systemAgent := model.ManagedAgent{
+		AgentID: "system-report", Name: "系统报告 Agent", Description: "统一生成日报和周报",
+		Engine: "claude-code", Instructions: defaultReportAgentMarker + "\n" + defaultManagedAgentMarker,
+		DefaultModelID: "deepseek-v4-flash",
+		Skills:         []model.ManagedSkillRef{{Owner: "10086", Slug: "secret-skill", Version: "1.0.0"}},
+	}
+	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Header.Get("Authorization") {
+		case "Bearer user-token":
+			writeJSON(w, http.StatusOK, model.ListManagedAgentsResponse{Agents: []model.ManagedAgent{{
+				AgentID: "personal-report", Name: "我的报告 Agent", Engine: "codex",
+			}}})
+		case "Bearer platform-token":
+			writeJSON(w, http.StatusOK, model.ListManagedAgentsResponse{Agents: []model.ManagedAgent{systemAgent}})
+		default:
+			t.Fatalf("authorization = %q", r.Header.Get("Authorization"))
+		}
+	}))
+	defer platform.Close()
+
+	h := NewManagedAgentHandler(nil, service.NewManagedAgentClient(platform.URL, "platform-token"))
+	req := httptest.NewRequest(http.MethodGet, "/ai-assets/agents", nil)
+	req.Header.Set("Authorization", "Bearer user-token")
+	req = requestWithUser(req, &model.User{ID: "user-1", Username: "alice"})
+	rec := httptest.NewRecorder()
+
+	h.ListMyAgents(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var got model.ListManagedAgentsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Agents) != 2 {
+		t.Fatalf("agents = %#v", got.Agents)
+	}
+	personal, system := got.Agents[0], got.Agents[1]
+	if personal.Source != managedAgentSourcePersonal || !personal.Permissions.CanEdit || !personal.Permissions.CanRun {
+		t.Fatalf("personal agent permissions = %#v", personal)
+	}
+	if system.Source != managedAgentSourceSystem || system.Permissions.CanEdit || system.Permissions.CanRun || !system.Permissions.CanSetDefault {
+		t.Fatalf("system agent permissions = %#v", system)
+	}
+	if system.Instructions != "" || system.DefaultModelID != "" || len(system.Skills) != 0 {
+		t.Fatalf("system projection leaked configuration = %#v", system)
+	}
+}
+
+func TestSetDefaultReportAgentAcceptsSystemProjection(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	systemAgent := model.ManagedAgent{
+		AgentID: "system-report", Name: "系统报告 Agent", Engine: "claude-code",
+		Instructions: defaultReportAgentMarker + "\n" + defaultManagedAgentMarker + "\n" + defaultReportAgentTypesPrefix + strings.Join(supportedReportTypes, ","),
+	}
+	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "Bearer user-token" {
+			writeJSON(w, http.StatusOK, model.ListManagedAgentsResponse{})
+			return
+		}
+		writeJSON(w, http.StatusOK, model.ListManagedAgentsResponse{Agents: []model.ManagedAgent{systemAgent}})
+	}))
+	defer platform.Close()
+
+	mock.ExpectQuery("SELECT agent_id, business_type, report_types").
+		WithArgs("user-1", "system-report").
+		WillReturnRows(sqlmock.NewRows([]string{"agent_id", "business_type", "report_types", "is_default_report"}))
+	mock.ExpectExec("UPDATE managed_agent_profiles").
+		WithArgs("user-1", "system-report").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("INSERT INTO managed_agent_profiles").
+		WithArgs("system-report", "user-1", managedAgentBusinessReport, sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	h := NewManagedAgentHandlerWithDefaults(db, service.NewManagedAgentClient(platform.URL, "platform-token"), testManagedAgentDefaults())
+	req := httptest.NewRequest(http.MethodPost, "/ai-assets/report-agents/system-report/default", nil)
+	req.Header.Set("Authorization", "Bearer user-token")
+	req = requestWithUser(req, &model.User{ID: "user-1", Username: "alice"})
+	req = requestWithURLParam(req, "agentId", "system-report")
+	rec := httptest.NewRecorder()
+
+	h.SetDefaultReportAgent(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var got model.ManagedAgent
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Source != managedAgentSourceSystem || !got.IsDefaultReport || got.Permissions.CanEdit || !got.Permissions.CanSetDefault {
+		t.Fatalf("agent = %#v", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestResolveDefaultReportAgentUsesPersonalPreference(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mock.ExpectQuery("SELECT agent_id, business_type, report_types").
+		WithArgs("user-1").
+		WillReturnRows(sqlmock.NewRows([]string{"agent_id", "business_type", "report_types", "is_default_report"}).
+			AddRow("personal-report", managedAgentBusinessReport, []byte(`["personal_daily"]`), true))
+
+	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "Bearer user-token" {
+			writeJSON(w, http.StatusOK, model.ListManagedAgentsResponse{Agents: []model.ManagedAgent{{
+				AgentID: "personal-report", Name: "我的报告 Agent", Engine: "codex",
+			}}})
+			return
+		}
+		writeJSON(w, http.StatusOK, model.ListManagedAgentsResponse{Agents: []model.ManagedAgent{{
+			AgentID: "system-report", Name: "系统报告 Agent", Engine: "claude-code", Instructions: defaultReportAgentMarker + "\n" + defaultManagedAgentMarker,
+		}}})
+	}))
+	defer platform.Close()
+
+	baseClient := service.NewManagedAgentClient(platform.URL, "platform-token")
+	h := NewManagedAgentHandlerWithDefaults(db, baseClient, testManagedAgentDefaults())
+	selected, _, systemAccount, err := h.resolveDefaultReportAgent(context.Background(), "user-1", baseClient.WithToken("user-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected == nil || selected.AgentID != "personal-report" || systemAccount {
+		t.Fatalf("selected=%#v systemAccount=%v", selected, systemAccount)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
 func TestReportSkillProtectedLifecycle(t *testing.T) {
 	h := NewManagedAgentHandlerWithDefaults(nil, service.NewManagedAgentClient("https://managed.example.com", "platform-token"), testManagedAgentDefaults())
 	for _, tc := range []struct {

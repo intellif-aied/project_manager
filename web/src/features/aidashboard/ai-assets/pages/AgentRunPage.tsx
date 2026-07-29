@@ -1299,6 +1299,30 @@ export function AgentRunPage() {
     );
   }
 
+  if (agent.permissions?.can_run === false) {
+    return (
+      <PagePanel
+        title="系统 Agent"
+        description="系统 Agent 由管理员统一运行"
+        backTo={AI_ASSETS_RETURN_PATH}
+        onBack={() => navigate(AI_ASSETS_RETURN_PATH)}
+        onNavigate={(path) => navigate(path)}
+        breadcrumbs={[
+          { title: "系统" },
+          { title: "我的 AI 资产", path: AI_ASSETS_HOME },
+          { title: agent.name }
+        ]}
+      >
+        <Alert
+          type="info"
+          showIcon
+          message="该 Agent 不支持手动运行"
+          description="你可以返回 Agent 列表，将它设为默认后从日报或周报页面使用。"
+        />
+      </PagePanel>
+    );
+  }
+
   const reportAgent = isReportAgent(agent);
 
   return (

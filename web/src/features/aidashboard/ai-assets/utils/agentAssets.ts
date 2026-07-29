@@ -13,7 +13,7 @@ export type AssetTab = "agents" | "skills" | "mcp" | "schedules" | "runs";
 export const AI_ASSETS_HOME = "/ai-assets";
 export const AI_ASSETS_TAB_QUERY_PARAM = "tab";
 
-const AI_ASSET_TABS = new Set<AssetTab>(["agents", "schedules", "runs"]);
+const AI_ASSET_TABS = new Set<AssetTab>(["agents", "skills", "mcp", "schedules", "runs"]);
 
 export function isAssetTab(value?: string | null): value is AssetTab {
   return Boolean(value && AI_ASSET_TABS.has(value as AssetTab));

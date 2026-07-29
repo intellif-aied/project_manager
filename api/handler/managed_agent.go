@@ -54,6 +54,8 @@ const (
 	scheduleRunKindReport         = "report_agent"
 	defaultScheduleTimezone       = "Asia/Shanghai"
 	reservedPromptValueCode       = "RESERVED_PROMPT_VALUE"
+	managedAgentSourcePersonal    = "personal"
+	managedAgentSourceSystem      = "system"
 )
 
 var reportSystemPromptKeys = map[string]struct{}{
@@ -792,6 +794,65 @@ func (h *ManagedAgentHandler) loadManagedAgentProfile(ctx context.Context, userI
 	return &profile, nil
 }
 
+func (h *ManagedAgentHandler) loadDefaultReportAgentProfile(ctx context.Context, userID string) (*managedAgentProfile, error) {
+	if h.db == nil || strings.TrimSpace(userID) == "" {
+		return nil, nil
+	}
+	var profile managedAgentProfile
+	var raw []byte
+	err := h.db.QueryRowContext(ctx, `
+		SELECT agent_id, business_type, report_types, COALESCE(is_default_report, false)
+		FROM managed_agent_profiles
+		WHERE user_id = $1 AND is_default_report = true
+		LIMIT 1
+	`, userID).Scan(&profile.AgentID, &profile.BusinessType, &raw, &profile.IsDefaultReport)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	_ = json.Unmarshal(raw, &profile.ReportTypes)
+	profile.BusinessType = normalizeManagedAgentBusinessType(profile.BusinessType)
+	profile.ReportTypes = normalizeManagedAgentReportTypes(profile.ReportTypes)
+	return &profile, nil
+}
+
+func personalManagedAgent(agent model.ManagedAgent) model.ManagedAgent {
+	agent.Source = managedAgentSourcePersonal
+	agent.Permissions = model.ManagedAgentPermissions{
+		CanRun: true, CanSetDefault: true, CanView: true, CanEdit: true, CanArchive: true,
+	}
+	return agent
+}
+
+func systemReportAgentProjection(agent model.ManagedAgent) model.ManagedAgent {
+	return model.ManagedAgent{
+		AgentID: agent.AgentID, Name: agent.Name, Description: agent.Description,
+		Engine: agent.Engine, CurrentVersionID: agent.CurrentVersionID,
+		ManagedVersion: agent.ManagedVersion, Archived: agent.Archived,
+		BusinessType: managedAgentBusinessReport,
+		ReportTypes:  append([]string{}, supportedReportTypes...),
+		Source:       managedAgentSourceSystem,
+		Permissions:  model.ManagedAgentPermissions{CanSetDefault: true},
+	}
+}
+
+func (h *ManagedAgentHandler) systemReportAgent(ctx context.Context) (*model.ManagedAgent, error) {
+	if h == nil || h.client == nil {
+		return nil, nil
+	}
+	resp, err := h.client.ListMyAgents(ctx)
+	if err != nil {
+		return nil, err
+	}
+	agent, found := h.selectDefaultReportAgent(resp.Agents)
+	if !found {
+		return nil, nil
+	}
+	return &agent, nil
+}
+
 func (h *ManagedAgentHandler) ListMyAgents(w http.ResponseWriter, r *http.Request) {
 	u := getUser(r)
 	includeArchived := includeArchivedManagedAssets(r)
@@ -801,8 +862,20 @@ func (h *ManagedAgentHandler) ListMyAgents(w http.ResponseWriter, r *http.Reques
 		if err != nil {
 			return nil, err
 		}
-		if resp.Agents == nil {
-			resp.Agents = []model.ManagedAgent{}
+		systemAgent, err := h.systemReportAgent(r.Context())
+		if err != nil {
+			return nil, err
+		}
+		personalAgents := make([]model.ManagedAgent, 0, len(resp.Agents))
+		for _, agent := range resp.Agents {
+			if systemAgent != nil && agent.AgentID == systemAgent.AgentID {
+				continue
+			}
+			personalAgents = append(personalAgents, personalManagedAgent(agent))
+		}
+		resp.Agents = personalAgents
+		if systemAgent != nil {
+			resp.Agents = append(resp.Agents, systemReportAgentProjection(*systemAgent))
 		}
 		if u != nil {
 			resp.Agents = h.mergeManagedAgentProfiles(r.Context(), u.ID, resp.Agents)
@@ -1056,7 +1129,9 @@ func (h *ManagedAgentHandler) CreateDefaultReportAgent(w http.ResponseWriter, r 
 		existing.BusinessType = managedAgentBusinessReport
 		existing.ReportTypes = append([]string{}, supportedReportTypes...)
 		existing.IsDefaultReport = true
-		writeJSON(w, http.StatusOK, existing)
+		projected := systemReportAgentProjection(existing)
+		projected.IsDefaultReport = true
+		writeJSON(w, http.StatusOK, projected)
 		return
 	}
 
@@ -1077,7 +1152,9 @@ func (h *ManagedAgentHandler) CreateDefaultReportAgent(w http.ResponseWriter, r 
 	agent.BusinessType = managedAgentBusinessReport
 	agent.ReportTypes = append([]string{}, supportedReportTypes...)
 	agent.IsDefaultReport = true
-	writeJSON(w, http.StatusOK, agent)
+	projected := systemReportAgentProjection(agent)
+	projected.IsDefaultReport = true
+	writeJSON(w, http.StatusOK, projected)
 }
 
 func (h *ManagedAgentHandler) SetDefaultReportAgent(w http.ResponseWriter, r *http.Request) {
@@ -1100,9 +1177,21 @@ func (h *ManagedAgentHandler) SetDefaultReportAgent(w http.ResponseWriter, r *ht
 		writeManagedAgentError(w, err)
 		return
 	}
+	isSystemAgent := false
 	if agent == nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found"})
-		return
+		systemAgent, systemErr := h.systemReportAgent(r.Context())
+		if systemErr != nil {
+			writeManagedAgentError(w, systemErr)
+			return
+		}
+		if systemAgent != nil && systemAgent.AgentID == agentID {
+			agent = systemAgent
+			isSystemAgent = true
+		}
+		if agent == nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found"})
+			return
+		}
 	}
 	profile, err := h.loadManagedAgentProfile(r.Context(), u.ID, agentID)
 	if err != nil {
@@ -1126,7 +1215,47 @@ func (h *ManagedAgentHandler) SetDefaultReportAgent(w http.ResponseWriter, r *ht
 	agent.BusinessType = managedAgentBusinessReport
 	agent.ReportTypes = append([]string{}, supported...)
 	agent.IsDefaultReport = true
+	if isSystemAgent {
+		projected := systemReportAgentProjection(*agent)
+		projected.IsDefaultReport = true
+		agent = &projected
+	} else {
+		personal := personalManagedAgent(*agent)
+		agent = &personal
+	}
 	writeJSON(w, http.StatusOK, agent)
+}
+
+func (h *ManagedAgentHandler) resolveDefaultReportAgent(
+	ctx context.Context, userID string, personalClient *service.ManagedAgentClient,
+) (*model.ManagedAgent, *service.ManagedAgentClient, bool, error) {
+	profile, err := h.loadDefaultReportAgentProfile(ctx, userID)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	systemAgent, err := h.systemReportAgent(ctx)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	if profile == nil {
+		if systemAgent == nil {
+			return nil, nil, false, nil
+		}
+		return systemAgent, h.client, true, nil
+	}
+	if systemAgent != nil && systemAgent.AgentID == profile.AgentID {
+		return systemAgent, h.client, true, nil
+	}
+	personalResp, err := personalClient.ListMyAgents(ctx)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	for idx := range personalResp.Agents {
+		if !personalResp.Agents[idx].Archived && personalResp.Agents[idx].AgentID == profile.AgentID {
+			return &personalResp.Agents[idx], personalClient, false, nil
+		}
+	}
+	return nil, nil, false, nil
 }
 
 func managedAgentFromUpsertRequest(req model.UpsertManagedAgentRequest) model.ManagedAgent {
@@ -2383,14 +2512,12 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 	client := h.clientForRequest(r)
 	isSystemDefault := agentID == "default"
 	if isSystemDefault {
-		client = h.client
-		agentsResp, err := client.ListMyAgents(r.Context())
+		selected, selectedClient, systemAccount, err := h.resolveDefaultReportAgent(r.Context(), u.ID, client)
 		if err != nil {
 			writeManagedAgentError(w, err)
 			return
 		}
-		selected, found := h.selectDefaultReportAgent(agentsResp.Agents)
-		if !found {
+		if selected == nil {
 			writeJSON(w, http.StatusOK, map[string]any{
 				"available": false,
 				"code":      "DEFAULT_REPORT_AGENT_NOT_CONFIGURED",
@@ -2398,6 +2525,8 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 			})
 			return
 		}
+		client = selectedClient
+		isSystemDefault = systemAccount
 		agentID = selected.AgentID
 	}
 	agent, err := findMyManagedAgent(r, client, agentID)
