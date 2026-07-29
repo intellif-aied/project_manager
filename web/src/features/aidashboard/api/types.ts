@@ -586,6 +586,14 @@ export interface ManagedAgent {
   business_type?: "generic" | "report";
   report_types?: ReportType[];
   is_default_report?: boolean;
+  source?: "personal" | "system";
+  permissions?: {
+    can_run: boolean;
+    can_set_default: boolean;
+    can_view: boolean;
+    can_edit: boolean;
+    can_archive: boolean;
+  };
 }
 
 export interface AvailableModelsResponse {

@@ -38,7 +38,6 @@ import type {
   ReportSourceInput,
   ReportType
 } from "../../api/types";
-import { errorMessage } from "../../ai-assets/utils/agentAssets";
 import { useAuth } from "@/shared/auth/authContext";
 import { HttpError } from "@/shared/request/types";
 import { businessDateKey } from "@/shared/utils/businessTime";
@@ -124,7 +123,7 @@ function reportRunErrorMessage(error: unknown) {
       return "所选日期暂无可用 Session。请先上传当天 Session，或手动选择其他 Session 后重试。";
     }
   }
-  return errorMessage(error);
+  return "日报生成请求未完成，请稍后重试。";
 }
 
 function confirmDefaultReportInitialization() {
@@ -245,8 +244,8 @@ function ReportAIGenerateControlsState({
       setInitializingDefault(true);
       try {
         await createDefaultReportAgent();
-      } catch (err) {
-        throw new Error(`日报生成能力初始化失败：${errorMessage(err)}`);
+      } catch {
+        throw new Error("日报生成能力初始化失败，请稍后重试");
       }
       void queryClient.invalidateQueries({ queryKey: ["managed-agents"] });
       run = await startRun();
@@ -314,7 +313,10 @@ function ReportAIGenerateControlsState({
       if (run.status === "failed" || run.status === "timeout") {
         setHandledRunId(run.id);
         setActiveRunId(undefined);
-        const text = run.error_message || `${periodLabel} AI 生成失败`;
+        const text =
+          run.status === "timeout"
+            ? "日报生成时间较长，请稍后重新生成"
+            : "日报生成未完成，请重新生成";
         setLastOutcome({ type: "error", text });
       }
     }, 0);

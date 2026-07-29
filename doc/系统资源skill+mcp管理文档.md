@@ -22,8 +22,8 @@
 
 | 环境 | Skill owner | Skill | MCP | 最近验证 | 验证依据 |
 | --- | --- | --- | --- | --- | --- |
-| 生产 | 10086 | aida-report@1.0.17 | aida-report-mcp@report-v1 | 2026-07-28 | `20260728-报告Agent两阶段生成生产发布`、公共Registry及真实Run SkillRef |
-| 14.157 测试 | 100866 | aida-report@1.0.50 | aida-report-mcp@report-v1 | 2026-07-24 | `20260724-04-report-context-concise-skill` 发布记录、运行环境、公共 Registry 与真实 Session SkillRef |
+| 生产 | 10086 | aida-report@1.0.20 | aida-report-mcp@report-v1 | 2026-07-28 | `20260728-日报质量失败降级生产发布`、公共 Registry 及生产运行配置 |
+| 14.157 测试 | 100866 | aida-report@1.1.8 | aida-report-mcp@report-v1 | 2026-07-28 | `20260728-日报质量失败降级测试发布`、运行环境、公共 Registry 与真实 Session SkillRef |
 
 规则：
 

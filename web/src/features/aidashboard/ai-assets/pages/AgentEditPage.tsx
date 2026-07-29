@@ -53,7 +53,10 @@ export function AgentEditPage() {
 
   const skills = useMemo(() => skillsQuery.data?.skills ?? [], [skillsQuery.data]);
   const mcpEntries = useMemo(() => mcpQuery.data?.entries ?? [], [mcpQuery.data]);
-  const credentials = useMemo(() => credentialsQuery.data?.credentials ?? [], [credentialsQuery.data]);
+  const credentials = useMemo(
+    () => credentialsQuery.data?.credentials ?? [],
+    [credentialsQuery.data]
+  );
 
   const agent = useMemo(
     () => agentsQuery.data?.agents.find((item) => item.agent_id === agentId) ?? null,
@@ -125,6 +128,30 @@ export function AgentEditPage() {
           showIcon
           message="未找到该 Agent"
           description="该 Agent 可能已被删除，请返回列表查看。"
+        />
+      </PagePanel>
+    );
+  }
+
+  if (agent.permissions?.can_edit === false) {
+    return (
+      <PagePanel
+        title="系统 Agent"
+        description="系统 Agent 由管理员统一维护"
+        backTo={AI_ASSETS_RETURN_PATH}
+        onBack={() => navigate(AI_ASSETS_RETURN_PATH)}
+        onNavigate={(path) => navigate(path)}
+        breadcrumbs={[
+          { title: "系统" },
+          { title: "我的 AI 资产", path: AI_ASSETS_HOME },
+          { title: agent.name }
+        ]}
+      >
+        <Alert
+          type="info"
+          showIcon
+          message="该 Agent 不支持查看或编辑"
+          description="你可以返回 Agent 列表，将它设为默认报告 Agent。"
         />
       </PagePanel>
     );

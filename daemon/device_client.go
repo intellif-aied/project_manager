@@ -420,6 +420,7 @@ func cmdUpload(args []string) int {
 	resolveAPIEndpoint(cfg)
 
 	uploadAll := false
+	uploadMode := uploadModePersonal
 	pageSize := defaultSessionPageSize
 	var selectedIdx []int
 
@@ -427,12 +428,19 @@ func cmdUpload(args []string) int {
 		a := args[i]
 		if a == "--all" || a == "-a" {
 			uploadAll = true
+		} else if a == "--team" {
+			uploadMode = uploadModeTeam
+			uploadAll = true
 		} else if a == "--page-size" && i+1 < len(args) {
 			pageSize, _ = strconv.Atoi(args[i+1])
 			i++
 		} else if n, err := strconv.Atoi(a); err == nil {
 			selectedIdx = append(selectedIdx, n)
 		}
+	}
+	if uploadMode == uploadModeTeam && len(selectedIdx) > 0 {
+		fmt.Println("团队模式会自动扫描全部 Session，不能与 Session 编号同时使用")
+		return 2
 	}
 	if !allowedSessionPageSizes[pageSize] {
 		fmt.Println("每页条数仅支持 10、20、50 或 100")
@@ -443,6 +451,12 @@ func cmdUpload(args []string) int {
 	sessions := scanSessionsForCommand(filepath.Join(home, ".claude", "projects"), filepath.Join(home, ".codex", "sessions"), true, true)
 
 	if len(sessions) == 0 {
+		if uploadMode == uploadModeTeam {
+			if err := updateTeamSyncUnresolved(map[string]int{}, true); err != nil {
+				fmt.Printf("团队同步日志保存失败：%v\n", err)
+				return 1
+			}
+		}
 		fmt.Println("没有找到可上传的 Session")
 		return 0
 	}
@@ -473,7 +487,15 @@ func cmdUpload(args []string) int {
 		}
 	}
 
-	if uploadAll {
+	teamUploadGroups := make([][]sessionWithFile, len(toUpload))
+	teamSessionCount := 0
+	if uploadMode == uploadModeTeam {
+		for index, session := range toUpload {
+			teamUploadGroups[index] = collectSessionsWithFiles(session)
+			teamSessionCount += len(teamUploadGroups[index])
+		}
+		fmt.Printf("\n团队模式扫描 %d 个本地 Session，归并为 %d 个上传组，按工作目录同步到团队成员。\n", teamSessionCount, len(toUpload))
+	} else if uploadAll {
 		fmt.Printf("\n已选择全部 %d 个 Session，未变化的内容会自动跳过。\n", len(toUpload))
 	}
 
@@ -493,31 +515,74 @@ func cmdUpload(args []string) int {
 	totalFailed := 0
 	succeededSessions := 0
 	failedSessions := 0
+	pendingSessions := 0
+	succeededSessionItems := 0
+	failedSessionItems := 0
+	pendingSessionItems := 0
+	unresolvedDirectories := map[string]int{}
 
 	for sessionIndex, s := range toUpload {
 		if sessionIndex > 0 {
 			fmt.Println()
 		}
 		allSessions := collectSessionsWithFiles(s)
-		incrementalResults, incrementalErr := uploadSessionGroupIncremental(cfg, allSessions, s.SessionRef)
+		if uploadMode == uploadModeTeam {
+			allSessions = teamUploadGroups[sessionIndex]
+		}
+		incrementalResults, incrementalErr := uploadSessionGroupIncrementalWithMode(cfg, allSessions, s.SessionRef, uploadMode)
 		if !errors.Is(incrementalErr, errSessionSyncNotEnabled) {
 			sessionFailed := false
+			sessionPending := false
+			sessionErrors := []string{}
 			for _, result := range incrementalResults {
+				if uploadMode == uploadModeTeam && result.ErrorCode == "TEAM_DIRECTORY_UNMAPPED" {
+					directory := strings.TrimSpace(result.CWD)
+					if directory == "" {
+						directory = "(unknown)"
+					} else {
+						directory = filepath.Clean(directory)
+					}
+					unresolvedDirectories[directory]++
+					sessionPending = true
+					pendingSessionItems++
+					continue
+				}
 				if result.Status == "content_cleared" || result.ErrorCode != "" || result.Status == "failed" {
 					totalFailed++
 					sessionFailed = true
+					failedSessionItems++
+					if result.ErrorCode != "" {
+						sessionErrors = append(sessionErrors, result.SessionRef+": "+result.ErrorCode)
+					}
+				} else {
+					succeededSessionItems++
 				}
 			}
 			if incrementalErr != nil {
 				totalFailed++
 				sessionFailed = true
+				failedSessionItems += len(allSessions) - len(incrementalResults)
+				sessionErrors = append(sessionErrors, incrementalErr.Error())
 			}
-			printSessionUploadResult(os.Stdout, s, sessionFailed)
+			if sessionPending && !sessionFailed {
+				printSessionUploadPending(os.Stdout, s)
+				pendingSessions++
+			} else {
+				printSessionUploadResult(os.Stdout, s, sessionFailed)
+			}
+			writeSessionUploadErrors(os.Stdout, sessionErrors)
 			if sessionFailed {
 				failedSessions++
-			} else {
+			} else if !sessionPending {
 				succeededSessions++
 			}
+			continue
+		}
+		if uploadMode == uploadModeTeam {
+			totalFailed++
+			failedSessions++
+			failedSessionItems += len(allSessions)
+			printSessionUploadResult(os.Stdout, s, true)
 			continue
 		}
 
@@ -604,17 +669,51 @@ func cmdUpload(args []string) int {
 			succeededSessions++
 		}
 	}
+	if uploadMode == uploadModeTeam {
+		if err := completeTeamSyncScan(unresolvedDirectories); err != nil {
+			fmt.Printf("\n团队同步日志保存失败：%v\n", err)
+			totalFailed++
+		}
+	}
 
 	switch {
 	case totalFailed > 0:
-		fmt.Printf("\n上传完成：成功 %d 个，失败 %d 个\n", succeededSessions, failedSessions)
+		if uploadMode == uploadModeTeam {
+			fmt.Printf("\n%s\n", formatTeamUploadSummary(succeededSessions, succeededSessionItems, pendingSessions, pendingSessionItems, failedSessions, failedSessionItems, true))
+		} else {
+			fmt.Printf("\n上传完成：成功 %d 个，失败 %d 个\n", succeededSessions, failedSessions)
+		}
+	case pendingSessions > 0:
+		fmt.Printf("\n%s\n", formatTeamUploadSummary(succeededSessions, succeededSessionItems, pendingSessions, pendingSessionItems, failedSessions, failedSessionItems, false))
 	default:
-		fmt.Printf("\n上传完成：成功 %d 个\n", succeededSessions)
+		if uploadMode == uploadModeTeam {
+			fmt.Printf("\n%s\n", formatTeamUploadSummary(succeededSessions, succeededSessionItems, pendingSessions, pendingSessionItems, failedSessions, failedSessionItems, false))
+		} else {
+			fmt.Printf("\n上传完成：成功 %d 个\n", succeededSessions)
+		}
 	}
 	if totalFailed > 0 {
 		return 1
 	}
 	return 0
+}
+
+func formatTeamUploadSummary(succeededGroups, succeededSessions, pendingGroups, pendingSessions, failedGroups, failedSessions int, includeFailed bool) string {
+	if includeFailed {
+		return fmt.Sprintf("上传完成：成功 %d 组（%d 个 Session），待配置 %d 组（%d 个 Session），失败 %d 组（%d 个 Session）", succeededGroups, succeededSessions, pendingGroups, pendingSessions, failedGroups, failedSessions)
+	}
+	if pendingGroups > 0 {
+		return fmt.Sprintf("上传完成：成功 %d 组（%d 个 Session），待配置 %d 组（%d 个 Session）；运行 aida log 查看目录。", succeededGroups, succeededSessions, pendingGroups, pendingSessions)
+	}
+	return fmt.Sprintf("上传完成：成功 %d 组（%d 个 Session）", succeededGroups, succeededSessions)
+}
+
+func printSessionUploadPending(output io.Writer, session *SessionInfo) {
+	summary := strings.TrimSpace(session.Summary)
+	if summary == "" {
+		summary = "Session"
+	}
+	fmt.Fprintf(output, "[待配置] %s  %s\n", formatLastActiveTime(session, "01-02 15:04"), trunc(summary, 60))
 }
 
 func printSessionUploadResult(output io.Writer, session *SessionInfo, failed bool) {
@@ -627,6 +726,19 @@ func printSessionUploadResult(output io.Writer, session *SessionInfo, failed boo
 		summary = "Session"
 	}
 	fmt.Fprintf(output, "[%s] %s  %s\n", status, formatLastActiveTime(session, "01-02 15:04"), trunc(summary, 60))
+}
+
+func writeSessionUploadErrors(output io.Writer, reasons []string) {
+	for _, reason := range reasons {
+		reason = strings.TrimSpace(reason)
+		if reason != "" {
+			fmt.Fprintf(output, "  原因：%s\n", reason)
+		}
+	}
+}
+
+func completeTeamSyncScan(unresolvedDirectories map[string]int) error {
+	return updateTeamSyncUnresolved(unresolvedDirectories, true)
 }
 
 // ---- consume ----

@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
-	"github.com/aidashboard/api/internal/reportbrief"
 )
 
 const (
 	managedReportMCPToolsetHeader = "X-Aida-MCP-Toolset"
 	managedReportMCPToolset       = "managed-report"
+	personalReportMCPToolset      = "personal-report"
+	standardReportFormatMode      = "standard"
 )
 
 // reportMCPTools returns the current Report MCP schemas. Legacy read tools stay
@@ -240,11 +240,12 @@ func reportMCPToolsForToolset(toolset string) []map[string]any {
 
 func reportMCPToolsForToolsetWithBrief(toolset string, briefEnabled bool) []map[string]any {
 	tools := reportMCPTools()
-	if strings.TrimSpace(toolset) != managedReportMCPToolset {
+	toolset = strings.TrimSpace(toolset)
+	if toolset != managedReportMCPToolset && toolset != personalReportMCPToolset {
 		return tools
 	}
 	names := []string{toolGetReportContext}
-	if briefEnabled {
+	if toolset == managedReportMCPToolset && briefEnabled {
 		tools = append(tools, reportBriefTool())
 		names = append(names, toolWriteReportBrief)
 	}
@@ -257,61 +258,83 @@ func reportMCPToolsForToolsetWithBrief(toolset string, briefEnabled bool) []map[
 	filtered := make([]map[string]any, 0, len(names))
 	for _, name := range names {
 		if tool, ok := byName[name]; ok {
-			filtered = append(filtered, tool)
+			if toolset == managedReportMCPToolset && name == toolWriteReportResult {
+				tool = managedFormattedReportResultTool(tool)
+			}
+			filtered = append(filtered, managedRunBoundTool(tool))
 		}
 	}
 	return filtered
 }
 
+func managedFormattedReportResultTool(tool map[string]any) map[string]any {
+	formatted := make(map[string]any, len(tool))
+	for key, value := range tool {
+		formatted[key] = value
+	}
+	schema, _ := tool["inputSchema"].(map[string]any)
+	formattedSchema := make(map[string]any, len(schema))
+	for key, value := range schema {
+		formattedSchema[key] = value
+	}
+	properties, _ := schema["properties"].(map[string]any)
+	formattedProperties := make(map[string]any, len(properties)+1)
+	for key, value := range properties {
+		formattedProperties[key] = value
+	}
+	formattedProperties["format_mode"] = map[string]any{
+		"type": "string", "enum": []string{standardReportFormatMode},
+	}
+	formattedSchema["properties"] = formattedProperties
+	required, _ := schema["required"].([]string)
+	formattedSchema["required"] = append(append([]string{}, required...), "format_mode")
+	formatted["inputSchema"] = formattedSchema
+	return formatted
+}
+
+func managedRunBoundTool(tool map[string]any) map[string]any {
+	name, _ := tool["name"].(string)
+	if name != toolGetReportContext && name != toolWriteReportResult && name != toolWriteReportFailure {
+		return tool
+	}
+	bound := make(map[string]any, len(tool))
+	for key, value := range tool {
+		bound[key] = value
+	}
+	schema, _ := tool["inputSchema"].(map[string]any)
+	boundSchema := make(map[string]any, len(schema))
+	for key, value := range schema {
+		boundSchema[key] = value
+	}
+	properties, _ := schema["properties"].(map[string]any)
+	boundProperties := make(map[string]any, len(properties))
+	for key, value := range properties {
+		if key != "run_id" {
+			boundProperties[key] = value
+		}
+	}
+	boundSchema["properties"] = boundProperties
+	if required, ok := schema["required"].([]string); ok {
+		boundRequired := make([]string, 0, len(required))
+		for _, field := range required {
+			if field != "run_id" {
+				boundRequired = append(boundRequired, field)
+			}
+		}
+		boundSchema["required"] = boundRequired
+	}
+	bound["inputSchema"] = boundSchema
+	return bound
+}
+
 func reportBriefTool() map[string]any {
-	factRefs := map[string]any{
-		"type": "array", "minItems": 1,
-		"items": map[string]any{"type": "string", "pattern": reportbrief.FactRefJSONPattern},
-	}
-	deliverable := map[string]any{
-		"type":     "object",
-		"required": []string{"result", "state", "environment", "validation", "next_action", "fact_refs"},
-		"properties": map[string]any{
-			"result":      map[string]any{"type": "string"},
-			"state":       map[string]any{"type": "string", "enum": reportbrief.ValidStates()},
-			"environment": map[string]any{"type": "string", "enum": reportbrief.ValidEnvironments()},
-			"validation":  map[string]any{"type": "string"},
-			"next_action": map[string]any{"type": "string"},
-			"fact_refs":   factRefs,
-		},
-	}
-	workstream := map[string]any{
-		"type":     "object",
-		"required": []string{"title", "objective", "deliverables"},
-		"properties": map[string]any{
-			"title":     map[string]any{"type": "string"},
-			"objective": map[string]any{"type": "string"},
-			"deliverables": map[string]any{
-				"type": "array", "minItems": 1, "maxItems": reportbrief.MaxDeliverables, "items": deliverable,
-			},
-		},
-	}
-	excluded := map[string]any{
-		"type": "object", "required": []string{"fact_ref", "reason"},
-		"properties": map[string]any{
-			"fact_ref": map[string]any{"type": "string", "pattern": reportbrief.FactRefJSONPattern},
-			"reason":   map[string]any{"type": "string", "enum": reportbrief.ValidExclusionReasons()},
-		},
-	}
 	return map[string]any{
 		"name":        toolWriteReportBrief,
 		"description": "Validate and freeze the first semantic pass for a managed personal daily report. Every Report Context fact_ref must be included in a deliverable or explicitly excluded. The accepted Brief returned by this tool is the only source for final writing.",
 		"inputSchema": map[string]any{
-			"type": "object", "required": []string{"run_id", "workstreams", "excluded_facts", "no_reportable_work"},
+			"type": "object", "required": []string{"brief_json"},
 			"properties": map[string]any{
-				"run_id": map[string]any{"type": "string"},
-				"workstreams": map[string]any{
-					"type": "array", "maxItems": reportbrief.MaxWorkstreams, "items": workstream,
-				},
-				"excluded_facts": map[string]any{
-					"type": "array", "items": excluded,
-				},
-				"no_reportable_work": map[string]any{"type": "boolean"},
+				"brief_json": map[string]any{"type": "string"},
 			},
 		},
 	}

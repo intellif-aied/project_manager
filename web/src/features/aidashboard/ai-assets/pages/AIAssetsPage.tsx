@@ -71,7 +71,7 @@ import {
 
 import "./AIAssetsPage.css";
 
-const PERSONAL_RESOURCE_MANAGEMENT_VISIBLE = false;
+const PERSONAL_RESOURCE_MANAGEMENT_VISIBLE = true;
 
 const WEEKDAY_OPTIONS = [
   { label: "周一", value: 1 },
@@ -677,7 +677,9 @@ export function AIAssetsPage() {
       dataIndex: "name",
       render: (_: string, record) => (
         <span className="ai-assets-name">
-          <strong>{record.name}</strong>
+          <strong>
+            {record.name} {record.source === "system" ? <Tag color="gold">系统</Tag> : null}
+          </strong>
           <span>{record.description || record.agent_id}</span>
         </span>
       )
@@ -719,29 +721,33 @@ export function AIAssetsPage() {
       width: 300,
       render: (_: unknown, record) => (
         <Space size={4} className="resource-actions">
-          <Button
-            type="link"
-            className="resource-action"
-            icon={<PlayCircleOutlined />}
-            disabled={platformBlocked || record.archived}
-            title={record.archived ? "已删除 Agent 不能发起新运行" : platformActionTitle}
-            onClick={() =>
-              navigate(aiAssetsChildPath(`${AGENTS_PATH}/${record.agent_id}/run`, "agents"))
-            }
-          >
-            运行
-          </Button>
-          <Button
-            type="link"
-            className="resource-action"
-            icon={<EditOutlined />}
-            onClick={() =>
-              navigate(aiAssetsChildPath(`${AGENTS_PATH}/${record.agent_id}/edit`, "agents"))
-            }
-          >
-            编辑
-          </Button>
-          {isReportAgentAsset(record) ? (
+          {record.permissions?.can_run !== false ? (
+            <Button
+              type="link"
+              className="resource-action"
+              icon={<PlayCircleOutlined />}
+              disabled={platformBlocked || record.archived}
+              title={record.archived ? "已删除 Agent 不能发起新运行" : platformActionTitle}
+              onClick={() =>
+                navigate(aiAssetsChildPath(`${AGENTS_PATH}/${record.agent_id}/run`, "agents"))
+              }
+            >
+              运行
+            </Button>
+          ) : null}
+          {record.permissions?.can_edit !== false ? (
+            <Button
+              type="link"
+              className="resource-action"
+              icon={<EditOutlined />}
+              onClick={() =>
+                navigate(aiAssetsChildPath(`${AGENTS_PATH}/${record.agent_id}/edit`, "agents"))
+              }
+            >
+              编辑
+            </Button>
+          ) : null}
+          {isReportAgentAsset(record) && record.permissions?.can_set_default !== false ? (
             <Button
               type="link"
               className="resource-action"
@@ -761,7 +767,7 @@ export function AIAssetsPage() {
               {record.is_default_report ? "默认" : "设为默认"}
             </Button>
           ) : null}
-          {record.archived ? (
+          {record.permissions?.can_archive === false ? null : record.archived ? (
             <Button
               type="link"
               className="resource-action"
@@ -1070,6 +1076,7 @@ export function AIAssetsPage() {
                 <span>{agent.description || agent.agent_id}</span>
               </span>
               <span className="ai-assets-mobile-card__tags">
+                {agent.source === "system" ? <Tag color="gold">系统</Tag> : null}
                 {agent.archived ? <Tag color="default">已删除</Tag> : <Tag color="blue">可用</Tag>}
                 {agent.is_default_report ? <Tag color="purple">默认报告</Tag> : null}
               </span>
@@ -1087,27 +1094,31 @@ export function AIAssetsPage() {
               />
             </div>
             <div className="ai-assets-mobile-card__actions">
-              <Button
-                type="primary"
-                size="small"
-                icon={<PlayCircleOutlined />}
-                disabled={platformBlocked || agent.archived}
-                onClick={() =>
-                  navigate(aiAssetsChildPath(`${AGENTS_PATH}/${agent.agent_id}/run`, "agents"))
-                }
-              >
-                运行
-              </Button>
-              <Button
-                size="small"
-                icon={<EditOutlined />}
-                onClick={() =>
-                  navigate(aiAssetsChildPath(`${AGENTS_PATH}/${agent.agent_id}/edit`, "agents"))
-                }
-              >
-                编辑
-              </Button>
-              {isReportAgentAsset(agent) ? (
+              {agent.permissions?.can_run !== false ? (
+                <Button
+                  type="primary"
+                  size="small"
+                  icon={<PlayCircleOutlined />}
+                  disabled={platformBlocked || agent.archived}
+                  onClick={() =>
+                    navigate(aiAssetsChildPath(`${AGENTS_PATH}/${agent.agent_id}/run`, "agents"))
+                  }
+                >
+                  运行
+                </Button>
+              ) : null}
+              {agent.permissions?.can_edit !== false ? (
+                <Button
+                  size="small"
+                  icon={<EditOutlined />}
+                  onClick={() =>
+                    navigate(aiAssetsChildPath(`${AGENTS_PATH}/${agent.agent_id}/edit`, "agents"))
+                  }
+                >
+                  编辑
+                </Button>
+              ) : null}
+              {isReportAgentAsset(agent) && agent.permissions?.can_set_default !== false ? (
                 <Button
                   size="small"
                   icon={agent.is_default_report ? <StarFilled /> : <StarOutlined />}
@@ -1121,7 +1132,7 @@ export function AIAssetsPage() {
                   {agent.is_default_report ? "默认" : "设为默认"}
                 </Button>
               ) : null}
-              {agent.archived ? (
+              {agent.permissions?.can_archive === false ? null : agent.archived ? (
                 <Button
                   size="small"
                   loading={
@@ -1431,7 +1442,12 @@ export function AIAssetsPage() {
           tone="success"
           icon={<RobotOutlined />}
           loading={agentsQuery.isLoading}
-          metric={{ key: "agents", title: "Agents", value: agents.length, description: "我的" }}
+          metric={{
+            key: "agents",
+            title: "Agents",
+            value: agents.length,
+            description: "个人 + 系统"
+          }}
         />
         {PERSONAL_RESOURCE_MANAGEMENT_VISIBLE ? (
           <>
@@ -1489,7 +1505,7 @@ export function AIAssetsPage() {
         items={[
           {
             key: "agents",
-            label: "我的 Agents",
+            label: "Agents",
             children: (
               <>
                 <div className="ai-assets-table-card ai-assets-table-card--desktop">

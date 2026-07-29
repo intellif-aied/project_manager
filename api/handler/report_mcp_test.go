@@ -24,6 +24,60 @@ func newReportMCPRequest(method string, body any) *http.Request {
 	return req
 }
 
+func TestReportBriefRequiredOnlyForSystemFlow(t *testing.T) {
+	if !reportBriefRequiredForRun(reportAIRun{}) {
+		t.Fatal("legacy run without source must keep the system Brief gate")
+	}
+	if !reportBriefRequiredForRun(reportAIRun{ReportAgentSource: managedAgentSourceSystem}) {
+		t.Fatal("system run must require Report Brief")
+	}
+	if reportBriefRequiredForRun(reportAIRun{ReportAgentSource: managedAgentSourcePersonal}) {
+		t.Fatal("personal run must not require Report Brief")
+	}
+}
+
+func TestPreparePersonalReportResultPreservesSkillMarkdown(t *testing.T) {
+	content := "## 今日推进\n\n1. 完成个人 Skill 验证。\n\n> 由 personal-daily-report-test 生成"
+	summary := "1. 完成个人 Skill 验证。"
+	gotContent, gotSummary, err := prepareReportResultForRun(
+		reportAIRun{
+			ContextRepresentation: reportcontext.RepresentationWorkEvidence,
+			ReportAgentSource:     managedAgentSourcePersonal,
+		},
+		reportTypePersonalDaily,
+		writeReportResultArgs{Content: content, Summary: summary},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotContent != content || gotSummary != summary {
+		t.Fatalf("personal result was rewritten: content=%q summary=%q", gotContent, gotSummary)
+	}
+	if strings.Contains(gotContent, "工作概览") || strings.Contains(gotContent, "工作详情") {
+		t.Fatalf("personal result received system headings: %q", gotContent)
+	}
+}
+
+func TestPrepareSystemReportResultKeepsStandardFormat(t *testing.T) {
+	content, _, err := prepareReportResultForRun(
+		reportAIRun{
+			ContextRepresentation: reportcontext.RepresentationWorkEvidence,
+			ReportAgentSource:     managedAgentSourceSystem,
+		},
+		reportTypePersonalDaily,
+		writeReportResultArgs{
+			Content: "## 今日推进\n\n1. 完成系统报告。",
+			Summary: "1. 完成系统报告。",
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(content, "## 工作概览\n\n") || !strings.Contains(content, "\n\n## 工作详情\n\n") {
+		t.Fatalf("system result lost standard format: %q", content)
+	}
+}
+
 func TestManagedReportWriteToolsRequireRunIDInsteadOfCopiedScope(t *testing.T) {
 	wantRequired := map[string][]string{
 		toolWriteReportResult:  {"run_id", "content"},
@@ -55,6 +109,7 @@ func TestManagedReportWriteToolsRequireRunIDInsteadOfCopiedScope(t *testing.T) {
 
 func TestPrepareReportResultContentForWorkEvidence(t *testing.T) {
 	content, summary, err := prepareReportResultContent(
+		reportTypePersonalDaily,
 		reportcontext.RepresentationWorkEvidence,
 		"完成日报结构优化。\n  已通过验证。",
 		"\n## 日报结构优化\n\n完成实现。\n",
@@ -62,16 +117,17 @@ func TestPrepareReportResultContentForWorkEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "## 工作总结\n\n完成日报结构优化。 已通过验证。\n\n## 日报结构优化\n\n完成实现。"
+	want := "## 工作概览\n\n完成日报结构优化。 已通过验证。\n\n## 工作详情\n\n### 日报结构优化\n\n完成实现。"
 	if content != want || summary != "完成日报结构优化。 已通过验证。" {
 		t.Fatalf("content=%q summary=%q", content, summary)
 	}
 
-	_, _, err = prepareReportResultContent(reportcontext.RepresentationWorkEvidence, " ", "## 正文\n内容")
+	_, _, err = prepareReportResultContent(reportTypePersonalDaily, reportcontext.RepresentationWorkEvidence, " ", "## 正文\n内容")
 	if got, ok := err.(*mcpErrorCode); !ok || got.Code != "REPORT_SUMMARY_REQUIRED" {
 		t.Fatalf("missing summary error=%v", err)
 	}
 	content, summary, err = prepareReportResultContent(
+		reportTypePersonalDaily,
 		reportcontext.RepresentationWorkEvidence,
 		"完成日报结构优化。",
 		"\n## 工作总结\n\n完成日报结构优化。\n\n## 日报结构优化\n\n完成实现。",
@@ -79,16 +135,86 @@ func TestPrepareReportResultContentForWorkEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want = "## 工作总结\n\n完成日报结构优化。\n\n## 日报结构优化\n\n完成实现。"
+	want = "## 工作概览\n\n完成日报结构优化。\n\n## 工作详情\n\n### 日报结构优化\n\n完成实现。"
 	if content != want || summary != "完成日报结构优化。" {
 		t.Fatalf("normalized duplicate content=%q summary=%q", content, summary)
 	}
 }
 
-func TestPrepareReportResultContentKeepsHistoricalContent(t *testing.T) {
-	content, summary, err := prepareReportResultContent("", "legacy summary", "  # 历史报告\n内容  ")
+func TestPrepareReportResultContentPreservesOrderedSummary(t *testing.T) {
+	content, summary, err := prepareReportResultContent(
+		reportTypePersonalDaily,
+		reportcontext.RepresentationWorkEvidence,
+		"  1. 完成报告入口整合。\r\n\r\n2. 修复生成失败提示。  ",
+		"## 报告体验优化\n\n完成实现。",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantSummary := "1. 完成报告入口整合。\n2. 修复生成失败提示。"
+	wantContent := "## 工作概览\n\n" + wantSummary + "\n\n## 工作详情\n\n### 报告体验优化\n\n完成实现。"
+	if summary != wantSummary || content != wantContent {
+		t.Fatalf("content=%q summary=%q", content, summary)
+	}
+}
+
+func TestPrepareReportResultContentSplitsInlineOrderedSummary(t *testing.T) {
+	content, summary, err := prepareReportResultContent(
+		reportTypePersonalDaily,
+		reportcontext.RepresentationWorkEvidence,
+		"1. 完成安全审计模块。 2. 完成报告 Agent 优化。 3. 完成生产运行排查。",
+		"### 工作主题\n\n完成实现。",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantSummary := "1. 完成安全审计模块。\n2. 完成报告 Agent 优化。\n3. 完成生产运行排查。"
+	if summary != wantSummary || !strings.Contains(content, "## 工作概览\n\n"+wantSummary+"\n\n## 工作详情") {
+		t.Fatalf("content=%q summary=%q", content, summary)
+	}
+}
+
+func TestNormalizeReportSummaryDoesNotSplitVersionNumbers(t *testing.T) {
+	want := "1. 完成 2.0 版本升级并通过验证。"
+	if got := normalizeReportSummary(want); got != want {
+		t.Fatalf("summary=%q, want %q", got, want)
+	}
+}
+
+func TestNormalizeReportSummaryCanonicalizesPresentationFamilies(t *testing.T) {
+	want := "1. 完成方案设计。\n2. 完成开发验证。\n3. 完成生产排查。"
+	tests := map[string]string{
+		"actual line feeds":    "1. 完成方案设计。\n2. 完成开发验证。\n3. 完成生产排查。",
+		"actual CRLF":          "1. 完成方案设计。\r\n2. 完成开发验证。\r\n3. 完成生产排查。",
+		"collapsed spaces":     "1. 完成方案设计。 2. 完成开发验证。 3. 完成生产排查。",
+		"literal line feeds":   `1. 完成方案设计。\n2. 完成开发验证。\n3. 完成生产排查。`,
+		"literal CRLF":         `1. 完成方案设计。\r\n2. 完成开发验证。\r\n3. 完成生产排查。`,
+		"adjacent punctuation": "1. 完成方案设计。2. 完成开发验证。3. 完成生产排查。",
+	}
+	for name, input := range tests {
+		t.Run(name, func(t *testing.T) {
+			if got := normalizeReportSummary(input); got != want {
+				t.Fatalf("summary=%q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestPrepareReportResultContentKeepsOtherReportFormats(t *testing.T) {
+	content, summary, err := prepareReportResultContent("", "", "legacy summary", "  # 历史报告\n内容  ")
 	if err != nil || content != "# 历史报告\n内容" || summary != "legacy summary" {
 		t.Fatalf("content=%q summary=%q err=%v", content, summary, err)
+	}
+
+	content, summary, err = prepareReportResultContent(
+		reportTypePersonalWeekly,
+		reportcontext.RepresentationWorkEvidence,
+		"完成周报结构优化。",
+		"## 周报结构优化\n\n完成实现。",
+	)
+	want := "## 工作总结\n\n完成周报结构优化。\n\n## 周报结构优化\n\n完成实现。"
+	if err != nil || content != want || summary != "完成周报结构优化。" {
+		t.Fatalf("weekly content=%q summary=%q err=%v", content, summary, err)
 	}
 }
 
@@ -823,7 +949,7 @@ func TestReportMCPWriteReportFailureUsesRunIDOnly(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id", "business_type", "agent_id", "agent_version_id", "model_id", "status", "execution_stage", "input_ref_json", "execution_input_json", "output_ref_json", "created_at"}).
 			AddRow("run-failed", reportAgentRunBusinessType, "agent-1", 3, "MiniMax-M2.5", "running", "agent_running", []byte(`{"report_type":"personal_daily","period":{"date":"2026-07-23"},"target":{"type":"self","user_id":"u-1"}}`), []byte(`{}`), []byte(`{}`), time.Now()))
 	mock.ExpectExec("(?s)UPDATE ai_runs.*status = 'failed'").
-		WithArgs("AGENT_REPORTED_FAILURE: boom", "AGENT_REPORTED_FAILURE", "run-failed", "u-1").
+		WithArgs("报告生成未完成，请重新生成", "AGENT_REPORTED_FAILURE", "run-failed", "u-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	req := newReportMCPRequest("tools/call", map[string]any{
@@ -847,6 +973,54 @@ func TestReportMCPWriteReportFailureUsesRunIDOnly(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestReportMCPQualityRetryExhaustionRequiresDegradedResult(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	h := NewReportMCPHandler(db)
+	h.ConfigureReportBrief(&recordingReportBriefService{degradedReason: "brief_retry_exhausted"}, true)
+	mock.ExpectQuery("SELECT id::text, business_type").
+		WithArgs("run-degraded", "u-1").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "business_type", "agent_id", "model_id", "status", "execution_stage", "input_ref_json", "execution_input_json", "output_ref_json", "created_at"}).
+			AddRow("run-degraded", reportAgentRunBusinessType, "agent-1", "deepseek-v4-flash", "running", "agent_running", []byte(`{"report_type":"personal_daily","period":{"date":"2026-07-24"},"target":{"type":"self","user_id":"u-1"}}`), []byte(`{}`), []byte(`{}`), time.Now()))
+
+	req := newReportMCPRequest("tools/call", map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "write_report_failure",
+			"arguments": map[string]any{
+				"run_id":        "run-degraded",
+				"error_code":    "REPORT_BRIEF_RETRY_EXHAUSTED",
+				"error_message": "quality retry exhausted",
+			},
+		},
+	})
+	req = requestWithUser(req, &model.User{ID: "u-1", Role: "employee"})
+	rec := httptest.NewRecorder()
+	h.Serve(rec, req)
+	if code := reportMCPError(t, rec); code != "REPORT_DEGRADED_RESULT_REQUIRED" {
+		t.Fatalf("expected REPORT_DEGRADED_RESULT_REQUIRED, got %s body=%s", code, rec.Body.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReportQualityRetryExhaustedCodes(t *testing.T) {
+	for _, value := range []string{"REPORT_BRIEF_RETRY_EXHAUSTED", "BRIEF_RETRY_EXHAUSTED", "REPORT_RESULT_RETRY_EXHAUSTED"} {
+		if !isReportQualityRetryExhausted(value, "") {
+			t.Fatalf("expected %q to be treated as quality exhaustion", value)
+		}
+	}
+	if isReportQualityRetryExhausted("REPORT_SOURCE_UNAVAILABLE", "source missing") {
+		t.Fatal("source failures must not enter quality degradation")
 	}
 }
 

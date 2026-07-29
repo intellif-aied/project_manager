@@ -128,7 +128,10 @@ export function ReportAIRunTracker() {
       notification.error({
         key,
         title: `${name}生成失败`,
-        description: run.error_message || "后台生成未完成，请打开报告后重新尝试。",
+        description:
+          run.status === "timeout"
+            ? "后台生成时间较长，请打开报告后重新生成。"
+            : "后台生成未完成，请打开报告后重新生成。",
         actions: (
           <Button size="small" onClick={openReport}>
             打开并重试

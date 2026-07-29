@@ -26,7 +26,7 @@ assert.match(
 );
 assert.match(
   tokensPage,
-  /<TokenAnalyticsPage scope="mine" \/>/,
+  /<TokenAnalyticsPage[^>]*\bscope="mine"[^>]*\/>/,
   "Token page must use the current analytics implementation for every authenticated user"
 );
 assert.doesNotMatch(

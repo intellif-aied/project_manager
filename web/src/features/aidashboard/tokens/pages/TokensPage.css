@@ -2,6 +2,97 @@
   width: 100%;
 }
 
+.team-sync-paths-trigger {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  color: #64748b;
+  border: 1px solid transparent;
+}
+
+.team-sync-paths-trigger:hover {
+  color: #2563eb !important;
+  background: #f3f7fd !important;
+  border-color: #dbe7f5 !important;
+}
+
+.team-sync-paths-modal .ant-modal-container {
+  overflow: hidden;
+}
+
+.team-sync-paths-modal .ant-modal-header {
+  margin: 0;
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid #e5eaf0;
+}
+
+.team-sync-paths-modal .ant-modal-body {
+  padding: 20px 24px 24px;
+}
+
+.team-sync-paths-modal .ant-modal-title {
+  color: #172033;
+  font-size: 16px;
+}
+
+.team-sync-paths__body {
+  display: grid;
+  gap: 16px;
+  padding-top: 4px;
+}
+
+.team-sync-paths__intro {
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.team-sync-paths__create {
+  display: flex;
+  gap: 10px;
+}
+
+.team-sync-paths__create .ant-input {
+  font-family: "JetBrains Mono", "SFMono-Regular", Menlo, monospace;
+}
+
+.team-sync-paths__create .ant-btn {
+  min-width: 82px;
+}
+
+.team-sync-paths__loading {
+  display: flex;
+  justify-content: center;
+  padding: 16px;
+}
+
+.team-sync-paths__list {
+  overflow: hidden;
+  border: 1px solid #e5edf6;
+  border-radius: 10px;
+  background: #fbfdff;
+}
+
+.team-sync-paths__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 48px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #edf2f7;
+}
+
+.team-sync-paths__item:last-child {
+  border-bottom: 0;
+}
+
+.team-sync-paths__item code {
+  color: #334155;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
 .tokens-page .page-panel__body {
   gap: 16px;
 }
@@ -171,6 +262,17 @@
 }
 
 @media (max-width: 860px) {
+  .team-sync-paths-modal .ant-modal-header,
+  .team-sync-paths-modal .ant-modal-body {
+    padding: 16px;
+  }
+
+  .team-sync-paths__create,
+  .team-sync-paths__item {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
   .tokens-toolbar,
   .tokens-toolbar__left,
   .tokens-toolbar__right {

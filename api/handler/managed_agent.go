@@ -54,6 +54,8 @@ const (
 	scheduleRunKindReport         = "report_agent"
 	defaultScheduleTimezone       = "Asia/Shanghai"
 	reservedPromptValueCode       = "RESERVED_PROMPT_VALUE"
+	managedAgentSourcePersonal    = "personal"
+	managedAgentSourceSystem      = "system"
 )
 
 var reportSystemPromptKeys = map[string]struct{}{
@@ -792,6 +794,65 @@ func (h *ManagedAgentHandler) loadManagedAgentProfile(ctx context.Context, userI
 	return &profile, nil
 }
 
+func (h *ManagedAgentHandler) loadDefaultReportAgentProfile(ctx context.Context, userID string) (*managedAgentProfile, error) {
+	if h.db == nil || strings.TrimSpace(userID) == "" {
+		return nil, nil
+	}
+	var profile managedAgentProfile
+	var raw []byte
+	err := h.db.QueryRowContext(ctx, `
+		SELECT agent_id, business_type, report_types, COALESCE(is_default_report, false)
+		FROM managed_agent_profiles
+		WHERE user_id = $1 AND is_default_report = true
+		LIMIT 1
+	`, userID).Scan(&profile.AgentID, &profile.BusinessType, &raw, &profile.IsDefaultReport)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	_ = json.Unmarshal(raw, &profile.ReportTypes)
+	profile.BusinessType = normalizeManagedAgentBusinessType(profile.BusinessType)
+	profile.ReportTypes = normalizeManagedAgentReportTypes(profile.ReportTypes)
+	return &profile, nil
+}
+
+func personalManagedAgent(agent model.ManagedAgent) model.ManagedAgent {
+	agent.Source = managedAgentSourcePersonal
+	agent.Permissions = model.ManagedAgentPermissions{
+		CanRun: true, CanSetDefault: true, CanView: true, CanEdit: true, CanArchive: true,
+	}
+	return agent
+}
+
+func systemReportAgentProjection(agent model.ManagedAgent) model.ManagedAgent {
+	return model.ManagedAgent{
+		AgentID: agent.AgentID, Name: agent.Name, Description: agent.Description,
+		Engine: agent.Engine, CurrentVersionID: agent.CurrentVersionID,
+		ManagedVersion: agent.ManagedVersion, Archived: agent.Archived,
+		BusinessType: managedAgentBusinessReport,
+		ReportTypes:  append([]string{}, supportedReportTypes...),
+		Source:       managedAgentSourceSystem,
+		Permissions:  model.ManagedAgentPermissions{CanSetDefault: true},
+	}
+}
+
+func (h *ManagedAgentHandler) systemReportAgent(ctx context.Context) (*model.ManagedAgent, error) {
+	if h == nil || h.client == nil {
+		return nil, nil
+	}
+	resp, err := h.client.ListMyAgents(ctx)
+	if err != nil {
+		return nil, err
+	}
+	agent, found := h.selectDefaultReportAgent(resp.Agents)
+	if !found {
+		return nil, nil
+	}
+	return &agent, nil
+}
+
 func (h *ManagedAgentHandler) ListMyAgents(w http.ResponseWriter, r *http.Request) {
 	u := getUser(r)
 	includeArchived := includeArchivedManagedAssets(r)
@@ -801,8 +862,20 @@ func (h *ManagedAgentHandler) ListMyAgents(w http.ResponseWriter, r *http.Reques
 		if err != nil {
 			return nil, err
 		}
-		if resp.Agents == nil {
-			resp.Agents = []model.ManagedAgent{}
+		systemAgent, err := h.systemReportAgent(r.Context())
+		if err != nil {
+			return nil, err
+		}
+		personalAgents := make([]model.ManagedAgent, 0, len(resp.Agents))
+		for _, agent := range resp.Agents {
+			if systemAgent != nil && agent.AgentID == systemAgent.AgentID {
+				continue
+			}
+			personalAgents = append(personalAgents, personalManagedAgent(agent))
+		}
+		resp.Agents = personalAgents
+		if systemAgent != nil {
+			resp.Agents = append(resp.Agents, systemReportAgentProjection(*systemAgent))
 		}
 		if u != nil {
 			resp.Agents = h.mergeManagedAgentProfiles(r.Context(), u.ID, resp.Agents)
@@ -1056,7 +1129,9 @@ func (h *ManagedAgentHandler) CreateDefaultReportAgent(w http.ResponseWriter, r 
 		existing.BusinessType = managedAgentBusinessReport
 		existing.ReportTypes = append([]string{}, supportedReportTypes...)
 		existing.IsDefaultReport = true
-		writeJSON(w, http.StatusOK, existing)
+		projected := systemReportAgentProjection(existing)
+		projected.IsDefaultReport = true
+		writeJSON(w, http.StatusOK, projected)
 		return
 	}
 
@@ -1077,7 +1152,9 @@ func (h *ManagedAgentHandler) CreateDefaultReportAgent(w http.ResponseWriter, r 
 	agent.BusinessType = managedAgentBusinessReport
 	agent.ReportTypes = append([]string{}, supportedReportTypes...)
 	agent.IsDefaultReport = true
-	writeJSON(w, http.StatusOK, agent)
+	projected := systemReportAgentProjection(agent)
+	projected.IsDefaultReport = true
+	writeJSON(w, http.StatusOK, projected)
 }
 
 func (h *ManagedAgentHandler) SetDefaultReportAgent(w http.ResponseWriter, r *http.Request) {
@@ -1100,9 +1177,21 @@ func (h *ManagedAgentHandler) SetDefaultReportAgent(w http.ResponseWriter, r *ht
 		writeManagedAgentError(w, err)
 		return
 	}
+	isSystemAgent := false
 	if agent == nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found"})
-		return
+		systemAgent, systemErr := h.systemReportAgent(r.Context())
+		if systemErr != nil {
+			writeManagedAgentError(w, systemErr)
+			return
+		}
+		if systemAgent != nil && systemAgent.AgentID == agentID {
+			agent = systemAgent
+			isSystemAgent = true
+		}
+		if agent == nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found"})
+			return
+		}
 	}
 	profile, err := h.loadManagedAgentProfile(r.Context(), u.ID, agentID)
 	if err != nil {
@@ -1126,7 +1215,47 @@ func (h *ManagedAgentHandler) SetDefaultReportAgent(w http.ResponseWriter, r *ht
 	agent.BusinessType = managedAgentBusinessReport
 	agent.ReportTypes = append([]string{}, supported...)
 	agent.IsDefaultReport = true
+	if isSystemAgent {
+		projected := systemReportAgentProjection(*agent)
+		projected.IsDefaultReport = true
+		agent = &projected
+	} else {
+		personal := personalManagedAgent(*agent)
+		agent = &personal
+	}
 	writeJSON(w, http.StatusOK, agent)
+}
+
+func (h *ManagedAgentHandler) resolveDefaultReportAgent(
+	ctx context.Context, userID string, personalClient *service.ManagedAgentClient,
+) (*model.ManagedAgent, *service.ManagedAgentClient, bool, error) {
+	profile, err := h.loadDefaultReportAgentProfile(ctx, userID)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	systemAgent, err := h.systemReportAgent(ctx)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	if profile == nil {
+		if systemAgent == nil {
+			return nil, nil, false, nil
+		}
+		return systemAgent, h.client, true, nil
+	}
+	if systemAgent != nil && systemAgent.AgentID == profile.AgentID {
+		return systemAgent, h.client, true, nil
+	}
+	personalResp, err := personalClient.ListMyAgents(ctx)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	for idx := range personalResp.Agents {
+		if !personalResp.Agents[idx].Archived && personalResp.Agents[idx].AgentID == profile.AgentID {
+			return &personalResp.Agents[idx], personalClient, false, nil
+		}
+	}
+	return nil, nil, false, nil
 }
 
 func managedAgentFromUpsertRequest(req model.UpsertManagedAgentRequest) model.ManagedAgent {
@@ -1238,10 +1367,10 @@ func (h *ManagedAgentHandler) defaultReportMCPBinding(owner string) model.Manage
 }
 
 func (h *ManagedAgentHandler) defaultReportMCPServer() model.ManagedMCPServer {
-	return h.reportMCPServer(true)
+	return h.reportMCPServer(managedReportMCPToolset)
 }
 
-func (h *ManagedAgentHandler) reportMCPServer(managedToolset bool) model.ManagedMCPServer {
+func (h *ManagedAgentHandler) reportMCPServer(toolset string) model.ManagedMCPServer {
 	server := model.ManagedMCPServer{
 		Name:           h.defaults.ReportMCPSlug,
 		URL:            h.reportMCPURL(),
@@ -1249,9 +1378,9 @@ func (h *ManagedAgentHandler) reportMCPServer(managedToolset bool) model.Managed
 		AuthHeader:     "Authorization",
 		AuthScheme:     "Bearer",
 	}
-	if managedToolset {
+	if strings.TrimSpace(toolset) != "" {
 		server.Headers = map[string]string{
-			managedReportMCPToolsetHeader: managedReportMCPToolset,
+			managedReportMCPToolsetHeader: strings.TrimSpace(toolset),
 		}
 	}
 	return server
@@ -1288,7 +1417,7 @@ func defaultReportAgentInstructions(_ string) string {
 }
 
 func defaultReportAgentStartPromptTemplate(_ string) string {
-	return "/aida-report\nrun_id={{ run_id }}"
+	return "/aida-report"
 }
 
 func (h *ManagedAgentHandler) selectDefaultReportAgent(agents []model.ManagedAgent) (model.ManagedAgent, bool) {
@@ -1463,7 +1592,7 @@ func (h *ManagedAgentHandler) repairedDefaultReportAgentRequest(agent model.Mana
 		})
 		changed = true
 	}
-	if servers, ok := h.ensureCurrentReportMCPServer(req.MCPServers, true); ok {
+	if servers, ok := h.ensureCurrentReportMCPServer(req.MCPServers, managedReportMCPToolset); ok {
 		req.MCPServers = servers
 		changed = true
 	}
@@ -1521,7 +1650,7 @@ func (h *ManagedAgentHandler) repairedReportAgentDependencyRequest(agent model.M
 		})
 		changed = true
 	}
-	if servers, ok := h.ensureCurrentReportMCPServer(req.MCPServers, false); ok {
+	if servers, ok := h.ensureCurrentReportMCPServer(req.MCPServers, ""); ok {
 		req.MCPServers = servers
 		changed = true
 	}
@@ -1536,13 +1665,75 @@ func (h *ManagedAgentHandler) repairedReportAgentDependencyRequest(agent model.M
 	return req, changed
 }
 
-func (h *ManagedAgentHandler) resolveAndRepairReportAgentDependencies(ctx context.Context, client *service.ManagedAgentClient, agent *model.ManagedAgent) error {
-	return h.resolveAndRepairReportAgent(ctx, client, agent, false)
+func (h *ManagedAgentHandler) repairedPersonalReportAgentDependencyRequest(agent model.ManagedAgent) (model.UpsertManagedAgentRequest, bool) {
+	req := model.UpsertManagedAgentRequest{
+		AgentID:             agent.AgentID,
+		Name:                agent.Name,
+		Description:         agent.Description,
+		Engine:              agent.Engine,
+		Instructions:        agent.Instructions,
+		DefaultModelID:      agent.DefaultModelID,
+		StartPromptTemplate: agent.StartPromptTemplate,
+		CredentialSlots:     agent.CredentialSlots,
+		DefaultBindings:     agent.DefaultBindings,
+		Skills:              agent.Skills,
+		MCPServers:          agent.MCPServers,
+		MCPBindings:         agent.MCPBindings,
+	}
+	changed := false
+	if !hasCredentialSlot(req.CredentialSlots, h.defaults.ReportMCPCredentialSlot) {
+		req.CredentialSlots = append(req.CredentialSlots, model.ManagedCredentialSlot{
+			Name: h.defaults.ReportMCPCredentialSlot, Required: true,
+		})
+		changed = true
+	}
+	if servers, ok := h.ensureCurrentReportMCPServer(req.MCPServers, personalReportMCPToolset); ok {
+		req.MCPServers = servers
+		changed = true
+	}
+	if bindings, ok := h.removeReportMCPBindings(req.MCPBindings); ok {
+		req.MCPBindings = bindings
+		changed = true
+	}
+	personalSkills := make([]model.ManagedSkillRef, 0, len(req.Skills))
+	for _, skill := range req.Skills {
+		if strings.TrimSpace(skill.Slug) == h.defaults.ReportSkillSlug {
+			changed = true
+			continue
+		}
+		personalSkills = append(personalSkills, skill)
+	}
+	req.Skills = personalSkills
+	if containsDefaultMarkers(req.Instructions) && isSystemReportInstructions(req.Instructions) {
+		req.Instructions = ""
+		changed = true
+	}
+	if isDefaultLikeStartPromptTemplate(req.StartPromptTemplate) {
+		req.StartPromptTemplate = ""
+		changed = true
+	}
+	return req, changed
 }
 
-func (h *ManagedAgentHandler) resolveAndRepairReportAgent(ctx context.Context, client *service.ManagedAgentClient, agent *model.ManagedAgent, repairDefault bool) error {
+func (h *ManagedAgentHandler) resolveAndRepairReportAgentDependencies(ctx context.Context, client *service.ManagedAgentClient, agent *model.ManagedAgent) error {
+	return h.resolveAndRepairReportAgent(ctx, client, agent, managedAgentSourcePersonal, false)
+}
+
+func (h *ManagedAgentHandler) resolveAndRepairReportAgent(ctx context.Context, client *service.ManagedAgentClient, agent *model.ManagedAgent, source string, repairDefault bool) error {
 	if agent == nil {
 		return managedAgentConfigError("Report Agent is required")
+	}
+	if strings.TrimSpace(source) == managedAgentSourcePersonal {
+		if h.defaults.ReportAssetRepair {
+			patch, changed := h.repairedPersonalReportAgentDependencyRequest(*agent)
+			if changed {
+				if _, err := client.UpdateMyAgent(ctx, agent.AgentID, platformManagedAgentRequest(patch)); err != nil {
+					return err
+				}
+				*agent = managedAgentFromUpsertRequestPreserving(patch, *agent)
+			}
+		}
+		return nil
 	}
 	systemSkill, err := h.resolveSystemReportSkill(ctx, client)
 	if err != nil {
@@ -1646,10 +1837,10 @@ func (h *ManagedAgentHandler) ensureCurrentReportMCPBinding(bindings []model.Man
 	return out, changed
 }
 
-func (h *ManagedAgentHandler) ensureCurrentReportMCPServer(servers []model.ManagedMCPServer, managedToolset bool) ([]model.ManagedMCPServer, bool) {
+func (h *ManagedAgentHandler) ensureCurrentReportMCPServer(servers []model.ManagedMCPServer, toolset string) ([]model.ManagedMCPServer, bool) {
 	changed := false
 	found := false
-	expected := h.reportMCPServer(managedToolset)
+	expected := h.reportMCPServer(toolset)
 	out := make([]model.ManagedMCPServer, 0, len(servers)+1)
 	for _, server := range servers {
 		if server.Name != h.defaults.ReportMCPSlug {
@@ -1661,12 +1852,17 @@ func (h *ManagedAgentHandler) ensureCurrentReportMCPServer(servers []model.Manag
 			continue
 		}
 		normalized := expected
-		if !managedToolset {
-			normalized.Headers = maps.Clone(server.Headers)
+		normalized.Headers = maps.Clone(server.Headers)
+		if strings.TrimSpace(toolset) == "" {
 			delete(normalized.Headers, managedReportMCPToolsetHeader)
-			if len(normalized.Headers) == 0 {
-				normalized.Headers = nil
+		} else {
+			if normalized.Headers == nil {
+				normalized.Headers = map[string]string{}
 			}
+			normalized.Headers[managedReportMCPToolsetHeader] = strings.TrimSpace(toolset)
+		}
+		if len(normalized.Headers) == 0 {
+			normalized.Headers = nil
 		}
 		if server.URL != normalized.URL || server.CredentialSlot != normalized.CredentialSlot || server.AuthHeader != normalized.AuthHeader || server.AuthScheme != normalized.AuthScheme || !maps.Equal(server.Headers, normalized.Headers) {
 			server = normalized
@@ -1735,6 +1931,11 @@ func containsDefaultMarkers(text string) bool {
 
 func isDefaultLikeInstructions(text string) bool {
 	return strings.Contains(text, "write_report_result") && (strings.Contains(text, "personal_daily") || strings.Contains(text, defaultReportAgentMarker))
+}
+
+func isSystemReportInstructions(text string) bool {
+	return isDefaultLikeInstructions(text) ||
+		(strings.Contains(text, "Aida 报告执行 Agent") && strings.Contains(text, "aida-report Skill"))
 }
 
 func (h *ManagedAgentHandler) hasReportMCPBinding(bindings []model.ManagedMCPBinding) bool {
@@ -1948,8 +2149,8 @@ func reportCalendarContextJSON(reportType, date, weekStart, weekEnd string) stri
 	return string(raw)
 }
 
-func reportAgentStartPromptValues(runID string) map[string]string {
-	return map[string]string{"run_id": strings.TrimSpace(runID)}
+func reportAgentStartPromptValues(_ string) map[string]string {
+	return map[string]string{}
 }
 
 func isReportSystemPromptKey(key, credentialSlot string) bool {
@@ -1976,12 +2177,28 @@ func mergeReportStartPromptValues(systemValues map[string]string, userValues map
 }
 
 func buildReportRunMessage(startValues map[string]string, message string, _ string) string {
-	runMessage := "/aida-report\nrun_id=" + strings.TrimSpace(startValues["run_id"])
+	runMessage := "/aida-report"
 	message = strings.TrimSpace(message)
 	if message == "" || message == fallbackReportRunMessage() {
 		return runMessage
 	}
 	return runMessage + "\n\n用户补充说明：\n" + message
+}
+
+func buildReportRunMessageForSource(source string, startValues map[string]string, message string, credentialSlot string) string {
+	if strings.TrimSpace(source) == managedAgentSourcePersonal {
+		message = strings.TrimSpace(message)
+		runMessage := personalReportRunMessage()
+		if message == "" || message == fallbackReportRunMessage() {
+			return runMessage
+		}
+		return runMessage + "\n\n用户补充说明：\n" + message
+	}
+	return buildReportRunMessage(startValues, message, credentialSlot)
+}
+
+func personalReportRunMessage() string {
+	return "调用 aida-report-mcp 的 get_report_context 获取本次报告上下文，按照当前 Agent 自身的 Prompt、Skill 和 MCP 配置生成报告，最后调用 write_report_result 保存结果。"
 }
 
 func fallbackReportRunMessage() string {
@@ -2383,14 +2600,12 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 	client := h.clientForRequest(r)
 	isSystemDefault := agentID == "default"
 	if isSystemDefault {
-		client = h.client
-		agentsResp, err := client.ListMyAgents(r.Context())
+		selected, selectedClient, systemAccount, err := h.resolveDefaultReportAgent(r.Context(), u.ID, client)
 		if err != nil {
 			writeManagedAgentError(w, err)
 			return
 		}
-		selected, found := h.selectDefaultReportAgent(agentsResp.Agents)
-		if !found {
+		if selected == nil {
 			writeJSON(w, http.StatusOK, map[string]any{
 				"available": false,
 				"code":      "DEFAULT_REPORT_AGENT_NOT_CONFIGURED",
@@ -2398,6 +2613,8 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 			})
 			return
 		}
+		client = selectedClient
+		isSystemDefault = systemAccount
 		agentID = selected.AgentID
 	}
 	agent, err := findMyManagedAgent(r, client, agentID)
@@ -2432,8 +2649,12 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 		writeJSON(w, http.StatusBadRequest, map[string]string{"code": "REPORT_TYPE_NOT_SUPPORTED", "error": "unsupported report_type"})
 		return
 	}
-	repairDefault := profile != nil && profile.IsDefaultReport || profile == nil && isMarkedDefaultReportAgent(*agent)
-	if err := h.resolveAndRepairReportAgent(r.Context(), client, agent, repairDefault); err != nil {
+	reportAgentSource := managedAgentSourcePersonal
+	if isSystemDefault {
+		reportAgentSource = managedAgentSourceSystem
+	}
+	repairDefault := isSystemDefault && (profile != nil && profile.IsDefaultReport || profile == nil && isMarkedDefaultReportAgent(*agent))
+	if err := h.resolveAndRepairReportAgent(r.Context(), client, agent, reportAgentSource, repairDefault); err != nil {
 		writeManagedAgentError(w, err)
 		return
 	}
@@ -2572,6 +2793,7 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 		"credential_overrides":          copyStringMap(runtimeOverrides),
 		"report_mcp_slots":              sortedStringKeys(reportSlots),
 		"report_context_representation": reportcontext.RepresentationWorkEvidence,
+		"report_agent_source":           reportAgentSource,
 	}
 	if isSystemDefault {
 		executionInput["system_report_account"] = true
@@ -4001,8 +4223,7 @@ func (h *ManagedAgentHandler) ensureScheduleAgentRunnable(ctx context.Context, c
 			return fmt.Errorf("run_kind does not match agent type")
 		}
 		if agentRunKind == scheduleRunKindReport {
-			repairDefault := profile != nil && profile.IsDefaultReport || profile == nil && isMarkedDefaultReportAgent(agent)
-			if err := h.resolveAndRepairReportAgent(ctx, client, &agent, repairDefault); err != nil {
+			if err := h.resolveAndRepairReportAgent(ctx, client, &agent, managedAgentSourcePersonal, false); err != nil {
 				return err
 			}
 		}
@@ -4070,6 +4291,7 @@ func (h *ManagedAgentHandler) executeReportAgentScheduleRun(ctx context.Context,
 			"credential_overrides":          map[string]string{},
 			"report_mcp_slots":              []string{h.defaults.ReportMCPCredentialSlot},
 			"report_context_representation": reportcontext.RepresentationWorkEvidence,
+			"report_agent_source":           managedAgentSourcePersonal,
 		},
 	})
 	if err != nil {

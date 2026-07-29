@@ -46,7 +46,16 @@ func (r *PostgresChunkRepository) InspectChunk(
 		JOIN sessions s ON s.id = src.session_id
 		LEFT JOIN session_upload_chunks c
 			ON c.generation_id = g.id AND c.start_cursor = $3 AND c.end_cursor = $4
-		WHERE g.id = $1 AND s.user_id = $2 AND g.status IN ('active', 'staging')`,
+		WHERE g.id = $1
+			AND (
+				(g.upload_team_id IS NULL AND s.user_id = $2)
+				OR (
+					g.upload_team_id IS NOT NULL
+					AND g.upload_team_id = (SELECT team_id FROM users WHERE id = $2)
+					AND g.upload_team_id = (SELECT team_id FROM users WHERE id = s.user_id)
+				)
+			)
+			AND g.status IN ('active', 'staging')`,
 		generationID, userID, chunk.StartCursor, chunk.EndCursor,
 	).Scan(
 		&snapshot.ExpectedCursor,
@@ -62,7 +71,7 @@ func (r *PostgresChunkRepository) InspectChunk(
 		&existingHash,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
-		return ChunkSnapshot{}, ErrGenerationNotFound
+		return ChunkSnapshot{}, generationAccessError(ctx, r.db, generationID, userID)
 	}
 	if err != nil {
 		return ChunkSnapshot{}, err
@@ -105,11 +114,20 @@ func (r *PostgresChunkRepository) commitChunkOnce(
 		FROM session_source_generations g
 		JOIN session_sources src ON src.id = g.source_id
 		JOIN sessions s ON s.id = src.session_id
-		WHERE g.id = $1 AND s.user_id = $2 AND g.status IN ('active', 'staging')`,
+		WHERE g.id = $1
+			AND (
+				(g.upload_team_id IS NULL AND s.user_id = $2)
+				OR (
+					g.upload_team_id IS NOT NULL
+					AND g.upload_team_id = (SELECT team_id FROM users WHERE id = $2)
+					AND g.upload_team_id = (SELECT team_id FROM users WHERE id = s.user_id)
+				)
+			)
+			AND g.status IN ('active', 'staging')`,
 		request.GenerationID, request.UserID,
 	).Scan(&sessionID, &sourceID, &generationStatus); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return ChunkDecision{}, ErrGenerationNotFound
+			return ChunkDecision{}, generationAccessError(ctx, tx, request.GenerationID, request.UserID)
 		}
 		return ChunkDecision{}, err
 	}
@@ -121,11 +139,11 @@ func (r *PostgresChunkRepository) commitChunkOnce(
 				SELECT 1 FROM session_content_tombstones t
 				WHERE t.session_id = sessions.id AND t.restored_at IS NULL
 					AND t.restore_status IN ('waiting_upload', 'building')
-					AND t.restore_generation_id = $3 AND t.restore_expires_at > now()
+					AND t.restore_generation_id = $2 AND t.restore_expires_at > now()
 			)
 		FROM sessions
-		WHERE id = $1 AND user_id = $2
-		FOR UPDATE`, sessionID, request.UserID,
+		WHERE id = $1
+		FOR UPDATE`, sessionID,
 		request.GenerationID,
 	).Scan(&snapshot.ContentStatus, &snapshot.ContentEpoch, &snapshot.RestoreWritable); err != nil {
 		return ChunkDecision{}, err

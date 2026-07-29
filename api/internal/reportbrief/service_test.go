@@ -251,3 +251,93 @@ func TestRejectInvalidBriefStopsAfterCorrectionBudget(t *testing.T) {
 		t.Fatalf("error=%v, want retry exhausted with details", err)
 	}
 }
+
+func TestRejectMalformedBriefUsesRunChecksAndCorrectionBudget(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	service := &Service{db: db}
+	const (
+		runID  = "00000000-0000-4000-8000-000000000001"
+		userID = "307"
+	)
+
+	mock.ExpectQuery("SELECT business_type, status").
+		WithArgs(runID, userID).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"business_type", "status", "execution_stage", "model_id", "report_context_representation",
+		}).AddRow("report_agent_run", "running", "agent_running", "deepseek-v4-flash", "work_evidence"))
+	mock.ExpectQuery("INSERT INTO report_run_generation_attempts").
+		WithArgs(runID, userID, MaxBriefInvalidAttempts+1).
+		WillReturnRows(sqlmock.NewRows([]string{"brief_invalid_attempts"}).AddRow(3))
+
+	_, err = service.RejectInvalid(context.Background(), userID, runID, "brief_json is malformed")
+	if !errors.Is(err, ErrBriefRetryExhausted) || !strings.Contains(err.Error(), "brief_json is malformed") {
+		t.Fatalf("error=%v, want retry exhausted with malformed JSON details", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReaderFacingTechnologyNamesDoNotBlockBrief(t *testing.T) {
+	issues := validateTextIssues(
+		"workstreams[4].deliverables[0].validation",
+		"TypeScript和ESLint通过，测试服验证",
+		1,
+		320,
+	)
+	if len(issues) != 0 {
+		t.Fatalf("reader-facing technology names must be soft quality concerns, got %v", issues)
+	}
+}
+
+func TestDegradedWriteReasonRequiresExhaustedQualityRetry(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	service := &Service{db: db}
+	const runID = "00000000-0000-4000-8000-000000000001"
+
+	mock.ExpectQuery("SELECT a.brief_invalid_attempts").
+		WithArgs(runID, "198").
+		WillReturnRows(sqlmock.NewRows([]string{"brief_invalid_attempts", "result_invalid_attempts"}).
+			AddRow(MaxBriefInvalidAttempts+1, 0))
+	reason, err := service.DegradedWriteReason(context.Background(), "198", runID)
+	if err != nil || reason != "brief_retry_exhausted" {
+		t.Fatalf("reason=%q err=%v", reason, err)
+	}
+
+	mock.ExpectQuery("SELECT a.brief_invalid_attempts").
+		WithArgs(runID, "198").
+		WillReturnRows(sqlmock.NewRows([]string{"brief_invalid_attempts", "result_invalid_attempts"}).
+			AddRow(1, MaxResultInvalidAttempts+1))
+	reason, err = service.DegradedWriteReason(context.Background(), "198", runID)
+	if err != nil || reason != "result_retry_exhausted" {
+		t.Fatalf("reason=%q err=%v", reason, err)
+	}
+
+	mock.ExpectQuery("SELECT a.brief_invalid_attempts").
+		WithArgs(runID, "198").
+		WillReturnRows(sqlmock.NewRows([]string{"brief_invalid_attempts", "result_invalid_attempts"}).
+			AddRow(MaxBriefInvalidAttempts, MaxResultInvalidAttempts))
+	if _, err := service.DegradedWriteReason(context.Background(), "198", runID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("non-exhausted run error=%v, want ErrNotFound", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReaderFacingTextSafetyRetainsTechnologyAndRejectsLocations(t *testing.T) {
+	if !ReaderFacingTextSafe("TypeScript和ESLint通过，测试服验证") {
+		t.Fatal("public technology names must remain usable")
+	}
+	if ReaderFacingTextSafe("访问 http://192.168.14.182:9180 完成验证") {
+		t.Fatal("internal locations must require the generic degraded fallback")
+	}
+}

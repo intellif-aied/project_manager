@@ -40,7 +40,7 @@ func (s *ReportRunSubmitter) Submit(
 	if err != nil {
 		return reportrun.SubmissionResult{}, prepareSubmissionError(err)
 	}
-	token, err := MintAIHubCompatibleToken(user, s.defaults.AIHubSecret)
+	token, err := MintReportRunToken(user, s.defaults.AIHubSecret, run.ID)
 	if err != nil {
 		return reportrun.SubmissionResult{}, prepareSubmissionError(err)
 	}
@@ -66,7 +66,10 @@ func (s *ReportRunSubmitter) Submit(
 			fmt.Errorf("%s is managed by Aida", reserved),
 		)
 	}
-	sessionMessage := buildReportRunMessage(startValues, message, s.defaults.ReportMCPCredentialSlot)
+	sessionMessage := buildReportRunMessageForSource(
+		runString(run.ExecutionInput, "report_agent_source"),
+		startValues, message, s.defaults.ReportMCPCredentialSlot,
+	)
 	overrides := runStringMap(run.ExecutionInput, "credential_overrides")
 	for _, slot := range runStringSlice(run.ExecutionInput, "report_mcp_slots") {
 		overrides[slot] = credentialID

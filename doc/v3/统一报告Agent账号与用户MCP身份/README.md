@@ -4,6 +4,10 @@
 > 状态：已部署测试服，待真实双用户链路验收
 > 适用范围：Aida 日报、周报的默认 Report Agent 生成链路
 
+> 2026-07-29 调整：系统默认 Agent 与个人自定义 Agent 改为双通道，详见 [05-系统与个人报告Agent双通道调整](05-系统与个人报告Agent双通道调整.md)。该文档覆盖本目录早期文档中“所有默认运行均使用系统账号”和“屏蔽个人 Skill/MCP”的规则。
+
+> 2026-07-29 补充：个人 Agent 使用自己的 Prompt、Skill 和第三方 MCP，Aida 只强制提供绑定当前 Report Run 的系统 Report MCP，详见 [06-个人Agent与系统ReportMCP写入通道](06-个人Agent与系统ReportMCP写入通道.md)。该文档覆盖 05 中“个人 Agent 沿用其全部 MCP 配置”的不完整描述。
+
 ## 核心目标
 
 1. 默认 Report Agent 的模型额度统一由环境专用账号承担；
@@ -27,6 +31,8 @@
 - [架构设计](02-架构设计.md)
 - [开发方案](03-开发方案.md)
 - [测试与验收](04-测试与验收.md)
+- [系统与个人报告 Agent 双通道调整](05-系统与个人报告Agent双通道调整.md)
+- [个人 Agent 与系统 Report MCP 写入通道](06-个人Agent与系统ReportMCP写入通道.md)
 
 ## 强制边界
 

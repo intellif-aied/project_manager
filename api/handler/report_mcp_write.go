@@ -7,10 +7,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/aidashboard/api/internal/reportbrief"
 	"github.com/aidashboard/api/internal/reportcontext"
 	"github.com/aidashboard/api/internal/reportsource"
 	"github.com/aidashboard/api/model"
@@ -29,14 +33,16 @@ type reportAIRun struct {
 	InputRef              map[string]any
 	OutputRef             map[string]any
 	ContextRepresentation string
+	ReportAgentSource     string
 	CreatedAt             time.Time
 }
 
 type writeReportResultArgs struct {
-	RunID     string `json:"run_id"`
-	Content   string `json:"content"`
-	Summary   string `json:"summary,omitempty"`
-	BriefHash string `json:"brief_hash,omitempty"`
+	RunID      string `json:"run_id"`
+	Content    string `json:"content"`
+	Summary    string `json:"summary,omitempty"`
+	BriefHash  string `json:"brief_hash,omitempty"`
+	FormatMode string `json:"format_mode,omitempty"`
 }
 
 type writeReportFailureArgs struct {
@@ -62,7 +68,12 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 	if err := decodeArguments(rawArgs, &args); err != nil {
 		return nil, err
 	}
-	run, err := h.aiRunGuard(r, args.RunID, u.ID)
+	runID, err := resolveReportRunID(r, args.RunID)
+	if err != nil {
+		return nil, err
+	}
+	args.RunID = runID
+	run, err := h.aiRunGuard(r, runID, u.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -72,22 +83,43 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 	}
 	briefSchemaVersion := ""
 	acceptedBriefHash := ""
-	content, normalizedSummary, err := prepareReportResultContent(run.ContextRepresentation, args.Summary, args.Content)
+	degradedReason := ""
+	degradedContentReplaced := false
+	content, normalizedSummary, err := prepareReportResultForRun(*run, reportType, args)
 	if err != nil {
 		return nil, err
 	}
-	if h.briefEnabled && reportType == reportTypePersonalDaily {
+	if h.briefEnabled && reportType == reportTypePersonalDaily && reportBriefRequiredForRun(*run) {
 		if h.reportBrief == nil {
 			return nil, errMCPInternal
 		}
-		storedBrief, briefErr := h.reportBrief.ValidateForWrite(
-			r.Context(), u.ID, args.RunID, strings.TrimSpace(args.BriefHash), normalizedSummary, content,
-		)
-		if briefErr != nil {
-			return nil, mapReportBriefError(briefErr)
+		if strings.TrimSpace(args.BriefHash) == "" {
+			degradedReason, err = h.reportBrief.DegradedWriteReason(r.Context(), u.ID, args.RunID)
+			if err != nil {
+				return nil, mapReportBriefError(err)
+			}
+			if !reportbrief.ReaderFacingTextSafe(normalizedSummary) || !reportbrief.ReaderFacingTextSafe(content) {
+				content, normalizedSummary, err = prepareReportResultContent(
+					reportType,
+					run.ContextRepresentation,
+					"1. 已根据本期工作记录生成日报，请检查并补充。",
+					"### 工作记录\n\n本期工作内容已完成整理，请结合实际情况检查并补充。",
+				)
+				if err != nil {
+					return nil, err
+				}
+				degradedContentReplaced = true
+			}
+		} else {
+			storedBrief, briefErr := h.reportBrief.ValidateForWrite(
+				r.Context(), u.ID, args.RunID, strings.TrimSpace(args.BriefHash), normalizedSummary, content,
+			)
+			if briefErr != nil {
+				return nil, mapReportBriefError(briefErr)
+			}
+			briefSchemaVersion = storedBrief.Payload.SchemaVersion
+			acceptedBriefHash = storedBrief.BriefHash
 		}
-		briefSchemaVersion = storedBrief.Payload.SchemaVersion
-		acceptedBriefHash = storedBrief.BriefHash
 	}
 	if content == "" {
 		return nil, mcpErr("INVALID_ARGUMENT", "content is required")
@@ -196,6 +228,13 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 		outputPayload["brief_schema_version"] = briefSchemaVersion
 		outputPayload["brief_hash"] = acceptedBriefHash
 	}
+	if degradedReason != "" {
+		outputPayload["report_generation_degraded"] = true
+		outputPayload["report_generation_degraded_reason"] = degradedReason
+		if degradedContentReplaced {
+			outputPayload["report_generation_degraded_content_replaced"] = true
+		}
+	}
 	copyReportRunMetadata(outputPayload, run.InputRef)
 	outputRef, _ := json.Marshal(outputPayload)
 	finalizeResult, err := tx.ExecContext(ctx, `
@@ -229,6 +268,7 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 		"product_status":       "ai_generated",
 		"origin":               "ai",
 		"updated_by_user":      false,
+		"degraded":             degradedReason != "",
 	}), nil
 }
 
@@ -317,10 +357,16 @@ func (h *ReportMCPHandler) toolWriteReportFailure(r *http.Request, rawArgs json.
 	if err := decodeArguments(rawArgs, &args); err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(args.RunID) == "" {
+	boundRunID, _ := r.Context().Value(reportRunIDKey).(string)
+	if strings.TrimSpace(args.RunID) == "" && strings.TrimSpace(boundRunID) == "" {
 		return nil, mcpErr("INVALID_ARGUMENT", "run_id is required")
 	}
-	run, err := h.aiRunGuard(r, args.RunID, u.ID)
+	runID, err := resolveReportRunID(r, args.RunID)
+	if err != nil {
+		return nil, err
+	}
+	args.RunID = runID
+	run, err := h.aiRunGuard(r, runID, u.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -335,8 +381,13 @@ func (h *ReportMCPHandler) toolWriteReportFailure(r *http.Request, rawArgs json.
 	if errorCode == "" {
 		errorCode = "AGENT_REPORTED_FAILURE"
 	}
-	formatted := errorMessage
-	formatted = errorCode + ": " + errorMessage
+	if h.briefEnabled && h.reportBrief != nil && isReportQualityRetryExhausted(errorCode, errorMessage) {
+		if _, degradedErr := h.reportBrief.DegradedWriteReason(r.Context(), u.ID, args.RunID); degradedErr == nil {
+			return nil, mcpErr("REPORT_DEGRADED_RESULT_REQUIRED", "report quality checks cannot fail the run; call write_report_result without brief_hash")
+		}
+	}
+	log.Printf("report Agent failure run_id=%s user_id=%s error_code=%s detail=%q", args.RunID, u.ID, errorCode, errorMessage)
+	formatted := "报告生成未完成，请重新生成"
 	failureResult, err := h.db.ExecContext(r.Context(), `
 		UPDATE ai_runs
 		SET status = 'failed',
@@ -361,6 +412,11 @@ func (h *ReportMCPHandler) toolWriteReportFailure(r *http.Request, rawArgs json.
 		"status":    "failed",
 		"retryable": true,
 	}), nil
+}
+
+func isReportQualityRetryExhausted(errorCode, errorMessage string) bool {
+	value := strings.ToUpper(strings.TrimSpace(errorCode) + " " + strings.TrimSpace(errorMessage))
+	return strings.Contains(value, "BRIEF_RETRY_EXHAUSTED") || strings.Contains(value, "RESULT_RETRY_EXHAUSTED")
 }
 
 func resolveRunReportIdentity(u *model.User, run *reportAIRun) (string, string, string, string, reportTarget, error) {
@@ -434,6 +490,7 @@ func (h *ReportMCPHandler) aiRunGuard(r *http.Request, runID, userID string) (*r
 	var executionInput map[string]any
 	_ = json.Unmarshal(executionInputRaw, &executionInput)
 	run.ContextRepresentation = strings.TrimSpace(stringFromAny(executionInput["report_context_representation"]))
+	run.ReportAgentSource = strings.TrimSpace(stringFromAny(executionInput["report_agent_source"]))
 	_ = json.Unmarshal(outputRaw, &run.OutputRef)
 	if run.InputRef == nil {
 		run.InputRef = map[string]any{}
@@ -444,7 +501,30 @@ func (h *ReportMCPHandler) aiRunGuard(r *http.Request, runID, userID string) (*r
 	return &run, nil
 }
 
-func prepareReportResultContent(representation, summary, content string) (string, string, error) {
+func reportBriefRequiredForRun(run reportAIRun) bool {
+	return strings.TrimSpace(run.ReportAgentSource) != managedAgentSourcePersonal
+}
+
+func prepareReportResultForRun(run reportAIRun, reportType string, args writeReportResultArgs) (string, string, error) {
+	if strings.TrimSpace(run.ReportAgentSource) != managedAgentSourcePersonal {
+		formatMode := strings.TrimSpace(args.FormatMode)
+		if formatMode != "" && formatMode != standardReportFormatMode {
+			return "", "", mcpErr("INVALID_ARGUMENT", "format_mode must be standard for a system report run")
+		}
+		return prepareReportResultContent(reportType, run.ContextRepresentation, args.Summary, args.Content)
+	}
+	content := strings.TrimSpace(strings.ReplaceAll(args.Content, "\r\n", "\n"))
+	if content == "" {
+		return "", "", mcpErr("INVALID_ARGUMENT", "content is required")
+	}
+	summary := strings.TrimSpace(strings.ReplaceAll(args.Summary, "\r\n", "\n"))
+	if strings.TrimSpace(run.ContextRepresentation) == reportcontext.RepresentationWorkEvidence && summary == "" {
+		return "", "", mcpErr("REPORT_SUMMARY_REQUIRED", "summary is required for this report run")
+	}
+	return content, summary, nil
+}
+
+func prepareReportResultContent(reportType, representation, summary, content string) (string, string, error) {
 	body := strings.TrimSpace(content)
 	if body == "" {
 		return "", "", mcpErr("INVALID_ARGUMENT", "content is required")
@@ -452,7 +532,7 @@ func prepareReportResultContent(representation, summary, content string) (string
 	if strings.TrimSpace(representation) != reportcontext.RepresentationWorkEvidence {
 		return body, summary, nil
 	}
-	normalizedSummary := strings.Join(strings.Fields(summary), " ")
+	normalizedSummary := normalizeReportSummary(summary)
 	if normalizedSummary == "" {
 		return "", "", mcpErr("REPORT_SUMMARY_REQUIRED", "summary is required for this report run")
 	}
@@ -462,7 +542,89 @@ func prepareReportResultContent(representation, summary, content string) (string
 			return "", "", mcpErr("INVALID_ARGUMENT", "content body is required after the work summary")
 		}
 	}
-	return "## 工作总结\n\n" + normalizedSummary + "\n\n" + body, normalizedSummary, nil
+	if reportType != reportTypePersonalDaily {
+		return "## 工作总结\n\n" + normalizedSummary + "\n\n" + body, normalizedSummary, nil
+	}
+	body = normalizeReportDetailHeadings(body)
+	return "## 工作概览\n\n" + normalizedSummary + "\n\n## 工作详情\n\n" + body, normalizedSummary, nil
+}
+
+var reportSummaryItemMarkerPattern = regexp.MustCompile(`(?m)(^|[[:space:]。！？；.!?;]|\\r\\n|\\n|\\r)([1-5])\.[ \t]+`)
+
+func normalizeReportSummary(summary string) string {
+	normalized := strings.ReplaceAll(strings.ReplaceAll(strings.TrimSpace(summary), "\r\n", "\n"), "\r", "\n")
+	if items, ok := parseOrderedReportSummary(normalized); ok {
+		return formatOrderedReportSummary(items)
+	}
+	lines := make([]string, 0, 5)
+	for _, rawLine := range strings.Split(normalized, "\n") {
+		line := strings.Join(strings.Fields(rawLine), " ")
+		if line != "" {
+			lines = append(lines, line)
+		}
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	items := make([]string, 0, len(lines))
+	for _, line := range lines {
+		dot := strings.IndexByte(line, '.')
+		if dot < 1 {
+			return strings.Join(strings.Fields(normalized), " ")
+		}
+		if _, err := strconv.Atoi(line[:dot]); err != nil {
+			return strings.Join(strings.Fields(normalized), " ")
+		}
+		item := strings.TrimSpace(line[dot+1:])
+		if item == "" {
+			return strings.Join(strings.Fields(normalized), " ")
+		}
+		items = append(items, fmt.Sprintf("%d. %s", len(items)+1, item))
+	}
+	return strings.Join(items, "\n")
+}
+
+func parseOrderedReportSummary(summary string) ([]string, bool) {
+	matches := reportSummaryItemMarkerPattern.FindAllStringSubmatchIndex(summary, -1)
+	if len(matches) == 0 || reportSummaryMarkerStart(summary, matches[0]) != 0 {
+		return nil, false
+	}
+	items := make([]string, 0, len(matches))
+	for index, match := range matches {
+		number, err := strconv.Atoi(summary[match[4]:match[5]])
+		if err != nil || number != index+1 {
+			return nil, false
+		}
+		itemEnd := len(summary)
+		if index+1 < len(matches) {
+			itemEnd = reportSummaryMarkerStart(summary, matches[index+1])
+		}
+		item := strings.Join(strings.Fields(summary[match[1]:itemEnd]), " ")
+		if item == "" {
+			return nil, false
+		}
+		items = append(items, item)
+	}
+	return items, true
+}
+
+func reportSummaryMarkerStart(summary string, match []int) int {
+	if match[2] == match[3] {
+		return match[0]
+	}
+	boundary := summary[match[2]:match[3]]
+	if strings.TrimSpace(boundary) == "" || strings.HasPrefix(boundary, `\`) {
+		return match[2]
+	}
+	return match[3]
+}
+
+func formatOrderedReportSummary(items []string) string {
+	lines := make([]string, 0, len(items))
+	for index, item := range items {
+		lines = append(lines, fmt.Sprintf("%d. %s", index+1, item))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func stripLeadingWorkSummary(content string) (string, bool) {
@@ -474,16 +636,44 @@ func stripLeadingWorkSummary(content string) (string, bool) {
 			break
 		}
 	}
-	if first < 0 || strings.TrimSpace(lines[first]) != "## 工作总结" {
+	if first < 0 {
+		return strings.TrimSpace(content), false
+	}
+	firstHeading := strings.TrimSpace(lines[first])
+	if firstHeading == "## 工作详情" {
+		return strings.TrimSpace(strings.Join(lines[first+1:], "\n")), true
+	}
+	if firstHeading != "## 工作总结" && firstHeading != "## 工作概览" {
 		return strings.TrimSpace(content), false
 	}
 	for index := first + 1; index < len(lines); index++ {
 		line := strings.TrimSpace(lines[index])
-		if strings.HasPrefix(line, "## ") && line != "## 工作总结" {
+		if line == "## 工作详情" {
+			return strings.TrimSpace(strings.Join(lines[index+1:], "\n")), true
+		}
+		if strings.HasPrefix(line, "## ") && line != "## 工作总结" && line != "## 工作概览" {
 			return strings.TrimSpace(strings.Join(lines[index:], "\n")), true
 		}
 	}
 	return "", true
+}
+
+func normalizeReportDetailHeadings(content string) string {
+	lines := strings.Split(strings.ReplaceAll(strings.TrimSpace(content), "\r\n", "\n"), "\n")
+	inFence := false
+	for index, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
+			inFence = !inFence
+			continue
+		}
+		if inFence || !strings.HasPrefix(trimmed, "## ") {
+			continue
+		}
+		indentLength := len(line) - len(strings.TrimLeft(line, " \t"))
+		lines[index] = line[:indentLength] + "### " + strings.TrimPrefix(trimmed, "## ")
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
 
 func reportResultHash(content string) string {

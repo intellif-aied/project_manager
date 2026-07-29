@@ -916,6 +916,25 @@ export const runManagedAgentScheduleNow = (
 
 // ───────────────────────── Tokens ─────────────────────────
 
+export interface TeamSyncPath {
+  id: string;
+  normalized_path: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export const fetchTeamSyncPaths = () =>
+  unwrap(api.get<{ items: TeamSyncPath[] }>("/me/team-sync-paths"));
+
+export const createTeamSyncPath = (path: string) =>
+  unwrap(api.post<TeamSyncPath>("/me/team-sync-paths", { path }));
+
+export const updateTeamSyncPath = (id: string, path: string) =>
+  unwrap(api.put<TeamSyncPath>(`/me/team-sync-paths/${id}`, { path }));
+
+export const deleteTeamSyncPath = (id: string) =>
+  unwrap(api.delete<void>(`/me/team-sync-paths/${id}`));
+
 export const fetchTokens = (params?: {
   period?: TokenPeriod;
   from?: string;

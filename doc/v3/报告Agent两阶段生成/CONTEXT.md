@@ -20,6 +20,20 @@
 
 **Final Report**：用户最终看到并保存的日报或周报内容。两阶段个人日报只能基于已接受的 Report Brief 生成。
 
+**System Report Agent**：归属 Aida 系统专用账号、由平台统一维护模型、Prompt、系统 Report Skill 和系统 Report MCP 的默认报告 Agent。
+
+**Personal Report Agent**：归属当前用户、由用户自行维护模型、Prompt、Skill 和第三方 MCP 的报告 Agent。Aida 不向它注入或替换系统 Report Skill。
+
+**System Report MCP**：由 Aida 提供的报告基础设施，使用绑定当前 Report Run 的短期凭证读取报告上下文并把结果写入 Aida。系统和个人 Report Agent 均必须具备此 MCP，但可见工具集不同。
+
+**Report Run Token**：Aida 为单次 Report Run 签发的短期 JWT，其中包含 `report_run_id` 和当前 Aida 用户身份。Report MCP 依赖它把调用限制在该次运行，Agent 无需自行传递 `run_id`。
+
+**System Report Flow**：System Report Agent 执行的两阶段生成流程。必须先产生并接受 Report Brief，再生成 Final Report。
+
+**Personal Report Flow**：Personal Report Agent 使用用户自有 Prompt、Skill 和第三方 MCP 的生成流程。系统只提供 Report MCP 写入通道，不要求 Report Brief，也不注入系统 Report Skill。
+
+Report Brief 是 System Report Flow 的中间产物，不是所有报告写入的通用门禁。
+
 ## 交付状态
 
 **released**：有明确证据证明已经发布到生产环境。

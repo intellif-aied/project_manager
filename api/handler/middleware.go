@@ -17,6 +17,13 @@ type contextKey string
 
 const userKey contextKey = "user"
 
+const reportRunIDKey contextKey = "report_run_id"
+
+type aiHubIdentity struct {
+	UID         int64
+	ReportRunID string
+}
+
 func AuthMiddleware(db *sql.DB, aiHubSecret string, aihub *service.AIHubClient) func(http.Handler) http.Handler {
 	return authMiddleware(db, aiHubSecret, aihub, false)
 }
@@ -38,12 +45,12 @@ func authMiddleware(db *sql.DB, aiHubSecret string, aihub *service.AIHubClient, 
 				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid authorization format"})
 				return
 			}
-			uid, err := extractAIHubUIDWithPolicy(tokenStr, aiHubSecret, allowExpired)
-			if err != nil || uid == 0 {
+			identity, err := extractAIHubIdentityWithPolicy(tokenStr, aiHubSecret, allowExpired)
+			if err != nil || identity.UID == 0 {
 				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid token"})
 				return
 			}
-			user, err := loadAidaUserByID(db, fmt.Sprint(uid))
+			user, err := loadAidaUserByID(db, fmt.Sprint(identity.UID))
 			if err == sql.ErrNoRows {
 				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "user is not synchronized"})
 				return
@@ -57,6 +64,9 @@ func authMiddleware(db *sql.DB, aiHubSecret string, aihub *service.AIHubClient, 
 				return
 			}
 			ctx := context.WithValue(r.Context(), userKey, user)
+			if identity.ReportRunID != "" {
+				ctx = context.WithValue(ctx, reportRunIDKey, identity.ReportRunID)
+			}
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
@@ -67,13 +77,18 @@ func extractAIHubUID(tokenString, secret string) (int64, error) {
 }
 
 func extractAIHubUIDWithPolicy(tokenString, secret string, allowExpired bool) (int64, error) {
+	identity, err := extractAIHubIdentityWithPolicy(tokenString, secret, allowExpired)
+	return identity.UID, err
+}
+
+func extractAIHubIdentityWithPolicy(tokenString, secret string, allowExpired bool) (aiHubIdentity, error) {
 	claims := jwt.MapClaims{}
 	if secret == "" {
 		_, _, err := jwt.NewParser().ParseUnverified(tokenString, claims)
 		if err != nil {
-			return 0, err
+			return aiHubIdentity{}, err
 		}
-		return uidFromClaims(claims)
+		return identityFromClaims(claims)
 	}
 	keyFunc := func(t *jwt.Token) (any, error) {
 		if t.Method.Alg() != jwt.SigningMethodHS256.Alg() {
@@ -89,18 +104,27 @@ func extractAIHubUIDWithPolicy(tokenString, secret string, allowExpired bool) (i
 		token, err = jwt.ParseWithClaims(tokenString, claims, keyFunc)
 	}
 	if err != nil || !token.Valid {
-		return 0, err
+		return aiHubIdentity{}, err
 	}
 	if allowExpired {
 		notBefore, nbfErr := claims.GetNotBefore()
 		if nbfErr != nil {
-			return 0, nbfErr
+			return aiHubIdentity{}, nbfErr
 		}
 		if notBefore != nil && time.Now().Before(notBefore.Time) {
-			return 0, fmt.Errorf("token is not valid yet")
+			return aiHubIdentity{}, fmt.Errorf("token is not valid yet")
 		}
 	}
-	return uidFromClaims(claims)
+	return identityFromClaims(claims)
+}
+
+func identityFromClaims(claims jwt.MapClaims) (aiHubIdentity, error) {
+	uid, err := uidFromClaims(claims)
+	if err != nil {
+		return aiHubIdentity{}, err
+	}
+	runID, _ := claims["report_run_id"].(string)
+	return aiHubIdentity{UID: uid, ReportRunID: strings.TrimSpace(runID)}, nil
 }
 
 func uidFromClaims(claims jwt.MapClaims) (int64, error) {

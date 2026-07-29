@@ -26,6 +26,18 @@ func NewAuthHandler(db *sql.DB, aihub *service.AIHubClient, bootstrapAdminUIDs s
 }
 
 func MintAIHubCompatibleToken(user *model.User, secret string) (string, error) {
+	return mintAIHubCompatibleToken(user, secret, "")
+}
+
+func MintReportRunToken(user *model.User, secret, runID string) (string, error) {
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return "", errors.New("report run id is required")
+	}
+	return mintAIHubCompatibleToken(user, secret, runID)
+}
+
+func mintAIHubCompatibleToken(user *model.User, secret, reportRunID string) (string, error) {
 	if user == nil {
 		return "", errors.New("user is required")
 	}
@@ -44,6 +56,9 @@ func MintAIHubCompatibleToken(user *model.User, secret string) (string, error) {
 		"username": user.Username,
 		"iat":      issuedAt.Unix(),
 		"exp":      now.Add(24 * time.Hour).Unix(),
+	}
+	if reportRunID != "" {
+		claims["report_run_id"] = reportRunID
 	}
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(secret))
 }

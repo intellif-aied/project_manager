@@ -941,6 +941,16 @@ type ManagedAgent struct {
 	BusinessType        string                  `json:"business_type,omitempty"`
 	ReportTypes         []string                `json:"report_types,omitempty"`
 	IsDefaultReport     bool                    `json:"is_default_report,omitempty"`
+	Source              string                  `json:"source,omitempty"`
+	Permissions         ManagedAgentPermissions `json:"permissions"`
+}
+
+type ManagedAgentPermissions struct {
+	CanRun        bool `json:"can_run"`
+	CanSetDefault bool `json:"can_set_default"`
+	CanView       bool `json:"can_view"`
+	CanEdit       bool `json:"can_edit"`
+	CanArchive    bool `json:"can_archive"`
 }
 
 type ListManagedSkillsResponse struct {
@@ -964,9 +974,9 @@ type UpsertManagedAgentRequest struct {
 	Name                string                  `json:"name"`
 	Description         string                  `json:"description,omitempty"`
 	Engine              string                  `json:"engine"`
-	Instructions        string                  `json:"instructions,omitempty"`
+	Instructions        string                  `json:"instructions"`
 	DefaultModelID      string                  `json:"default_model_id,omitempty"`
-	StartPromptTemplate string                  `json:"start_prompt_template,omitempty"`
+	StartPromptTemplate string                  `json:"start_prompt_template"`
 	CredentialSlots     []ManagedCredentialSlot `json:"credential_slots"`
 	DefaultBindings     map[string]string       `json:"default_bindings"`
 	Skills              []ManagedSkillRef       `json:"skills"`
