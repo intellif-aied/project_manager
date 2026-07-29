@@ -132,7 +132,7 @@ func summaryRegion(value string) (string, bool) {
 	matches := markdownHeadingPattern.FindAllStringSubmatchIndex(value, -1)
 	for index, match := range matches {
 		title := strings.TrimSpace(value[match[2]:match[3]])
-		if title != "工作总结" {
+		if !isSummaryHeading(title) {
 			continue
 		}
 		end := len(value)
@@ -149,11 +149,15 @@ func topicHeadings(value string) []string {
 	result := make([]string, 0, len(matches))
 	for _, match := range matches {
 		title := strings.TrimSpace(match[1])
-		if title != "" && title != "工作总结" {
+		if title != "" && !isSummaryHeading(title) {
 			result = append(result, title)
 		}
 	}
 	return result
+}
+
+func isSummaryHeading(title string) bool {
+	return title == "工作概览" || title == "工作总结"
 }
 
 func orderedDifference(left, right []string) []string {

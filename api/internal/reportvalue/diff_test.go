@@ -3,8 +3,8 @@ package reportvalue
 import "testing"
 
 func TestCompareUnchangedChineseMarkdown(t *testing.T) {
-	generated := "## 项目 A  \r\n完成接口\r\n\r\n## 工作总结\r\n今天完成联调。\r\n"
-	user := "## 项目 A\n完成接口\n\n## 工作总结\n今天完成联调。"
+	generated := "## 工作概览  \r\n1. 完成项目 A 联调。\r\n\r\n## 工作详情\r\n### 项目 A\r\n完成接口。\r\n"
+	user := "## 工作概览\n1. 完成项目 A 联调。\n\n## 工作详情\n### 项目 A\n完成接口。"
 	got := Compare(generated, user)
 	if got.Text.ChangeBand != ChangeUnchanged || got.Text.DiffRatio == nil || *got.Text.DiffRatio != 0 {
 		t.Fatalf("unexpected text metrics: %#v", got.Text)
@@ -12,13 +12,13 @@ func TestCompareUnchangedChineseMarkdown(t *testing.T) {
 	if got.Summary.Outcome != "summary_unchanged" {
 		t.Fatalf("summary outcome = %q", got.Summary.Outcome)
 	}
-	if len(got.Topics.Generated) != 1 || got.Topics.Generated[0] != "项目 A" {
+	if len(got.Topics.Generated) != 1 || got.Topics.Generated[0] != "工作详情" {
 		t.Fatalf("topics = %#v", got.Topics)
 	}
 }
 
 func TestCompareSummaryRemovedAndTopicChanges(t *testing.T) {
-	generated := "## 项目 A\n完成接口\n\n## 工作总结\n总结内容"
+	generated := "## 工作概览\n总结内容\n\n## 项目 A\n完成接口"
 	user := "## 项目 B\n补充文档"
 	got := Compare(generated, user)
 	if got.Summary.Outcome != "summary_removed" || !got.Summary.Reduced30 {
@@ -26,6 +26,18 @@ func TestCompareSummaryRemovedAndTopicChanges(t *testing.T) {
 	}
 	if len(got.Topics.Deleted) != 1 || got.Topics.Deleted[0] != "项目 A" || len(got.Topics.Added) != 1 || got.Topics.Added[0] != "项目 B" {
 		t.Fatalf("topics = %#v", got.Topics)
+	}
+}
+
+func TestCompareKeepsLegacyWorkSummaryCompatible(t *testing.T) {
+	generated := "## 项目 A\n完成接口\n\n## 工作总结\n旧版总结内容"
+	user := "## 项目 A\n完成接口\n\n## 工作总结\n旧版总结内容"
+	got := Compare(generated, user)
+	if got.Summary.Outcome != "summary_unchanged" {
+		t.Fatalf("legacy summary outcome = %q", got.Summary.Outcome)
+	}
+	if len(got.Topics.Generated) != 1 || got.Topics.Generated[0] != "项目 A" {
+		t.Fatalf("legacy topics = %#v", got.Topics)
 	}
 }
 
