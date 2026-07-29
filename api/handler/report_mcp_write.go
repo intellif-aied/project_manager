@@ -26,6 +26,7 @@ type reportAIRun struct {
 	ID                    string
 	BusinessType          string
 	AgentID               string
+	AgentVersionID        *int
 	ModelID               *string
 	Status                string
 	Stage                 string
@@ -203,6 +204,14 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 	reportID, err := upsertReportContent(ctx, tx, reportType, date, ws, we, target, content, run, u.ID, sourceRefs)
 	if err != nil {
 		return nil, errMCPInternal
+	}
+	if reportType == reportTypePersonalDaily {
+		if err := insertReportGenerationSnapshot(
+			ctx, tx, run, reportID, target.UserID, date,
+			content, normalizedSummary, briefSchemaVersion,
+		); err != nil {
+			return nil, errMCPInternal
+		}
 	}
 
 	outputPayload := map[string]any{
@@ -450,15 +459,16 @@ func (h *ReportMCPHandler) aiRunGuard(r *http.Request, runID, userID string) (*r
 	}
 	var run reportAIRun
 	var modelID sql.NullString
+	var agentVersionID sql.NullInt64
 	var createdAt sql.NullTime
 	var inputRaw, executionInputRaw, outputRaw []byte
 	err := h.db.QueryRowContext(r.Context(), `
-		SELECT id::text, business_type, COALESCE(agent_id, ''), model_id, status,
+		SELECT id::text, business_type, COALESCE(agent_id, ''), agent_version_id, model_id, status,
 		       COALESCE(execution_stage, ''), input_ref_json, execution_input_json,
 		       output_ref_json, created_at
 		FROM ai_runs
 		WHERE id::text = $1 AND user_id = $2`, runID, userID).
-		Scan(&run.ID, &run.BusinessType, &run.AgentID, &modelID, &run.Status, &run.Stage, &inputRaw, &executionInputRaw, &outputRaw, &createdAt)
+		Scan(&run.ID, &run.BusinessType, &run.AgentID, &agentVersionID, &modelID, &run.Status, &run.Stage, &inputRaw, &executionInputRaw, &outputRaw, &createdAt)
 	if err == sql.ErrNoRows {
 		return nil, errRunNotFound
 	}
@@ -468,6 +478,10 @@ func (h *ReportMCPHandler) aiRunGuard(r *http.Request, runID, userID string) (*r
 	if modelID.Valid && modelID.String != "" {
 		s := modelID.String
 		run.ModelID = &s
+	}
+	if agentVersionID.Valid {
+		value := int(agentVersionID.Int64)
+		run.AgentVersionID = &value
 	}
 	if createdAt.Valid {
 		run.CreatedAt = createdAt.Time

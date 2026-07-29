@@ -1,0 +1,194 @@
+.daily-value {
+  display: grid;
+  gap: 16px;
+}
+
+.daily-value__metric-card {
+  height: 100%;
+}
+
+.daily-value__advanced-filters .ant-select {
+  min-width: 150px;
+}
+
+.daily-value__executive-summary {
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 92% 0%, rgba(37, 99, 235, 0.12), transparent 34%),
+    linear-gradient(135deg, #ffffff 0%, #f7fbff 58%, #f3f8ff 100%);
+  border-color: rgba(37, 99, 235, 0.2);
+}
+
+.daily-value__executive-copy {
+  max-width: min(900px, 100%);
+}
+
+.daily-value__executive-copy .ant-typography {
+  margin-bottom: 8px;
+}
+
+.daily-value__executive-copy h3.ant-typography {
+  margin-top: 12px;
+  color: #172554;
+  font-size: clamp(22px, 2vw, 30px);
+  line-height: 1.28;
+}
+
+.daily-value__eyebrow {
+  color: #475569;
+  font-size: 12px;
+  font-weight: 750;
+  letter-spacing: 0.12em;
+}
+
+.daily-value__executive-icon {
+  font-size: 18px;
+}
+
+.daily-value__executive-icon.is-positive {
+  color: var(--ant-color-success);
+}
+
+.daily-value__executive-icon.is-attention {
+  color: var(--ant-color-warning);
+}
+
+.daily-value__evidence-tags {
+  max-width: 320px;
+  justify-content: flex-end;
+}
+
+.daily-value__executive-metric {
+  position: relative;
+  height: 100%;
+  overflow: hidden;
+  border-top: 3px solid transparent;
+}
+
+.daily-value__executive-metric.is-positive {
+  border-top-color: var(--ant-color-success);
+}
+
+.daily-value__executive-metric.is-neutral {
+  border-top-color: var(--ant-color-primary);
+}
+
+.daily-value__executive-metric.is-attention {
+  border-top-color: var(--ant-color-warning);
+}
+
+.daily-value__executive-metric-label {
+  color: #475569;
+  font-weight: 650;
+}
+
+.daily-value__executive-metric h2.ant-typography,
+.daily-value__comparison-metric h3.ant-typography {
+  margin: 8px 0 4px;
+}
+
+.daily-value__comparison-metric {
+  min-height: 112px;
+  padding: 4px 8px;
+}
+
+.daily-value__attention-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  margin: -8px 0 18px;
+  overflow: hidden;
+  background: var(--ant-color-border-secondary);
+  border: 1px solid var(--ant-color-border-secondary);
+  border-radius: 8px;
+}
+
+.daily-value__attention-strip > div {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-height: 68px;
+  padding: 16px 18px;
+  background: var(--ant-color-bg-container);
+}
+
+.daily-value__attention-strip strong {
+  color: #172554;
+  font-size: 24px;
+  line-height: 1;
+}
+
+.daily-value__attention-strip span {
+  color: var(--ant-color-text-secondary);
+}
+
+.daily-value__diagnostics {
+  background: var(--ant-color-bg-container);
+}
+
+.daily-value__diagnostic-content {
+  width: 100%;
+}
+
+.daily-value__secondary {
+  font-size: 12px;
+}
+
+.daily-value__drawer-content {
+  width: 100%;
+}
+
+.daily-value__comparison {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.daily-value__diff-pane {
+  min-height: 360px;
+  max-height: 58vh;
+  padding: 12px;
+  overflow: auto;
+  background: var(--ant-color-fill-quaternary);
+  border-radius: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  line-height: 1.7;
+}
+
+.daily-value__diff-line {
+  min-height: 1.7em;
+  padding: 0 6px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.daily-value__diff-line.is-removed,
+.daily-value__diff-line.is-changed {
+  background: color-mix(in srgb, var(--ant-color-error) 12%, transparent);
+}
+
+.daily-value__comparison > :last-child .daily-value__diff-line.is-added,
+.daily-value__comparison > :last-child .daily-value__diff-line.is-changed {
+  background: color-mix(in srgb, var(--ant-color-success) 14%, transparent);
+}
+
+@media (max-width: 768px) {
+  .daily-value__evidence-tags {
+    max-width: none;
+    justify-content: flex-start;
+  }
+
+  .daily-value__attention-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .daily-value__comparison {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 520px) {
+  .daily-value__attention-strip {
+    grid-template-columns: 1fr;
+  }
+}

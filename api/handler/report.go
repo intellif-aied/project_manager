@@ -602,14 +602,31 @@ func (h *ReportHandler) Update(w http.ResponseWriter, r *http.Request) {
 	args = append(args, u.ID)
 	where += fmt.Sprintf(" AND user_id = $%d", argIdx)
 	query := fmt.Sprintf("UPDATE daily_reports SET %s WHERE %s", joinWithCommas(sets), where)
-
-	res, err := h.db.Exec(query, args...)
+	tx, err := h.db.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	if rows, _ := res.RowsAffected(); rows == 0 {
+	defer tx.Rollback()
+	var reportDate, content string
+	var managedRunID sql.NullString
+	err = tx.QueryRowContext(r.Context(), query+`
+		RETURNING report_date::text, content, managed_agent_run_id::text`, args...).
+		Scan(&reportDate, &content, &managedRunID)
+	if err == sql.ErrNoRows {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := insertReportUserOutcome(r.Context(), tx, id, u.ID, reportDate, managedRunID, "saved", &content); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 
@@ -689,13 +706,21 @@ func (h *ReportHandler) SubmitReport(w http.ResponseWriter, r *http.Request) {
 	where += fmt.Sprintf(" AND user_id = $%d", argIdx)
 
 	query := fmt.Sprintf("UPDATE daily_reports SET %s WHERE %s", joinWithCommas(sets), where)
-	res, err := tx.ExecContext(r.Context(), query, args...)
+	var reportDate, content string
+	var managedRunID sql.NullString
+	err = tx.QueryRowContext(r.Context(), query+`
+		RETURNING report_date::text, content, managed_agent_run_id::text`, args...).
+		Scan(&reportDate, &content, &managedRunID)
+	if err == sql.ErrNoRows {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	if rows, _ := res.RowsAffected(); rows == 0 {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+	if err := insertReportUserOutcome(r.Context(), tx, id, u.ID, reportDate, managedRunID, "submitted", &content); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 	if err := tx.Commit(); err != nil {
@@ -2989,7 +3014,45 @@ func uniqueStringsPreserveOrder(values []string) []string {
 }
 
 func (h *ReportHandler) DeletePersonalDailyReport(w http.ResponseWriter, r *http.Request) {
-	h.deletePersonalReport(w, r, "daily_reports")
+	id := chi.URLParam(r, "id")
+	if !validateUUIDParam(w, id, "report_id") {
+		return
+	}
+	u := getUser(r)
+	tx, err := h.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	defer tx.Rollback()
+	var reportDate string
+	var managedRunID sql.NullString
+	err = tx.QueryRowContext(r.Context(), `
+		SELECT report_date::text, managed_agent_run_id::text
+		FROM daily_reports
+		WHERE id = $1 AND user_id = $2
+		FOR UPDATE`, id, u.ID).Scan(&reportDate, &managedRunID)
+	if err == sql.ErrNoRows {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := insertReportUserOutcome(r.Context(), tx, id, u.ID, reportDate, managedRunID, "deleted", nil); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if _, err := tx.ExecContext(r.Context(), `DELETE FROM daily_reports WHERE id = $1 AND user_id = $2`, id, u.ID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *ReportHandler) DeletePersonalWeeklyReport(w http.ResponseWriter, r *http.Request) {

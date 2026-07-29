@@ -2727,13 +2727,19 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 		modelID = h.defaults.ReportModelID
 	}
 	inputRef := map[string]any{
-		"trigger_source":  "manual",
-		"report_type":     req.ReportType,
-		"period":          reportPeriodInputRef(req.ReportType, date, weekStart, weekEnd),
-		"target":          target,
-		"model_id":        modelID,
-		"mcp_server":      h.defaults.ReportMCPSlug,
-		"credential_slot": h.defaults.ReportMCPCredentialSlot,
+		"trigger_source":                "manual",
+		"report_type":                   req.ReportType,
+		"period":                        reportPeriodInputRef(req.ReportType, date, weekStart, weekEnd),
+		"target":                        target,
+		"model_id":                      modelID,
+		"mcp_server":                    h.defaults.ReportMCPSlug,
+		"report_mcp_version":            h.defaults.ReportMCPVersion,
+		"report_skill_slug":             h.defaults.ReportSkillSlug,
+		"report_skill_version":          h.defaults.ReportSkillVersion,
+		"digest_version":                sessiondigestv2.Version,
+		"redaction_version":             sessiondigestv2.RedactionVersion,
+		"report_context_schema_version": reportcontext.SchemaVersion,
+		"credential_slot":               h.defaults.ReportMCPCredentialSlot,
 	}
 	if len(selectedSessionSliceKeys) > 0 {
 		inputRef["selected_session_slice_keys"] = selectedSessionSliceKeys
@@ -4250,6 +4256,12 @@ func (h *ManagedAgentHandler) executeReportAgentScheduleRun(ctx context.Context,
 	inputRef["period_end"] = period.End
 	inputRef["period_display"] = period.Display
 	inputRef["mcp_server"] = h.defaults.ReportMCPSlug
+	inputRef["report_mcp_version"] = h.defaults.ReportMCPVersion
+	inputRef["report_skill_slug"] = h.defaults.ReportSkillSlug
+	inputRef["report_skill_version"] = h.defaults.ReportSkillVersion
+	inputRef["digest_version"] = sessiondigestv2.Version
+	inputRef["redaction_version"] = sessiondigestv2.RedactionVersion
+	inputRef["report_context_schema_version"] = reportcontext.SchemaVersion
 	inputRef["credential_slot"] = h.defaults.ReportMCPCredentialSlot
 	contextPeriod := reportContextPeriod(reportType, period.Date, period.WeekStart, period.WeekEnd)
 	userMessage := strings.TrimSpace(schedule.InitialMessage)

@@ -1,5 +1,5 @@
 import { runtimeConfig } from "@/config/runtimeConfig";
-import { api } from "@/shared/request/httpClient";
+import { api, httpClient } from "@/shared/request/httpClient";
 import { getAuthSession } from "@/shared/auth/session";
 import { HttpError } from "@/shared/request/types";
 import type { User } from "@/shared/auth/types";
@@ -73,7 +73,9 @@ import type {
   ReportSourceCandidatePage,
   ReportSourceSelection,
   UpsertManagedAgentPayload,
-  UpsertManagedAgentSchedulePayload
+  UpsertManagedAgentSchedulePayload,
+  DailyReportValueResponse,
+  DailyReportValueDetailResponse
 } from "./types";
 
 async function unwrap<T>(promise: Promise<{ data: T }>): Promise<T> {
@@ -530,8 +532,7 @@ export const saveTeamReportCurrent = (data: {
 export const fetchTeamReports = (params?: Record<string, string>) =>
   unwrap(api.get<PaginatedTeamReports>("/reports/team", params));
 export const fetchTeamReport = (id: string) => unwrap(api.get<TeamReport>(`/reports/team/${id}`));
-export const deleteTeamReport = (id: string) =>
-  unwrap(api.delete<void>(`/reports/team/${id}`));
+export const deleteTeamReport = (id: string) => unwrap(api.delete<void>(`/reports/team/${id}`));
 export const updateTeamReport = (
   id: string,
   data: { content?: string; next_day_plan?: string; feishu_doc_url?: string }
@@ -1097,3 +1098,29 @@ export const applyPricingRecalculation = (payload: {
       unchanged_components: number;
     }>("/admin/pricing/recalculate/apply", payload)
   );
+
+export const fetchDailyReportValue = (params: Record<string, string>) =>
+  unwrap(api.get<DailyReportValueResponse>("/admin/daily-report-value", params));
+
+export const fetchDailyReportValueDetail = (userID: string, reportDate: string) =>
+  unwrap(
+    api.get<DailyReportValueDetailResponse>(
+      `/admin/daily-report-value/users/${encodeURIComponent(userID)}`,
+      { report_date: reportDate }
+    )
+  );
+
+export const downloadDailyReportValue = async (params: Record<string, string>) => {
+  const response = await httpClient.get<Blob>("/admin/daily-report-value/export", {
+    params,
+    responseType: "blob"
+  });
+  const url = URL.createObjectURL(response.data);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `daily-report-value-${params.report_date}.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+};

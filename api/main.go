@@ -100,6 +100,7 @@ func main() {
 	}
 	canonicalSyncH := handler.NewCanonicalSyncHandler(canonicalSyncService)
 	reportH := handler.NewReportHandler(database)
+	dailyReportValueH := handler.NewDailyReportValueHandler(database)
 	reportImageH := handler.NewReportImageHandler(minioStore)
 	reportSourceConfig, err := reportsource.ProductConfig().Normalized()
 	if err != nil {
@@ -383,6 +384,9 @@ func main() {
 			r.Get("/pricing/recalculation-runs", pricingAdminH.ListRecalculationRuns)
 			r.Post("/pricing/recalculate/preview", pricingAdminH.RecalculatePreview)
 			r.Post("/pricing/recalculate/apply", pricingAdminH.RecalculateApply)
+			r.Get("/daily-report-value", dailyReportValueH.List)
+			r.Get("/daily-report-value/users/{user_id}", dailyReportValueH.Detail)
+			r.Get("/daily-report-value/export", dailyReportValueH.Export)
 		})
 
 		r.Get("/requirements", reqH.List)

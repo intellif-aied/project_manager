@@ -1499,3 +1499,147 @@ export interface PricingRecalculationRun {
   calculator_version: string;
   created_at: string;
 }
+
+export interface DailyReportValueRatio {
+  numerator: number;
+  denominator: number;
+  value?: number;
+}
+
+export interface DailyReportValueTextMetrics {
+  generated_chars: number;
+  user_chars: number;
+  matched_chars: number;
+  text_diff_ratio?: number;
+  draft_retention_rate?: number;
+  user_addition_rate?: number;
+  change_band: "unchanged" | "light" | "medium" | "heavy" | "not_applicable";
+}
+
+export interface DailyReportValueDiff {
+  text: DailyReportValueTextMetrics;
+  summary: {
+    generated_present: boolean;
+    user_present: boolean;
+    outcome: string;
+    reduced_30: boolean;
+    text?: DailyReportValueTextMetrics;
+  };
+  topics: {
+    generated: string[];
+    user: string[];
+    deleted: string[];
+    added: string[];
+  };
+}
+
+export interface DailyReportValueRun {
+  run_id: string;
+  status: string;
+  failure_stage?: string;
+  agent_id: string;
+  model_id?: string;
+  created_at: string;
+  started_at?: string;
+  finished_at?: string;
+  duration_ms?: number;
+  source_session_count: number;
+  snapshot?: {
+    report_id: string;
+    generated_content?: string;
+    generated_content_sha256: string;
+    summary_content?: string;
+    summary_sha256: string;
+    variant_manifest: Record<string, unknown>;
+    variant_hash: string;
+    created_at: string;
+  };
+  current_outcome?: {
+    id: string;
+    run_id?: string;
+    action: string;
+    content?: string;
+    content_sha256?: string;
+    action_at: string;
+  };
+  diff?: DailyReportValueDiff;
+}
+
+export interface DailyReportValueUserDay {
+  user_id: string;
+  user_name: string;
+  department_id?: string;
+  department_name?: string;
+  team_id?: string;
+  team_name?: string;
+  report_date: string;
+  report_id?: string;
+  run_count: number;
+  successful_run_count: number;
+  last_failure_stage?: string;
+  variant_hash?: string;
+  outcome_status: string;
+  diff?: DailyReportValueDiff;
+  observed_diff?: DailyReportValueDiff;
+  current_content?: string;
+  regenerated: boolean;
+  downstream_reuse: boolean;
+  missing_reason?: string;
+  current_run_id?: string;
+  current_outcome_id?: string;
+  runs?: DailyReportValueRun[];
+  outcome_events?: Array<{
+    id: string;
+    run_id?: string;
+    action: string;
+    content?: string;
+    content_sha256?: string;
+    action_at: string;
+  }>;
+}
+
+export interface DailyReportValueMetrics {
+  total_reports: number;
+  ai_reports: number;
+  handwritten_reports: number;
+  total_runs: number;
+  successful_runs: number;
+  comparable_outcomes: number;
+  ai_report_coverage: DailyReportValueRatio;
+  generation_success: DailyReportValueRatio;
+  confirmed_direct_use: DailyReportValueRatio;
+  light_or_less: DailyReportValueRatio;
+  significant_modification: DailyReportValueRatio;
+  summary_removed: DailyReportValueRatio;
+  regeneration: DailyReportValueRatio;
+  observed_unchanged: DailyReportValueRatio;
+  downstream_reuse: DailyReportValueRatio;
+  draft_retention_p25?: number;
+  draft_retention_p50?: number;
+  draft_retention_p95?: number;
+  average_duration_ms?: number;
+  p95_duration_ms?: number;
+  deletion: DailyReportValueRatio;
+}
+
+export interface DailyReportValueResponse {
+  report_date: string;
+  observed_at: string;
+  data_completeness: "complete" | "partial";
+  missing_count: number;
+  metrics: DailyReportValueMetrics;
+  change_bands: Record<string, number>;
+  summary_outcomes: Record<string, number>;
+  failure_stages: Record<string, number>;
+  items: DailyReportValueUserDay[];
+  total: number;
+  page: number;
+  page_size: number;
+  trend: Array<{ report_date: string; metrics: DailyReportValueMetrics }>;
+}
+
+export interface DailyReportValueDetailResponse {
+  report_date: string;
+  observed_at: string;
+  item: DailyReportValueUserDay;
+}
