@@ -1013,7 +1013,20 @@ export function DailyReportValuePage() {
             {generatedContent ? (
               <DiffComparison generated={generatedContent} user={userContent} />
             ) : (
-              <Alert type="info" showIcon message="当前用户日没有可用 Generated Draft" />
+              <Space direction="vertical" size="middle" className="daily-value__current-only">
+                <Alert
+                  type="info"
+                  showIcon
+                  message="历史 Generated Draft 未采集，以下展示当前日报内容"
+                />
+                <Card size="small" title="当前日报内容">
+                  <div className="daily-value__diff-pane">
+                    <div className="daily-value__diff-line">
+                      {userContent || "当前日报内容为空"}
+                    </div>
+                  </div>
+                </Card>
+              </Space>
             )}
             <Card size="small" title="Run 时间线">
               <Table

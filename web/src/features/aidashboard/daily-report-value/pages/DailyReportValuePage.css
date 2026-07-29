@@ -144,6 +144,10 @@
   gap: 16px;
 }
 
+.daily-value__current-only {
+  width: 100%;
+}
+
 .daily-value__diff-pane {
   min-height: 360px;
   max-height: 58vh;
