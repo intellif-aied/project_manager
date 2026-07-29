@@ -3,6 +3,8 @@ package handler
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/aidashboard/api/service"
 )
 
 func TestBuildReportVariantManifestWithOptionalBrief(t *testing.T) {
@@ -59,5 +61,27 @@ func TestBuildReportVariantManifestIsDeterministic(t *testing.T) {
 	}
 	if string(first) != string(second) || firstHash != secondHash {
 		t.Fatalf("manifest is not deterministic")
+	}
+}
+
+func TestBuildReportVariantManifestDoesNotClaimSystemSkillForPersonalAgent(t *testing.T) {
+	run := &reportAIRun{
+		AgentID:           "personal-agent",
+		ReportAgentSource: managedAgentSourcePersonal,
+		InputRef: map[string]any{
+			"report_skill_slug":    service.ReportSkillSlug,
+			"report_skill_version": "1.0.20",
+		},
+	}
+	payload, _, err := buildReportVariantManifest(run, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest reportVariantManifest
+	if err := json.Unmarshal(payload, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.ReportSkillSlug != "" || manifest.ReportSkillVersion != "" {
+		t.Fatalf("personal agent variant claimed system skill: %#v", manifest)
 	}
 }

@@ -974,9 +974,9 @@ type UpsertManagedAgentRequest struct {
 	Name                string                  `json:"name"`
 	Description         string                  `json:"description,omitempty"`
 	Engine              string                  `json:"engine"`
-	Instructions        string                  `json:"instructions"`
+	Instructions        string                  `json:"instructions,omitempty"`
 	DefaultModelID      string                  `json:"default_model_id,omitempty"`
-	StartPromptTemplate string                  `json:"start_prompt_template"`
+	StartPromptTemplate string                  `json:"start_prompt_template,omitempty"`
 	CredentialSlots     []ManagedCredentialSlot `json:"credential_slots"`
 	DefaultBindings     map[string]string       `json:"default_bindings"`
 	Skills              []ManagedSkillRef       `json:"skills"`

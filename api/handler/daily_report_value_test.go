@@ -39,6 +39,27 @@ func TestAggregateValueDaysUsesLatestSuccessfulRunOnly(t *testing.T) {
 	}
 }
 
+func TestAggregateValueDaysUsesLatestCompletedDraftWhenRunsOverlap(t *testing.T) {
+	date := "2026-07-28"
+	createdAt1 := time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC)
+	createdAt2 := createdAt1.Add(time.Minute)
+	key := valueDayKey("user-1", date)
+	facts := valueFacts{
+		People:  map[string]valueUserDay{key: {UserID: "user-1", UserName: "张三", ReportDate: date}},
+		Reports: map[string]currentDailyReport{key: {ID: "report-1", UserID: "user-1", ReportDate: date, Content: "G1", RunID: "run-1", GenerationMode: "managed_agent"}},
+		Runs: map[string][]valueRun{key: {
+			{ID: "run-1", Status: "succeeded", CreatedAt: createdAt1, Snapshot: testValueSnapshot("report-1", "G1", createdAt2.Add(time.Minute))},
+			{ID: "run-2", Status: "succeeded", CreatedAt: createdAt2, Snapshot: testValueSnapshot("report-1", "G2", createdAt2.Add(30*time.Second))},
+		}},
+		Outcomes: map[string][]valueOutcome{},
+	}
+
+	item := aggregateValueDays(facts, date, true)[0]
+	if item.CurrentRunID != "run-1" || item.OutcomeStatus != "observed_unchanged" {
+		t.Fatalf("current run selected by creation time instead of completed draft: %#v", item)
+	}
+}
+
 func TestAggregateValueDaysBuildsComparableOutcome(t *testing.T) {
 	date := "2026-07-28"
 	generatedAt := time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC)
@@ -76,6 +97,19 @@ func TestCalculateValueMetricsDoesNotCountFailedAttemptAsAIReport(t *testing.T) 
 	}
 	if failures["building_context"] != 1 {
 		t.Fatalf("failure stages = %#v", failures)
+	}
+}
+
+func TestValueVariantOptionsUsesAllRowsAndDeduplicates(t *testing.T) {
+	items := []valueUserDay{
+		{VariantHash: "variant-b"},
+		{VariantHash: "variant-a"},
+		{VariantHash: "variant-b"},
+		{},
+	}
+	got := valueVariantOptions(items)
+	if len(got) != 2 || got[0] != "variant-a" || got[1] != "variant-b" {
+		t.Fatalf("variants = %#v", got)
 	}
 }
 

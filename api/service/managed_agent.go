@@ -197,6 +197,27 @@ func (c *ManagedAgentClient) UpdateMyAgent(ctx context.Context, agentID string, 
 	return &out, nil
 }
 
+// UpdateMyAgentWithExplicitPromptFields is reserved for the narrowly scoped
+// cleanup of confirmed Aida-managed prompt residue. Generic Agent updates must
+// keep omitting empty prompt fields so a partial update cannot erase user data.
+func (c *ManagedAgentClient) UpdateMyAgentWithExplicitPromptFields(ctx context.Context, agentID string, req model.UpsertManagedAgentRequest) (*model.UpsertManagedAgentResponse, error) {
+	payloadBytes, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+		return nil, err
+	}
+	payload["instructions"] = req.Instructions
+	payload["start_prompt_template"] = req.StartPromptTemplate
+	var out model.UpsertManagedAgentResponse
+	if err := c.do(ctx, http.MethodPut, "/api/my/agents/"+urlPathEscape(agentID), payload, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 type ArchiveManagedAgentRequest struct {
 	Archived bool `json:"archived"`
 }

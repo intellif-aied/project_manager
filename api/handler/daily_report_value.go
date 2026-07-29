@@ -149,6 +149,7 @@ type dailyReportValueResponse struct {
 	Page             int               `json:"page"`
 	PageSize         int               `json:"page_size"`
 	Trend            []valueTrendPoint `json:"trend"`
+	Variants         []string          `json:"variants"`
 }
 
 type valueFacts struct {
@@ -179,6 +180,7 @@ func (h *DailyReportValueHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	allItems := aggregateValueDays(facts, reportDate, false)
+	variants := valueVariantOptions(allItems)
 	allItems = filterValueItems(allItems, r)
 	page := queryInt(r, "page", 1, 1, 1000000)
 	pageSize := queryInt(r, "page_size", 20, 1, 100)
@@ -196,6 +198,7 @@ func (h *DailyReportValueHandler) List(w http.ResponseWriter, r *http.Request) {
 		DataCompleteness: completeness(missing), MissingCount: missing,
 		Metrics: metrics, ChangeBands: bands, SummaryOutcomes: summaries, FailureStages: failures,
 		Items: allItems[start:end], Total: len(allItems), Page: page, PageSize: pageSize,
+		Variants: variants,
 	}
 	if trendDays > 0 {
 		response.Trend = buildValueTrend(facts, fromDate, reportDate, r)
@@ -450,10 +453,13 @@ func aggregateValueDays(facts valueFacts, reportDate string, includeContent bool
 			}
 		}
 		var currentRunIndex = -1
-		for index := len(runs) - 1; index >= 0; index-- {
-			if runs[index].Status == "succeeded" {
+		for index := range runs {
+			if runs[index].Status != "succeeded" {
+				continue
+			}
+			if currentRunIndex < 0 || valueRunCompletedAt(runs[index]).After(valueRunCompletedAt(runs[currentRunIndex])) ||
+				(valueRunCompletedAt(runs[index]).Equal(valueRunCompletedAt(runs[currentRunIndex])) && runs[index].ID > runs[currentRunIndex].ID) {
 				currentRunIndex = index
-				break
 			}
 		}
 		if currentRunIndex < 0 {
@@ -523,6 +529,16 @@ func aggregateValueDays(facts valueFacts, reportDate string, includeContent bool
 		return items[i].UserName < items[j].UserName
 	})
 	return items
+}
+
+func valueRunCompletedAt(run valueRun) time.Time {
+	if run.Snapshot != nil && !run.Snapshot.CreatedAt.IsZero() {
+		return run.Snapshot.CreatedAt
+	}
+	if run.FinishedAt != nil {
+		return *run.FinishedAt
+	}
+	return run.CreatedAt
 }
 
 func redactValueRuns(runs []valueRun, includeContent bool) []valueRun {
@@ -714,6 +730,24 @@ func filterValueItems(items []valueUserDay, r *http.Request) []valueUserDay {
 		}
 		result = append(result, item)
 	}
+	return result
+}
+
+func valueVariantOptions(items []valueUserDay) []string {
+	seen := make(map[string]struct{}, len(items))
+	result := make([]string, 0)
+	for _, item := range items {
+		value := strings.TrimSpace(item.VariantHash)
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	sort.Strings(result)
 	return result
 }
 

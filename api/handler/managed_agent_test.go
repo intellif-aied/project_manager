@@ -1030,7 +1030,7 @@ func TestResolveAndRepairPersonalReportAgentDoesNotResolveSystemSkill(t *testing
 		AgentID:             "agent-report",
 		Instructions:        defaultReportAgentInstructions(reportMCPCredentialSlot),
 		StartPromptTemplate: "/aida-report\nrun_id={{ run_id }}",
-		Skills:              []model.ManagedSkillRef{{Owner: "001898", Slug: service.ReportSkillSlug, Version: testReportSkillVersion}},
+		Skills:              []model.ManagedSkillRef{{Owner: "100866", Slug: service.ReportSkillSlug, Version: testReportSkillVersion}},
 	}
 	err := h.resolveAndRepairReportAgentDependencies(context.Background(), h.client, &agent)
 	if err != nil {
@@ -1694,16 +1694,18 @@ func TestRepairedPersonalReportAgentPreservesUserAssetsAndRemovesSystemResidue(t
 		ReportMCPVersion:        service.ReportMCPVersion,
 		ReportMCPCredentialSlot: reportMCPCredentialSlot,
 		ReportSkillSlug:         service.ReportSkillSlug,
+		ReportSkillOwner:        "100866",
 		ReportSkillVersion:      testReportSkillVersion,
 		AIDAPublicBaseURL:       "https://aida.example.com",
 	})
 	agent := model.ManagedAgent{
 		AgentID:             "personal-agent",
 		Instructions:        "这是用户自己的日报生成要求",
-		StartPromptTemplate: "请使用我的 Skill 生成日报",
+		StartPromptTemplate: "/aida-report\nrun_id={{ run_id }}\n请使用我的规则生成日报",
 		DefaultModelID:      "user-model",
 		Skills: []model.ManagedSkillRef{
 			{Owner: "100866", Slug: service.ReportSkillSlug, Version: testReportSkillVersion},
+			{Owner: "t03", Slug: service.ReportSkillSlug, Version: "9.9.9"},
 			{Owner: "t03", Slug: "my-daily-skill", Version: "2.0.0"},
 		},
 		MCPServers: []model.ManagedMCPServer{{Name: "my-search", URL: "https://mcp.example.com"}},
@@ -1716,7 +1718,7 @@ func TestRepairedPersonalReportAgentPreservesUserAssetsAndRemovesSystemResidue(t
 	if req.Instructions != agent.Instructions || req.StartPromptTemplate != agent.StartPromptTemplate || req.DefaultModelID != agent.DefaultModelID {
 		t.Fatalf("user prompt/model changed: %#v", req)
 	}
-	if len(req.Skills) != 1 || req.Skills[0].Slug != "my-daily-skill" {
+	if len(req.Skills) != 2 || req.Skills[0].Owner != "t03" || req.Skills[0].Slug != service.ReportSkillSlug || req.Skills[1].Slug != "my-daily-skill" {
 		t.Fatalf("personal skills = %#v", req.Skills)
 	}
 	if len(req.MCPServers) != 2 || req.MCPServers[0].Name != "my-search" {
@@ -1725,6 +1727,26 @@ func TestRepairedPersonalReportAgentPreservesUserAssetsAndRemovesSystemResidue(t
 	reportServer := req.MCPServers[1]
 	if reportServer.Name != service.ReportMCPSlug || reportServer.Headers[managedReportMCPToolsetHeader] != personalReportMCPToolset {
 		t.Fatalf("personal Report MCP = %#v", reportServer)
+	}
+}
+
+func TestRepairedPersonalReportAgentClearsOnlyConfirmedManagedPromptResidue(t *testing.T) {
+	h := NewManagedAgentHandlerWithDefaults(nil, nil, testManagedAgentDefaults())
+	agent := model.ManagedAgent{
+		AgentID:             "legacy-system-agent",
+		Instructions:        defaultReportAgentInstructions(reportMCPCredentialSlot),
+		StartPromptTemplate: "/aida-report\nrun_id={{ run_id }}",
+		Skills: []model.ManagedSkillRef{
+			{Owner: "100866", Slug: service.ReportSkillSlug, Version: testReportSkillVersion},
+		},
+	}
+
+	req, changed := h.repairedPersonalReportAgentDependencyRequest(agent)
+	if !changed {
+		t.Fatal("expected confirmed managed residue cleanup")
+	}
+	if req.Instructions != "" || req.StartPromptTemplate != "" || len(req.Skills) != 0 {
+		t.Fatalf("managed residue was not cleared: %#v", req)
 	}
 }
 
@@ -2042,7 +2064,9 @@ func TestStartReportAgentRunCreatesPendingRunWithoutExternalSubmission(t *testin
 		WithArgs("305", "agent-report").
 		WillReturnRows(sqlmock.NewRows([]string{"agent_id", "business_type", "report_types", "is_default_report"}).
 			AddRow("agent-report", managedAgentBusinessReport, []byte(`["personal_weekly"]`), false))
-	expectReportRunSubmission(mock, "305", "agent-report", "MiniMax-M2.5", idempotencyKey, "run-report")
+	expectReportRunSubmission(mock, "305", "agent-report", "MiniMax-M2.5", idempotencyKey, "run-report", jsonStringArg{
+		forbid: []string{`"report_skill_slug"`, `"report_skill_version"`},
+	})
 	now := time.Date(2026, 7, 1, 8, 0, 0, 0, time.UTC)
 	mock.ExpectQuery("SELECT id::text").WithArgs("run-report", "305").
 		WillReturnRows(sqlmock.NewRows(aiRunColumns()).AddRow(
@@ -2169,7 +2193,11 @@ func TestReportRunDedupeScopeIncludesPrivateExecutionIdentity(t *testing.T) {
 	}
 }
 
-func expectReportRunSubmission(mock sqlmock.Sqlmock, userID, agentID, modelID, idempotencyKey, runID string) {
+func expectReportRunSubmission(mock sqlmock.Sqlmock, userID, agentID, modelID, idempotencyKey, runID string, inputRefArgs ...driver.Value) {
+	var inputRefArg driver.Value = sqlmock.AnyArg()
+	if len(inputRefArgs) > 0 {
+		inputRefArg = inputRefArgs[0]
+	}
 	mock.ExpectQuery("(?s)SELECT r.id::text.*FROM ai_runs.*idempotency_key").
 		WithArgs(userID, reportAgentRunBusinessType, idempotencyKey).
 		WillReturnError(sql.ErrNoRows)
@@ -2179,7 +2207,7 @@ func expectReportRunSubmission(mock sqlmock.Sqlmock, userID, agentID, modelID, i
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery("(?s)INSERT INTO ai_runs.*RETURNING id::text").
 		WithArgs(userID, reportAgentRunBusinessType, agentID, modelID,
-			sqlmock.AnyArg(), sqlmock.AnyArg(), 3600, idempotencyKey,
+			inputRefArg, sqlmock.AnyArg(), 3600, idempotencyKey,
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(runID))
 	mock.ExpectCommit()

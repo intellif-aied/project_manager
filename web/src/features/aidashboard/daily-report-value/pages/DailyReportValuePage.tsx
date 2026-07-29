@@ -19,6 +19,7 @@ import {
   Flex,
   message,
   Row,
+  Segmented,
   Select,
   Space,
   Statistic,
@@ -280,6 +281,9 @@ export function DailyReportValuePage() {
   const [teamID, setTeamID] = useState<string>();
   const [variantHash, setVariantHash] = useState<string>();
   const [regenerated, setRegenerated] = useState<string>();
+  const [summaryOutcome, setSummaryOutcome] = useState<string>();
+  const [missingData, setMissingData] = useState<string>();
+  const [trendDays, setTrendDays] = useState<14 | 30>(14);
   const [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(false);
   const [page, setPage] = useState(1);
   const [detailUserID, setDetailUserID] = useState<string>();
@@ -289,14 +293,16 @@ export function DailyReportValuePage() {
       report_date: reportDate,
       page: String(page),
       page_size: "20",
-      trend_days: "14",
+      trend_days: String(trendDays),
       ...(outcomeStatus ? { outcome_status: outcomeStatus } : {}),
       ...(changeBand ? { change_band: changeBand } : {}),
       ...(generationStatus ? { generation_status: generationStatus } : {}),
       ...(departmentID ? { department_id: departmentID } : {}),
       ...(teamID ? { team_id: teamID } : {}),
       ...(variantHash ? { variant_hash: variantHash } : {}),
-      ...(regenerated ? { regenerated } : {})
+      ...(regenerated ? { regenerated } : {}),
+      ...(summaryOutcome ? { summary_outcome: summaryOutcome } : {}),
+      ...(missingData ? { missing: missingData } : {})
     }),
     [
       changeBand,
@@ -306,7 +312,10 @@ export function DailyReportValuePage() {
       page,
       regenerated,
       reportDate,
+      missingData,
+      summaryOutcome,
       teamID,
+      trendDays,
       variantHash
     ]
   );
@@ -361,30 +370,60 @@ export function DailyReportValuePage() {
       (left, right) => attentionScore(left) - attentionScore(right)
     );
   }, [data?.items]);
-  const trendOption = useMemo<EChartsOption>(
-    () => ({
+  const trendOption = useMemo<EChartsOption>(() => {
+    const series = [
+      {
+        name: "AI 覆盖",
+        value: (metrics: DailyReportValueMetrics) => metrics.ai_report_coverage.value
+      },
+      {
+        name: "生成成功",
+        value: (metrics: DailyReportValueMetrics) => metrics.generation_success.value
+      },
+      {
+        name: "确认直接使用",
+        value: (metrics: DailyReportValueMetrics) => metrics.confirmed_direct_use.value
+      },
+      {
+        name: "轻度及以下",
+        value: (metrics: DailyReportValueMetrics) => metrics.light_or_less.value
+      },
+      {
+        name: "显著修改",
+        value: (metrics: DailyReportValueMetrics) => metrics.significant_modification.value
+      },
+      {
+        name: "Draft 保留 P50",
+        value: (metrics: DailyReportValueMetrics) => metrics.draft_retention_p50
+      },
+      {
+        name: "工作概览删除",
+        value: (metrics: DailyReportValueMetrics) => metrics.summary_removed.value
+      },
+      { name: "重新生成", value: (metrics: DailyReportValueMetrics) => metrics.regeneration.value },
+      {
+        name: "下游采用",
+        value: (metrics: DailyReportValueMetrics) => metrics.downstream_reuse.value
+      },
+      { name: "生成后删除", value: (metrics: DailyReportValueMetrics) => metrics.deletion.value }
+    ];
+    return {
       tooltip: { trigger: "axis" },
-      legend: { data: ["AI 覆盖", "生成成功", "确认直接使用", "轻度及以下"] },
+      legend: { type: "scroll", data: series.map((item) => item.name) },
       grid: { left: 44, right: 22, top: 44, bottom: 32 },
       xAxis: { type: "category", data: populatedTrend.map((item) => item.report_date.slice(5)) },
       yAxis: { type: "value", min: 0, max: 100, axisLabel: { formatter: "{value}%" } },
-      series: [
-        ["AI 覆盖", "ai_report_coverage"],
-        ["生成成功", "generation_success"],
-        ["确认直接使用", "confirmed_direct_use"],
-        ["轻度及以下", "light_or_less"]
-      ].map(([name, key]) => ({
-        name,
+      series: series.map((item) => ({
+        name: item.name,
         type: "line",
         connectNulls: false,
-        data: populatedTrend.map((item) => {
-          const ratio = item.metrics[key as keyof DailyReportValueMetrics] as DailyReportValueRatio;
-          return ratio.value === undefined ? null : Number((ratio.value * 100).toFixed(1));
+        data: populatedTrend.map((point) => {
+          const value = item.value(point.metrics);
+          return value === undefined ? null : Number((value * 100).toFixed(1));
         })
       }))
-    }),
-    [populatedTrend]
-  );
+    };
+  }, [populatedTrend]);
   const distributionOption = useMemo<EChartsOption>(
     () => ({
       tooltip: { trigger: "axis", axisPointer: { type: "shadow" } },
@@ -576,13 +615,10 @@ export function DailyReportValuePage() {
                 setPage(1);
                 setVariantHash(value);
               }}
-              options={Array.from(
-                new Set(
-                  (data?.items ?? [])
-                    .map((item) => item.variant_hash)
-                    .filter((value): value is string => Boolean(value))
-                )
-              ).map((value) => ({ value, label: value.slice(0, 12) }))}
+              options={(data?.variants ?? []).map((value) => ({
+                value,
+                label: value.slice(0, 12)
+              }))}
             />
             <Select
               allowClear
@@ -607,6 +643,31 @@ export function DailyReportValuePage() {
                 { value: "light", label: "轻度" },
                 { value: "medium", label: "中度" },
                 { value: "heavy", label: "重度" }
+              ]}
+            />
+            <Select
+              allowClear
+              placeholder="工作概览结果"
+              value={summaryOutcome}
+              onChange={(value) => {
+                setPage(1);
+                setSummaryOutcome(value);
+              }}
+              options={Object.entries(summaryLabels)
+                .filter(([value]) => value !== "summary_reduced_30")
+                .map(([value, label]) => ({ value, label }))}
+            />
+            <Select
+              allowClear
+              placeholder="数据完整性"
+              value={missingData}
+              onChange={(value) => {
+                setPage(1);
+                setMissingData(value);
+              }}
+              options={[
+                { value: "true", label: "数据缺失" },
+                { value: "false", label: "数据完整" }
               ]}
             />
             <Select
@@ -761,7 +822,7 @@ export function DailyReportValuePage() {
                 type="info"
                 showIcon
                 message="当前日期作为效果比较基线"
-                description="近 14 日没有更早的可比数据；后续版本或日期产生数据后，将在这里直接展示变化量。"
+                description={`近 ${trendDays} 日没有更早的可比数据；后续版本或日期产生数据后，将在这里直接展示变化量。`}
               />
             )}
           </Card>
@@ -856,7 +917,20 @@ export function DailyReportValuePage() {
                     </Card>
                   </Col>
                   <Col xs={24} xl={15}>
-                    <Card title="近 14 日趋势">
+                    <Card
+                      title={`近 ${trendDays} 日趋势`}
+                      extra={
+                        <Segmented<14 | 30>
+                          size="small"
+                          value={trendDays}
+                          options={[
+                            { label: "14 日", value: 14 },
+                            { label: "30 日", value: 30 }
+                          ]}
+                          onChange={setTrendDays}
+                        />
+                      }
+                    >
                       {populatedTrend.length >= 2 ? (
                         <BaseEChart
                           height={280}

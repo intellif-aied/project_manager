@@ -1697,18 +1697,21 @@ func (h *ManagedAgentHandler) repairedPersonalReportAgentDependencyRequest(agent
 	}
 	personalSkills := make([]model.ManagedSkillRef, 0, len(req.Skills))
 	for _, skill := range req.Skills {
-		if strings.TrimSpace(skill.Slug) == h.defaults.ReportSkillSlug {
+		if strings.TrimSpace(skill.Owner) == strings.TrimSpace(h.defaults.ReportSkillOwner) &&
+			strings.TrimSpace(skill.Slug) == strings.TrimSpace(h.defaults.ReportSkillSlug) &&
+			strings.TrimSpace(skill.Version) == strings.TrimSpace(h.defaults.ReportSkillVersion) {
 			changed = true
 			continue
 		}
 		personalSkills = append(personalSkills, skill)
 	}
 	req.Skills = personalSkills
-	if containsDefaultMarkers(req.Instructions) && isSystemReportInstructions(req.Instructions) {
+	hasManagedPromptResidue := containsDefaultMarkers(req.Instructions)
+	if hasManagedPromptResidue && isSystemReportInstructions(req.Instructions) {
 		req.Instructions = ""
 		changed = true
 	}
-	if isDefaultLikeStartPromptTemplate(req.StartPromptTemplate) {
+	if hasManagedPromptResidue && isDefaultLikeStartPromptTemplate(req.StartPromptTemplate) {
 		req.StartPromptTemplate = ""
 		changed = true
 	}
@@ -1727,7 +1730,7 @@ func (h *ManagedAgentHandler) resolveAndRepairReportAgent(ctx context.Context, c
 		if h.defaults.ReportAssetRepair {
 			patch, changed := h.repairedPersonalReportAgentDependencyRequest(*agent)
 			if changed {
-				if _, err := client.UpdateMyAgent(ctx, agent.AgentID, platformManagedAgentRequest(patch)); err != nil {
+				if _, err := client.UpdateMyAgentWithExplicitPromptFields(ctx, agent.AgentID, platformManagedAgentRequest(patch)); err != nil {
 					return err
 				}
 				*agent = managedAgentFromUpsertRequestPreserving(patch, *agent)
@@ -2734,12 +2737,14 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 		"model_id":                      modelID,
 		"mcp_server":                    h.defaults.ReportMCPSlug,
 		"report_mcp_version":            h.defaults.ReportMCPVersion,
-		"report_skill_slug":             h.defaults.ReportSkillSlug,
-		"report_skill_version":          h.defaults.ReportSkillVersion,
 		"digest_version":                sessiondigestv2.Version,
 		"redaction_version":             sessiondigestv2.RedactionVersion,
 		"report_context_schema_version": reportcontext.SchemaVersion,
 		"credential_slot":               h.defaults.ReportMCPCredentialSlot,
+	}
+	if isSystemDefault {
+		inputRef["report_skill_slug"] = h.defaults.ReportSkillSlug
+		inputRef["report_skill_version"] = h.defaults.ReportSkillVersion
 	}
 	if len(selectedSessionSliceKeys) > 0 {
 		inputRef["selected_session_slice_keys"] = selectedSessionSliceKeys
@@ -4257,8 +4262,6 @@ func (h *ManagedAgentHandler) executeReportAgentScheduleRun(ctx context.Context,
 	inputRef["period_display"] = period.Display
 	inputRef["mcp_server"] = h.defaults.ReportMCPSlug
 	inputRef["report_mcp_version"] = h.defaults.ReportMCPVersion
-	inputRef["report_skill_slug"] = h.defaults.ReportSkillSlug
-	inputRef["report_skill_version"] = h.defaults.ReportSkillVersion
 	inputRef["digest_version"] = sessiondigestv2.Version
 	inputRef["redaction_version"] = sessiondigestv2.RedactionVersion
 	inputRef["report_context_schema_version"] = reportcontext.SchemaVersion

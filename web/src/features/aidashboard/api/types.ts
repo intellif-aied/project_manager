@@ -1636,6 +1636,7 @@ export interface DailyReportValueResponse {
   page: number;
   page_size: number;
   trend: Array<{ report_date: string; metrics: DailyReportValueMetrics }>;
+  variants: string[];
 }
 
 export interface DailyReportValueDetailResponse {

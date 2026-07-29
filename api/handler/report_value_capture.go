@@ -23,6 +23,7 @@ type reportVariantManifest struct {
 	ContextSchemaVersion  string   `json:"context_schema_version"`
 	ContextRepresentation string   `json:"context_representation"`
 	BriefSchemaVersion    string   `json:"brief_schema_version"`
+	ReportAgentSource     string   `json:"report_agent_source"`
 	ReportSkillSlug       string   `json:"report_skill_slug"`
 	ReportSkillVersion    string   `json:"report_skill_version"`
 	ReportMCPSlug         string   `json:"report_mcp_slug"`
@@ -41,6 +42,10 @@ func buildReportVariantManifest(run *reportAIRun, briefSchemaVersion string) ([]
 		stages = []string{"digest", "context", "brief", "final"}
 		pipelineProfile = "digest_context_brief_final"
 	}
+	reportAgentSource := strings.TrimSpace(run.ReportAgentSource)
+	if reportAgentSource == "" {
+		reportAgentSource = managedAgentSourceSystem
+	}
 	manifest := reportVariantManifest{
 		SchemaVersion:         reportVariantManifestSchemaVersion,
 		PipelineProfile:       pipelineProfile,
@@ -53,10 +58,13 @@ func buildReportVariantManifest(run *reportAIRun, briefSchemaVersion string) ([]
 		ContextSchemaVersion:  strings.TrimSpace(stringFromAny(run.InputRef["report_context_schema_version"])),
 		ContextRepresentation: strings.TrimSpace(run.ContextRepresentation),
 		BriefSchemaVersion:    strings.TrimSpace(briefSchemaVersion),
-		ReportSkillSlug:       strings.TrimSpace(stringFromAny(run.InputRef["report_skill_slug"])),
-		ReportSkillVersion:    strings.TrimSpace(stringFromAny(run.InputRef["report_skill_version"])),
+		ReportAgentSource:     reportAgentSource,
 		ReportMCPSlug:         strings.TrimSpace(stringFromAny(run.InputRef["mcp_server"])),
 		ReportMCPVersion:      strings.TrimSpace(stringFromAny(run.InputRef["report_mcp_version"])),
+	}
+	if reportAgentSource == managedAgentSourceSystem {
+		manifest.ReportSkillSlug = strings.TrimSpace(stringFromAny(run.InputRef["report_skill_slug"]))
+		manifest.ReportSkillVersion = strings.TrimSpace(stringFromAny(run.InputRef["report_skill_version"]))
 	}
 	payload, err := json.Marshal(manifest)
 	if err != nil {
