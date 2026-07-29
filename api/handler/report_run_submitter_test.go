@@ -136,6 +136,35 @@ func TestBuildReportRunMessageNeverCarriesRunID(t *testing.T) {
 	}
 }
 
+func TestBuildPersonalReportRunMessageDoesNotForceSystemSkillCommand(t *testing.T) {
+	tests := []struct {
+		name    string
+		message string
+		want    string
+	}{
+		{name: "default", want: personalReportRunMessage()},
+		{
+			name:    "user instruction",
+			message: "请突出今天完成的发布",
+			want:    personalReportRunMessage() + "\n\n用户补充说明：\n请突出今天完成的发布",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := buildReportRunMessageForSource(managedAgentSourcePersonal, nil, test.message, reportMCPCredentialSlot)
+			if got != test.want {
+				t.Fatalf("message=%q, want %q", got, test.want)
+			}
+			if strings.Contains(got, "/aida-report") {
+				t.Fatalf("personal message forced system Skill command: %q", got)
+			}
+			if !strings.Contains(got, "get_report_context") || !strings.Contains(got, "write_report_result") {
+				t.Fatalf("personal message does not explain the required Report MCP flow: %q", got)
+			}
+		})
+	}
+}
+
 func TestReportRunSubmitterFailsUnknownExternalStateWithoutRetry(t *testing.T) {
 	database, mock, err := sqlmock.New()
 	if err != nil {

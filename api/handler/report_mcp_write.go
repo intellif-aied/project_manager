@@ -32,14 +32,16 @@ type reportAIRun struct {
 	InputRef              map[string]any
 	OutputRef             map[string]any
 	ContextRepresentation string
+	ReportAgentSource     string
 	CreatedAt             time.Time
 }
 
 type writeReportResultArgs struct {
-	RunID     string `json:"run_id"`
-	Content   string `json:"content"`
-	Summary   string `json:"summary,omitempty"`
-	BriefHash string `json:"brief_hash,omitempty"`
+	RunID      string `json:"run_id"`
+	Content    string `json:"content"`
+	Summary    string `json:"summary,omitempty"`
+	BriefHash  string `json:"brief_hash,omitempty"`
+	FormatMode string `json:"format_mode,omitempty"`
 }
 
 type writeReportFailureArgs struct {
@@ -82,11 +84,11 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 	acceptedBriefHash := ""
 	degradedReason := ""
 	degradedContentReplaced := false
-	content, normalizedSummary, err := prepareReportResultContent(reportType, run.ContextRepresentation, args.Summary, args.Content)
+	content, normalizedSummary, err := prepareReportResultForRun(*run, reportType, args)
 	if err != nil {
 		return nil, err
 	}
-	if h.briefEnabled && reportType == reportTypePersonalDaily {
+	if h.briefEnabled && reportType == reportTypePersonalDaily && reportBriefRequiredForRun(*run) {
 		if h.reportBrief == nil {
 			return nil, errMCPInternal
 		}
@@ -474,6 +476,7 @@ func (h *ReportMCPHandler) aiRunGuard(r *http.Request, runID, userID string) (*r
 	var executionInput map[string]any
 	_ = json.Unmarshal(executionInputRaw, &executionInput)
 	run.ContextRepresentation = strings.TrimSpace(stringFromAny(executionInput["report_context_representation"]))
+	run.ReportAgentSource = strings.TrimSpace(stringFromAny(executionInput["report_agent_source"]))
 	_ = json.Unmarshal(outputRaw, &run.OutputRef)
 	if run.InputRef == nil {
 		run.InputRef = map[string]any{}
@@ -482,6 +485,29 @@ func (h *ReportMCPHandler) aiRunGuard(r *http.Request, runID, userID string) (*r
 		run.OutputRef = map[string]any{}
 	}
 	return &run, nil
+}
+
+func reportBriefRequiredForRun(run reportAIRun) bool {
+	return strings.TrimSpace(run.ReportAgentSource) != managedAgentSourcePersonal
+}
+
+func prepareReportResultForRun(run reportAIRun, reportType string, args writeReportResultArgs) (string, string, error) {
+	if strings.TrimSpace(run.ReportAgentSource) != managedAgentSourcePersonal {
+		formatMode := strings.TrimSpace(args.FormatMode)
+		if formatMode != "" && formatMode != standardReportFormatMode {
+			return "", "", mcpErr("INVALID_ARGUMENT", "format_mode must be standard for a system report run")
+		}
+		return prepareReportResultContent(reportType, run.ContextRepresentation, args.Summary, args.Content)
+	}
+	content := strings.TrimSpace(strings.ReplaceAll(args.Content, "\r\n", "\n"))
+	if content == "" {
+		return "", "", mcpErr("INVALID_ARGUMENT", "content is required")
+	}
+	summary := strings.TrimSpace(strings.ReplaceAll(args.Summary, "\r\n", "\n"))
+	if strings.TrimSpace(run.ContextRepresentation) == reportcontext.RepresentationWorkEvidence && summary == "" {
+		return "", "", mcpErr("REPORT_SUMMARY_REQUIRED", "summary is required for this report run")
+	}
+	return content, summary, nil
 }
 
 func prepareReportResultContent(reportType, representation, summary, content string) (string, string, error) {

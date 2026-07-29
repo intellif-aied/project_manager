@@ -30,6 +30,52 @@ func TestManagedReportToolsetIncludesBriefOnlyWhenEnabled(t *testing.T) {
 	}
 }
 
+func TestPersonalReportToolsetIsRunBoundWithoutBrief(t *testing.T) {
+	tools := reportMCPToolsForToolsetWithBrief(personalReportMCPToolset, true)
+	want := []string{toolGetReportContext, toolWriteReportResult, toolWriteReportFailure}
+	if len(tools) != len(want) {
+		t.Fatalf("personal tools=%d, want %d", len(tools), len(want))
+	}
+	for index, tool := range tools {
+		if got := tool["name"]; got != want[index] {
+			t.Fatalf("tool[%d]=%v, want %s", index, got, want[index])
+		}
+		properties := tool["inputSchema"].(map[string]any)["properties"].(map[string]any)
+		if _, exists := properties["run_id"]; exists {
+			t.Fatalf("personal tool %s exposes run_id", want[index])
+		}
+		if want[index] == toolWriteReportResult {
+			if _, exists := properties["format_mode"]; exists {
+				t.Fatal("personal write_report_result must not expose the system format policy")
+			}
+		}
+	}
+}
+
+func TestManagedReportResultToolRequiresStandardFormatMode(t *testing.T) {
+	tools := reportMCPToolsForToolsetWithBrief(managedReportMCPToolset, true)
+	for _, tool := range tools {
+		if tool["name"] != toolWriteReportResult {
+			continue
+		}
+		schema := tool["inputSchema"].(map[string]any)
+		properties := schema["properties"].(map[string]any)
+		mode, exists := properties["format_mode"]
+		if !exists {
+			t.Fatal("managed write_report_result does not expose format_mode")
+		}
+		if !reflect.DeepEqual(mode, map[string]any{"type": "string", "enum": []string{"standard"}}) {
+			t.Fatalf("format_mode schema = %#v", mode)
+		}
+		required := schema["required"].([]string)
+		if !reflect.DeepEqual(required, []string{"content", "format_mode"}) {
+			t.Fatalf("managed write required = %#v", required)
+		}
+		return
+	}
+	t.Fatal("managed write_report_result tool not found")
+}
+
 func TestManagedReportBriefToolUsesRunBoundJSONContract(t *testing.T) {
 	tool := reportBriefTool()
 	schema, ok := tool["inputSchema"].(map[string]any)

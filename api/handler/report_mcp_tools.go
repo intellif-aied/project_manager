@@ -10,6 +10,8 @@ import (
 const (
 	managedReportMCPToolsetHeader = "X-Aida-MCP-Toolset"
 	managedReportMCPToolset       = "managed-report"
+	personalReportMCPToolset      = "personal-report"
+	standardReportFormatMode      = "standard"
 )
 
 // reportMCPTools returns the current Report MCP schemas. Legacy read tools stay
@@ -238,11 +240,12 @@ func reportMCPToolsForToolset(toolset string) []map[string]any {
 
 func reportMCPToolsForToolsetWithBrief(toolset string, briefEnabled bool) []map[string]any {
 	tools := reportMCPTools()
-	if strings.TrimSpace(toolset) != managedReportMCPToolset {
+	toolset = strings.TrimSpace(toolset)
+	if toolset != managedReportMCPToolset && toolset != personalReportMCPToolset {
 		return tools
 	}
 	names := []string{toolGetReportContext}
-	if briefEnabled {
+	if toolset == managedReportMCPToolset && briefEnabled {
 		tools = append(tools, reportBriefTool())
 		names = append(names, toolWriteReportBrief)
 	}
@@ -255,10 +258,38 @@ func reportMCPToolsForToolsetWithBrief(toolset string, briefEnabled bool) []map[
 	filtered := make([]map[string]any, 0, len(names))
 	for _, name := range names {
 		if tool, ok := byName[name]; ok {
+			if toolset == managedReportMCPToolset && name == toolWriteReportResult {
+				tool = managedFormattedReportResultTool(tool)
+			}
 			filtered = append(filtered, managedRunBoundTool(tool))
 		}
 	}
 	return filtered
+}
+
+func managedFormattedReportResultTool(tool map[string]any) map[string]any {
+	formatted := make(map[string]any, len(tool))
+	for key, value := range tool {
+		formatted[key] = value
+	}
+	schema, _ := tool["inputSchema"].(map[string]any)
+	formattedSchema := make(map[string]any, len(schema))
+	for key, value := range schema {
+		formattedSchema[key] = value
+	}
+	properties, _ := schema["properties"].(map[string]any)
+	formattedProperties := make(map[string]any, len(properties)+1)
+	for key, value := range properties {
+		formattedProperties[key] = value
+	}
+	formattedProperties["format_mode"] = map[string]any{
+		"type": "string", "enum": []string{standardReportFormatMode},
+	}
+	formattedSchema["properties"] = formattedProperties
+	required, _ := schema["required"].([]string)
+	formattedSchema["required"] = append(append([]string{}, required...), "format_mode")
+	formatted["inputSchema"] = formattedSchema
+	return formatted
 }
 
 func managedRunBoundTool(tool map[string]any) map[string]any {

@@ -24,6 +24,60 @@ func newReportMCPRequest(method string, body any) *http.Request {
 	return req
 }
 
+func TestReportBriefRequiredOnlyForSystemFlow(t *testing.T) {
+	if !reportBriefRequiredForRun(reportAIRun{}) {
+		t.Fatal("legacy run without source must keep the system Brief gate")
+	}
+	if !reportBriefRequiredForRun(reportAIRun{ReportAgentSource: managedAgentSourceSystem}) {
+		t.Fatal("system run must require Report Brief")
+	}
+	if reportBriefRequiredForRun(reportAIRun{ReportAgentSource: managedAgentSourcePersonal}) {
+		t.Fatal("personal run must not require Report Brief")
+	}
+}
+
+func TestPreparePersonalReportResultPreservesSkillMarkdown(t *testing.T) {
+	content := "## 今日推进\n\n1. 完成个人 Skill 验证。\n\n> 由 personal-daily-report-test 生成"
+	summary := "1. 完成个人 Skill 验证。"
+	gotContent, gotSummary, err := prepareReportResultForRun(
+		reportAIRun{
+			ContextRepresentation: reportcontext.RepresentationWorkEvidence,
+			ReportAgentSource:     managedAgentSourcePersonal,
+		},
+		reportTypePersonalDaily,
+		writeReportResultArgs{Content: content, Summary: summary},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotContent != content || gotSummary != summary {
+		t.Fatalf("personal result was rewritten: content=%q summary=%q", gotContent, gotSummary)
+	}
+	if strings.Contains(gotContent, "工作概览") || strings.Contains(gotContent, "工作详情") {
+		t.Fatalf("personal result received system headings: %q", gotContent)
+	}
+}
+
+func TestPrepareSystemReportResultKeepsStandardFormat(t *testing.T) {
+	content, _, err := prepareReportResultForRun(
+		reportAIRun{
+			ContextRepresentation: reportcontext.RepresentationWorkEvidence,
+			ReportAgentSource:     managedAgentSourceSystem,
+		},
+		reportTypePersonalDaily,
+		writeReportResultArgs{
+			Content: "## 今日推进\n\n1. 完成系统报告。",
+			Summary: "1. 完成系统报告。",
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(content, "## 工作概览\n\n") || !strings.Contains(content, "\n\n## 工作详情\n\n") {
+		t.Fatalf("system result lost standard format: %q", content)
+	}
+}
+
 func TestManagedReportWriteToolsRequireRunIDInsteadOfCopiedScope(t *testing.T) {
 	wantRequired := map[string][]string{
 		toolWriteReportResult:  {"run_id", "content"},

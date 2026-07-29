@@ -1006,15 +1006,20 @@ func TestCreateDefaultReportAgentMissingSystemSkillDoesNotWritePlatform(t *testi
 	}
 }
 
-func TestResolveAndRepairReportAgentDependenciesFailureDoesNotUpdateAgent(t *testing.T) {
+func TestResolveAndRepairPersonalReportAgentDoesNotResolveSystemSkill(t *testing.T) {
 	putCalled := false
+	var updated map[string]any
 	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == "/api/skill/list" {
-			writeJSON(w, http.StatusOK, model.ListManagedSkillsResponse{})
-			return
+			t.Fatal("personal Agent must not resolve the system Report Skill")
 		}
-		if r.Method == http.MethodPut {
+		if r.Method == http.MethodPut && r.URL.Path == "/api/my/agents/agent-report" {
 			putCalled = true
+			if err := json.NewDecoder(r.Body).Decode(&updated); err != nil {
+				t.Fatal(err)
+			}
+			writeJSON(w, http.StatusOK, model.ManagedAgent{AgentID: "agent-report"})
+			return
 		}
 		t.Fatalf("unexpected platform request: %s %s", r.Method, r.URL.Path)
 	}))
@@ -1022,18 +1027,26 @@ func TestResolveAndRepairReportAgentDependenciesFailureDoesNotUpdateAgent(t *tes
 
 	h := NewManagedAgentHandlerWithDefaults(nil, service.NewManagedAgentClient(platform.URL, "platform-token"), testManagedAgentDefaults())
 	agent := model.ManagedAgent{
-		AgentID: "agent-report",
-		Skills:  []model.ManagedSkillRef{{Owner: "001898", Slug: service.ReportSkillSlug, Version: testReportSkillVersion}},
+		AgentID:             "agent-report",
+		Instructions:        defaultReportAgentInstructions(reportMCPCredentialSlot),
+		StartPromptTemplate: "/aida-report\nrun_id={{ run_id }}",
+		Skills:              []model.ManagedSkillRef{{Owner: "001898", Slug: service.ReportSkillSlug, Version: testReportSkillVersion}},
 	}
 	err := h.resolveAndRepairReportAgentDependencies(context.Background(), h.client, &agent)
-	if err == nil || !strings.Contains(err.Error(), "was not found") {
-		t.Fatalf("error = %v", err)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if putCalled {
-		t.Fatal("Agent PUT was sent before system Skill resolution succeeded")
+	if !putCalled {
+		t.Fatal("personal Agent dependencies were not repaired")
 	}
-	if len(agent.Skills) != 1 || agent.Skills[0].Owner != "001898" {
-		t.Fatalf("agent was mutated after resolution failure: %#v", agent.Skills)
+	if len(agent.Skills) != 0 {
+		t.Fatalf("system Report Skill residue was not removed: %#v", agent.Skills)
+	}
+	if value, exists := updated["instructions"]; !exists || value != "" {
+		t.Fatalf("legacy system instructions were not explicitly cleared: %#v", updated)
+	}
+	if value, exists := updated["start_prompt_template"]; !exists || value != "" {
+		t.Fatalf("legacy system start prompt was not explicitly cleared: %#v", updated)
 	}
 }
 
@@ -1675,6 +1688,46 @@ func TestRepairedReportAgentDependencyMovesReportMCPToInlineServer(t *testing.T)
 	}
 }
 
+func TestRepairedPersonalReportAgentPreservesUserAssetsAndRemovesSystemResidue(t *testing.T) {
+	h := NewManagedAgentHandlerWithDefaults(nil, nil, ManagedAgentDefaults{
+		ReportMCPSlug:           service.ReportMCPSlug,
+		ReportMCPVersion:        service.ReportMCPVersion,
+		ReportMCPCredentialSlot: reportMCPCredentialSlot,
+		ReportSkillSlug:         service.ReportSkillSlug,
+		ReportSkillVersion:      testReportSkillVersion,
+		AIDAPublicBaseURL:       "https://aida.example.com",
+	})
+	agent := model.ManagedAgent{
+		AgentID:             "personal-agent",
+		Instructions:        "这是用户自己的日报生成要求",
+		StartPromptTemplate: "请使用我的 Skill 生成日报",
+		DefaultModelID:      "user-model",
+		Skills: []model.ManagedSkillRef{
+			{Owner: "100866", Slug: service.ReportSkillSlug, Version: testReportSkillVersion},
+			{Owner: "t03", Slug: "my-daily-skill", Version: "2.0.0"},
+		},
+		MCPServers: []model.ManagedMCPServer{{Name: "my-search", URL: "https://mcp.example.com"}},
+	}
+
+	req, changed := h.repairedPersonalReportAgentDependencyRequest(agent)
+	if !changed {
+		t.Fatal("expected personal Report MCP dependency repair")
+	}
+	if req.Instructions != agent.Instructions || req.StartPromptTemplate != agent.StartPromptTemplate || req.DefaultModelID != agent.DefaultModelID {
+		t.Fatalf("user prompt/model changed: %#v", req)
+	}
+	if len(req.Skills) != 1 || req.Skills[0].Slug != "my-daily-skill" {
+		t.Fatalf("personal skills = %#v", req.Skills)
+	}
+	if len(req.MCPServers) != 2 || req.MCPServers[0].Name != "my-search" {
+		t.Fatalf("personal MCP servers = %#v", req.MCPServers)
+	}
+	reportServer := req.MCPServers[1]
+	if reportServer.Name != service.ReportMCPSlug || reportServer.Headers[managedReportMCPToolsetHeader] != personalReportMCPToolset {
+		t.Fatalf("personal Report MCP = %#v", reportServer)
+	}
+}
+
 func TestReportSkillRefOwnerOmitsOwnerWhenPlatformOmitsOwner(t *testing.T) {
 	got := reportSkillRefOwner(model.ManagedSkill{SkillID: "skill-1", Slug: service.ReportSkillSlug, Version: testReportSkillVersion}, "001898")
 	if got != "" {
@@ -1896,7 +1949,7 @@ func TestResolveAndRepairDefaultReportAgentRefreshesManagedPromptBeforeRun(t *te
 		MCPServers:          []model.ManagedMCPServer{h.defaultReportMCPServer()},
 	}
 
-	if err := h.resolveAndRepairReportAgent(context.Background(), h.client, &agent, true); err != nil {
+	if err := h.resolveAndRepairReportAgent(context.Background(), h.client, &agent, managedAgentSourceSystem, true); err != nil {
 		t.Fatal(err)
 	}
 	if updated.StartPromptTemplate != "/aida-report" {
@@ -2240,12 +2293,12 @@ func TestEnsureScheduleAgentRunnableUsesLocalReportProfile(t *testing.T) {
 				Name:            "report",
 				BusinessType:    managedAgentBusinessGeneric,
 				CredentialSlots: []model.ManagedCredentialSlot{{Name: reportMCPCredentialSlot, Required: true}},
-				Skills:          []model.ManagedSkillRef{{Owner: "100866", Slug: service.ReportSkillSlug, Version: testReportSkillVersion}},
-				MCPServers:      []model.ManagedMCPServer{{Name: service.ReportMCPSlug, URL: "https://aida.example.com/api/v1/mcp/reports", CredentialSlot: reportMCPCredentialSlot, AuthHeader: "Authorization", AuthScheme: "Bearer"}},
-			}}})
-		case r.Method == http.MethodGet && r.URL.Path == "/api/skill/list":
-			writeJSON(w, http.StatusOK, model.ListManagedSkillsResponse{Skills: []model.ManagedSkill{{
-				SkillID: "system-skill", Owner: "100866", Slug: service.ReportSkillSlug, Version: testReportSkillVersion,
+				Skills:          []model.ManagedSkillRef{{Owner: "t03", Slug: "my-report", Version: "1.0.0"}},
+				MCPServers: []model.ManagedMCPServer{{
+					Name: service.ReportMCPSlug, URL: "https://aida.example.com/api/v1/mcp/reports",
+					CredentialSlot: reportMCPCredentialSlot, AuthHeader: "Authorization", AuthScheme: "Bearer",
+					Headers: map[string]string{managedReportMCPToolsetHeader: personalReportMCPToolset},
+				}},
 			}}})
 		default:
 			t.Fatalf("unexpected platform request: %s %s", r.Method, r.URL.Path)
