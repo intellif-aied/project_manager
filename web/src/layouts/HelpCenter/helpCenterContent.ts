@@ -31,6 +31,7 @@ export interface HelpSection {
 export interface HelpArticle {
   id: string;
   keywords: string[];
+  lastReviewedAt?: string;
   module: HelpModuleKey;
   roles?: BusinessRole[];
   route: string;
@@ -186,6 +187,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
   },
   {
     id: "client-install",
+    lastReviewedAt: "2026-07-28",
     module: "client",
     title: "安装或更新 AIDA 客户端",
     summary: "根据 Windows、macOS 或 Linux 安装客户端，并使用自动检查或 aida update 保持最新版本。",
@@ -231,6 +233,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
   },
   {
     id: "client-login",
+    lastReviewedAt: "2026-07-28",
     module: "client",
     title: "登录客户端并检查状态",
     summary: "使用个人令牌绑定 AIDA 服务，并确认当前终端登录身份正确。",
@@ -262,9 +265,10 @@ export const HELP_ARTICLES: HelpArticle[] = [
   },
   {
     id: "client-quick-start",
+    lastReviewedAt: "2026-07-28",
     module: "client",
-    title: "第一次上传 Session",
-    summary: "完成安装和登录后，把本地 Claude Code 或 Codex 工作记录同步到 AIDA。",
+    title: "个人设备上传 Session",
+    summary: "在个人设备上交互选择或批量同步 Claude Code、Codex 工作记录。",
     route: "/sessions",
     roles: ALL_BUSINESS_ROLES,
     keywords: ["AIDA", "客户端", "CLI", "Session", "上传", "全屏选择", "搜索", "READY", "PROCESSING", "安装", "Claude Code", "Codex"],
@@ -274,6 +278,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
         bullets: [
           "已经安装 AIDA 客户端，并通过 aida status 确认当前登录身份正确。",
           "本机已经使用 Claude Code 或 Codex 完成过工作，客户端会扫描对应的本地 Session。",
+          "本页介绍个人模式：上传结果归当前登录账号。多人共用同一系统账号的开发机请改用团队模式。",
           "令牌只用于本人设备登录，不要粘贴到群聊、需求描述或截图中。"
         ]
       },
@@ -285,7 +290,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
           "检查顶部已选择数量，确认后按 Enter 上传。"
         ],
         codeBlocks: [{ label: "交互选择并上传", code: "aida upload" }],
-        note: "首次使用建议交互选择，不建议直接使用 --all；这样可以先排除无关项目或包含敏感上下文的 Session。"
+        note: "首次使用建议交互选择，不建议直接使用 --all；这样可以先排除无关项目或包含敏感上下文的 Session。命令 --all 仍是个人模式，不会按团队目录分发。"
       },
       {
         title: "全屏选择器操作",
@@ -312,7 +317,150 @@ export const HELP_ARTICLES: HelpArticle[] = [
     ]
   },
   {
+    id: "client-team-sync",
+    lastReviewedAt: "2026-07-28",
+    module: "client",
+    title: "共享开发机使用团队同步",
+    summary: "多人共用一台开发机时，按工作目录把 Session 同步到对应团队成员。",
+    route: "/tokens",
+    roles: ALL_BUSINESS_ROLES,
+    keywords: ["团队同步", "共享开发机", "upload --team", "auto-sync", "同步目录", "aida log", "待配置", "归属"],
+    sections: [
+      {
+        title: "什么时候使用团队模式",
+        bullets: [
+          "多人共用同一个系统账号，并共同使用这台机器上的 Claude Code 或 Codex 时，使用团队模式。",
+          "个人电脑或只需要上传本人 Session 时，继续使用 aida upload、aida upload --all 或个人自动同步。",
+          "团队模式仍使用普通个人 Token 登录，不需要创建或保管团队账号、团队 Token。共享机上登录的账号必须属于目标团队。"
+        ]
+      },
+      {
+        title: "1. 每位成员配置自己的目录",
+        steps: [
+          "每位成员分别登录自己的 AIDA 网页账号，进入“我的 Token”。",
+          "在日期选择器后点击文件夹图标，打开“团队同步目录”。",
+          "添加本人工作目录的绝对路径，例如 /home/shared/alice/project；该目录及其子目录都会归属本人。",
+          "不同成员不能配置相同或互相包含的目录；不能配置文件系统根目录 /。"
+        ],
+        note: "目录由成员自行维护。修改目录只影响后续团队同步；已上传 Session 不会自动迁移。删除目录后，该目录下新旧 Session 都会停止后续团队同步。",
+        screenshots: [
+          {
+            alt: "我的 Token 页面团队同步目录入口",
+            caption: "团队同步目录入口位于日期范围选择器最右侧的文件夹按钮，图中已用红色描边标出。",
+            src: "/help-center/screenshots/v3/client/01-team-sync-directory-entry.png"
+          }
+        ]
+      },
+      {
+        title: "2. 在共享机登录并立即同步",
+        steps: [
+          "共享机上的任一团队成员执行 aida login，使用自己的个人 Token 登录。",
+          "执行 aida status，确认登录身份和服务地址正确。",
+          "执行 aida upload --team。团队模式会扫描全部本地 Session，不会打开逐条选择器。",
+          "命中成员目录的新 Session 会直接进入该成员的个人数据；既有 Session 继续沿用原归属。"
+        ],
+        codeBlocks: [
+          { label: "团队模式立即同步", code: "aida login\naida status\naida upload --team" }
+        ]
+      },
+      {
+        title: "3. 开启团队自动同步",
+        paragraphs: ["设置一次后，AIDA 会按选择的北京时间每天自动执行团队同步。"],
+        codeBlocks: [
+          { label: "开启团队自动同步", code: "aida auto-sync enable --team" },
+          { label: "检查自动同步状态", code: "aida auto-sync status" }
+        ],
+        note: "普通 aida auto-sync enable 开启的是个人模式。团队模式不会由登录、升级或其他命令自动开启。"
+      },
+      {
+        title: "4. 处理待配置目录",
+        steps: [
+          "如果上传结果显示“待配置”，执行 aida log 查看目录和受影响的 Session 数。",
+          "让对应成员在“我的 Token”的文件夹入口补充该绝对目录。",
+          "配置完成后再次执行 aida upload --team；未配置期间内容不会被上传，也不会自动归给登录者。"
+        ],
+        codeBlocks: [{ label: "查看团队同步待配置目录", code: "aida log" }]
+      },
+      {
+        title: "归属规则",
+        bullets: [
+          "目录只决定新 Session 的个人归属；同一 Session 建立后不会因为登录账号或目录配置变化而换人。",
+          "团队模式上传的 Session 直接计入归属成员的个人 Token、成本、Session 和日报统计。",
+          "旧 Session 已经传错账号时不会由日常同步自动拆分，需要联系平台负责人按确认目录执行一次性历史归属迁移。",
+          "目录未配置、Session 身份重复或原归属已不在当前团队时，对应 Session 不会上传；保留终端错误信息交给平台负责人处理。"
+        ]
+      }
+    ]
+  },
+  {
+    id: "client-auto-sync",
+    lastReviewedAt: "2026-07-28",
+    module: "client",
+    title: "设置每天自动同步",
+    summary: "选择个人或团队模式，设置每天的北京时间，并检查或关闭后台同步。",
+    route: "/sessions",
+    roles: ALL_BUSINESS_ROLES,
+    keywords: ["自动同步", "auto-sync", "定时", "北京时间", "enable", "set-time", "disable", "status"],
+    sections: [
+      {
+        title: "选择同步模式",
+        codeBlocks: [
+          { label: "个人设备：开启个人自动同步", code: "aida auto-sync enable" },
+          { label: "共享开发机：开启团队自动同步", code: "aida auto-sync enable --team" }
+        ],
+        note: "个人模式把 Session 上传到当前登录账号；团队模式按网页中配置的成员目录分发。两种模式需要显式选择，不会自动互相切换。"
+      },
+      {
+        title: "管理自动同步",
+        codeBlocks: [
+          { label: "查看自动同步状态", code: "aida auto-sync status" },
+          { label: "修改每天同步时间", code: "aida auto-sync set-time" },
+          { label: "关闭自动同步", code: "aida auto-sync disable" }
+        ],
+        bullets: [
+          "enable 和 set-time 会在终端中引导选择每天的同步时间，页面显示统一使用北京时间。",
+          "也可以执行 aida status，同时检查登录、连接和自动同步状态。",
+          "客户端更新后会自动恢复已开启的同步任务；需要改变个人/团队模式时，重新执行对应的 enable 命令。"
+        ]
+      }
+    ]
+  },
+  {
+    id: "client-additional-clients",
+    lastReviewedAt: "2026-07-28",
+    module: "client",
+    title: "同步其他 AI 编程客户端",
+    summary: "检测 OpenCode、Kimi Code、OpenClaw 和 WorkBuddy，并显式选择可上传的 Session。",
+    route: "/sessions",
+    roles: ALL_BUSINESS_ROLES,
+    keywords: ["clients", "upload-client", "OpenCode", "Kimi Code", "OpenClaw", "WorkBuddy", "其他客户端"],
+    sections: [
+      {
+        title: "检测本机客户端",
+        paragraphs: ["Claude Code 和 Codex 直接使用 aida upload；其他客户端先检测，再使用 upload-client。"],
+        codeBlocks: [{ label: "检测支持的客户端", code: "aida clients" }]
+      },
+      {
+        title: "上传 OpenCode 或 Kimi Code",
+        codeBlocks: [
+          { label: "交互选择 Session", code: "aida upload-client opencode\naida upload-client kimi_code" },
+          { label: "上传全部 Session", code: "aida upload-client opencode --all\naida upload-client kimi_code --all" }
+        ]
+      },
+      {
+        title: "上传 OpenClaw",
+        paragraphs: ["OpenClaw 可能包含私人或非编码对话，因此必须逐条选择，不支持 --all。"],
+        codeBlocks: [
+          { label: "打开选择器", code: "aida upload-client openclaw" },
+          { label: "按 Session Ref 上传", code: "aida upload-client openclaw <session-ref>" }
+        ],
+        note: "WorkBuddy 当前只支持检测，不支持上传；以 aida clients 的检测结果为准。"
+      }
+    ]
+  },
+  {
     id: "client-session-slice-rules",
+    lastReviewedAt: "2026-07-28",
     module: "client",
     title: "Session 切片如何形成",
     summary: "了解首次上传、后续增量上传、跨天内容与报告选择之间的关系。",
@@ -356,6 +504,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
   },
   {
     id: "client-upload-troubleshooting",
+    lastReviewedAt: "2026-07-28",
     module: "client",
     title: "选择、上传与问题排查",
     summary: "掌握交互搜索、批量上传和常见失败的处理方式。",
@@ -367,14 +516,17 @@ export const HELP_ARTICLES: HelpArticle[] = [
         title: "常用命令",
         codeBlocks: [
           { label: "交互选择并上传", code: "aida upload" },
-          { label: "上传全部本地可发现 Session", code: "aida upload --all" }
+          { label: "个人账号上传全部本地 Session", code: "aida upload --all" },
+          { label: "共享机按团队目录上传全部 Session", code: "aida upload --team" },
+          { label: "查看团队模式待配置目录", code: "aida log" }
         ]
       },
       {
         title: "交互模式与直接模式",
         bullets: [
           "直接执行 aida upload 会进入全屏交互选择，支持键盘移动、勾选和搜索，适合首次上传和需要核对范围的场景。",
-          "aida upload --all 会直接处理全部本地可发现 Session，不是最近一页；无变化的 Session 会跳过，但仍应先检查上传范围。"
+          "aida upload --all 会按当前登录账号处理全部本地可发现 Session，不是最近一页；无变化的 Session 会跳过，但仍应先检查上传范围。",
+          "aida upload --team 同样扫描全部本地 Session，但按当前团队成员配置的工作目录分发；它不会打开选择器。"
         ]
       },
       {

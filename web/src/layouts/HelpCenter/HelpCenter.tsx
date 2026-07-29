@@ -244,7 +244,7 @@ export function HelpCenter({ onClose, open }: HelpCenterProps) {
         >
           前往对应页面
         </Button>
-        <span>最后核对：2026-07-14</span>
+        <span>最后核对：{article.lastReviewedAt ?? "2026-07-14"}</span>
       </div>
     </article>
   );
