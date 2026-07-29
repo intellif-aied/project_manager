@@ -986,8 +986,8 @@ func TestReportMCPQualityRetryExhaustionRequiresDegradedResult(t *testing.T) {
 	h.ConfigureReportBrief(&recordingReportBriefService{degradedReason: "brief_retry_exhausted"}, true)
 	mock.ExpectQuery("SELECT id::text, business_type").
 		WithArgs("run-degraded", "u-1").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "business_type", "agent_id", "model_id", "status", "execution_stage", "input_ref_json", "execution_input_json", "output_ref_json", "created_at"}).
-			AddRow("run-degraded", reportAgentRunBusinessType, "agent-1", "deepseek-v4-flash", "running", "agent_running", []byte(`{"report_type":"personal_daily","period":{"date":"2026-07-24"},"target":{"type":"self","user_id":"u-1"}}`), []byte(`{}`), []byte(`{}`), time.Now()))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "business_type", "agent_id", "agent_version_id", "model_id", "status", "execution_stage", "input_ref_json", "execution_input_json", "output_ref_json", "created_at"}).
+			AddRow("run-degraded", reportAgentRunBusinessType, "agent-1", 3, "deepseek-v4-flash", "running", "agent_running", []byte(`{"report_type":"personal_daily","period":{"date":"2026-07-24"},"target":{"type":"self","user_id":"u-1"}}`), []byte(`{}`), []byte(`{}`), time.Now()))
 
 	req := newReportMCPRequest("tools/call", map[string]any{
 		"jsonrpc": "2.0",
