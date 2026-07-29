@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "daily-report-evaluation-plan/v1",
+  "$defs": {
+    "variants": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["variant_version", "agent_id"],
+        "properties": {
+          "variant_version": { "type": "string", "minLength": 1 },
+          "agent_id": { "type": "string", "minLength": 1 },
+          "model_id": { "type": "string" },
+          "expected_variant_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "expected_pipeline_profile": { "type": "string" }
+        }
+      }
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "dataset_file", "repetitions", "timeout_seconds", "variants"],
+  "properties": {
+    "schema_version": { "const": "daily-report-evaluation-plan/v1" },
+    "dataset_file": { "type": "string", "minLength": 1 },
+    "repetitions": { "type": "integer", "minimum": 1, "maximum": 5 },
+    "timeout_seconds": { "type": "integer", "minimum": 30, "maximum": 7200 },
+    "variants": { "$ref": "#/$defs/variants" }
+  }
+}

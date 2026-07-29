@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/aidashboard/api/internal/biztime"
+	"github.com/aidashboard/api/internal/reportbrief"
 	"github.com/aidashboard/api/internal/reportcontext"
 	"github.com/aidashboard/api/internal/reportsource"
 	"github.com/aidashboard/api/internal/sessiondigestv2"
@@ -98,6 +99,8 @@ type ManagedAgentDefaults struct {
 	ReportAgentStartPromptTemplate string
 	ReportAssetRepair              bool
 	ReportAssetRepairConfigured    bool
+	ReportTwoPassEnabled           bool
+	BuildRevision                  string
 	AIDAPublicBaseURL              string
 	AIHubSecret                    string
 }
@@ -2778,7 +2781,7 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 		"user_id": u.ID, "business_type": reportAgentRunBusinessType,
 		"report_type": req.ReportType, "target": target,
 		"period": inputRef["period"], "timezone": biztime.Zone,
-		"agent_id": agentID, "model_id": modelID,
+		"agent_id": agentID, "agent_version_id": agent.CurrentVersionID, "model_id": modelID,
 		"initial_message":               userMessage,
 		"trigger_source":                "manual",
 		"digest_version":                sessiondigestv2.Version,
@@ -2803,14 +2806,39 @@ func (h *ManagedAgentHandler) StartReportAgentRun(w http.ResponseWriter, r *http
 	if isSystemDefault {
 		executionInput["system_report_account"] = true
 	}
+	inputRef["code_revision"] = strings.TrimSpace(h.defaults.BuildRevision)
+	promptMaterial := strings.TrimSpace(agent.Instructions) + "\n" + strings.TrimSpace(agent.StartPromptTemplate)
+	if strings.TrimSpace(promptMaterial) != "" {
+		inputRef["report_prompt_sha256"] = sha256Hex(promptMaterial)
+	}
+	if isSystemDefault {
+		if skillMarkdown := strings.TrimSpace(h.reportSkillMarkdown()); skillMarkdown != "" {
+			inputRef["report_skill_sha256"] = sha256Hex(skillMarkdown)
+		}
+	}
+	var agentVersionID *int
+	if agent.CurrentVersionID > 0 {
+		value := agent.CurrentVersionID
+		agentVersionID = &value
+	}
+	variantManifest, variantSHA256, err := buildSubmittedReportVariant(
+		agentID, agentVersionID, modelID, inputRef, reportAgentSource,
+		h.defaults.ReportTwoPassEnabled,
+	)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
 	result, err := h.reportSource.CreateReportRun(r.Context(), reportsource.RunSubmissionRequest{
 		UserID: u.ID, ReportType: req.ReportType, Period: contextPeriod,
 		SelectionID: reportSourceSelectionID, Sources: sources,
 		RequireSources: needsReportSourceSelection,
 		BusinessType:   reportAgentRunBusinessType, AgentID: agentID, ModelID: modelID,
+		AgentVersionID:          agentVersionID,
 		IdempotencyKey:          idempotencyKey,
 		RequestFingerprintInput: requestFingerprint, ActiveDedupeInput: dedupeScope,
 		InputRef: inputRef, ExecutionInput: executionInput,
+		VariantManifest: variantManifest, VariantSHA256: variantSHA256,
 	})
 	if errors.Is(err, reportsource.ErrIdempotencyKeyReused) {
 		writeJSON(w, http.StatusConflict, map[string]string{
@@ -2854,6 +2882,31 @@ func nullableStringValue(value string) any {
 		return nil
 	}
 	return strings.TrimSpace(value)
+}
+
+func buildSubmittedReportVariant(
+	agentID string,
+	agentVersionID *int,
+	modelID string,
+	inputRef map[string]any,
+	reportAgentSource string,
+	briefEnabled bool,
+) (json.RawMessage, string, error) {
+	var modelIDRef *string
+	if value := strings.TrimSpace(modelID); value != "" {
+		modelIDRef = &value
+	}
+	briefSchemaVersion := ""
+	if briefEnabled && strings.TrimSpace(reportAgentSource) != managedAgentSourcePersonal {
+		briefSchemaVersion = reportbrief.SchemaVersion
+	}
+	run := &reportAIRun{
+		AgentID: agentID, AgentVersionID: agentVersionID, ModelID: modelIDRef,
+		InputRef: inputRef, ContextRepresentation: reportcontext.RepresentationWorkEvidence,
+		ReportAgentSource: reportAgentSource,
+	}
+	payload, hash, err := buildReportVariantManifest(run, briefSchemaVersion)
+	return json.RawMessage(payload), hash, err
 }
 
 type reportSourceRunInputError struct {
@@ -4266,6 +4319,7 @@ func (h *ManagedAgentHandler) executeReportAgentScheduleRun(ctx context.Context,
 	inputRef["redaction_version"] = sessiondigestv2.RedactionVersion
 	inputRef["report_context_schema_version"] = reportcontext.SchemaVersion
 	inputRef["credential_slot"] = h.defaults.ReportMCPCredentialSlot
+	inputRef["code_revision"] = strings.TrimSpace(h.defaults.BuildRevision)
 	contextPeriod := reportContextPeriod(reportType, period.Date, period.WeekStart, period.WeekEnd)
 	userMessage := strings.TrimSpace(schedule.InitialMessage)
 	if h.reportSource == nil {
@@ -4282,6 +4336,12 @@ func (h *ManagedAgentHandler) executeReportAgentScheduleRun(ctx context.Context,
 		"report_context_schema_version": reportcontext.SchemaVersion,
 		"report_context_representation": reportcontext.RepresentationWorkEvidence,
 	}
+	variantManifest, variantSHA256, err := buildSubmittedReportVariant(
+		schedule.AgentID, nil, modelID, inputRef, managedAgentSourcePersonal, false,
+	)
+	if err != nil {
+		return nil, err
+	}
 	result, err := h.reportSource.CreateReportRun(ctx, reportsource.RunSubmissionRequest{
 		UserID: u.ID, ReportType: reportType, Period: contextPeriod,
 		RequireSources: reportType == reportTypePersonalDaily,
@@ -4296,6 +4356,7 @@ func (h *ManagedAgentHandler) executeReportAgentScheduleRun(ctx context.Context,
 			"report_context_representation": reportcontext.RepresentationWorkEvidence,
 			"report_agent_source":           managedAgentSourcePersonal,
 		},
+		VariantManifest: variantManifest, VariantSHA256: variantSHA256,
 	})
 	if err != nil {
 		return nil, err

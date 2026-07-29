@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"runtime/debug"
 	"strings"
 
 	"github.com/aidashboard/api/config"
@@ -116,14 +117,16 @@ func main() {
 	reportContextService := reportcontext.NewService(database, reportSourceService)
 	reportBriefService := reportbrief.NewService(database, reportContextService)
 	managedAgentDefaults := handler.ManagedAgentDefaults{
-		Engine:             cfg.ManagedAgentDefaultEngine,
-		ModelID:            cfg.ManagedAgentDefaultModelID,
-		ReportModelID:      cfg.ManagedAgentReportModelID,
-		ReportSkillOwner:   cfg.ManagedAgentReportSkillOwner,
-		ReportSkillVersion: cfg.ManagedAgentReportSkillVersion,
-		ReportMCPURL:       cfg.ManagedAgentReportMCPURL,
-		AIDAPublicBaseURL:  cfg.AIDAPublicBaseURL,
-		AIHubSecret:        cfg.AIHubSecret,
+		Engine:               cfg.ManagedAgentDefaultEngine,
+		ModelID:              cfg.ManagedAgentDefaultModelID,
+		ReportModelID:        cfg.ManagedAgentReportModelID,
+		ReportSkillOwner:     cfg.ManagedAgentReportSkillOwner,
+		ReportSkillVersion:   cfg.ManagedAgentReportSkillVersion,
+		ReportMCPURL:         cfg.ManagedAgentReportMCPURL,
+		ReportTwoPassEnabled: cfg.ReportTwoPassEnabled,
+		BuildRevision:        currentBuildRevision(),
+		AIDAPublicBaseURL:    cfg.AIDAPublicBaseURL,
+		AIHubSecret:          cfg.AIHubSecret,
 	}
 	managedAgentH := handler.NewManagedAgentHandlerWithDefaults(database, managedAgentClient, managedAgentDefaults)
 	managedAgentH.ConfigureReportSourceSelection(reportSourceService)
@@ -535,6 +538,20 @@ func main() {
 	if err := http.ListenAndServe(":"+cfg.Port, r); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
+}
+
+func currentBuildRevision() string {
+	if value := strings.TrimSpace(os.Getenv("AIDA_BUILD_REVISION")); value != "" {
+		return value
+	}
+	if info, ok := debug.ReadBuildInfo(); ok {
+		for _, setting := range info.Settings {
+			if setting.Key == "vcs.revision" {
+				return strings.TrimSpace(setting.Value)
+			}
+		}
+	}
+	return "not_available"
 }
 
 func corsMiddleware(origin string) func(http.Handler) http.Handler {

@@ -1,0 +1,17 @@
+{
+  "schema_version": "daily-report-evaluation-plan/v1",
+  "dataset_file": "dataset.example.json",
+  "repetitions": 1,
+  "timeout_seconds": 1800,
+  "variants": [
+    {
+      "variant_version": "baseline",
+      "agent_id": "default",
+      "expected_pipeline_profile": "digest_context_brief_final"
+    },
+    {
+      "variant_version": "candidate",
+      "agent_id": "candidate-report-agent"
+    }
+  ]
+}

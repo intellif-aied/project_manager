@@ -1,0 +1,17 @@
+{
+  "schema_version": "daily-report-evaluation-dataset/v1",
+  "dataset_version": "daily-report-fixed/v1-draft",
+  "rubric_version": "daily-report-rubric/v1",
+  "report_type": "personal_daily",
+  "cases": [
+    {
+      "case_id": "case-001",
+      "report_date": "2026-06-11",
+      "selected_session_slice_keys": ["11111111-1111-4111-8111-111111111111"],
+      "evidence_baseline": { "facts": [], "allowed_exclusions": [], "forbidden_additions": [] },
+      "tags": ["example"],
+      "source": "replace_before_run",
+      "usage_authorized": true
+    }
+  ]
+}
