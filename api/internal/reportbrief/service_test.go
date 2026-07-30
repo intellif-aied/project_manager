@@ -159,6 +159,7 @@ func TestValidateTextIssuesRejectsInternalDetails(t *testing.T) {
 		"镜像标签 20260727-a66ffdb-report-actions",
 		"兼容路由 /reports/daily",
 		"开放 UDP 123 并运行 systemd --user 服务",
+		"开放 3001 端口供局域网访问",
 		"通知跳转到 /agent 页面",
 	} {
 		if len(validateTextIssues("content", text, 0, MaxPayloadBytes)) == 0 {
@@ -167,6 +168,28 @@ func TestValidateTextIssuesRejectsInternalDetails(t *testing.T) {
 	}
 	if issues := validateTextIssues("content", "完成错误提示、通知跳转和操作布局优化，并在生产环境验证", 0, MaxPayloadBytes); len(issues) != 0 {
 		t.Fatalf("reader-facing content rejected: %v", issues)
+	}
+}
+
+func TestValidateResultBriefIssuesKeepsNoWorkStateConsistent(t *testing.T) {
+	noWork := Payload{NoReportableWork: true}
+	if issues := validateResultBriefIssues(
+		noWork,
+		noReportableResultText,
+		"## 工作概览\n\n本期无可核验的工作记录\n\n## 工作详情\n\n本期无可核验的工作记录",
+	); len(issues) != 0 {
+		t.Fatalf("valid no-work result rejected: %v", issues)
+	}
+	if issues := validateResultBriefIssues(noWork, "完成一项工作", "完成一项工作"); len(issues) != 2 {
+		t.Fatalf("no-work brief accepted contradictory result: %v", issues)
+	}
+
+	withWork := Payload{Workstreams: []Workstream{{Title: "日报优化"}}}
+	if issues := validateResultBriefIssues(withWork, "1. 完成日报优化", "### 日报优化\n\n完成实现"); len(issues) != 0 {
+		t.Fatalf("normal report result rejected: %v", issues)
+	}
+	if issues := validateResultBriefIssues(withWork, noReportableResultText, noReportableResultText); len(issues) != 1 {
+		t.Fatalf("non-empty brief accepted no-work claim: %v", issues)
 	}
 }
 

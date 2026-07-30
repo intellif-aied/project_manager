@@ -181,6 +181,7 @@ func (s *Service) ValidateForWrite(ctx context.Context, userID, runID, briefHash
 	issues := make([]string, 0, 8)
 	appendValidationIssues(&issues, validateTextIssues("summary", normalizeText(summary), 0, MaxPayloadBytes))
 	appendValidationIssues(&issues, validateTextIssues("content", normalizeText(content), 0, MaxPayloadBytes))
+	appendValidationIssues(&issues, validateResultBriefIssues(stored.Payload, summary, content))
 	if len(issues) > 0 {
 		validationErr := invalidError(ErrResultInvalid, issues)
 		attempts, attemptErr := s.recordInvalidAttempt(ctx, userID, runID, "result")
@@ -318,6 +319,7 @@ var (
 	absWindowsPathPattern = regexp.MustCompile(`(?i)\b[A-Z]:\\[^\s]+`)
 	internalRoutePattern  = regexp.MustCompile(`(?:^|[\s(\x60])/[A-Za-z][A-Za-z0-9_-]*(?:/[A-Za-z0-9_.{}:-]+)*`)
 	networkPortPattern    = regexp.MustCompile(`(?i)(?:udp|tcp|port|端口)\s*[:：]?\s*[0-9]{2,5}\b`)
+	reversePortPattern    = regexp.MustCompile(`(?i)\b[0-9]{2,5}\s*(?:号)?\s*(?:udp|tcp|port|端口)`)
 	commandFlagPattern    = regexp.MustCompile(`(?:^|\s)--[A-Za-z][A-Za-z0-9-]*\b`)
 )
 
@@ -467,6 +469,27 @@ func normalizeText(value string) string {
 	return strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
 }
 
+const noReportableResultText = "本期无可核验的工作记录"
+
+func validateResultBriefIssues(payload Payload, summary, content string) []string {
+	summary = normalizeText(summary)
+	content = normalizeText(content)
+	if payload.NoReportableWork {
+		issues := make([]string, 0, 2)
+		if summary != noReportableResultText {
+			issues = append(issues, "summary must use the no-reportable-work statement from the accepted brief")
+		}
+		if !strings.Contains(content, noReportableResultText) {
+			issues = append(issues, "content must use the no-reportable-work statement from the accepted brief")
+		}
+		return issues
+	}
+	if strings.Contains(summary, noReportableResultText) || strings.Contains(content, noReportableResultText) {
+		return []string{"report result conflicts with the accepted brief by claiming no reportable work"}
+	}
+	return nil
+}
+
 func validateTextIssues(path, value string, minRunes, maxRunes int) []string {
 	issues := make([]string, 0, 4)
 	length := len([]rune(value))
@@ -489,6 +512,7 @@ func validateTextIssues(path, value string, minRunes, maxRunes int) []string {
 		{rawCodePattern, "raw error code"},
 		{absUnixPathPattern, "absolute path"}, {absWindowsPathPattern, "absolute path"},
 		{internalRoutePattern, "internal route"}, {networkPortPattern, "network port"},
+		{reversePortPattern, "network port"},
 		{commandFlagPattern, "command-line flag"},
 	} {
 		if rule.pattern.MatchString(value) {

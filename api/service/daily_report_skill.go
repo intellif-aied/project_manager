@@ -97,13 +97,14 @@ For personal_daily, perform two distinct semantic passes in this same Agent Sess
 ### Pass 1: build and submit the Brief
 
 - Read every work_evidence.fact and fact_ref, then form candidate workstreams. Reviewing every fact does not mean promoting every real activity to a report heading.
-- Read work_evidence.threads as the work-thread dictionary. For each fact, resolve thread_refs against that dictionary before deciding its workstream. Facts sharing a thread_ref belong to the same work thread; threads with the same or clearly continuous goal should normally be merged into one reader-facing workstream.
-- After grouping candidates by work thread and goal, select for reader value. Keep one to three primary workstreams by default. Use four or five only when every additional workstream has an independently important outcome, blocker, or risk. Never exceed five.
+- Resolve work_evidence.threads and thread_refs as continuity hints, not headings. First identify the shared reader-facing product, initiative, or business object.
+- Facts about one named system normally form one workstream. Keep material documentation, Q&A, implementation, deployment, fixes, and validation as deliverables, not headings.
+- Split only for independent manager-facing outcomes or artifacts, such as a protocol decision and usable prototype. Session, repository, or thread alone neither forces merge nor split.
+- After subject-first grouping, select for reader value. Keep one to three primary workstreams by default. Use four or five only when every additional workstream has an independently important outcome, blocker, or risk. Never exceed five.
 - Prefer sustained objectives, deliverables, state changes, blockers, and risks; duration, detail, tests, deployments, repositories, or Subagent output do not establish importance by themselves.
-- Merge implementation, documentation, validation, fixes, and same-product technical analysis or Q&A into one objective through fact_refs instead of creating extra headings. Split research or architecture only when it is the primary result or yields an independent material decision, artifact, blocker, or risk.
 - thread_ref is internal correlation data. Never copy thread_ref, goal field names, or the work-thread dictionary into Brief prose or the final report. The Brief continues to cite evidence only through fact_refs.
 - Each independently deliverable result must be a separate deliverable with result, state, environment, validation, next_action, and supporting fact_refs.
-- State rules are strict: released requires explicit production evidence and environment=production; validated means test verification; completed does not imply release; preserve in_progress and blocked.
+- State rules: released requires explicit production evidence and environment=production; validated means test verification; completed is not released; preserve in_progress and blocked. Internal, LAN, test, demo, or prototype deployment is not production unless explicitly released to production users.
 - Exclude preparation, discussion, traces, duplicates, and low reader-value details with the matching reason. Exclude a real but relatively minor independent activity with reason secondary_activity.
 - Never use secondary_activity to hide a fact about a selected result's latest state, failure, blocker, or a material security risk; attach it to that result or keep it as a primary workstream.
 - Every fact_ref must be included in at least one deliverable or excluded. A fact cannot be both included and excluded.
