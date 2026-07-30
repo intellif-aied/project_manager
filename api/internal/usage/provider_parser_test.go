@@ -279,6 +279,35 @@ func TestCodexSubagentRewrittenHistoryStopsAtCommunicationBoundary(t *testing.T)
 	}
 }
 
+func TestCodexForkedSessionRetimestampedParentHistoryStopsAtTaskBoundary(t *testing.T) {
+	lines := []string{
+		`{"timestamp":"2026-07-30T08:05:58Z","type":"session_meta","payload":{"id":"child","timestamp":"2026-07-30T08:05:58Z","forked_from_id":"parent"}}`,
+		`{"timestamp":"2026-07-30T08:05:59Z","type":"session_meta","payload":{"id":"parent","timestamp":"2026-07-20T01:00:00Z"}}`,
+		`{"timestamp":"2026-07-30T08:06:00Z","type":"event_msg","payload":{"type":"task_started","started_at":1784510000}}`,
+		`{"timestamp":"2026-07-30T08:06:01Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20,"total_tokens":120}}}}`,
+		`{"timestamp":"2026-07-30T08:06:02Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":130,"cached_input_tokens":25,"output_tokens":30,"total_tokens":160}}}}`,
+		`{"timestamp":"2026-07-30T08:09:30Z","type":"event_msg","payload":{"type":"task_started","started_at":1785398970}}`,
+		`{"timestamp":"2026-07-30T08:09:31Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":170,"cached_input_tokens":30,"output_tokens":40,"total_tokens":210}}}}`,
+		`{"timestamp":"2026-07-30T08:09:32Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":190,"cached_input_tokens":35,"output_tokens":50,"total_tokens":240}}}}`,
+	}
+	firstContent := strings.Join(lines[:5], "\n") + "\n"
+	first, err := ParseProviderChunk("codex", strings.NewReader(firstContent), 0, ParseState{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Records) != 0 {
+		t.Fatalf("retimestamped parent history was billed: records=%+v", first.Records)
+	}
+	secondContent := strings.Join(lines[5:], "\n") + "\n"
+	second, err := ParseProviderChunk("codex", strings.NewReader(secondContent), int64(len(firstContent)), first.State)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second.Records) != 1 || second.Records[0].Delta.TotalTokens != 30 {
+		t.Fatalf("unexpected child usage after task boundary: state=%+v records=%+v", second.State, second.Records)
+	}
+}
+
 func TestUsageParserRejectsIncompleteAndOversizedLines(t *testing.T) {
 	if _, err := ParseProviderChunk("codex", bytes.NewReader([]byte(`{"type":"event_msg"}`)), 0, ParseState{}); !errors.Is(err, ErrIncompleteLine) {
 		t.Fatalf("incomplete err=%v", err)
