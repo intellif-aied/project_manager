@@ -32,7 +32,7 @@ func ValidEnvironments() []string {
 }
 
 func ValidExclusionReasons() []string {
-	return []string{"preparation", "discussion", "trace", "duplicate", "low_reader_value"}
+	return []string{"preparation", "discussion", "trace", "duplicate", "low_reader_value", "secondary_activity"}
 }
 
 type Draft struct {

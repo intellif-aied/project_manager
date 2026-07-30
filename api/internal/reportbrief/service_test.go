@@ -101,6 +101,37 @@ func TestNormalizeDraftAcceptsNoReportableWorkWhenEveryFactIsExcluded(t *testing
 	}
 }
 
+func TestNormalizeDraftAcceptsSecondaryActivityExclusion(t *testing.T) {
+	payload, err := normalizeDraft(Draft{
+		Workstreams: []Workstream{{
+			Title: "核心协议设计", Objective: "完成核心交付方案",
+			Deliverables: []Deliverable{{
+				Result: "完成协议设计", State: "completed", Environment: "development",
+				Validation: "设计内容已完成复核", NextAction: "进入实现验证", FactRefs: []string{"fact-001"},
+			}},
+		}},
+		ExcludedFacts: []ExcludedFact{{FactRef: "fact-002", Reason: "secondary_activity"}},
+	}, personalDaily, Period{Start: "2026-07-29", End: "2026-07-29"}, map[string]struct{}{
+		"fact-001": {}, "fact-002": {},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := payload.ExcludedFacts[0].Reason; got != "secondary_activity" {
+		t.Fatalf("exclusion reason = %q, want secondary_activity", got)
+	}
+}
+
+func TestNormalizeDraftRejectsUnknownExclusionReason(t *testing.T) {
+	_, err := normalizeDraft(Draft{
+		NoReportableWork: true,
+		ExcludedFacts:    []ExcludedFact{{FactRef: "fact-001", Reason: "not_important"}},
+	}, personalDaily, Period{Start: "2026-07-29", End: "2026-07-29"}, map[string]struct{}{"fact-001": {}})
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "reason is invalid") {
+		t.Fatalf("error = %v, want invalid exclusion reason", err)
+	}
+}
+
 func TestNormalizeDraftMergesSameWorkstream(t *testing.T) {
 	payload, err := normalizeDraft(Draft{Workstreams: []Workstream{
 		{Title: "报告体验优化", Objective: "改善报告使用体验", Deliverables: []Deliverable{{

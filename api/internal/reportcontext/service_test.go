@@ -247,7 +247,7 @@ func TestProjectPayloadDoesNotAddFactRefsToOtherReportTypes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(encoded), `"fact_ref"`) {
+	if strings.Contains(string(encoded), `"fact_ref"`) || strings.Contains(string(encoded), `"thread_ref"`) || strings.Contains(string(encoded), `"threads"`) {
 		t.Fatalf("non-personal-daily projection changed: %s", encoded)
 	}
 }
@@ -270,6 +270,17 @@ func TestProjectPayloadUsesReadableFactsAndOmitsRawGoals(t *testing.T) {
 	evidence := projected.WorkEvidence
 	if len(evidence.Facts) != 3 {
 		t.Fatalf("report-bearing facts were lost: %+v", evidence.Facts)
+	}
+	if len(evidence.Threads) != 3 ||
+		evidence.Threads[0].ThreadRef != "thread-001" || evidence.Threads[0].Goal != "same goal" ||
+		evidence.Threads[1].ThreadRef != "thread-002" || evidence.Threads[1].Goal != "same goal" ||
+		evidence.Threads[2].ThreadRef != "thread-003" || evidence.Threads[2].Goal != "other goal" {
+		t.Fatalf("work thread dictionary was not preserved: %+v", evidence.Threads)
+	}
+	if strings.Join(evidence.Facts[0].ThreadRefs, ",") != "thread-001,thread-002" ||
+		strings.Join(evidence.Facts[1].ThreadRefs, ",") != "thread-003" ||
+		strings.Join(evidence.Facts[2].ThreadRefs, ",") != "thread-003" {
+		t.Fatalf("facts were not linked to their work threads: %+v", evidence.Facts)
 	}
 	if evidence.Facts[0].Kind != "result" ||
 		evidence.Facts[0].FactRef != "fact-001" ||
@@ -297,14 +308,14 @@ func TestProjectPayloadUsesReadableFactsAndOmitsRawGoals(t *testing.T) {
 	visible := string(encoded)
 	for _, forbidden := range []string{
 		`"fact_columns"`, `"lookup_columns"`, `"row_reference_base"`,
-		`"evidence_by_exact_goal"`, `"work_unit_ref"`, `"goal"`,
-		`"evidence_refs"`, `"selection_id"`, `"digest_sha256"`,
+		`"evidence_by_exact_goal"`, `"work_unit_ref"`, `"source_ref"`,
+		`"evidence_refs"`, `"selection_id"`, `"digest_sha256"`, `"session-1"`,
 	} {
 		if strings.Contains(visible, forbidden) {
 			t.Fatalf("work evidence leaked transport or raw goal field %s: %s", forbidden, visible)
 		}
 	}
-	if !strings.Contains(visible, `"facts":[{"fact_ref":"fact-001","kind":"result","text":"same result","source":"tool_result","observations":[{"date":"2026-07-23","observed_at":"2026-07-23T09:00:00+08:00","category":"implementation","status":"completed","occurrence_count":1`) ||
+	if !strings.Contains(visible, `"facts":[{"fact_ref":"fact-001","kind":"result","text":"same result","source":"tool_result","thread_refs":["thread-001","thread-002"],"observations":[{"date":"2026-07-23","observed_at":"2026-07-23T09:00:00+08:00","category":"implementation","status":"completed","occurrence_count":1`) ||
 		!strings.Contains(visible, `"fact_ref":"fact-003","kind":"unresolved","text":"follow up"`) {
 		t.Fatalf("work evidence is not readable object JSON: %s", visible)
 	}
@@ -315,15 +326,15 @@ func TestAppendWorkEvidenceFactAggregatesOnlyEquivalentObservations(t *testing.T
 	indexes := make(map[workEvidenceFactIdentity]int)
 	observationIndexes := make([]map[workEvidenceObservationIdentity]int, 0)
 	identity := workEvidenceFactIdentity{Kind: "result", Text: "same result", Source: "tool_result"}
-	appendWorkEvidenceFact(&projection, indexes, &observationIndexes, identity, WorkEvidenceObservation{
+	appendWorkEvidenceFact(&projection, indexes, &observationIndexes, identity, "thread-001", WorkEvidenceObservation{
 		Date: "2026-07-23", ObservedAt: "2026-07-23T09:00:00+08:00",
 		Category: "validation", Status: "completed",
 	})
-	appendWorkEvidenceFact(&projection, indexes, &observationIndexes, identity, WorkEvidenceObservation{
+	appendWorkEvidenceFact(&projection, indexes, &observationIndexes, identity, "thread-002", WorkEvidenceObservation{
 		Date: "2026-07-23", ObservedAt: "2026-07-23T10:00:00+08:00",
 		Category: "validation", Status: "completed",
 	})
-	appendWorkEvidenceFact(&projection, indexes, &observationIndexes, identity, WorkEvidenceObservation{
+	appendWorkEvidenceFact(&projection, indexes, &observationIndexes, identity, "thread-002", WorkEvidenceObservation{
 		Date: "2026-07-23", ObservedAt: "2026-07-23T11:00:00+08:00",
 		Category: "validation", Status: "failed",
 	})
@@ -334,6 +345,9 @@ func TestAppendWorkEvidenceFactAggregatesOnlyEquivalentObservations(t *testing.T
 		observations[0].ObservedAt != "2026-07-23T10:00:00+08:00" ||
 		observations[1].Status != "failed" || observations[1].OccurrenceCount != 1 {
 		t.Fatalf("observation status or occurrence evidence was lost: %+v", observations)
+	}
+	if strings.Join(projection.Facts[0].ThreadRefs, ",") != "thread-001,thread-002" {
+		t.Fatalf("fact thread links were not deduplicated: %+v", projection.Facts[0].ThreadRefs)
 	}
 }
 
