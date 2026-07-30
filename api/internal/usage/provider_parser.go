@@ -62,7 +62,6 @@ type ParseState struct {
 	ForkedAt              *time.Time     `json:"forked_at,omitempty"`
 	ForkBaselineReady     bool           `json:"fork_baseline_ready,omitempty"`
 	ForkBaselineMissing   bool           `json:"fork_baseline_missing,omitempty"`
-	ForkHistoryReplay     bool           `json:"fork_history_replay,omitempty"`
 	ForkMetadataConflict  bool           `json:"fork_metadata_conflict,omitempty"`
 }
 
@@ -290,7 +289,6 @@ func parseCodexLine(
 			var meta codexRootSessionMeta
 			if json.Unmarshal(envelope.Payload, &meta) == nil &&
 				strings.TrimSpace(meta.ID) == state.ForkParentSessionRef {
-				state.ForkHistoryReplay = true
 				state.ForkBaselineReady = false
 				state.ForkBaselineMissing = true
 				state.PreviousCodexCounters = nil
@@ -328,14 +326,10 @@ func parseCodexLine(
 	if json.Unmarshal(envelope.Payload, &event) != nil {
 		return UsageRecord{}, lineMalformed
 	}
-	if event.Type == "task_started" && state.ForkHistoryReplay && state.ForkedAt != nil &&
+	if event.Type == "task_started" && codexForkHistoryReplay(state) && state.ForkedAt != nil &&
 		event.StartedAt >= state.ForkedAt.Unix() {
-		state.ForkHistoryReplay = false
-		state.ForkBaselineReady = false
-		state.ForkBaselineMissing = true
-		state.PreviousCodexCounters = nil
-		state.PreviousCodexModel = ""
-		state.CodexBaselineOnly = false
+		state.ForkBaselineReady = true
+		state.ForkBaselineMissing = false
 		return UsageRecord{}, lineIgnored
 	}
 	if event.Type != "token_count" {
@@ -401,7 +395,7 @@ func parseCodexLine(
 		return UsageRecord{}, lineUnknownUsage
 	}
 	occurredAt = occurredAt.UTC()
-	if state.ForkHistoryReplay {
+	if codexForkHistoryReplay(state) {
 		state.PreviousCodexCounters = &counters
 		state.PreviousCodexModel = state.ActiveModel
 		return UsageRecord{}, lineIgnored
@@ -487,6 +481,10 @@ func codexContextWindowTokens(model string) int64 {
 	default:
 		return 0
 	}
+}
+
+func codexForkHistoryReplay(state *ParseState) bool {
+	return state.ForkSource == "forked_from_id" && state.ForkBaselineMissing && !state.ForkBaselineReady
 }
 
 func codexInterAgentTriggerTurn(payload json.RawMessage) bool {

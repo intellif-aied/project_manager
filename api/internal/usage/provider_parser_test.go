@@ -303,7 +303,8 @@ func TestCodexForkedSessionRetimestampedParentHistoryStopsAtTaskBoundary(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(second.Records) != 1 || second.Records[0].Delta.TotalTokens != 30 {
+	if len(second.Records) != 2 || second.Records[0].Delta.TotalTokens != 50 ||
+		second.Records[1].Delta.TotalTokens != 30 {
 		t.Fatalf("unexpected child usage after task boundary: state=%+v records=%+v", second.State, second.Records)
 	}
 }
