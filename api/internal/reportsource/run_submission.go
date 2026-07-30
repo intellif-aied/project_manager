@@ -153,15 +153,12 @@ func (s *Service) createReportRunOnce(
 	if err != nil {
 		return RunSubmissionResult{}, err
 	}
-	items, identities := canonicalizeSelectionItems(items)
-	if request.RequireSources && len(identities) == 0 {
-		return RunSubmissionResult{}, ErrSourceUnavailable
-	}
-	sourceIdentitySHA, err := canonicalSHA256(struct {
-		Items []sourceIdentity `json:"items"`
-	}{Items: identities})
+	items, sourceIdentitySHA, err := CanonicalSourceIdentity(items)
 	if err != nil {
 		return RunSubmissionResult{}, err
+	}
+	if request.RequireSources && len(items) == 0 {
+		return RunSubmissionResult{}, ErrSourceUnavailable
 	}
 	activeDedupeKey, err := canonicalSHA256(struct {
 		Scope             any    `json:"scope"`
@@ -308,6 +305,20 @@ func canonicalizeSelectionItems(items []SelectionItem) ([]SelectionItem, []sourc
 		identities = append(identities, candidate.identity)
 	}
 	return canonicalItems, identities
+}
+
+// CanonicalSourceIdentity returns the canonical source order and the exact
+// identity hash used by report runs. Evaluation freezes must use this function
+// so their pre-Digest evidence is bound to the same immutable source set.
+func CanonicalSourceIdentity(items []SelectionItem) ([]SelectionItem, string, error) {
+	canonicalItems, identities := canonicalizeSelectionItems(items)
+	hash, err := canonicalSHA256(struct {
+		Items []sourceIdentity `json:"items"`
+	}{Items: identities})
+	if err != nil {
+		return nil, "", err
+	}
+	return canonicalItems, hash, nil
 }
 
 func canonicalSHA256(value any) (string, error) {

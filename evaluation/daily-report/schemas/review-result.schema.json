@@ -1,11 +1,17 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "daily-report-case-review/v1",
+  "$id": "daily-report-case-review/v2",
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  },
   "type": "object",
   "additionalProperties": false,
   "required": [
     "case_id", "repetition", "variant_version", "grade", "directly_usable",
-    "issues", "confidence", "needs_human_review", "reviewer_model",
+    "issues", "confidence", "needs_human_review", "reviewer_kind", "rubric_version",
     "input_sha256", "output_sha256"
   ],
   "properties": {
@@ -22,7 +28,13 @@
         "additionalProperties": false,
         "required": ["error_type", "severity", "first_bad_stage", "evidence_refs", "affected_final_refs", "explanation"],
         "properties": {
-          "error_type": { "enum": ["FACT_OMISSION", "FACT_HALLUCINATION", "STATUS_UPGRADE", "ENVIRONMENT_MIX", "WRONG_GROUPING", "OVER_COMPRESSION", "NOISE_RETENTION", "INTERNAL_LEAKAGE", "REPETITION", "POOR_READABILITY"] },
+          "error_type": {
+            "enum": [
+              "FACT_OMISSION", "FACT_HALLUCINATION", "STATUS_UPGRADE", "ENVIRONMENT_MIX",
+              "WRONG_GROUPING", "OVER_COMPRESSION", "NOISE_RETENTION", "INTERNAL_LEAKAGE",
+              "REPETITION", "POOR_READABILITY"
+            ]
+          },
           "severity": { "enum": ["minor", "unacceptable"] },
           "first_bad_stage": { "type": "string", "minLength": 1 },
           "evidence_refs": { "type": "array", "items": { "type": "string" } },
@@ -34,12 +46,44 @@
     "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
     "needs_human_review": { "type": "boolean" },
     "review_source": { "enum": ["ai", "gold"] },
+    "reviewer_kind": { "enum": ["model", "human"] },
     "reviewer_model": { "type": "string", "minLength": 1 },
-    "rubric_version": { "type": "string" },
-    "prompt_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-    "skill_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "reviewer_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "human_confirmed": { "type": "boolean" },
+    "rubric_version": { "type": "string", "minLength": 1 },
+    "prompt_sha256": { "$ref": "#/$defs/sha256" },
+    "skill_sha256": { "$ref": "#/$defs/sha256" },
     "elapsed_ms": { "type": "integer", "minimum": 0 },
-    "input_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-    "output_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
-  }
+    "input_sha256": { "$ref": "#/$defs/sha256" },
+    "output_sha256": { "$ref": "#/$defs/sha256" }
+  },
+  "oneOf": [
+    {
+      "properties": { "reviewer_kind": { "const": "model" } },
+      "required": ["reviewer_model", "prompt_sha256", "skill_sha256"],
+      "not": {
+        "anyOf": [
+          { "required": ["reviewer_id"] },
+          { "required": ["human_confirmed"] }
+        ]
+      }
+    },
+    {
+      "properties": {
+        "reviewer_kind": { "const": "human" },
+        "human_confirmed": { "const": true }
+      },
+      "required": ["reviewer_id", "human_confirmed"],
+      "not": {
+        "anyOf": [
+          { "required": ["reviewer_model"] },
+          { "required": ["prompt_sha256"] },
+          { "required": ["skill_sha256"] }
+        ]
+      }
+    }
+  ]
 }

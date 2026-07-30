@@ -41,6 +41,9 @@ type Config struct {
 	ReportRunProcessorCount        int
 	DigestBackgroundWorkerCount    int
 	DigestInteractiveWorkerCount   int
+	Environment                    string
+	EvaluationEnabled              bool
+	EvaluationInstanceID           string
 
 	MinioEndpoint         string
 	MinioAccessKey        string
@@ -83,6 +86,9 @@ func Load() *Config {
 		AIDAInternalMetricsAddr:        getEnv("AIDA_INTERNAL_METRICS_ADDR", ":9091"),
 		EnablePublicRegister:           getEnv("ENABLE_PUBLIC_REGISTER", "false") == "true",
 		ClaudeCacheWriteVariant:        strings.TrimSpace(strings.ToLower(getEnv("AIDA_CLAUDE_CACHE_WRITE_VARIANT", ""))),
+		Environment:                    strings.TrimSpace(strings.ToLower(getEnv("AIDA_ENVIRONMENT", "development"))),
+		EvaluationEnabled:              getEnv("AIDA_EVALUATION_ENABLED", "false") == "true",
+		EvaluationInstanceID:           strings.TrimSpace(getEnv("AIDA_EVALUATION_INSTANCE_ID", "")),
 
 		MinioEndpoint:         getEnv("MINIO_ENDPOINT", ""),
 		MinioAccessKey:        getEnv("MINIO_ACCESS_KEY", ""),
@@ -92,6 +98,22 @@ func Load() *Config {
 		MinioExternalEndpoint: getEnv("MINIO_EXTERNAL_ENDPOINT", ""),
 	}
 	return cfg
+}
+
+func (c *Config) ValidateEvaluationRuntime() error {
+	if c == nil {
+		return fmt.Errorf("evaluation runtime configuration is required")
+	}
+	if !c.EvaluationEnabled {
+		return nil
+	}
+	if c.Environment != "test" {
+		return fmt.Errorf("AIDA_EVALUATION_ENABLED requires AIDA_ENVIRONMENT=test")
+	}
+	if c.EvaluationInstanceID == "" {
+		return fmt.Errorf("AIDA_EVALUATION_INSTANCE_ID is required when evaluation is enabled")
+	}
+	return nil
 }
 
 func LoadWorkerCounts() (WorkerCounts, error) {

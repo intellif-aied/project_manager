@@ -15,9 +15,14 @@
 ```text
 evaluation-bundle/
 ├── manifest.json
+├── execution-plan.json
+├── dataset-manifest.json
+├── sources/
+│   └── <case-id>.json
+├── pattern/
+│   └── statistics.json
 ├── cases/
 │   └── <case-id>/
-│       ├── source-evidence.json
 │       ├── evidence-baseline.json
 │       └── runs/
 │           └── <run-id>/
@@ -30,7 +35,7 @@ evaluation-bundle/
 └── baseline-report.json
 ```
 
-不存在的阶段使用 Manifest 中的 `not_applicable` 声明，不用空文件伪装存在。
+Dataset Manifest 中的 `source_evidence.path` 和 `pattern_baseline.statistics.path` 是 Bundle 根目录下的相对路径，文件 Hash 必须一致。不存在的阶段由 Run Manifest 的实际阶段集合判定为 `not_applicable`，不用空文件伪装存在。
 
 ## 3. Skill 职责
 
@@ -42,6 +47,8 @@ evaluation-bundle/
 6. 聚合 Scorecard、fixed/regressed 和三态结论；
 7. 输出结构化结果和 Markdown 报告。
 
+匿名目录会把 Case 引用的 Source 文件复制为 `source-evidence.json`，并在 `review-input/production-pattern-statistics.json` 提供聚合形态参考；两者都不暴露 Variant 身份。
+
 ## 4. 输出
 
 ```text
@@ -52,7 +59,7 @@ evaluation-result/
 └── review-needed.jsonl
 ```
 
-记录 Reviewer 模型、Prompt Hash、Rubric 版本、输入/输出 Hash、耗时和置信度。
+AI Review 记录 `reviewer_kind=model`、Reviewer 模型和 Prompt/Skill Hash；Gold Review 记录 `reviewer_kind=human`、匿名 Reviewer ID 与 `human_confirmed=true`。两者都记录 Rubric 版本、输入/输出 Hash、耗时和置信度。Issue 的 Evidence 引用必须来自该 Case 的 Source Evidence 或 Evidence Baseline。
 
 ## 5. 边界
 

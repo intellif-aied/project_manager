@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	projectdb "github.com/aidashboard/api/db"
 	"github.com/aidashboard/api/internal/reporteval"
 )
 
@@ -21,6 +20,8 @@ func main() {
 	switch os.Args[1] {
 	case "validate":
 		validateCommand(os.Args[2:])
+	case "freeze-source":
+		freezeSourceCommand(os.Args[2:])
 	case "run":
 		runCommand(os.Args[2:])
 	case "verify":
@@ -114,92 +115,143 @@ func validateCommand(arguments []string) {
 	if err != nil {
 		fatal(err)
 	}
-	datasetHash, err := reporteval.CanonicalSHA256(dataset)
+	fmt.Printf("valid plan: %d cases, %d variants, dataset_sha256=%s\n", len(dataset.Manifest.Cases), len(plan.Variants), dataset.DatasetSHA256)
+}
+
+type stringList []string
+
+func (values *stringList) String() string { return strings.Join(*values, ",") }
+func (values *stringList) Set(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fmt.Errorf("slice key cannot be empty")
+	}
+	*values = append(*values, value)
+	return nil
+}
+
+func freezeSourceCommand(arguments []string) {
+	flags := flag.NewFlagSet("freeze-source", flag.ExitOnError)
+	baseURL := flags.String("base-url", "", "isolated test server base URL")
+	tokenEnv := flags.String("token-env", "", "environment variable containing the test account token")
+	reportDate := flags.String("report-date", "", "personal daily report date (YYYY-MM-DD)")
+	output := flags.String("output", "", "new source evidence JSON file")
+	requestTimeout := flags.Duration("request-timeout", 5*time.Minute, "source freeze HTTP request timeout")
+	pollInterval := flags.Duration("poll-interval", 2*time.Second, "HTTP runtime polling interval")
+	var sliceKeys stringList
+	flags.Var(&sliceKeys, "slice-key", "selected session slice UUID; repeat for multiple slices")
+	_ = flags.Parse(arguments)
+	if strings.TrimSpace(*baseURL) == "" || strings.TrimSpace(*tokenEnv) == "" || strings.TrimSpace(*reportDate) == "" || strings.TrimSpace(*output) == "" || len(sliceKeys) == 0 {
+		fatal(fmt.Errorf("base-url, token-env, report-date, output, and at least one slice-key are required"))
+	}
+	if *requestTimeout <= 0 {
+		fatal(fmt.Errorf("request-timeout must be greater than zero"))
+	}
+	token := strings.TrimSpace(os.Getenv(*tokenEnv))
+	if token == "" {
+		fatal(fmt.Errorf("token environment variable %s is empty", *tokenEnv))
+	}
+	runtime := &reporteval.HTTPRuntime{
+		BaseURL: strings.TrimRight(*baseURL, "/"), BearerToken: token, PollInterval: *pollInterval,
+		RequestTimeout: *requestTimeout,
+	}
+	ctx := context.Background()
+	attestation, err := runtime.Attest(ctx)
 	if err != nil {
 		fatal(err)
 	}
-	fmt.Printf("valid plan: %d cases, %d variants, dataset_sha256=%s\n", len(dataset.Cases), len(plan.Variants), datasetHash)
+	if err := attestation.Validate(); err != nil {
+		fatal(fmt.Errorf("reject runtime: %w", err))
+	}
+	source, err := runtime.FreezeSource(ctx, *reportDate, sliceKeys)
+	if err != nil {
+		fatal(err)
+	}
+	payload, err := json.MarshalIndent(source, "", "  ")
+	if err != nil {
+		fatal(err)
+	}
+	payload = append(payload, '\n')
+	if err := os.MkdirAll(filepath.Dir(*output), 0o750); err != nil {
+		fatal(err)
+	}
+	file, err := os.OpenFile(*output, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o640)
+	if err != nil {
+		fatal(err)
+	}
+	if _, err := file.Write(payload); err != nil {
+		_ = file.Close()
+		fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		fatal(err)
+	}
+	fmt.Printf("source frozen: %s sha256=%s source_identity=%s runtime=%s/%s\n",
+		*output, reporteval.CanonicalBytesSHA256(payload), source.SourceIdentitySHA256,
+		attestation.InstanceID, attestation.BuildRevision)
 }
 
 func runCommand(arguments []string) {
 	flags := flag.NewFlagSet("run", flag.ExitOnError)
 	planPath := flags.String("plan", "", "evaluation execution plan JSON")
-	baseURL := flags.String("base-url", "", "test server base URL")
-	tokenEnv := flags.String("token-env", "AIDA_EVAL_TOKEN", "environment variable containing a test account token")
-	databaseURL := flags.String("database-url", os.Getenv("DATABASE_URL"), "test PostgreSQL connection URL")
 	outputDir := flags.String("output", "", "new evaluation bundle directory")
-	environment := flags.String("environment", "", "must be test; production execution is forbidden")
 	pollInterval := flags.Duration("poll-interval", 2*time.Second, "run status poll interval")
 	_ = flags.Parse(arguments)
 	plan, dataset, err := loadInputs(*planPath)
 	if err != nil {
 		fatal(err)
 	}
-	if strings.TrimSpace(*databaseURL) == "" || strings.TrimSpace(*baseURL) == "" || strings.TrimSpace(*outputDir) == "" {
-		fatal(fmt.Errorf("database-url, base-url, and output are required"))
-	}
-	if strings.TrimSpace(*environment) != "test" {
-		fatal(fmt.Errorf("environment must be explicitly set to test"))
-	}
-	token := strings.TrimSpace(os.Getenv(*tokenEnv))
-	if token == "" {
-		fatal(fmt.Errorf("token environment variable %s is empty", *tokenEnv))
+	if strings.TrimSpace(*outputDir) == "" {
+		fatal(fmt.Errorf("output is required"))
 	}
 	if _, err := os.Stat(*outputDir); err == nil {
 		fatal(fmt.Errorf("output directory already exists: %s", *outputDir))
 	} else if !os.IsNotExist(err) {
 		fatal(err)
 	}
-	database, err := projectdb.Connect(*databaseURL)
+	exporter := reporteval.Exporter{OutputDir: *outputDir}
+	_, err = exporter.Initialize(dataset)
 	if err != nil {
 		fatal(err)
 	}
-	defer database.Close()
-	exporter := reporteval.Exporter{DB: database, OutputDir: *outputDir}
-	datasetHash, err := exporter.Initialize(dataset)
-	if err != nil {
-		fatal(err)
-	}
-	runner := reporteval.Runner{
-		BaseURL: *baseURL, BearerToken: token, PollInterval: *pollInterval,
-	}
+	runner := reporteval.Runner{RuntimeFactory: reporteval.NewHTTPRuntimeFactory(os.Getenv, nil, *pollInterval)}
 	ctx := context.Background()
 	receipts, err := runner.Execute(ctx, dataset, plan, func(
-		ctx context.Context, item reporteval.EvaluationCase, variant reporteval.VariantSpec, receipt *reporteval.RunReceipt,
+		_ context.Context, item reporteval.EvaluationCase, variant reporteval.VariantSpec,
+		receipt *reporteval.RunReceipt, artifacts reporteval.RunArtifactEnvelope,
 	) error {
-		return exporter.ExportRun(ctx, item, variant, receipt)
+		return exporter.ExportRun(item, dataset.Sources[item.CaseID], variant, receipt, artifacts)
 	})
 	if err != nil {
 		fatal(err)
 	}
-	if err := exporter.Finalize(dataset, plan, datasetHash, receipts); err != nil {
+	if err := exporter.Finalize(dataset, plan, receipts); err != nil {
 		fatal(err)
 	}
 	fmt.Printf("bundle complete: %s (%d runs)\n", *outputDir, len(receipts))
 }
 
-func loadInputs(planPath string) (reporteval.ExecutionPlan, reporteval.DatasetManifest, error) {
+func loadInputs(planPath string) (reporteval.ExecutionPlan, reporteval.FrozenDataset, error) {
 	var plan reporteval.ExecutionPlan
 	if strings.TrimSpace(planPath) == "" {
-		return plan, reporteval.DatasetManifest{}, fmt.Errorf("plan is required")
+		return plan, reporteval.FrozenDataset{}, fmt.Errorf("plan is required")
 	}
 	if err := decodeFile(planPath, &plan); err != nil {
-		return plan, reporteval.DatasetManifest{}, err
+		return plan, reporteval.FrozenDataset{}, err
 	}
 	if err := plan.Validate(); err != nil {
-		return plan, reporteval.DatasetManifest{}, fmt.Errorf("invalid plan: %w", err)
+		return plan, reporteval.FrozenDataset{}, fmt.Errorf("invalid plan: %w", err)
 	}
 	datasetPath := plan.DatasetFile
 	if !filepath.IsAbs(datasetPath) {
 		datasetPath = filepath.Join(filepath.Dir(planPath), datasetPath)
 	}
-	var dataset reporteval.DatasetManifest
-	if err := decodeFile(datasetPath, &dataset); err != nil {
+	dataset, err := reporteval.LoadFrozenDataset(datasetPath)
+	if err != nil {
 		return plan, dataset, err
 	}
-	reporteval.NormalizeDataset(&dataset)
-	if err := dataset.Validate(); err != nil {
-		return plan, dataset, fmt.Errorf("invalid dataset: %w", err)
+	if err := plan.ValidateForDataset(dataset.Manifest); err != nil {
+		return plan, dataset, fmt.Errorf("plan credentials do not match dataset: %w", err)
 	}
 	return plan, dataset, nil
 }
@@ -219,7 +271,7 @@ func decodeFile(path string, output any) error {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: daily-report-eval <validate|run|verify|prepare-review|aggregate> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: daily-report-eval <validate|freeze-source|run|verify|prepare-review|aggregate> [flags]")
 	os.Exit(2)
 }
 

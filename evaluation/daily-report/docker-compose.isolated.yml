@@ -1,0 +1,23 @@
+services:
+  db:
+    ports: !override
+      - "${AIDA_EVAL_DB_PORT:-25433}:5432"
+
+  minio:
+    ports: !override
+      - "${AIDA_EVAL_MINIO_PORT:-29000}:9000"
+      - "${AIDA_EVAL_MINIO_CONSOLE_PORT:-29001}:9001"
+
+  api:
+    ports: !override
+      - "${AIDA_EVAL_API_PORT:-28091}:8080"
+    environment:
+      AIDA_ENVIRONMENT: "test"
+      AIDA_EVALUATION_ENABLED: "true"
+      AIDA_EVALUATION_INSTANCE_ID: "${AIDA_EVALUATION_INSTANCE_ID:?set a unique isolated instance id}"
+      AIDA_BUILD_REVISION: "${AIDA_BUILD_REVISION:?set the evaluated build revision}"
+      AIDA_PUBLIC_BASE_URL: "${AIDA_EVAL_PUBLIC_BASE_URL:-http://192.168.14.157:28091}"
+      AIDA_INTERNAL_METRICS_ADDR: ":9091"
+      REPORT_RUN_PROCESSOR_COUNT: "${AIDA_EVAL_REPORT_WORKERS:-2}"
+      DIGEST_BACKGROUND_WORKER_COUNT: "${AIDA_EVAL_DIGEST_BACKGROUND_WORKERS:-2}"
+      DIGEST_INTERACTIVE_WORKER_COUNT: "${AIDA_EVAL_DIGEST_INTERACTIVE_WORKERS:-2}"

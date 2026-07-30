@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "daily-report-source-evidence/v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "source_identity_set_sha256", "redaction_version", "items"],
+  "properties": {
+    "schema_version": { "const": "daily-report-source-evidence/v2" },
+    "source_identity_set_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "redaction_version": { "const": "daily-report-evaluation-source-redaction/v1" },
+    "items": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["evidence_source_id", "agent_type", "events"],
+        "properties": {
+          "evidence_source_id": { "type": "string", "minLength": 1 },
+          "agent_type": { "type": "string", "minLength": 1 },
+          "events": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["evidence_ref", "occurred_at", "event_type", "payload"],
+              "properties": {
+                "evidence_ref": { "type": "string", "minLength": 1 },
+                "occurred_at": { "type": "string", "format": "date-time" },
+                "event_type": { "type": "string", "minLength": 1 },
+                "summary": { "type": "string" },
+                "excerpt": { "type": "string" },
+                "payload": {}
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

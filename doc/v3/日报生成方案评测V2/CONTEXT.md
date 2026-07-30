@@ -17,12 +17,28 @@ _Avoid_: 模型版本、当前流程
 _Avoid_: Run、日报样例
 
 **Source Evidence Snapshot**:
-不同 Variant 端到端比较的共同上游输入。
-_Avoid_: Context、标准日报
+在任何 Digest、Context 或生成阶段之前，从固定 Session Slice 冻结的规范事件证据及其 Hash，是不同 Variant 的共同上游输入。
+_Avoid_: Digest、Context、标准日报
 
 **Evidence Baseline**:
-从 Source Evidence 标注的重要事实、状态、环境、允许排除项和禁止新增内容。
+从 Source Evidence 结构化标注的必选、可选、排除证据，事实状态、环境、主题关系和禁止新增内容。
 _Avoid_: AI 答案、标准日报全文
+
+**Production Report Pattern Baseline**:
+从多用户、多日期生产日报聚合出的主题数量、结构层级、篇幅、合并颗粒度和表达方式分布。
+_Avoid_: 某位员工最终稿、标准日报模板
+
+**Employee Final Reference**:
+某位员工已保存的最终日报，用于观察该用户当次的取舍和表达偏好，不作为该用户日的标准答案。
+_Avoid_: Ground Truth、Evidence Baseline
+
+**Evaluation Runtime**:
+由服务端明确证明为测试环境且开启评测能力的 Aida 运行实例；一次 Version Comparison 可以使用多个隔离 Runtime。
+_Avoid_: 用户在命令行自称的 test、生产实例
+
+**Runtime Attestation**:
+Evaluation Runtime 对环境、评测开关和构建 Revision 给出的服务端证明，执行任何写操作前必须校验。
+_Avoid_: `--environment=test` 参数
 
 **Directly Usable**:
 日报不存在需要用户纠正的实质问题，可以直接使用或只需非必要风格调整。

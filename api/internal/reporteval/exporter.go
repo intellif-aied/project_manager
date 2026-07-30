@@ -2,9 +2,7 @@ package reporteval
 
 import (
 	"bytes"
-	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,47 +12,86 @@ import (
 	"time"
 )
 
+const RunArtifactsSchemaVersion = "daily-report-evaluation-run-artifacts/v1"
+
+// RunArtifactEnvelope is the test server's narrow, user-authorized export
+// contract. The CLI never receives database credentials.
+type RunArtifactEnvelope struct {
+	SchemaVersion         string          `json:"schema_version"`
+	RunID                 string          `json:"run_id"`
+	Status                string          `json:"status"`
+	FailureStage          string          `json:"failure_stage,omitempty"`
+	ErrorCode             string          `json:"error_code,omitempty"`
+	CreatedAt             time.Time       `json:"created_at"`
+	StartedAt             *time.Time      `json:"started_at,omitempty"`
+	FinishedAt            *time.Time      `json:"finished_at,omitempty"`
+	SourceIdentitySHA256  string          `json:"source_identity_set_sha256"`
+	VariantManifest       json.RawMessage `json:"variant_manifest"`
+	VariantSHA256         string          `json:"variant_sha256"`
+	Digest                json.RawMessage `json:"digest,omitempty"`
+	Context               json.RawMessage `json:"context,omitempty"`
+	Brief                 json.RawMessage `json:"brief,omitempty"`
+	GeneratedDraft        string          `json:"generated_draft,omitempty"`
+	BriefInvalidAttempts  int             `json:"brief_invalid_attempts"`
+	ResultInvalidAttempts int             `json:"result_invalid_attempts"`
+}
+
+func (artifacts RunArtifactEnvelope) Validate() error {
+	if artifacts.SchemaVersion != RunArtifactsSchemaVersion || strings.TrimSpace(artifacts.RunID) == "" {
+		return errors.New("run artifacts schema or run_id is invalid")
+	}
+	if !terminalRunStatus(artifacts.Status) || artifacts.CreatedAt.IsZero() || !isSHA256(artifacts.SourceIdentitySHA256) {
+		return errors.New("run artifacts status, timestamps, or source identity is invalid")
+	}
+	if len(artifacts.VariantManifest) == 0 || !json.Valid(artifacts.VariantManifest) || !isSHA256(artifacts.VariantSHA256) {
+		return errors.New("run artifacts variant manifest is invalid")
+	}
+	for name, payload := range map[string]json.RawMessage{"digest": artifacts.Digest, "context": artifacts.Context, "brief": artifacts.Brief} {
+		if len(payload) > 0 && !json.Valid(payload) {
+			return fmt.Errorf("run artifacts %s is invalid JSON", name)
+		}
+	}
+	if artifacts.BriefInvalidAttempts < 0 || artifacts.ResultInvalidAttempts < 0 {
+		return errors.New("run artifact attempt counts cannot be negative")
+	}
+	return nil
+}
+
 type Exporter struct {
-	DB        *sql.DB
 	OutputDir string
 }
 
-type runArtifacts struct {
-	Status                string
-	FailureStage          string
-	ErrorCode             string
-	CreatedAt             time.Time
-	StartedAt             sql.NullTime
-	FinishedAt            sql.NullTime
-	SourceIdentitySHA256  string
-	VariantManifest       json.RawMessage
-	VariantSHA256         string
-	Context               json.RawMessage
-	Brief                 json.RawMessage
-	GeneratedDraft        string
-	BriefInvalidAttempts  int
-	ResultInvalidAttempts int
-}
-
-func (exporter Exporter) Initialize(dataset DatasetManifest) (string, error) {
-	if exporter.DB == nil || strings.TrimSpace(exporter.OutputDir) == "" {
-		return "", errors.New("database and output directory are required")
+func (exporter Exporter) Initialize(dataset FrozenDataset) (string, error) {
+	if strings.TrimSpace(exporter.OutputDir) == "" {
+		return "", errors.New("output directory is required")
 	}
-	NormalizeDataset(&dataset)
-	if err := dataset.Validate(); err != nil {
+	if err := dataset.Manifest.Validate(); err != nil {
 		return "", err
 	}
-	datasetHash, err := CanonicalSHA256(dataset)
-	if err != nil {
+	if len(dataset.Sources) != len(dataset.Manifest.Cases) || len(dataset.PatternPayload) == 0 || !isSHA256(dataset.DatasetSHA256) {
+		return "", errors.New("frozen dataset is incomplete")
+	}
+	if err := os.Mkdir(exporter.OutputDir, 0o750); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return "", fmt.Errorf("output directory already exists: %s", exporter.OutputDir)
+		}
 		return "", err
 	}
-	if err := os.MkdirAll(exporter.OutputDir, 0o750); err != nil {
+	if _, err := writeJSON(filepath.Join(exporter.OutputDir, "dataset-manifest.json"), dataset.Manifest); err != nil {
 		return "", err
 	}
-	if _, err := writeJSON(filepath.Join(exporter.OutputDir, "dataset-manifest.json"), dataset); err != nil {
+	if err := exporter.writeReferencedFile(dataset.Manifest.PatternBaseline.Statistics, dataset.PatternPayload); err != nil {
 		return "", err
 	}
-	for _, item := range dataset.Cases {
+	for _, item := range dataset.Manifest.Cases {
+		source, ok := dataset.Sources[item.CaseID]
+		payload := dataset.SourcePayloads[item.CaseID]
+		if !ok || len(payload) == 0 || source.SourceIdentitySHA256 == "" {
+			return "", fmt.Errorf("case %s frozen source is missing", item.CaseID)
+		}
+		if err := exporter.writeReferencedFile(item.SourceEvidence, payload); err != nil {
+			return "", err
+		}
 		caseDir := filepath.Join(exporter.OutputDir, "cases", item.CaseID)
 		if err := os.MkdirAll(filepath.Join(caseDir, "runs"), 0o750); err != nil {
 			return "", err
@@ -63,31 +100,62 @@ func (exporter Exporter) Initialize(dataset DatasetManifest) (string, error) {
 			return "", err
 		}
 	}
-	return datasetHash, nil
+	return dataset.DatasetSHA256, nil
+}
+
+func (exporter Exporter) writeReferencedFile(reference FileReference, payload []byte) error {
+	if err := reference.Validate("file_reference"); err != nil {
+		return err
+	}
+	if actual := CanonicalBytesSHA256(payload); actual != reference.SHA256 {
+		return fmt.Errorf("referenced file %s hash mismatch", reference.Path)
+	}
+	destination := filepath.Join(exporter.OutputDir, filepath.FromSlash(reference.Path))
+	if err := os.MkdirAll(filepath.Dir(destination), 0o750); err != nil {
+		return err
+	}
+	if err := os.WriteFile(destination, payload, 0o640); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (exporter Exporter) ExportRun(
-	ctx context.Context,
 	item EvaluationCase,
+	frozenSource SourceEvidence,
 	variant VariantSpec,
 	receipt *RunReceipt,
+	artifacts RunArtifactEnvelope,
 ) error {
-	artifacts, err := exporter.loadRunArtifacts(ctx, receipt.RunID)
+	if receipt == nil || receipt.RunID == "" || receipt.RunID != artifacts.RunID {
+		return errors.New("run receipt does not match artifacts")
+	}
+	if err := artifacts.Validate(); err != nil {
+		return err
+	}
+	if err := frozenSource.Validate(); err != nil {
+		return err
+	}
+	if artifacts.SourceIdentitySHA256 != frozenSource.SourceIdentitySHA256 {
+		return fmt.Errorf("run source identity %s does not match frozen case source %s", artifacts.SourceIdentitySHA256, frozenSource.SourceIdentitySHA256)
+	}
+	var manifestValue any
+	if err := json.Unmarshal(artifacts.VariantManifest, &manifestValue); err != nil {
+		return fmt.Errorf("decode variant manifest: %w", err)
+	}
+	actualVariantHash, err := CanonicalSHA256(manifestValue)
 	if err != nil {
 		return err
 	}
-	receipt.Status = artifacts.Status
-	receipt.FailureStage = artifacts.FailureStage
-	receipt.ErrorCode = artifacts.ErrorCode
-	receipt.VariantSHA256 = artifacts.VariantSHA256
-	if len(artifacts.VariantManifest) == 0 {
-		return errors.New("actual variant manifest is missing")
+	if actualVariantHash != artifacts.VariantSHA256 {
+		return fmt.Errorf("stored variant hash %s does not match manifest %s", artifacts.VariantSHA256, actualVariantHash)
 	}
-	if variant.ExpectedVariantSHA256 != "" && variant.ExpectedVariantSHA256 != artifacts.VariantSHA256 {
-		return fmt.Errorf("actual variant hash %s does not match expected %s", artifacts.VariantSHA256, variant.ExpectedVariantSHA256)
+	if variant.ExpectedVariantSHA256 != "" && variant.ExpectedVariantSHA256 != actualVariantHash {
+		return fmt.Errorf("actual variant hash %s does not match expected %s", actualVariantHash, variant.ExpectedVariantSHA256)
 	}
 	var manifest struct {
 		PipelineProfile string `json:"pipeline_profile"`
+		ModelID         string `json:"model_id"`
 	}
 	if err := json.Unmarshal(artifacts.VariantManifest, &manifest); err != nil {
 		return fmt.Errorf("decode variant manifest: %w", err)
@@ -95,36 +163,15 @@ func (exporter Exporter) ExportRun(
 	if variant.ExpectedPipelineProfile != "" && variant.ExpectedPipelineProfile != manifest.PipelineProfile {
 		return fmt.Errorf("actual pipeline profile %s does not match expected %s", manifest.PipelineProfile, variant.ExpectedPipelineProfile)
 	}
-
-	source, err := exporter.loadSourceEvidence(ctx, receipt.RunID, artifacts.SourceIdentitySHA256)
-	if err != nil {
-		return err
-	}
-	if expected := item.ExpectedSourceIdentitySHA256; expected != "" && expected != source.SourceIdentitySHA256 {
-		return fmt.Errorf("actual source identity %s does not match case expectation %s", source.SourceIdentitySHA256, expected)
-	}
-	caseDir := filepath.Join(exporter.OutputDir, "cases", item.CaseID)
-	sourcePath := filepath.Join(caseDir, "source-evidence.json")
-	if existing, readErr := os.ReadFile(sourcePath); readErr == nil {
-		var frozen SourceEvidence
-		if err := json.Unmarshal(existing, &frozen); err != nil {
-			return fmt.Errorf("decode frozen source evidence: %w", err)
-		}
-		frozen.SelectionID = ""
-		comparableSource := source
-		comparableSource.SelectionID = ""
-		frozenHash, _ := CanonicalSHA256(frozen)
-		actualHash, _ := CanonicalSHA256(comparableSource)
-		if frozenHash != actualHash {
-			return fmt.Errorf("source evidence changed within case %s", item.CaseID)
-		}
-	} else if !errors.Is(readErr, os.ErrNotExist) {
-		return readErr
-	} else if _, err := writeJSON(sourcePath, source); err != nil {
-		return err
+	if variant.ModelID != "" && variant.ModelID != manifest.ModelID {
+		return fmt.Errorf("actual model %s does not match requested %s", manifest.ModelID, variant.ModelID)
 	}
 
-	runDir := filepath.Join(caseDir, "runs", receipt.RunID)
+	receipt.Status = artifacts.Status
+	receipt.FailureStage = artifacts.FailureStage
+	receipt.ErrorCode = artifacts.ErrorCode
+	receipt.VariantSHA256 = actualVariantHash
+	runDir := filepath.Join(exporter.OutputDir, "cases", item.CaseID, "runs", receipt.RunID)
 	if err := os.MkdirAll(runDir, 0o750); err != nil {
 		return err
 	}
@@ -132,19 +179,13 @@ func (exporter Exporter) ExportRun(
 	if hashes["variant-manifest.json"], err = writeJSON(filepath.Join(runDir, "variant-manifest.json"), artifacts.VariantManifest); err != nil {
 		return err
 	}
-	if len(source.DigestPayload) > 0 && string(source.DigestPayload) != "null" {
-		if hashes["digest.json"], err = writeJSON(filepath.Join(runDir, "digest.json"), source.DigestPayload); err != nil {
-			return err
-		}
-	}
-	if len(artifacts.Context) > 0 {
-		if hashes["context.json"], err = writeJSON(filepath.Join(runDir, "context.json"), artifacts.Context); err != nil {
-			return err
-		}
-	}
-	if len(artifacts.Brief) > 0 {
-		if hashes["brief.json"], err = writeJSON(filepath.Join(runDir, "brief.json"), artifacts.Brief); err != nil {
-			return err
+	for name, payload := range map[string]json.RawMessage{
+		"digest.json": artifacts.Digest, "context.json": artifacts.Context, "brief.json": artifacts.Brief,
+	} {
+		if len(payload) > 0 && string(payload) != "null" {
+			if hashes[name], err = writeJSON(filepath.Join(runDir, name), payload); err != nil {
+				return err
+			}
 		}
 	}
 	if artifacts.GeneratedDraft != "" {
@@ -160,120 +201,56 @@ func (exporter Exporter) ExportRun(
 	return nil
 }
 
-func (exporter Exporter) Finalize(dataset DatasetManifest, plan ExecutionPlan, datasetHash string, receipts []RunReceipt) error {
-	manifest := BundleManifest{
-		SchemaVersion: BundleSchemaVersion, DatasetVersion: dataset.DatasetVersion,
-		DatasetSHA256: datasetHash, RubricVersion: dataset.RubricVersion,
-		CreatedAt: time.Now().UTC(), Variants: plan.Variants, Runs: receipts,
+func (exporter Exporter) Finalize(dataset FrozenDataset, plan ExecutionPlan, receipts []RunReceipt) error {
+	if err := validateVariantIdentityConsistency(receipts); err != nil {
+		return fmt.Errorf("variant identity is inconsistent: %w", err)
 	}
-	_, err := writeJSON(filepath.Join(exporter.OutputDir, "manifest.json"), manifest)
+	variants := make([]VariantDescriptor, 0, len(plan.Variants))
+	for _, variant := range plan.Variants {
+		variants = append(variants, variant.Descriptor())
+	}
+	planHash, err := CanonicalSHA256(plan)
+	if err != nil {
+		return err
+	}
+	if _, err := writeJSON(filepath.Join(exporter.OutputDir, "execution-plan.json"), plan); err != nil {
+		return err
+	}
+	manifest := BundleManifest{
+		SchemaVersion: BundleSchemaVersion, DatasetVersion: dataset.Manifest.DatasetVersion,
+		DatasetSHA256: dataset.DatasetSHA256, PlanSHA256: planHash, RubricVersion: dataset.Manifest.RubricVersion,
+		Repetitions: plan.Repetitions, CreatedAt: time.Now().UTC(), Variants: variants, Runs: receipts,
+	}
+	_, err = writeJSON(filepath.Join(exporter.OutputDir, "manifest.json"), manifest)
 	return err
 }
 
-func (exporter Exporter) loadRunArtifacts(ctx context.Context, runID string) (runArtifacts, error) {
-	var result runArtifacts
-	var failureStage, errorCode sql.NullString
-	var contextPayload, briefPayload, variantPayload []byte
-	err := exporter.DB.QueryRowContext(ctx, `
-		SELECT ar.status, ar.failure_stage, ar.error_code, ar.created_at, ar.started_at, ar.finished_at,
-			COALESCE(ar.source_identity_set_sha256, ''),
-			COALESCE(variant.manifest_json, snapshot.variant_manifest_json, '{}'::jsonb),
-			COALESCE(variant.manifest_sha256, snapshot.variant_sha256, ''),
-			context.context_payload, brief.brief_payload,
-			COALESCE(snapshot.generated_content, ''),
-			COALESCE(attempts.brief_invalid_attempts, 0), COALESCE(attempts.result_invalid_attempts, 0)
-		FROM ai_runs ar
-		LEFT JOIN report_generation_snapshots snapshot ON snapshot.run_id = ar.id
-		LEFT JOIN report_run_variant_manifests variant ON variant.run_id = ar.id
-		LEFT JOIN report_run_contexts context ON context.run_id = ar.id
-		LEFT JOIN report_run_briefs brief ON brief.run_id = ar.id
-		LEFT JOIN report_run_generation_attempts attempts ON attempts.run_id = ar.id
-		WHERE ar.id = $1 AND ar.business_type = 'report_agent_run'`, runID).Scan(
-		&result.Status, &failureStage, &errorCode, &result.CreatedAt, &result.StartedAt, &result.FinishedAt,
-		&result.SourceIdentitySHA256, &variantPayload, &result.VariantSHA256,
-		&contextPayload, &briefPayload, &result.GeneratedDraft,
-		&result.BriefInvalidAttempts, &result.ResultInvalidAttempts,
-	)
-	if err != nil {
-		return runArtifacts{}, err
-	}
-	result.FailureStage = failureStage.String
-	result.ErrorCode = errorCode.String
-	if string(variantPayload) != "{}" {
-		result.VariantManifest = append(json.RawMessage(nil), variantPayload...)
-	}
-	result.Context = append(json.RawMessage(nil), contextPayload...)
-	result.Brief = append(json.RawMessage(nil), briefPayload...)
-	return result, nil
-}
-
-func (exporter Exporter) loadSourceEvidence(ctx context.Context, runID, identityHash string) (SourceEvidence, error) {
-	var source SourceEvidence
-	var digestPayload []byte
-	err := exporter.DB.QueryRowContext(ctx, `
-		SELECT id::text, required_read_mode, COALESCE(digest_version_snapshot, ''),
-			COALESCE(redaction_version_snapshot, ''), COALESCE(selection_digest_sha256, ''),
-			selection_digest_payload
-		FROM report_source_selections WHERE attached_run_id = $1`, runID).Scan(
-		&source.SelectionID, &source.ReadMode, &source.DigestVersion, &source.RedactionVersion,
-		&source.DigestSHA256, &digestPayload,
-	)
-	if err != nil {
-		return SourceEvidence{}, err
-	}
-	source.SchemaVersion = SourceSchemaVersion
-	source.SourceIdentitySHA256 = identityHash
-	if len(digestPayload) > 0 {
-		if !json.Valid(digestPayload) {
-			return SourceEvidence{}, errors.New("selection digest payload is not valid JSON")
-		}
-		source.DigestPayload = append(json.RawMessage(nil), digestPayload...)
-	}
-	rows, err := exporter.DB.QueryContext(ctx, `
-		SELECT session_id::text, session_ref_snapshot, agent_type,
-			COALESCE(session_content_slice_id::text, ''), source_generation_id::text,
-			content_projection_revision_id::text, content_epoch_snapshot, start_cursor, end_cursor,
-			COALESCE(digest_sha256_snapshot, ''), COALESCE(digest_version_snapshot, '')
-		FROM report_source_selection_items WHERE selection_id = $1
-		ORDER BY session_id, start_cursor, end_cursor`, source.SelectionID)
-	if err != nil {
-		return SourceEvidence{}, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var item SourceEvidenceItem
-		if err := rows.Scan(
-			&item.SessionID, &item.SessionRef, &item.AgentType, &item.SessionContentSliceID,
-			&item.SourceGenerationID, &item.ProjectionRevisionID, &item.ContentEpoch,
-			&item.StartCursor, &item.EndCursor, &item.DigestSHA256, &item.DigestVersion,
-		); err != nil {
-			return SourceEvidence{}, err
-		}
-		source.Items = append(source.Items, item)
-	}
-	return source, rows.Err()
-}
-
-func buildMetrics(artifacts runArtifacts) RunMetrics {
+func buildMetrics(artifacts RunArtifactEnvelope) RunMetrics {
 	metrics := RunMetrics{
 		SchemaVersion: MetricsSchemaVersion, Status: artifacts.Status,
 		FailureStage: artifacts.FailureStage, ErrorCode: artifacts.ErrorCode,
 		BriefInvalidAttempts:  artifacts.BriefInvalidAttempts,
 		ResultInvalidAttempts: artifacts.ResultInvalidAttempts,
-		InputTokens:           unavailable("report run token attribution is not available in V2 E-01"),
-		OutputTokens:          unavailable("report run token attribution is not available in V2 E-01"),
-		CostMicrousd:          unavailable("report run cost attribution is not available in V2 E-01"),
+		InputTokens:           unavailable("report run token attribution is not available in V2"),
+		OutputTokens:          unavailable("report run token attribution is not available in V2"),
+		CostMicrousd:          unavailable("report run cost attribution is not available in V2"),
 	}
-	if artifacts.FinishedAt.Valid {
+	if artifacts.FinishedAt != nil {
 		start := artifacts.CreatedAt
-		if artifacts.StartedAt.Valid {
-			start = artifacts.StartedAt.Time
+		if artifacts.StartedAt != nil {
+			start = *artifacts.StartedAt
 		}
-		value := artifacts.FinishedAt.Time.Sub(start).Milliseconds()
+		value := artifacts.FinishedAt.Sub(start).Milliseconds()
 		metrics.DurationMS = &value
 	}
 	return metrics
 }
+
+func terminalRunStatus(status string) bool {
+	return status == "succeeded" || status == "failed" || status == "timeout"
+}
+
+func IsTerminalRunStatus(status string) bool { return terminalRunStatus(status) }
 
 func unavailable(reason string) AvailabilityValue {
 	return AvailabilityValue{Status: "not_available", Reason: reason}
@@ -309,10 +286,6 @@ func writeFile(path string, payload []byte) (string, error) {
 }
 
 func CanonicalBytesSHA256(payload []byte) string {
-	sum := sha256Bytes(payload)
+	sum := sha256.Sum256(payload)
 	return fmt.Sprintf("%x", sum)
-}
-
-func sha256Bytes(payload []byte) [32]byte {
-	return sha256.Sum256(payload)
 }

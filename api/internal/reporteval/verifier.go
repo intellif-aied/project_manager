@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -34,26 +35,39 @@ func VerifyBundle(bundleDir string) (VerificationResult, error) {
 	if manifest.SchemaVersion != BundleSchemaVersion {
 		result.Errors = append(result.Errors, "unsupported bundle schema_version")
 	}
-	var dataset DatasetManifest
-	if err := decodeJSONFile(filepath.Join(bundleDir, "dataset-manifest.json"), &dataset); err != nil {
-		result.Errors = append(result.Errors, "dataset-manifest.json is missing or invalid: "+err.Error())
+	if !isSHA256(manifest.PlanSHA256) || manifest.Repetitions < 1 || manifest.Repetitions > 5 || manifest.CreatedAt.IsZero() {
+		result.Errors = append(result.Errors, "bundle plan_sha256, repetitions, or created_at is invalid")
+	}
+	var plan ExecutionPlan
+	if err := decodeStrictJSONFile(filepath.Join(bundleDir, "execution-plan.json"), &plan); err != nil {
+		result.Errors = append(result.Errors, "execution-plan.json is missing or invalid: "+err.Error())
+	} else if err := plan.Validate(); err != nil {
+		result.Errors = append(result.Errors, "execution plan is invalid: "+err.Error())
 	} else {
-		NormalizeDataset(&dataset)
-		if err := dataset.Validate(); err != nil {
-			result.Errors = append(result.Errors, "dataset is invalid: "+err.Error())
-		} else {
-			result.CaseCount = len(dataset.Cases)
-			hash, _ := CanonicalSHA256(dataset)
-			result.DatasetSHA256 = hash
-			if hash != manifest.DatasetSHA256 {
-				result.Errors = append(result.Errors, "dataset_sha256 does not match dataset-manifest.json")
-			}
+		planHash, _ := CanonicalSHA256(plan)
+		if planHash != manifest.PlanSHA256 || plan.Repetitions != manifest.Repetitions {
+			result.Errors = append(result.Errors, "execution plan does not match bundle manifest")
 		}
 	}
-	variants := map[string]VariantSpec{}
+
+	frozen, err := LoadFrozenDataset(filepath.Join(bundleDir, "dataset-manifest.json"))
+	if err != nil {
+		result.Errors = append(result.Errors, "frozen dataset is invalid: "+err.Error())
+	} else {
+		result.CaseCount = len(frozen.Manifest.Cases)
+		result.DatasetSHA256 = frozen.DatasetSHA256
+		if frozen.DatasetSHA256 != manifest.DatasetSHA256 {
+			result.Errors = append(result.Errors, "dataset_sha256 does not match frozen dataset")
+		}
+		if frozen.Manifest.DatasetVersion != manifest.DatasetVersion || frozen.Manifest.RubricVersion != manifest.RubricVersion {
+			result.Errors = append(result.Errors, "dataset or rubric version does not match bundle manifest")
+		}
+	}
+
+	variants := map[string]VariantDescriptor{}
 	for _, variant := range manifest.Variants {
-		if !safeIdentifierPattern.MatchString(variant.VariantVersion) || variants[variant.VariantVersion].VariantVersion != "" {
-			result.Errors = append(result.Errors, "variant_version is invalid or duplicated: "+variant.VariantVersion)
+		if !safeIdentifierPattern.MatchString(variant.VariantVersion) || variants[variant.VariantVersion].VariantVersion != "" || strings.TrimSpace(variant.AgentID) == "" {
+			result.Errors = append(result.Errors, "variant descriptor is invalid or duplicated: "+variant.VariantVersion)
 			continue
 		}
 		variants[variant.VariantVersion] = variant
@@ -61,11 +75,25 @@ func VerifyBundle(bundleDir string) (VerificationResult, error) {
 	if len(variants) < 2 || len(variants) > 3 {
 		result.Errors = append(result.Errors, "bundle must contain 2 or 3 variants")
 	}
-	cases := map[string]EvaluationCase{}
-	for _, item := range dataset.Cases {
-		cases[item.CaseID] = item
-		verifyCaseFiles(bundleDir, item, &result)
+	if len(plan.Variants) > 0 {
+		if len(plan.Variants) != len(manifest.Variants) {
+			result.Errors = append(result.Errors, "execution plan variants do not match bundle manifest")
+		} else {
+			for index, variant := range plan.Variants {
+				expectedHash, _ := CanonicalSHA256(variant.Descriptor())
+				actualHash, _ := CanonicalSHA256(manifest.Variants[index])
+				if expectedHash != actualHash {
+					result.Errors = append(result.Errors, "execution plan variant descriptor mismatch: "+variant.VariantVersion)
+				}
+			}
+		}
 	}
+	cases := map[string]EvaluationCase{}
+	for _, item := range frozen.Manifest.Cases {
+		cases[item.CaseID] = item
+		verifyCaseFiles(bundleDir, item, frozen.Sources[item.CaseID], &result)
+	}
+
 	coverage := map[string]int{}
 	seenRuns := map[string]bool{}
 	for _, run := range manifest.Runs {
@@ -80,26 +108,39 @@ func VerifyBundle(bundleDir string) (VerificationResult, error) {
 		if !ok {
 			result.Errors = append(result.Errors, "run references unknown variant: "+key)
 		}
+		if run.Repetition < 1 || run.Repetition > manifest.Repetitions || coverage[key] != 1 {
+			result.Errors = append(result.Errors, "run repetition is invalid or duplicated: "+key)
+		}
 		if _, err := uuid.Parse(run.RunID); err != nil || seenRuns[run.RunID] {
 			result.Errors = append(result.Errors, "run_id is invalid or duplicated: "+run.RunID)
 			continue
 		}
 		seenRuns[run.RunID] = true
+		if err := run.Runtime.Validate(); err != nil {
+			result.Errors = append(result.Errors, run.RunID+": runtime attestation is invalid")
+		}
+		if !terminalRunStatus(run.Status) || !isSHA256(run.VariantSHA256) {
+			result.Errors = append(result.Errors, run.RunID+": status or variant_sha256 is invalid")
+		}
 		verifyRunFiles(bundleDir, run, variant, &result)
 		runDir := filepath.Join(bundleDir, "cases", run.CaseID, "runs", run.RunID)
 		result.RunMetrics = append(result.RunMetrics, collectDeterministicMetrics(runDir, run.RunID))
 	}
-	for _, item := range dataset.Cases {
-		for _, variant := range manifest.Variants {
-			found := false
-			for key, count := range coverage {
-				prefix := item.CaseID + "/" + variant.VariantVersion + "/"
-				if len(key) >= len(prefix) && key[:len(prefix)] == prefix && count == 1 {
-					found = true
+	if err := validateVariantIdentityConsistency(manifest.Runs); err != nil {
+		result.Errors = append(result.Errors, "variant identity is inconsistent: "+err.Error())
+	}
+
+	expectedRuns := len(cases) * len(variants) * manifest.Repetitions
+	if len(manifest.Runs) != expectedRuns {
+		result.Errors = append(result.Errors, fmt.Sprintf("bundle has %d runs; expected %d", len(manifest.Runs), expectedRuns))
+	}
+	for caseID := range cases {
+		for variantVersion := range variants {
+			for repetition := 1; repetition <= manifest.Repetitions; repetition++ {
+				key := fmt.Sprintf("%s/%s/%d", caseID, variantVersion, repetition)
+				if coverage[key] != 1 {
+					result.Errors = append(result.Errors, "missing or duplicated run: "+key)
 				}
-			}
-			if !found {
-				result.Errors = append(result.Errors, fmt.Sprintf("missing run for %s/%s", item.CaseID, variant.VariantVersion))
 			}
 		}
 	}
@@ -109,28 +150,41 @@ func VerifyBundle(bundleDir string) (VerificationResult, error) {
 	return result, nil
 }
 
-func verifyCaseFiles(bundleDir string, item EvaluationCase, result *VerificationResult) {
-	caseDir := filepath.Join(bundleDir, "cases", item.CaseID)
-	var source SourceEvidence
-	if err := decodeJSONFile(filepath.Join(caseDir, "source-evidence.json"), &source); err != nil {
-		result.Errors = append(result.Errors, item.CaseID+": source-evidence.json is missing or invalid")
-	} else {
-		if source.SchemaVersion != SourceSchemaVersion || source.SourceIdentitySHA256 == "" {
-			result.Errors = append(result.Errors, item.CaseID+": source evidence identity is invalid")
-		}
-		if expected := item.ExpectedSourceIdentitySHA256; expected != "" && expected != source.SourceIdentitySHA256 {
-			result.Errors = append(result.Errors, item.CaseID+": source identity differs from dataset")
-		}
+func verifyCaseFiles(bundleDir string, item EvaluationCase, source SourceEvidence, result *VerificationResult) {
+	if err := source.Validate(); err != nil {
+		result.Errors = append(result.Errors, item.CaseID+": source evidence is invalid")
 	}
-	var baseline map[string]any
+	caseDir := filepath.Join(bundleDir, "cases", item.CaseID)
+	var baseline EvidenceBaseline
 	if err := decodeJSONFile(filepath.Join(caseDir, "evidence-baseline.json"), &baseline); err != nil {
 		result.Errors = append(result.Errors, item.CaseID+": evidence-baseline.json is missing or invalid")
+		return
+	}
+	actualHash, _ := CanonicalSHA256(baseline)
+	expectedHash, _ := CanonicalSHA256(item.EvidenceBaseline)
+	if actualHash != expectedHash {
+		result.Errors = append(result.Errors, item.CaseID+": evidence baseline differs from dataset manifest")
+	}
+	if err := ValidateBaselineSourceRefs(baseline, source, item.ReportDate); err != nil {
+		result.Errors = append(result.Errors, item.CaseID+": evidence baseline references invalid source evidence")
 	}
 }
 
-func verifyRunFiles(bundleDir string, run RunReceipt, variant VariantSpec, result *VerificationResult) {
+var knownRunArtifacts = map[string]bool{
+	"variant-manifest.json": true, "digest.json": true, "context.json": true,
+	"brief.json": true, "generated-draft.md": true, "run-metrics.json": true,
+}
+
+func verifyRunFiles(bundleDir string, run RunReceipt, variant VariantDescriptor, result *VerificationResult) {
 	runDir := filepath.Join(bundleDir, "cases", run.CaseID, "runs", run.RunID)
+	if run.ArtifactSHA256["variant-manifest.json"] == "" || run.ArtifactSHA256["run-metrics.json"] == "" {
+		result.Errors = append(result.Errors, run.RunID+": mandatory artifact hashes are missing")
+	}
 	for name, expected := range run.ArtifactSHA256 {
+		if !knownRunArtifacts[name] || !isSHA256(expected) {
+			result.Errors = append(result.Errors, run.RunID+": unknown artifact or invalid hash "+name)
+			continue
+		}
 		payload, err := os.ReadFile(filepath.Join(runDir, name))
 		if err != nil {
 			result.Errors = append(result.Errors, run.RunID+": missing artifact "+name)
@@ -138,6 +192,17 @@ func verifyRunFiles(bundleDir string, run RunReceipt, variant VariantSpec, resul
 			result.Errors = append(result.Errors, run.RunID+": artifact hash mismatch for "+name)
 		}
 	}
+	entries, err := os.ReadDir(runDir)
+	if err != nil {
+		result.Errors = append(result.Errors, run.RunID+": run directory is missing")
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !knownRunArtifacts[entry.Name()] || run.ArtifactSHA256[entry.Name()] == "" {
+			result.Errors = append(result.Errors, run.RunID+": untracked artifact "+entry.Name())
+		}
+	}
+
 	var actualManifest map[string]any
 	manifestPath := filepath.Join(runDir, "variant-manifest.json")
 	if err := decodeJSONFile(manifestPath, &actualManifest); err != nil {
@@ -155,10 +220,18 @@ func verifyRunFiles(bundleDir string, run RunReceipt, variant VariantSpec, resul
 	if variant.ExpectedPipelineProfile != "" && variant.ExpectedPipelineProfile != profile {
 		result.Errors = append(result.Errors, run.RunID+": pipeline profile does not match execution plan")
 	}
+	modelID, _ := actualManifest["model_id"].(string)
+	if variant.ModelID != "" && variant.ModelID != modelID {
+		result.Errors = append(result.Errors, run.RunID+": model does not match execution plan")
+	}
 	if run.Status != "succeeded" {
 		return
 	}
-	stages, _ := actualManifest["stages"].([]any)
+	stages, ok := actualManifest["stages"].([]any)
+	if !ok || len(stages) == 0 {
+		result.Errors = append(result.Errors, run.RunID+": succeeded run variant has no stages")
+		return
+	}
 	for _, stageValue := range stages {
 		stage, _ := stageValue.(string)
 		name := map[string]string{
@@ -167,7 +240,7 @@ func verifyRunFiles(bundleDir string, run RunReceipt, variant VariantSpec, resul
 		}[stage]
 		if name == "" {
 			result.Warnings = append(result.Warnings, run.RunID+": unknown stage "+stage)
-		} else if _, err := os.Stat(filepath.Join(runDir, name)); err != nil {
+		} else if run.ArtifactSHA256[name] == "" {
 			result.Errors = append(result.Errors, run.RunID+": succeeded run is missing "+name)
 		}
 	}

@@ -1,32 +1,86 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "daily-report-evaluation-bundle/v1",
+  "$id": "daily-report-evaluation-bundle/v2",
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "variant_descriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["variant_version", "agent_id"],
+      "properties": {
+        "variant_version": { "type": "string", "minLength": 1 },
+        "agent_id": { "type": "string", "minLength": 1 },
+        "model_id": { "type": "string" },
+        "expected_variant_sha256": { "$ref": "#/$defs/sha256" },
+        "expected_pipeline_profile": { "type": "string" }
+      }
+    },
+    "runtime_attestation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "enabled", "environment", "build_revision", "instance_id"],
+      "properties": {
+        "schema_version": { "const": "daily-report-evaluation-runtime/v1" },
+        "enabled": { "const": true },
+        "environment": { "const": "test" },
+        "build_revision": { "type": "string", "minLength": 1, "not": { "enum": ["not_available", "unknown"] } },
+        "instance_id": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "dataset_version", "dataset_sha256", "rubric_version", "created_at", "variants", "runs"],
+  "required": [
+    "schema_version", "dataset_version", "dataset_sha256", "plan_sha256",
+    "rubric_version", "repetitions", "created_at", "variants", "runs"
+  ],
   "properties": {
-    "schema_version": { "const": "daily-report-evaluation-bundle/v1" },
+    "schema_version": { "const": "daily-report-evaluation-bundle/v2" },
     "dataset_version": { "type": "string", "minLength": 1 },
-    "dataset_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "dataset_sha256": { "$ref": "#/$defs/sha256" },
+    "plan_sha256": { "$ref": "#/$defs/sha256" },
     "rubric_version": { "type": "string", "minLength": 1 },
+    "repetitions": { "type": "integer", "minimum": 1, "maximum": 5 },
     "created_at": { "type": "string", "format": "date-time" },
-    "variants": { "$ref": "execution-plan.schema.json#/$defs/variants" },
+    "variants": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 3,
+      "items": { "$ref": "#/$defs/variant_descriptor" }
+    },
     "runs": {
       "type": "array",
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["case_id", "variant_version", "repetition", "run_id", "status", "variant_sha256"],
+        "required": ["case_id", "variant_version", "repetition", "run_id", "status", "variant_sha256", "runtime", "artifact_sha256"],
         "properties": {
-          "case_id": { "type": "string" },
-          "variant_version": { "type": "string" },
+          "case_id": { "type": "string", "minLength": 1 },
+          "variant_version": { "type": "string", "minLength": 1 },
           "repetition": { "type": "integer", "minimum": 1 },
           "run_id": { "type": "string", "format": "uuid" },
           "status": { "enum": ["succeeded", "failed", "timeout"] },
           "failure_stage": { "type": "string" },
           "error_code": { "type": "string" },
-          "variant_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-          "artifact_sha256": { "type": "object", "additionalProperties": { "type": "string", "pattern": "^[0-9a-f]{64}$" } }
+          "variant_sha256": { "$ref": "#/$defs/sha256" },
+          "runtime": { "$ref": "#/$defs/runtime_attestation" },
+          "artifact_sha256": {
+            "type": "object",
+            "minProperties": 2,
+            "additionalProperties": false,
+            "properties": {
+              "variant-manifest.json": { "$ref": "#/$defs/sha256" },
+              "digest.json": { "$ref": "#/$defs/sha256" },
+              "context.json": { "$ref": "#/$defs/sha256" },
+              "brief.json": { "$ref": "#/$defs/sha256" },
+              "generated-draft.md": { "$ref": "#/$defs/sha256" },
+              "run-metrics.json": { "$ref": "#/$defs/sha256" }
+            },
+            "required": ["variant-manifest.json", "run-metrics.json"]
+          }
         }
       }
     }

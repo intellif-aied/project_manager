@@ -11,10 +11,11 @@ import (
 )
 
 type ReviewControl struct {
-	SchemaVersion  string          `json:"schema_version"`
-	DatasetVersion string          `json:"dataset_version"`
-	RubricVersion  string          `json:"rubric_version"`
-	Cases          []AnonymousCase `json:"cases"`
+	SchemaVersion         string          `json:"schema_version"`
+	DatasetVersion        string          `json:"dataset_version"`
+	RubricVersion         string          `json:"rubric_version"`
+	PatternDatasetVersion string          `json:"pattern_dataset_version"`
+	Cases                 []AnonymousCase `json:"cases"`
 }
 
 type AnonymousCase struct {
@@ -53,9 +54,13 @@ func PrepareAnonymousReview(bundleDir, outputDir string) error {
 	if err := decodeJSONFile(filepath.Join(bundleDir, "manifest.json"), &manifest); err != nil {
 		return err
 	}
+	frozen, err := LoadFrozenDataset(filepath.Join(bundleDir, "dataset-manifest.json"))
+	if err != nil {
+		return err
+	}
 	control := ReviewControl{
-		SchemaVersion:  "daily-report-anonymous-review/v1",
-		DatasetVersion: manifest.DatasetVersion, RubricVersion: manifest.RubricVersion,
+		SchemaVersion: "daily-report-anonymous-review/v1", DatasetVersion: manifest.DatasetVersion,
+		RubricVersion: manifest.RubricVersion, PatternDatasetVersion: frozen.Manifest.PatternBaseline.DatasetVersion,
 	}
 	pairing := PairingMap{SchemaVersion: "daily-report-pairing-map/v1"}
 	byCase := map[string][]RunReceipt{}
@@ -82,10 +87,21 @@ func PrepareAnonymousReview(bundleDir, outputDir string) error {
 		if err := os.MkdirAll(caseOutput, 0o750); err != nil {
 			return err
 		}
-		for _, name := range []string{"source-evidence.json", "evidence-baseline.json"} {
-			if err := copyFile(filepath.Join(bundleDir, "cases", caseID, name), filepath.Join(caseOutput, name)); err != nil {
-				return err
-			}
+		item, ok := evaluationCaseByID(frozen.Manifest.Cases, caseID)
+		if !ok {
+			return fmt.Errorf("case %s is missing from frozen dataset", caseID)
+		}
+		if err := copyFile(
+			filepath.Join(bundleDir, filepath.FromSlash(item.SourceEvidence.Path)),
+			filepath.Join(caseOutput, "source-evidence.json"),
+		); err != nil {
+			return err
+		}
+		if err := copyFile(
+			filepath.Join(bundleDir, "cases", caseID, "evidence-baseline.json"),
+			filepath.Join(caseOutput, "evidence-baseline.json"),
+		); err != nil {
+			return err
 		}
 		anonymous := AnonymousCase{CaseID: caseID, Repetition: repetition}
 		for index, run := range runs {
@@ -117,8 +133,23 @@ func PrepareAnonymousReview(bundleDir, outputDir string) error {
 	if _, err := writeJSON(filepath.Join(outputDir, "review-input", "review-control.json"), control); err != nil {
 		return err
 	}
+	if err := copyFile(
+		filepath.Join(bundleDir, filepath.FromSlash(frozen.Manifest.PatternBaseline.Statistics.Path)),
+		filepath.Join(outputDir, "review-input", "production-pattern-statistics.json"),
+	); err != nil {
+		return err
+	}
 	_, err = writeJSON(filepath.Join(outputDir, "pairing-map.json"), pairing)
 	return err
+}
+
+func evaluationCaseByID(cases []EvaluationCase, caseID string) (EvaluationCase, bool) {
+	for _, item := range cases {
+		if item.CaseID == caseID {
+			return item, true
+		}
+	}
+	return EvaluationCase{}, false
 }
 
 func shuffleRuns(values []RunReceipt) error {
