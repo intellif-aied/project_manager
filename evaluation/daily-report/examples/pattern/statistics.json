@@ -1,0 +1,50 @@
+{
+  "schema_version": "production-report-pattern-statistics/v1",
+  "report_count": 2,
+  "author_count": 2,
+  "date_count": 1,
+  "date_range": {
+    "start": "2026-06-11",
+    "end": "2026-06-11"
+  },
+  "with_next_day_plan": 0,
+  "format_class_counts": {
+    "ordered_list": 2
+  },
+  "character_count": {
+    "min": 10,
+    "p50": 20,
+    "p90": 30,
+    "p95": 35,
+    "max": 40
+  },
+  "line_count": {
+    "min": 1,
+    "p50": 2,
+    "p90": 3,
+    "p95": 3,
+    "max": 4
+  },
+  "ordered_item_count": {
+    "p50": 1,
+    "p90": 2,
+    "max": 3
+  },
+  "heading_count": {
+    "p50": 0,
+    "p90": 0,
+    "max": 1
+  },
+  "reports_per_date": {
+    "2026-06-11": 2
+  },
+  "reports_per_author": {
+    "min": 1,
+    "p50": 1,
+    "p90": 1,
+    "max": 1
+  },
+  "exact_duplicate_extra_rows": 0,
+  "literal_newline_escape_reports": 0,
+  "redaction_counts": {}
+}

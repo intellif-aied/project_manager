@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "daily-report-evaluation-plan/v2",
+  "$defs": {
+    "variant_descriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["variant_version", "agent_id"],
+      "properties": {
+        "variant_version": { "type": "string", "minLength": 1 },
+        "agent_id": { "type": "string", "minLength": 1 },
+        "model_id": { "type": "string" },
+        "expected_variant_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "expected_pipeline_profile": { "type": "string" }
+      }
+    },
+    "variant": {
+	  "type": "object",
+	  "additionalProperties": false,
+	  "required": ["variant_version", "agent_id", "runtime"],
+	  "properties": {
+	    "variant_version": { "type": "string", "minLength": 1 },
+	    "agent_id": { "type": "string", "minLength": 1 },
+	    "model_id": { "type": "string" },
+	    "expected_variant_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+	    "expected_pipeline_profile": { "type": "string" },
+	    "runtime": {
+	      "type": "object",
+	      "additionalProperties": false,
+	      "required": ["base_url"],
+	      "properties": {
+	        "base_url": { "type": "string", "format": "uri", "pattern": "^https?://" },
+	        "token_env": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,127}$" },
+	        "case_token_envs": {
+	          "type": "object",
+	          "minProperties": 1,
+	          "propertyNames": { "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+	          "additionalProperties": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,127}$" }
+	        }
+	      },
+	      "oneOf": [
+	        { "required": ["token_env"], "not": { "required": ["case_token_envs"] } },
+	        { "required": ["case_token_envs"], "not": { "required": ["token_env"] } }
+	      ]
+	    }
+	  }
+    },
+    "variants": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 3,
+      "items": { "$ref": "#/$defs/variant" }
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "dataset_file", "repetitions", "timeout_seconds", "variants"],
+  "properties": {
+    "schema_version": { "const": "daily-report-evaluation-plan/v2" },
+    "dataset_file": { "type": "string", "minLength": 1 },
+    "repetitions": { "type": "integer", "minimum": 1, "maximum": 5 },
+    "timeout_seconds": { "type": "integer", "minimum": 30, "maximum": 7200 },
+    "variants": { "$ref": "#/$defs/variants" }
+  }
+}

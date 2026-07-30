@@ -30,6 +30,10 @@ func TestBuildReportVariantManifestWithOptionalBrief(t *testing.T) {
 	if manifest.PipelineProfile != "digest_context_brief_final" || len(manifest.Stages) != 4 || manifest.BriefSchemaVersion != "brief-v1" {
 		t.Fatalf("manifest = %#v", manifest)
 	}
+	if manifest.ConfigSHA256 == "" || manifest.StageVersions["digest"] != "digest-v2" ||
+		manifest.StageVersions["brief"] != "brief-v1" || manifest.CodeRevision != "not_available" {
+		t.Fatalf("manifest provenance = %#v", manifest)
+	}
 	if hash != sha256Hex(string(payload)) {
 		t.Fatalf("variant hash does not match payload")
 	}

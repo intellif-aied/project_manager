@@ -1,0 +1,4 @@
+interface:
+  display_name: "日报方案评测"
+  short_description: "对冻结日报评测包执行完整结构化质量评测、匿名对比与结论输出"
+  default_prompt: "使用 $daily-report-eval 对基线与候选日报方案执行匿名配对评测并输出证据结论。"

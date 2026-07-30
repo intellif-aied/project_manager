@@ -2206,10 +2206,13 @@ func expectReportRunSubmission(mock sqlmock.Sqlmock, userID, agentID, modelID, i
 		WithArgs(userID, reportAgentRunBusinessType, idempotencyKey).
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery("(?s)INSERT INTO ai_runs.*RETURNING id::text").
-		WithArgs(userID, reportAgentRunBusinessType, agentID, modelID,
+		WithArgs(userID, reportAgentRunBusinessType, agentID, sqlmock.AnyArg(), modelID,
 			inputRefArg, sqlmock.AnyArg(), 3600, idempotencyKey,
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(runID))
+	mock.ExpectExec("INSERT INTO report_run_variant_manifests").
+		WithArgs(runID, sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 }
 

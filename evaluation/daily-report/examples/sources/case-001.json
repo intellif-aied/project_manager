@@ -1,0 +1,22 @@
+{
+  "schema_version": "daily-report-source-evidence/v2",
+  "source_identity_set_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "redaction_version": "daily-report-evaluation-source-redaction/v1",
+  "items": [
+    {
+      "evidence_source_id": "source-001",
+      "agent_type": "codex",
+      "events": [
+        {
+          "evidence_ref": "source-001/event-000001",
+          "occurred_at": "2026-06-11T02:00:00Z",
+          "event_type": "assistant",
+          "summary": "完成协议设计",
+          "payload": {
+            "text": "完成协议设计并整理验证结果"
+          }
+        }
+      ]
+    }
+  ]
+}

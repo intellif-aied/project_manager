@@ -43,12 +43,15 @@ type RunSubmissionRequest struct {
 	RequireSources          bool
 	BusinessType            string
 	AgentID                 string
+	AgentVersionID          *int
 	ModelID                 string
 	IdempotencyKey          string
 	RequestFingerprintInput any
 	ActiveDedupeInput       any
 	InputRef                map[string]any
 	ExecutionInput          map[string]any
+	VariantManifest         json.RawMessage
+	VariantSHA256           string
 }
 
 type RunSubmissionResult struct {
@@ -150,15 +153,12 @@ func (s *Service) createReportRunOnce(
 	if err != nil {
 		return RunSubmissionResult{}, err
 	}
-	items, identities := canonicalizeSelectionItems(items)
-	if request.RequireSources && len(identities) == 0 {
-		return RunSubmissionResult{}, ErrSourceUnavailable
-	}
-	sourceIdentitySHA, err := canonicalSHA256(struct {
-		Items []sourceIdentity `json:"items"`
-	}{Items: identities})
+	items, sourceIdentitySHA, err := CanonicalSourceIdentity(items)
 	if err != nil {
 		return RunSubmissionResult{}, err
+	}
+	if request.RequireSources && len(items) == 0 {
+		return RunSubmissionResult{}, ErrSourceUnavailable
 	}
 	activeDedupeKey, err := canonicalSHA256(struct {
 		Scope             any    `json:"scope"`
@@ -191,17 +191,17 @@ func (s *Service) createReportRunOnce(
 	var runID string
 	err = tx.QueryRowContext(ctx, `
 		INSERT INTO ai_runs (
-			user_id, business_type, runtime_type, agent_id, model_id, status,
+			user_id, business_type, runtime_type, agent_id, agent_version_id, model_id, status,
 			input_ref_json, execution_input_json, execution_stage, stage_updated_at,
 			next_attempt_at, digest_wait_deadline_at, idempotency_key,
 			active_dedupe_key, source_identity_set_sha256, request_fingerprint
 		) VALUES (
-			$1, $2, 'managed_session', $3, NULLIF($4, ''), 'pending',
-			$5, $6, 'waiting_digest', now(), now(), now() + make_interval(secs => $7),
-			$8, $9, $10, $11
+			$1, $2, 'managed_session', $3, $4, NULLIF($5, ''), 'pending',
+			$6, $7, 'waiting_digest', now(), now(), now() + make_interval(secs => $8),
+			$9, $10, $11, $12
 		)
 		RETURNING id::text`,
-		request.UserID, request.BusinessType, request.AgentID, request.ModelID,
+		request.UserID, request.BusinessType, request.AgentID, request.AgentVersionID, request.ModelID,
 		inputJSON, executionJSON, int(reportDigestWaitTimeout.Seconds()), request.IdempotencyKey,
 		activeDedupeKey, sourceIdentitySHA, requestFingerprint,
 	).Scan(&runID)
@@ -216,6 +216,18 @@ func (s *Service) createReportRunOnce(
 			return s.findActiveDedupeRun(ctx, request.UserID, request.BusinessType, activeDedupeKey)
 		}
 		return RunSubmissionResult{}, err
+	}
+	if len(request.VariantManifest) > 0 || strings.TrimSpace(request.VariantSHA256) != "" {
+		manifestSum := sha256.Sum256(request.VariantManifest)
+		if !json.Valid(request.VariantManifest) ||
+			hex.EncodeToString(manifestSum[:]) != strings.TrimSpace(request.VariantSHA256) {
+			return RunSubmissionResult{}, ErrInvalidRequest
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO report_run_variant_manifests (run_id, manifest_json, manifest_sha256)
+			VALUES ($1, $2, $3)`, runID, request.VariantManifest, request.VariantSHA256); err != nil {
+			return RunSubmissionResult{}, err
+		}
 	}
 
 	if request.RequireSources || selectionID != "" || len(request.Sources) > 0 {
@@ -293,6 +305,20 @@ func canonicalizeSelectionItems(items []SelectionItem) ([]SelectionItem, []sourc
 		identities = append(identities, candidate.identity)
 	}
 	return canonicalItems, identities
+}
+
+// CanonicalSourceIdentity returns the canonical source order and the exact
+// identity hash used by report runs. Evaluation freezes must use this function
+// so their pre-Digest evidence is bound to the same immutable source set.
+func CanonicalSourceIdentity(items []SelectionItem) ([]SelectionItem, string, error) {
+	canonicalItems, identities := canonicalizeSelectionItems(items)
+	hash, err := canonicalSHA256(struct {
+		Items []sourceIdentity `json:"items"`
+	}{Items: identities})
+	if err != nil {
+		return nil, "", err
+	}
+	return canonicalItems, hash, nil
 }
 
 func canonicalSHA256(value any) (string, error) {

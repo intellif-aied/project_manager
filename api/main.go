@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"runtime/debug"
 	"strings"
 
 	"github.com/aidashboard/api/config"
@@ -18,6 +19,7 @@ import (
 	"github.com/aidashboard/api/internal/pricing"
 	"github.com/aidashboard/api/internal/reportbrief"
 	"github.com/aidashboard/api/internal/reportcontext"
+	"github.com/aidashboard/api/internal/reporteval"
 	"github.com/aidashboard/api/internal/reportrun"
 	"github.com/aidashboard/api/internal/reportsource"
 	"github.com/aidashboard/api/internal/reportsourcecatalog"
@@ -37,6 +39,9 @@ func main() {
 	cfg := config.Load()
 	if err := cfg.ValidateManagedReportResources(); err != nil {
 		log.Fatalf("Invalid managed report resource configuration: %v", err)
+	}
+	if err := cfg.ValidateEvaluationRuntime(); err != nil {
+		log.Fatalf("Invalid evaluation runtime configuration: %v", err)
 	}
 	workerCounts, err := config.LoadWorkerCounts()
 	if err != nil {
@@ -113,17 +118,34 @@ func main() {
 		log.Fatalf("Failed to init report source service: %v", err)
 	}
 	reportSourceH := handler.NewReportSourceHandler(reportSourceService)
+	var reportEvaluationH *handler.ReportEvaluationHandler
+	if cfg.EvaluationEnabled {
+		artifactRepository, repositoryErr := reporteval.NewRunArtifactRepository(database)
+		if repositoryErr != nil {
+			log.Fatalf("Failed to init evaluation artifact repository: %v", repositoryErr)
+		}
+		reportEvaluationH, err = handler.NewReportEvaluationHandler(
+			cfg.Environment, currentBuildRevision(), cfg.EvaluationInstanceID,
+			reportSourceService, reporteval.EvidenceFreezer{Reader: sessionContentReader}, artifactRepository,
+		)
+		if err != nil {
+			log.Fatalf("Failed to init evaluation handler: %v", err)
+		}
+		log.Printf("Evaluation adapter enabled for test instance %s", cfg.EvaluationInstanceID)
+	}
 	reportContextService := reportcontext.NewService(database, reportSourceService)
 	reportBriefService := reportbrief.NewService(database, reportContextService)
 	managedAgentDefaults := handler.ManagedAgentDefaults{
-		Engine:             cfg.ManagedAgentDefaultEngine,
-		ModelID:            cfg.ManagedAgentDefaultModelID,
-		ReportModelID:      cfg.ManagedAgentReportModelID,
-		ReportSkillOwner:   cfg.ManagedAgentReportSkillOwner,
-		ReportSkillVersion: cfg.ManagedAgentReportSkillVersion,
-		ReportMCPURL:       cfg.ManagedAgentReportMCPURL,
-		AIDAPublicBaseURL:  cfg.AIDAPublicBaseURL,
-		AIHubSecret:        cfg.AIHubSecret,
+		Engine:               cfg.ManagedAgentDefaultEngine,
+		ModelID:              cfg.ManagedAgentDefaultModelID,
+		ReportModelID:        cfg.ManagedAgentReportModelID,
+		ReportSkillOwner:     cfg.ManagedAgentReportSkillOwner,
+		ReportSkillVersion:   cfg.ManagedAgentReportSkillVersion,
+		ReportMCPURL:         cfg.ManagedAgentReportMCPURL,
+		ReportTwoPassEnabled: cfg.ReportTwoPassEnabled,
+		BuildRevision:        currentBuildRevision(),
+		AIDAPublicBaseURL:    cfg.AIDAPublicBaseURL,
+		AIHubSecret:          cfg.AIHubSecret,
 	}
 	managedAgentH := handler.NewManagedAgentHandlerWithDefaults(database, managedAgentClient, managedAgentDefaults)
 	managedAgentH.ConfigureReportSourceSelection(reportSourceService)
@@ -499,6 +521,11 @@ func main() {
 		r.Get("/report-source-capability", reportSourceH.Capability)
 		r.Get("/report-source-sessions", reportSourceH.ListCandidates)
 		r.Post("/report-source-selections", reportSourceH.CreateSelection)
+		if reportEvaluationH != nil {
+			r.Get("/evaluation/runtime", reportEvaluationH.Runtime)
+			r.Post("/evaluation/sources/freeze", reportEvaluationH.FreezeSource)
+			r.Get("/evaluation/runs/{runId}/artifacts", reportEvaluationH.RunArtifacts)
+		}
 
 		r.Get("/ai-assets/skills", managedAgentH.ListSkills)
 		r.Post("/ai-assets/skills", managedAgentH.CreateSkill)
@@ -535,6 +562,20 @@ func main() {
 	if err := http.ListenAndServe(":"+cfg.Port, r); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
+}
+
+func currentBuildRevision() string {
+	if value := strings.TrimSpace(os.Getenv("AIDA_BUILD_REVISION")); value != "" {
+		return value
+	}
+	if info, ok := debug.ReadBuildInfo(); ok {
+		for _, setting := range info.Settings {
+			if setting.Key == "vcs.revision" {
+				return strings.TrimSpace(setting.Value)
+			}
+		}
+	}
+	return "not_available"
 }
 
 func corsMiddleware(origin string) func(http.Handler) http.Handler {

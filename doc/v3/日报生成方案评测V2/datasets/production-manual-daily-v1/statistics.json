@@ -1,0 +1,78 @@
+{
+  "schema_version": "production-report-pattern-statistics/v1",
+  "report_count": 166,
+  "author_count": 21,
+  "date_count": 15,
+  "date_range": {
+    "start": "2026-07-13",
+    "end": "2026-07-30"
+  },
+  "with_next_day_plan": 77,
+  "format_class_counts": {
+    "headings_with_lists": 5,
+    "ordered_list": 96,
+    "paragraph": 17,
+    "unordered_list": 48
+  },
+  "character_count": {
+    "min": 2,
+    "p50": 163,
+    "p90": 448,
+    "p95": 597,
+    "max": 5846
+  },
+  "line_count": {
+    "min": 1,
+    "p50": 3,
+    "p90": 9,
+    "p95": 13,
+    "max": 176
+  },
+  "ordered_item_count": {
+    "p50": 1,
+    "p90": 3,
+    "max": 32
+  },
+  "heading_count": {
+    "p50": 0,
+    "p90": 0,
+    "max": 1
+  },
+  "reports_per_date": {
+    "2026-07-13": 3,
+    "2026-07-14": 7,
+    "2026-07-15": 9,
+    "2026-07-16": 11,
+    "2026-07-17": 5,
+    "2026-07-20": 12,
+    "2026-07-21": 16,
+    "2026-07-22": 20,
+    "2026-07-23": 17,
+    "2026-07-24": 18,
+    "2026-07-25": 1,
+    "2026-07-27": 15,
+    "2026-07-28": 16,
+    "2026-07-29": 15,
+    "2026-07-30": 1
+  },
+  "reports_per_author": {
+    "min": 1,
+    "p50": 8,
+    "p90": 12,
+    "max": 13
+  },
+  "exact_duplicate_extra_rows": 1,
+  "literal_newline_escape_reports": 0,
+  "redaction_counts": {
+    "credential": 0,
+    "email": 0,
+    "hash": 0,
+    "ip": 1,
+    "organization": 0,
+    "path": 1,
+    "person": 40,
+    "phone": 0,
+    "url": 26,
+    "uuid": 0
+  }
+}

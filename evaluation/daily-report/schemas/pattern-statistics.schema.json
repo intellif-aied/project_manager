@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "production-report-pattern-statistics/v1",
+  "$defs": {
+    "range": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["p50", "p90", "max"],
+      "properties": {
+        "min": { "type": "integer", "minimum": 0 },
+        "p50": { "type": "integer", "minimum": 0 },
+        "p90": { "type": "integer", "minimum": 0 },
+        "p95": { "type": "integer", "minimum": 0 },
+        "max": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "count_map": {
+      "type": "object",
+      "additionalProperties": { "type": "integer", "minimum": 0 }
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "report_count", "author_count", "date_count", "date_range",
+    "with_next_day_plan", "format_class_counts", "character_count", "line_count",
+    "ordered_item_count", "heading_count", "reports_per_date", "reports_per_author",
+    "exact_duplicate_extra_rows", "literal_newline_escape_reports", "redaction_counts"
+  ],
+  "properties": {
+    "schema_version": { "const": "production-report-pattern-statistics/v1" },
+    "report_count": { "type": "integer", "minimum": 1 },
+    "author_count": { "type": "integer", "minimum": 1 },
+    "date_count": { "type": "integer", "minimum": 1 },
+    "date_range": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "type": "string", "format": "date" },
+        "end": { "type": "string", "format": "date" }
+      }
+    },
+    "with_next_day_plan": { "type": "integer", "minimum": 0 },
+    "format_class_counts": { "$ref": "#/$defs/count_map" },
+    "character_count": { "$ref": "#/$defs/range" },
+    "line_count": { "$ref": "#/$defs/range" },
+    "ordered_item_count": { "$ref": "#/$defs/range" },
+    "heading_count": { "$ref": "#/$defs/range" },
+    "reports_per_date": { "$ref": "#/$defs/count_map" },
+    "reports_per_author": { "$ref": "#/$defs/range" },
+    "exact_duplicate_extra_rows": { "type": "integer", "minimum": 0 },
+    "literal_newline_escape_reports": { "type": "integer", "minimum": 0 },
+    "redaction_counts": { "$ref": "#/$defs/count_map" }
+  }
+}

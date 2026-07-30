@@ -1,0 +1,29 @@
+{
+  "schema_version": "daily-report-evaluation-plan/v2",
+  "dataset_file": "dataset.example.json",
+  "repetitions": 1,
+  "timeout_seconds": 1800,
+  "variants": [
+    {
+      "variant_version": "baseline",
+      "agent_id": "default",
+      "expected_pipeline_profile": "digest_context_brief_final",
+      "runtime": {
+        "base_url": "http://127.0.0.1:18090",
+        "case_token_envs": {
+          "case-001": "AIDA_EVAL_CASE_001_BASELINE_TOKEN"
+        }
+      }
+    },
+    {
+      "variant_version": "candidate",
+      "agent_id": "candidate-report-agent",
+      "runtime": {
+        "base_url": "http://127.0.0.1:28090",
+        "case_token_envs": {
+          "case-001": "AIDA_EVAL_CASE_001_CANDIDATE_TOKEN"
+        }
+      }
+    }
+  ]
+}
