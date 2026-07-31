@@ -15,13 +15,16 @@ import (
 type recordingReportBriefService struct {
 	runID          string
 	draft          reportbrief.Draft
+	acceptCalls    int
 	rejectDetail   string
+	rejectCalls    int
 	rejectErr      error
 	degradedReason string
 	degradedErr    error
 }
 
 func (s *recordingReportBriefService) RejectInvalid(_ context.Context, _, runID, details string) (reportbrief.Stored, error) {
+	s.rejectCalls++
 	s.runID = runID
 	s.rejectDetail = details
 	if s.rejectErr != nil {
@@ -31,6 +34,7 @@ func (s *recordingReportBriefService) RejectInvalid(_ context.Context, _, runID,
 }
 
 func (s *recordingReportBriefService) Accept(_ context.Context, _, runID string, draft reportbrief.Draft) (reportbrief.Stored, error) {
+	s.acceptCalls++
 	s.runID = runID
 	s.draft = draft
 	return reportbrief.Stored{}, reportbrief.ErrInvalid
@@ -89,7 +93,36 @@ func TestResolveReportRunIDRejectsArgumentMismatch(t *testing.T) {
 	}
 }
 
-func TestEmptyBriefArgumentsReachBoundRunValidation(t *testing.T) {
+func TestEmptyBriefArgumentsStayAtArgumentBoundary(t *testing.T) {
+	const runID = "958458d9-8e65-489f-8bfc-0de80ff46752"
+	for name, rawArgs := range map[string]json.RawMessage{
+		"empty arguments":  json.RawMessage(`{}`),
+		"blank brief_json": json.RawMessage(`{"brief_json":" "}`),
+		"empty brief_json": json.RawMessage(`{"brief_json":"{}"}`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			service := &recordingReportBriefService{}
+			handler := &ReportMCPHandler{reportBrief: service, briefEnabled: true}
+			request := httptest.NewRequest("POST", "/api/v1/mcp/reports", nil)
+			ctx := context.WithValue(request.Context(), userKey, &model.User{ID: "21"})
+			ctx = context.WithValue(ctx, reportRunIDKey, runID)
+			request = request.WithContext(ctx)
+
+			_, err := handler.toolWriteReportBrief(request, rawArgs)
+			if err == nil {
+				t.Fatal("expected empty Brief arguments to be rejected")
+			}
+			if !strings.Contains(err.Error(), "brief_json is required") {
+				t.Fatalf("error = %q, want brief_json requirement", err)
+			}
+			if service.acceptCalls != 0 || service.rejectCalls != 0 {
+				t.Fatalf("empty arguments reached semantic validation: accept=%d reject=%d", service.acceptCalls, service.rejectCalls)
+			}
+		})
+	}
+}
+
+func TestLegacyBriefFieldsStillReachSemanticValidation(t *testing.T) {
 	const runID = "958458d9-8e65-489f-8bfc-0de80ff46752"
 	service := &recordingReportBriefService{}
 	handler := &ReportMCPHandler{reportBrief: service, briefEnabled: true}
@@ -98,14 +131,12 @@ func TestEmptyBriefArgumentsReachBoundRunValidation(t *testing.T) {
 	ctx = context.WithValue(ctx, reportRunIDKey, runID)
 	request = request.WithContext(ctx)
 
-	if _, err := handler.toolWriteReportBrief(request, json.RawMessage(`{}`)); err == nil {
-		t.Fatal("expected empty Brief to be rejected by Report Brief validation")
+	_, err := handler.toolWriteReportBrief(request, json.RawMessage(`{"no_reportable_work":true}`))
+	if err == nil {
+		t.Fatal("expected recording service to reject the legacy Brief")
 	}
-	if service.runID != runID {
-		t.Fatalf("validated run_id = %q, want %q", service.runID, runID)
-	}
-	if len(service.draft.Workstreams) != 0 || service.draft.NoReportableWork {
-		t.Fatalf("unexpected empty draft normalization: %#v", service.draft)
+	if service.acceptCalls != 1 || !service.draft.NoReportableWork {
+		t.Fatalf("legacy Brief did not reach semantic validation: accept=%d draft=%#v", service.acceptCalls, service.draft)
 	}
 }
 
