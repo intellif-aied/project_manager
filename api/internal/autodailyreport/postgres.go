@@ -220,7 +220,12 @@ func (r *postgresRepository) ObserveSourceSnapshot(
 		INSERT INTO auto_daily_report_states (
 			user_id, report_date, desired_source_fingerprint, desired_source_slice_keys,
 			last_source_ready_at, due_at, status
-		) VALUES ($1, $2, $3, $4, $5, $5 + make_interval(secs => $6), 'pending')
+		) VALUES (
+			$1, $2, $3, $4,
+			$5::timestamptz,
+			$5::timestamptz + make_interval(secs => $6),
+			'pending'
+		)
 		ON CONFLICT (user_id, report_date) DO UPDATE
 		SET desired_source_fingerprint = EXCLUDED.desired_source_fingerprint,
 			desired_source_slice_keys = EXCLUDED.desired_source_slice_keys,
