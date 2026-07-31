@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/aidashboard/api/internal/autodailyreport"
 	"github.com/aidashboard/api/internal/reportcontext"
 	"github.com/aidashboard/api/internal/reportsource"
 	"github.com/aidashboard/api/model"
@@ -33,6 +34,102 @@ func TestReportBriefRequiredOnlyForSystemFlow(t *testing.T) {
 	}
 	if reportBriefRequiredForRun(reportAIRun{ReportAgentSource: managedAgentSourcePersonal}) {
 		t.Fatal("personal run must not require Report Brief")
+	}
+}
+
+func TestValidateAutoReportWriteGuard(t *testing.T) {
+	updatedAt := time.Date(2026, 7, 31, 12, 0, 0, 123000, time.UTC)
+	replaceGuard := map[string]any{
+		"mode": autodailyreport.GuardModeReplace, "report_id": "report-1",
+		"updated_at": updatedAt.Format(time.RFC3339Nano),
+	}
+	tests := []struct {
+		name       string
+		run        *reportAIRun
+		reportType string
+		existing   *existingReportRow
+		wantErr    bool
+	}{
+		{
+			name: "non automatic run unchanged",
+			run: &reportAIRun{InputRef: map[string]any{
+				"trigger_source": "manual",
+			}},
+			reportType: reportTypePersonalDaily,
+			existing:   &existingReportRow{ID: "any", Edited: true},
+		},
+		{
+			name: "absent snapshot stays absent",
+			run: &reportAIRun{InputRef: map[string]any{
+				"trigger_source":    autodailyreport.TriggerSource,
+				"auto_report_guard": map[string]any{"mode": autodailyreport.GuardModeAbsent},
+			}},
+			reportType: reportTypePersonalDaily,
+		},
+		{
+			name: "absent snapshot rejects newly created report",
+			run: &reportAIRun{InputRef: map[string]any{
+				"trigger_source":    autodailyreport.TriggerSource,
+				"auto_report_guard": map[string]any{"mode": autodailyreport.GuardModeAbsent},
+			}},
+			reportType: reportTypePersonalDaily,
+			existing:   &existingReportRow{ID: "report-1", UpdatedAt: updatedAt},
+			wantErr:    true,
+		},
+		{
+			name: "replace snapshot matches",
+			run: &reportAIRun{InputRef: map[string]any{
+				"trigger_source":    autodailyreport.TriggerSource,
+				"auto_report_guard": replaceGuard,
+			}},
+			reportType: reportTypePersonalDaily,
+			existing:   &existingReportRow{ID: "report-1", UpdatedAt: updatedAt},
+		},
+		{
+			name: "replace rejects user edit",
+			run: &reportAIRun{InputRef: map[string]any{
+				"trigger_source":    autodailyreport.TriggerSource,
+				"auto_report_guard": replaceGuard,
+			}},
+			reportType: reportTypePersonalDaily,
+			existing:   &existingReportRow{ID: "report-1", Edited: true, UpdatedAt: updatedAt},
+			wantErr:    true,
+		},
+		{
+			name: "replace rejects changed timestamp",
+			run: &reportAIRun{InputRef: map[string]any{
+				"trigger_source":    autodailyreport.TriggerSource,
+				"auto_report_guard": replaceGuard,
+			}},
+			reportType: reportTypePersonalDaily,
+			existing:   &existingReportRow{ID: "report-1", UpdatedAt: updatedAt.Add(time.Second)},
+			wantErr:    true,
+		},
+		{
+			name: "automatic run fails closed without guard",
+			run: &reportAIRun{InputRef: map[string]any{
+				"trigger_source": autodailyreport.TriggerSource,
+			}},
+			reportType: reportTypePersonalDaily,
+			wantErr:    true,
+		},
+		{
+			name: "automatic trigger cannot target another report type",
+			run: &reportAIRun{InputRef: map[string]any{
+				"trigger_source":    autodailyreport.TriggerSource,
+				"auto_report_guard": map[string]any{"mode": autodailyreport.GuardModeAbsent},
+			}},
+			reportType: reportTypePersonalWeekly,
+			wantErr:    true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateAutoReportWriteGuard(test.run, test.reportType, test.existing)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("error=%v wantErr=%v", err, test.wantErr)
+			}
+		})
 	}
 }
 

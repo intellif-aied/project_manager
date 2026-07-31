@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aidashboard/api/internal/autodailyreport"
 	"github.com/aidashboard/api/internal/reportbrief"
 	"github.com/aidashboard/api/internal/reportcontext"
 	"github.com/aidashboard/api/internal/reportsource"
@@ -189,6 +190,16 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 	existing, err := selectReportForUpdate(ctx, tx, reportType, date, ws, we, target)
 	if err != nil {
 		return nil, errMCPInternal
+	}
+	if err := validateAutoReportWriteGuard(run, reportType, existing); err != nil {
+		msg := "自动日报生成期间日报状态已变化，AI 回写已取消"
+		if markErr := markAIRunFailedTx(ctx, tx, run.ID, u.ID, reportEditConflictCode, msg); markErr != nil {
+			return nil, errMCPInternal
+		}
+		if commitErr := tx.Commit(); commitErr != nil {
+			return nil, errMCPInternal
+		}
+		return nil, errReportEditConflict
 	}
 	if existing != nil && existing.Edited && existing.UpdatedAt.After(run.CreatedAt) {
 		msg := "报告已被用户编辑，AI 回写已取消"
@@ -797,6 +808,41 @@ type existingReportRow struct {
 	ID        string
 	Edited    bool
 	UpdatedAt time.Time
+}
+
+func validateAutoReportWriteGuard(run *reportAIRun, reportType string, existing *existingReportRow) error {
+	if run == nil || stringFromAny(run.InputRef["trigger_source"]) != autodailyreport.TriggerSource {
+		return nil
+	}
+	if reportType != reportTypePersonalDaily {
+		return errReportEditConflict
+	}
+	raw, found := run.InputRef["auto_report_guard"]
+	if !found {
+		return errReportEditConflict
+	}
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return errReportEditConflict
+	}
+	var guard autodailyreport.ReportGuard
+	if err := json.Unmarshal(encoded, &guard); err != nil {
+		return errReportEditConflict
+	}
+	switch guard.Mode {
+	case autodailyreport.GuardModeAbsent:
+		if existing != nil {
+			return errReportEditConflict
+		}
+	case autodailyreport.GuardModeReplace:
+		if existing == nil || existing.Edited || guard.ReportID == "" || guard.UpdatedAt == nil ||
+			existing.ID != guard.ReportID || !existing.UpdatedAt.Equal(*guard.UpdatedAt) {
+			return errReportEditConflict
+		}
+	default:
+		return errReportEditConflict
+	}
+	return nil
 }
 
 func selectReportForUpdate(ctx context.Context, tx *sql.Tx, reportType, date, ws, we string, target reportTarget) (*existingReportRow, error) {
