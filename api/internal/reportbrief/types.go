@@ -5,7 +5,7 @@ import "errors"
 const (
 	SchemaVersion            = "report-brief/v1"
 	MaxPayloadBytes          = 128 * 1024
-	MaxWorkstreams           = 8
+	MaxWorkstreams           = 5
 	MaxDeliverables          = 8
 	MaxBriefInvalidAttempts  = 2
 	MaxResultInvalidAttempts = 1
@@ -42,18 +42,23 @@ type Draft struct {
 }
 
 type Workstream struct {
-	Title        string        `json:"title"`
-	Objective    string        `json:"objective"`
+	Subject string `json:"subject,omitempty"`
+	Title   string `json:"title"`
+	// Objective is accepted only for a legacy subject-less Brief. The subject
+	// subject contract intentionally keeps it out of normalized system Briefs.
+	Objective    string        `json:"objective,omitempty"`
 	Deliverables []Deliverable `json:"deliverables"`
 }
 
 type Deliverable struct {
-	Result      string   `json:"result"`
-	State       string   `json:"state"`
-	Environment string   `json:"environment"`
-	Validation  string   `json:"validation,omitempty"`
-	NextAction  string   `json:"next_action,omitempty"`
-	FactRefs    []string `json:"fact_refs"`
+	Result   string   `json:"result"`
+	FactRefs []string `json:"fact_refs"`
+	// Legacy fields remain decodable during a rolling Skill/API update. They
+	// are discarded by the project-outcome subject contract and never reach Pass 2.
+	State       string `json:"state,omitempty"`
+	Environment string `json:"environment,omitempty"`
+	Validation  string `json:"validation,omitempty"`
+	NextAction  string `json:"next_action,omitempty"`
 }
 
 type ExcludedFact struct {

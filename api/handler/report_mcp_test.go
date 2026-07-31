@@ -184,12 +184,13 @@ func TestNormalizeReportSummaryDoesNotSplitVersionNumbers(t *testing.T) {
 func TestNormalizeReportSummaryCanonicalizesPresentationFamilies(t *testing.T) {
 	want := "1. 完成方案设计。\n2. 完成开发验证。\n3. 完成生产排查。"
 	tests := map[string]string{
-		"actual line feeds":    "1. 完成方案设计。\n2. 完成开发验证。\n3. 完成生产排查。",
-		"actual CRLF":          "1. 完成方案设计。\r\n2. 完成开发验证。\r\n3. 完成生产排查。",
-		"collapsed spaces":     "1. 完成方案设计。 2. 完成开发验证。 3. 完成生产排查。",
-		"literal line feeds":   `1. 完成方案设计。\n2. 完成开发验证。\n3. 完成生产排查。`,
-		"literal CRLF":         `1. 完成方案设计。\r\n2. 完成开发验证。\r\n3. 完成生产排查。`,
-		"adjacent punctuation": "1. 完成方案设计。2. 完成开发验证。3. 完成生产排查。",
+		"actual line feeds":       "1. 完成方案设计。\n2. 完成开发验证。\n3. 完成生产排查。",
+		"actual CRLF":             "1. 完成方案设计。\r\n2. 完成开发验证。\r\n3. 完成生产排查。",
+		"collapsed spaces":        "1. 完成方案设计。 2. 完成开发验证。 3. 完成生产排查。",
+		"literal line feeds":      `1. 完成方案设计。\n2. 完成开发验证。\n3. 完成生产排查。`,
+		"literal CRLF":            `1. 完成方案设计。\r\n2. 完成开发验证。\r\n3. 完成生产排查。`,
+		"repeated actual numbers": "1. 完成方案设计。\n1. 完成开发验证。\n1. 完成生产排查。",
+		"adjacent punctuation":    "1. 完成方案设计。2. 完成开发验证。3. 完成生产排查。",
 	}
 	for name, input := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -197,6 +198,29 @@ func TestNormalizeReportSummaryCanonicalizesPresentationFamilies(t *testing.T) {
 				t.Fatalf("summary=%q, want %q", got, want)
 			}
 		})
+	}
+}
+
+func TestPrepareReportResultContentRepairsRepeatedNumbersOnlyForPersonalDaily(t *testing.T) {
+	input := `1. 完成方案设计。\n1. 完成开发验证。\n1. 完成生产排查。`
+	wantDaily := "1. 完成方案设计。\n2. 完成开发验证。\n3. 完成生产排查。"
+	_, dailySummary, err := prepareReportResultContent(
+		reportTypePersonalDaily,
+		reportcontext.RepresentationWorkEvidence,
+		input,
+		"### 工作主题\n\n完成实现。",
+	)
+	if err != nil || dailySummary != wantDaily {
+		t.Fatalf("personal daily summary=%q err=%v, want %q", dailySummary, err, wantDaily)
+	}
+	_, weeklySummary, err := prepareReportResultContent(
+		reportTypePersonalWeekly,
+		reportcontext.RepresentationWorkEvidence,
+		input,
+		"## 工作主题\n\n完成实现。",
+	)
+	if err != nil || weeklySummary != input {
+		t.Fatalf("weekly summary changed=%q err=%v, want %q", weeklySummary, err, input)
 	}
 }
 

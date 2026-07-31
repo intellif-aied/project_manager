@@ -26,16 +26,17 @@ type Target struct {
 }
 
 type BuildRequest struct {
-	UserID            string
-	RunID             string
-	ReportType        string
-	Period            reportsource.Period
-	Timezone          string
-	TriggerSource     string
-	ModelID           string
-	Target            Target
-	SourceSelectionID string
-	Representation    string
+	UserID             string
+	RunID              string
+	ReportType         string
+	Period             reportsource.Period
+	Timezone           string
+	TriggerSource      string
+	ModelID            string
+	Target             Target
+	SourceSelectionID  string
+	Representation     string
+	IncludeWorkThreads bool
 }
 
 func (r BuildRequest) validate() error {

@@ -115,7 +115,7 @@ func TestBuildRequestFreezesProjectionCompatibility(t *testing.T) {
 func TestPresentationProfileForEveryManagedReportType(t *testing.T) {
 	tests := map[string]PresentationProfile{
 		ReportTypePersonalDaily: {
-			SummaryFocus:    "个人当日推进的主要目标、关键成果、验证和整体状态；只有存在明确证据时才提及风险或阻塞。",
+			SummaryFocus:    "个人当日推进的主要项目与工作成果；Git、测试、构建、合并和部署只用于关联工作主题，不作为日报结论。",
 			ContentGrouping: "按个人工作目标归并；同一目标下的开发、文档、部署、验证和修复合并表达。",
 		},
 		ReportTypePersonalWeekly: {
@@ -162,14 +162,14 @@ func TestProjectPayloadForRepresentationKeepsHistoricalRunShape(t *testing.T) {
 		Sessions: []SessionSource{{SelectionID: "selection-1", Mode: "digest_v2", Digest: digest}},
 		Sources:  Sources{SessionDigest: digest},
 	}
-	legacy, err := projectPayloadForRepresentation(payload, "")
+	legacy, err := projectPayloadForRepresentation(payload, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(legacy.Sessions) != 1 || len(legacy.Sources.SessionDigest) == 0 || legacy.WorkEvidence != nil || legacy.PresentationProfile != nil {
 		t.Fatalf("historical run shape changed: %+v", legacy)
 	}
-	current, err := projectPayloadForRepresentation(payload, RepresentationWorkEvidence)
+	current, err := projectPayloadForRepresentation(payload, RepresentationWorkEvidence, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +191,7 @@ func TestProjectPayloadForRepresentationRejectsIncompleteProjection(t *testing.T
 		Sources:  Sources{SessionDigest: digest},
 	}
 
-	if _, err := projectPayloadForRepresentation(payload, RepresentationWorkEvidence); !errors.Is(err, ErrIncomplete) {
+	if _, err := projectPayloadForRepresentation(payload, RepresentationWorkEvidence, false); !errors.Is(err, ErrIncomplete) {
 		t.Fatalf("incomplete Projection must fail instead of exposing the frozen Digest, got %v", err)
 	}
 }
@@ -239,7 +239,7 @@ func TestProjectPayloadDoesNotAddFactRefsToOtherReportTypes(t *testing.T) {
 		Sources:  Sources{SessionDigest: digest},
 	}
 
-	projected, err := projectPayload(payload)
+	projected, err := projectPayloadWithThreads(payload, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +260,20 @@ func TestProjectPayloadUsesReadableFactsAndOmitsRawGoals(t *testing.T) {
 		Sources:  Sources{SessionDigest: digest},
 	}
 
-	projected, err := projectPayload(payload)
+	withoutThreads, err := projectPayload(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(withoutThreads.WorkEvidence.Threads) != 0 {
+		t.Fatalf("personal report Agent received system work threads: %+v", withoutThreads.WorkEvidence.Threads)
+	}
+	for _, fact := range withoutThreads.WorkEvidence.Facts {
+		if len(fact.ThreadRefs) != 0 {
+			t.Fatalf("personal report Agent fact received system thread refs: %+v", fact)
+		}
+	}
+
+	projected, err := projectPayloadWithThreads(payload, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,6 +331,54 @@ func TestProjectPayloadUsesReadableFactsAndOmitsRawGoals(t *testing.T) {
 	if !strings.Contains(visible, `"facts":[{"fact_ref":"fact-001","kind":"result","text":"same result","source":"tool_result","thread_refs":["thread-001","thread-002"],"observations":[{"date":"2026-07-23","observed_at":"2026-07-23T09:00:00+08:00","category":"implementation","status":"completed","occurrence_count":1`) ||
 		!strings.Contains(visible, `"fact_ref":"fact-003","kind":"unresolved","text":"follow up"`) {
 		t.Fatalf("work evidence is not readable object JSON: %s", visible)
+	}
+}
+
+func TestProjectPayloadWithoutThreadsKeepsSourceScopedWorkUnitIdentity(t *testing.T) {
+	var digest map[string]any
+	if err := json.Unmarshal(validFrozenDigestV2(), &digest); err != nil {
+		t.Fatal(err)
+	}
+	digest["returned_item_count"] = float64(2)
+	coverage := digest["coverage"].(map[string]any)
+	coverage["source_item_count"] = float64(2)
+	coverage["represented_item_count"] = float64(2)
+	items := digest["items"].([]any)
+	secondItemJSON, err := json.Marshal(items[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var secondItem map[string]any
+	if err := json.Unmarshal(secondItemJSON, &secondItem); err != nil {
+		t.Fatal(err)
+	}
+	secondItem["source_item_ref"] = "item-2"
+	secondItem["session_ref"] = "session-2"
+	digest["items"] = append(items, secondItem)
+
+	period := digest["report_period_summary"].(map[string]any)
+	days := period["days"].([]any)
+	highlights := days[0].(map[string]any)["highlights"].([]any)
+	highlights[0].(map[string]any)["source_ref"] = "session-1"
+	highlights[1].(map[string]any)["source_ref"] = "session-2"
+	highlights[1].(map[string]any)["work_unit_ref"] = "wu-1"
+	highlights[2].(map[string]any)["source_ref"] = "session-1"
+
+	encoded, err := json.Marshal(digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := Payload{
+		Run:      Run{ReportType: ReportTypePersonalDaily},
+		Sessions: []SessionSource{{SelectionID: "selection-1", Mode: "digest_v2", Digest: encoded}},
+		Sources:  Sources{SessionDigest: encoded},
+	}
+	projected, err := projectPayload(payload)
+	if err != nil {
+		t.Fatalf("source-scoped work units without exposed threads were rejected: %v", err)
+	}
+	if len(projected.WorkEvidence.Threads) != 0 {
+		t.Fatalf("personal Agent received system work threads: %+v", projected.WorkEvidence.Threads)
 	}
 }
 

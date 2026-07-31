@@ -15,7 +15,10 @@ import (
 	"github.com/aidashboard/api/internal/reportcontext"
 )
 
-const personalDaily = "personal_daily"
+const (
+	personalDaily                             = "personal_daily"
+	maxPersonalDailyContentRunesPerWorkstream = 600
+)
 
 type contextReader interface {
 	Get(context.Context, string, string) (reportcontext.StoredContext, error)
@@ -303,24 +306,34 @@ func (s *Service) loadStored(ctx context.Context, userID, runID string) (Stored,
 		return Stored{}, ErrMismatch
 	}
 	var payload Payload
-	if err := json.Unmarshal(raw, &payload); err != nil || payload.SchemaVersion != SchemaVersion {
+	if err := json.Unmarshal(raw, &payload); err != nil || payload.SchemaVersion != schemaVersion {
 		return Stored{}, ErrMismatch
 	}
 	return Stored{Payload: payload, BriefHash: briefHash, ContextHash: contextHash}, nil
 }
 
 var (
-	factRefPattern        = regexp.MustCompile(FactRefJSONPattern)
-	uuidPattern           = regexp.MustCompile(`(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b`)
-	privateIPPattern      = regexp.MustCompile(`\b(?:10\.|192\.168\.|172\.(?:1[6-9]|2[0-9]|3[01])\.)[0-9]{1,3}\.[0-9]{1,3}\b`)
-	longHexPattern        = regexp.MustCompile(`(?i)\b[0-9a-f]{7,64}\b`)
-	rawCodePattern        = regexp.MustCompile(`\bREPORT_[A-Z0-9_]+\b`)
-	absUnixPathPattern    = regexp.MustCompile(`(?:^|\s)/(?:home|tmp|var|etc|opt|usr)/[^\s]+`)
-	absWindowsPathPattern = regexp.MustCompile(`(?i)\b[A-Z]:\\[^\s]+`)
-	internalRoutePattern  = regexp.MustCompile(`(?:^|[\s(\x60])/[A-Za-z][A-Za-z0-9_-]*(?:/[A-Za-z0-9_.{}:-]+)*`)
-	networkPortPattern    = regexp.MustCompile(`(?i)(?:udp|tcp|port|端口)\s*[:：]?\s*[0-9]{2,5}\b`)
-	reversePortPattern    = regexp.MustCompile(`(?i)\b[0-9]{2,5}\s*(?:号)?\s*(?:udp|tcp|port|端口)`)
-	commandFlagPattern    = regexp.MustCompile(`(?:^|\s)--[A-Za-z][A-Za-z0-9-]*\b`)
+	factRefPattern                = regexp.MustCompile(FactRefJSONPattern)
+	uuidPattern                   = regexp.MustCompile(`(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b`)
+	privateIPPattern              = regexp.MustCompile(`\b(?:10\.|192\.168\.|172\.(?:1[6-9]|2[0-9]|3[01])\.)[0-9]{1,3}\.[0-9]{1,3}\b`)
+	longHexPattern                = regexp.MustCompile(`(?i)\b[0-9a-f]{7,64}\b`)
+	rawCodePattern                = regexp.MustCompile(`\bREPORT_[A-Z0-9_]+\b`)
+	absUnixPathPattern            = regexp.MustCompile(`(?:^|\s)/(?:home|tmp|var|etc|opt|usr)/[^\s]+`)
+	absWindowsPathPattern         = regexp.MustCompile(`(?i)\b[A-Z]:\\[^\s]+`)
+	sensitiveInternalRoutePattern = regexp.MustCompile(`(?i)/(?:api|internal|admin|debug|metrics|healthz?|mcp|_[A-Za-z0-9_-]+)(?:$|[^A-Za-z0-9_-])`)
+	networkPortPattern            = regexp.MustCompile(`(?i)(?:udp|tcp|port|端口)\s*[:：]?\s*[0-9]{2,5}\b`)
+	reversePortPattern            = regexp.MustCompile(`(?i)\b[0-9]{2,5}\s*(?:号)?\s*(?:udp|tcp|port|端口)`)
+	ipv4CIDRPattern               = regexp.MustCompile(`\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}/(?:[0-9]|[12][0-9]|3[0-2])\b`)
+	internalHostAliasPattern      = regexp.MustCompile(`(?i)(?:(?:服务器|主机|host|部署至|部署到|运行于|上线至)\s*[:：]?\s*[0-9]{1,3}\.[0-9]{1,3}\b|\b[0-9]{1,3}\.[0-9]{1,3}\b\s*(?:服务器|主机|host)|(?:在|位于)\s*[0-9]{1,3}\.[0-9]{1,3}\s*(?:环境|服务器|主机|host))`)
+	credentialTermPattern         = regexp.MustCompile(`(?i)(?:api[ _-]?key|token|credential|secret|密钥|秘钥|凭据|令牌)`)
+	credentialExpiryPattern       = regexp.MustCompile(`(?i)(?:expir|到期|过期|失效)`)
+	calendarDatePattern           = regexp.MustCompile(`\b20[0-9]{2}[-/][0-9]{1,2}(?:[-/][0-9]{1,2})?\b`)
+	sensitiveClausePattern        = regexp.MustCompile(`[。！？；;!?\r\n]+`)
+	orderedSummaryLine            = regexp.MustCompile(`^[1-9][0-9]*\.\s+\S`)
+	commandFlagPattern            = regexp.MustCompile(`(?:^|\s)--[A-Za-z][A-Za-z0-9-]*\b`)
+	credentialValuePattern        = regexp.MustCompile(`(?i)(?:(?:默认(?:管理员)?(?:密码|口令|账号|用户名|登录))\s*(?:(?:为|是|[:：])\s*)?|default\s+(?:password|credential|login)\s*(?:(?::|is)\s*))['"]?[A-Za-z0-9@#$%^&*_.!-]{3,}['"]?`)
+	operationalTracePattern       = regexp.MustCompile(`(?i)(?:\bgit\b|\bcommit\b|\bpush\b|\bmerge\b|\bbuild\b|\bdeploy(?:ed|ment)?\b|\breleas(?:e|ed)\b|\btests?\b|\bvalidation\b|\bRun\s*ID\b|代码.{0,8}(?:提交|合并)|(?:测试|构建|编译).{0,12}(?:通过|失败|完成|检查|环境)|(?:部署|发布|上线).{0,12}(?:完成|失败|生产|环境|服务)|(?:可以|可|不建议|暂不建议).{0,12}(?:合并|发布|上线|部署)|达到.{0,16}(?:合并|发布|上线|生产).{0,8}标准|尚未.{0,16}(?:提交|推送|合并|发布|上线|部署)|未(?:提交|推送|合并|发布|上线|部署))`)
+	agentJudgementPattern         = regexp.MustCompile(`(?i)(?:\bevidence_insufficient\b|(?:评测|审查|AI|Agent).{0,12}(?:认可|建议|不建议)|(?:质量|效果|稳定性).{0,16}(?:证明|证实)|(?:^|[，。；:：])(?:且|并且|同时|本次|此次|本期)?(?:未|不)(?:改动|改变|修改|涉及|包含|影响)|(?:仅|只)(?:涉及|包含|改动|改变|修改|影响)|(?:保持|维持).{0,6}不变)`)
 )
 
 var validStates = valueSet(ValidStates())
@@ -357,37 +370,56 @@ func normalizeDraft(draft Draft, reportType string, period Period, available map
 	}
 	included := map[string]struct{}{}
 	workstreamIndexes := map[string]int{}
+	subjectCount := 0
+	for _, rawWorkstream := range draft.Workstreams {
+		if strings.TrimSpace(rawWorkstream.Subject) != "" {
+			subjectCount++
+		}
+	}
+	if subjectCount > 0 && subjectCount != len(draft.Workstreams) {
+		appendValidationIssue(&issues, "subject must be provided for every workstream when used")
+	}
 	for workstreamIndex, rawWorkstream := range draft.Workstreams {
 		workstream := Workstream{
-			Title: normalizeText(rawWorkstream.Title), Objective: normalizeText(rawWorkstream.Objective),
+			Subject: normalizeText(rawWorkstream.Subject), Title: normalizeText(rawWorkstream.Title),
 			Deliverables: make([]Deliverable, 0, len(rawWorkstream.Deliverables)),
 		}
+		if subjectCount > 0 {
+			appendValidationIssues(&issues, validateTextIssues(fmt.Sprintf("workstreams[%d].subject", workstreamIndex), workstream.Subject, 1, 80))
+		} else {
+			workstream.Objective = normalizeText(rawWorkstream.Objective)
+			appendValidationIssues(&issues, validateTextIssues(fmt.Sprintf("workstreams[%d].objective", workstreamIndex), workstream.Objective, 1, 240))
+		}
 		appendValidationIssues(&issues, validateTextIssues(fmt.Sprintf("workstreams[%d].title", workstreamIndex), workstream.Title, 1, 80))
-		appendValidationIssues(&issues, validateTextIssues(fmt.Sprintf("workstreams[%d].objective", workstreamIndex), workstream.Objective, 1, 240))
 		if len(rawWorkstream.Deliverables) == 0 || len(rawWorkstream.Deliverables) > MaxDeliverables {
 			appendValidationIssue(&issues, fmt.Sprintf("workstreams[%d] requires 1 to 8 deliverables", workstreamIndex))
 		}
 		for deliverableIndex, rawDeliverable := range rawWorkstream.Deliverables {
 			path := fmt.Sprintf("workstreams[%d].deliverables[%d]", workstreamIndex, deliverableIndex)
-			deliverable := Deliverable{
-				Result: normalizeText(rawDeliverable.Result), State: strings.TrimSpace(rawDeliverable.State),
-				Environment: strings.TrimSpace(rawDeliverable.Environment),
-				Validation:  normalizeText(rawDeliverable.Validation), NextAction: normalizeText(rawDeliverable.NextAction),
-			}
+			deliverable := Deliverable{Result: normalizeText(rawDeliverable.Result)}
 			appendValidationIssues(&issues, validateTextIssues(path+".result", deliverable.Result, 1, 500))
-			appendValidationIssues(&issues, validateTextIssues(path+".validation", deliverable.Validation, 1, 320))
-			appendValidationIssues(&issues, validateTextIssues(path+".next_action", deliverable.NextAction, 1, 240))
-			if _, ok := validStates[deliverable.State]; !ok {
-				appendValidationIssue(&issues, path+".state is invalid")
+			if subjectCount > 0 && (operationalTracePattern.MatchString(deliverable.Result) || agentJudgementPattern.MatchString(deliverable.Result)) {
+				appendValidationIssue(&issues, path+".result contains an operational trace or Agent judgement; use it only to associate the subject and state the project outcome instead")
 			}
-			if _, ok := validEnvironments[deliverable.Environment]; !ok {
-				appendValidationIssue(&issues, path+".environment is invalid")
-			}
-			if deliverable.State == "released" && deliverable.Environment != "production" {
-				appendValidationIssue(&issues, path+": released requires production environment")
-			}
-			if deliverable.State == "validated" && deliverable.Environment != "test" {
-				appendValidationIssue(&issues, path+": validated requires test environment")
+			if subjectCount == 0 {
+				deliverable.State = strings.TrimSpace(rawDeliverable.State)
+				deliverable.Environment = strings.TrimSpace(rawDeliverable.Environment)
+				deliverable.Validation = normalizeText(rawDeliverable.Validation)
+				deliverable.NextAction = normalizeText(rawDeliverable.NextAction)
+				appendValidationIssues(&issues, validateTextIssues(path+".validation", deliverable.Validation, 1, 320))
+				appendValidationIssues(&issues, validateTextIssues(path+".next_action", deliverable.NextAction, 1, 240))
+				if _, ok := validStates[deliverable.State]; !ok {
+					appendValidationIssue(&issues, path+".state is invalid")
+				}
+				if _, ok := validEnvironments[deliverable.Environment]; !ok {
+					appendValidationIssue(&issues, path+".environment is invalid")
+				}
+				if deliverable.State == "released" && deliverable.Environment != "production" {
+					appendValidationIssue(&issues, path+": released requires production environment")
+				}
+				if deliverable.State == "validated" && deliverable.Environment != "test" {
+					appendValidationIssue(&issues, path+": validated requires test environment")
+				}
 			}
 			deliverable.FactRefs = normalizeFactRefs(rawDeliverable.FactRefs)
 			if len(deliverable.FactRefs) == 0 {
@@ -403,6 +435,9 @@ func normalizeDraft(draft Draft, reportType string, period Period, available map
 			workstream.Deliverables = append(workstream.Deliverables, deliverable)
 		}
 		key := workstream.Title + "\x00" + workstream.Objective
+		if workstream.Subject != "" {
+			key = "subject\x00" + strings.ToLower(workstream.Subject)
+		}
 		if existingIndex, exists := workstreamIndexes[key]; exists {
 			combined := append(payload.Workstreams[existingIndex].Deliverables, workstream.Deliverables...)
 			if len(combined) > MaxDeliverables {
@@ -472,22 +507,65 @@ func normalizeText(value string) string {
 const noReportableResultText = "本期无可核验的工作记录"
 
 func validateResultBriefIssues(payload Payload, summary, content string) []string {
-	summary = normalizeText(summary)
-	content = normalizeText(content)
+	normalizedSummary := normalizeText(summary)
+	normalizedContent := normalizeText(content)
 	if payload.NoReportableWork {
 		issues := make([]string, 0, 2)
-		if summary != noReportableResultText {
+		if normalizedSummary != noReportableResultText {
 			issues = append(issues, "summary must use the no-reportable-work statement from the accepted brief")
 		}
-		if !strings.Contains(content, noReportableResultText) {
+		if !strings.Contains(normalizedContent, noReportableResultText) {
 			issues = append(issues, "content must use the no-reportable-work statement from the accepted brief")
 		}
 		return issues
 	}
-	if strings.Contains(summary, noReportableResultText) || strings.Contains(content, noReportableResultText) {
+	if strings.Contains(normalizedSummary, noReportableResultText) || strings.Contains(normalizedContent, noReportableResultText) {
 		return []string{"report result conflicts with the accepted brief by claiming no reportable work"}
 	}
-	return nil
+	usesSubjectContract := len(payload.Workstreams) > 0
+	for _, workstream := range payload.Workstreams {
+		if strings.TrimSpace(workstream.Subject) == "" {
+			usesSubjectContract = false
+			break
+		}
+	}
+	if !usesSubjectContract {
+		return nil
+	}
+	issues := make([]string, 0, 2)
+	if countOrderedSummaryItems(summary) != len(payload.Workstreams) {
+		issues = append(issues, "summary item count must match accepted brief workstreams")
+	}
+	if countLevelThreeHeadings(content) != len(payload.Workstreams) {
+		issues = append(issues, "content level-three heading count must match accepted brief workstreams")
+	}
+	maxContentRunes := maxPersonalDailyContentRunesPerWorkstream * len(payload.Workstreams)
+	if len([]rune(strings.TrimSpace(content))) > maxContentRunes {
+		issues = append(issues, fmt.Sprintf("content length must not exceed %d characters for %d accepted workstreams", maxContentRunes, len(payload.Workstreams)))
+	}
+	return issues
+}
+
+func countOrderedSummaryItems(value string) int {
+	value = strings.ReplaceAll(strings.ReplaceAll(value, `\r\n`, "\n"), `\n`, "\n")
+	count := 0
+	for _, line := range strings.Split(strings.ReplaceAll(value, "\r\n", "\n"), "\n") {
+		if orderedSummaryLine.MatchString(strings.TrimSpace(line)) {
+			count++
+		}
+	}
+	return count
+}
+
+func countLevelThreeHeadings(value string) int {
+	value = strings.ReplaceAll(strings.ReplaceAll(value, `\r\n`, "\n"), `\n`, "\n")
+	count := 0
+	for _, line := range strings.Split(strings.ReplaceAll(value, "\r\n", "\n"), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "### ") {
+			count++
+		}
+	}
+	return count
 }
 
 func validateTextIssues(path, value string, minRunes, maxRunes int) []string {
@@ -511,19 +589,42 @@ func validateTextIssues(path, value string, minRunes, maxRunes int) []string {
 		{uuidPattern, "UUID"}, {privateIPPattern, "private IP"}, {longHexPattern, "hash"},
 		{rawCodePattern, "raw error code"},
 		{absUnixPathPattern, "absolute path"}, {absWindowsPathPattern, "absolute path"},
-		{internalRoutePattern, "internal route"}, {networkPortPattern, "network port"},
-		{reversePortPattern, "network port"},
+		{sensitiveInternalRoutePattern, "internal route"},
+		{networkPortPattern, "network port"},
+		{reversePortPattern, "network port"}, {internalHostAliasPattern, "internal host"},
+		{ipv4CIDRPattern, "network range"},
 		{commandFlagPattern, "command-line flag"},
 	} {
 		if rule.pattern.MatchString(value) {
 			issues = append(issues, fmt.Sprintf("%s contains %s", path, rule.label))
 		}
 	}
+	if credentialValuePattern.MatchString(stripSensitiveMarkdown(value)) {
+		issues = append(issues, path+" contains credential value")
+	}
+	if containsExactCredentialExpiry(value) {
+		issues = append(issues, path+" contains exact credential expiry details")
+	}
 	if strings.Contains(strings.ToLower(value), "bearer ") || strings.Contains(value, "eyJ") ||
 		strings.Contains(value, "http://") || strings.Contains(value, "https://") {
 		issues = append(issues, path+" contains credentials or an internal location")
 	}
 	return issues
+}
+
+func stripSensitiveMarkdown(value string) string {
+	return strings.NewReplacer(
+		"`", "", "*", "", "_", "", "[", "", "]", "", "<", "", ">", "",
+	).Replace(value)
+}
+
+func containsExactCredentialExpiry(value string) bool {
+	for _, clause := range sensitiveClausePattern.Split(value, -1) {
+		if credentialTermPattern.MatchString(clause) && credentialExpiryPattern.MatchString(clause) && calendarDatePattern.MatchString(clause) {
+			return true
+		}
+	}
+	return false
 }
 
 func appendValidationIssue(issues *[]string, issue string) {

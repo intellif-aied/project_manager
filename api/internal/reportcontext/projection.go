@@ -59,7 +59,7 @@ type workEvidenceObservationIdentity struct {
 	Status   string
 }
 
-func projectPayloadForRepresentation(payload Payload, representation string) (Payload, error) {
+func projectPayloadForRepresentation(payload Payload, representation string, includeWorkThreads bool) (Payload, error) {
 	switch representation {
 	case "":
 		return payload, nil
@@ -68,7 +68,7 @@ func projectPayloadForRepresentation(payload Payload, representation string) (Pa
 		if err != nil {
 			return Payload{}, err
 		}
-		projected, err := projectPayload(payload)
+		projected, err := projectPayloadWithThreads(payload, includeWorkThreads)
 		if err != nil {
 			return Payload{}, err
 		}
@@ -82,7 +82,7 @@ func projectPayloadForRepresentation(payload Payload, representation string) (Pa
 func presentationProfileFor(reportType string) (PresentationProfile, error) {
 	profiles := map[string]PresentationProfile{
 		ReportTypePersonalDaily: {
-			SummaryFocus:    "个人当日推进的主要目标、关键成果、验证和整体状态；只有存在明确证据时才提及风险或阻塞。",
+			SummaryFocus:    "个人当日推进的主要项目与工作成果；Git、测试、构建、合并和部署只用于关联工作主题，不作为日报结论。",
 			ContentGrouping: "按个人工作目标归并；同一目标下的开发、文档、部署、验证和修复合并表达。",
 		},
 		ReportTypePersonalWeekly: {
@@ -117,6 +117,10 @@ func presentationProfileFor(reportType string) (PresentationProfile, error) {
 // Report Agent. It compacts deterministic transport noise and exact duplicates,
 // but never ranks facts or decides which conclusion is semantically correct.
 func projectPayload(payload Payload) (Payload, error) {
+	return projectPayloadWithThreads(payload, false)
+}
+
+func projectPayloadWithThreads(payload Payload, includeWorkThreads bool) (Payload, error) {
 	if err := removeDuplicateLegacyDigest(&payload); err != nil {
 		return Payload{}, err
 	}
@@ -124,7 +128,7 @@ func projectPayload(payload Payload) (Payload, error) {
 		return payload, nil
 	}
 
-	includeThreadContext := payload.Run.ReportType == ReportTypePersonalDaily
+	includeThreadContext := includeWorkThreads && payload.Run.ReportType == ReportTypePersonalDaily
 	workEvidence, err := projectDigestV2(payload.Sessions[0], includeThreadContext)
 	if err != nil {
 		return Payload{}, err
@@ -211,13 +215,15 @@ func projectDigestV2(session SessionSource, includeThreadContext bool) (WorkEvid
 			if workUnitRef == "" {
 				return WorkEvidence{}, ErrIncomplete
 			}
-			threadKey := sourceRef + "\x00" + workUnitRef
-			if _, exists := workUnitKeys[threadKey]; exists {
+			workUnitKey := sourceRef + "\x00" + workUnitRef
+			if _, exists := workUnitKeys[workUnitKey]; exists {
 				return WorkEvidence{}, ErrIncomplete
 			}
-			workUnitKeys[threadKey] = struct{}{}
+			workUnitKeys[workUnitKey] = struct{}{}
+			threadKey := ""
 			threadGoal := ""
 			if includeThreadContext {
+				threadKey = workUnitKey
 				threadGoal = projectWorkThreadGoal(highlight.Goal)
 			}
 			category := strings.TrimSpace(highlight.Category)
