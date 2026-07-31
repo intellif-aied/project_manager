@@ -37,12 +37,17 @@ func (h *ReportMCPHandler) toolWriteReportBrief(r *http.Request, rawArgs json.Ra
 		Workstreams: args.Workstreams, ExcludedFacts: args.ExcludedFacts,
 		NoReportableWork: args.NoReportableWork,
 	}
-	if strings.TrimSpace(args.BriefJSON) != "" {
-		if err := json.Unmarshal([]byte(args.BriefJSON), &draft); err != nil {
+	briefJSON := strings.TrimSpace(args.BriefJSON)
+	if briefJSON != "" {
+		if err := json.Unmarshal([]byte(briefJSON), &draft); err != nil {
 			_, rejectErr := h.reportBrief.RejectInvalid(r.Context(), u.ID, runID,
 				"brief_json must contain one valid Report Brief JSON object")
 			return nil, mapReportBriefError(rejectErr)
 		}
+	}
+	if len(draft.Workstreams) == 0 && len(draft.ExcludedFacts) == 0 && !draft.NoReportableWork {
+		return nil, mcpErr("REPORT_BRIEF_INVALID",
+			"brief_json is required; submit one non-empty serialized Report Brief JSON object")
 	}
 	stored, err := h.reportBrief.Accept(r.Context(), u.ID, runID, draft)
 	if err != nil {
