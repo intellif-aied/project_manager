@@ -13,6 +13,7 @@ import (
 	"github.com/aidashboard/api/config"
 	"github.com/aidashboard/api/db"
 	"github.com/aidashboard/api/handler"
+	"github.com/aidashboard/api/internal/autodailyreport"
 	"github.com/aidashboard/api/internal/canonicalsync"
 	"github.com/aidashboard/api/internal/contentreader"
 	"github.com/aidashboard/api/internal/observability"
@@ -150,6 +151,13 @@ func main() {
 	managedAgentH := handler.NewManagedAgentHandlerWithDefaults(database, managedAgentClient, managedAgentDefaults)
 	managedAgentH.ConfigureReportSourceSelection(reportSourceService)
 	managedAgentH.ConfigureReportContext(reportContextService)
+	autoDailyReportService, err := autodailyreport.NewService(
+		database, managedAgentH, "api:"+hostname+":auto-daily-report",
+	)
+	if err != nil {
+		log.Fatalf("Failed to init auto daily report service: %v", err)
+	}
+	autoDailyReportAdminH := handler.NewAutoDailyReportAdminHandler(autoDailyReportService)
 	dailyReportMCPH := handler.NewReportMCPHandler(database)
 	dailyReportMCPH.ConfigureReportSourceSelection(reportSourceService)
 	dailyReportMCPH.ConfigureReportContext(reportContextService)
@@ -335,7 +343,9 @@ func main() {
 		log.Fatalf("Failed to init report run reconciler: %v", err)
 	}
 	reportRunReconciler.Start(schedulerCtx)
+	autoDailyReportService.Start(schedulerCtx)
 	log.Printf("Report run services started (processor_count=%d)", cfg.ReportRunProcessorCount)
+	log.Println("Session upload auto daily report scheduler started (database runtime switch; default disabled)")
 	docH := handler.NewDocumentHandler(database)
 	tokenH := handler.NewTokenHandler(database)
 	pricingService := pricing.NewService(database)
@@ -409,6 +419,8 @@ func main() {
 			r.Get("/daily-report-value", dailyReportValueH.List)
 			r.Get("/daily-report-value/users/{user_id}", dailyReportValueH.Detail)
 			r.Get("/daily-report-value/export", dailyReportValueH.Export)
+			r.Get("/runtime-config/auto-daily-report", autoDailyReportAdminH.GetConfig)
+			r.Put("/runtime-config/auto-daily-report", autoDailyReportAdminH.UpdateConfig)
 		})
 
 		r.Get("/requirements", reqH.List)
