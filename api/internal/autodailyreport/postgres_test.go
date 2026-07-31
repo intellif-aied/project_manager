@@ -133,6 +133,27 @@ func TestDiscoverSourceSnapshotsGroupsByActualOwner(t *testing.T) {
 	}
 }
 
+func TestObserveSourceSnapshotCastsReadyTimestamp(t *testing.T) {
+	repository, mock := newPostgresRepositoryTest(t)
+	readyAt := time.Date(2026, 7, 31, 9, 17, 27, 0, time.UTC)
+	fingerprint := strings.Repeat("b", 64)
+	key := "00000000-0000-4000-8000-000000000001"
+	mock.ExpectExec(`(?s)INSERT INTO auto_daily_report_states.*\$5::timestamptz.*\$5::timestamptz \+ make_interval`).
+		WithArgs("305", "2026-07-31", fingerprint, sqlmock.AnyArg(), readyAt, 120).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	err := repository.ObserveSourceSnapshot(context.Background(), SourceSnapshot{
+		UserID: "305", ReportDate: "2026-07-31", Fingerprint: fingerprint,
+		SourceSliceKeys: []string{key}, LatestReadyAt: readyAt,
+	}, 2*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSuppressPendingRecoversAlreadyCreatedRunBeforeDroppingExpiredClaim(t *testing.T) {
 	repository, mock := newPostgresRepositoryTest(t)
 	mock.ExpectBegin()
