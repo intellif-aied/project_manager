@@ -484,6 +484,72 @@ func TestAutoSyncRunOnceRecordsDailySuccess(t *testing.T) {
 	}
 }
 
+func TestAutoSyncFailureBacksOffInsteadOfRetryingEveryMinute(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	now := time.Date(2026, 7, 21, 10, 30, 0, 0, time.UTC)
+	if err := saveAutoSyncConfig(autoSyncConfig{
+		SchemaVersion:       1,
+		Enabled:             true,
+		DailyTime:           "18:00",
+		ScheduleEffectiveAt: "2026-07-20T18:00:00+08:00",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	executions := 0
+	execute := func() int {
+		executions++
+		return 1
+	}
+	if ran, err := runAutoSyncOnce(now, execute); err == nil || !ran {
+		t.Fatalf("first failure: ran=%t err=%v", ran, err)
+	}
+	if ran, err := runAutoSyncOnce(now.Add(2*time.Minute), execute); err != nil || ran {
+		t.Fatalf("retry inside backoff: ran=%t err=%v", ran, err)
+	}
+	if executions != 1 {
+		t.Fatalf("executions inside backoff=%d want=1", executions)
+	}
+	if ran, err := runAutoSyncOnce(now.Add(5*time.Minute), execute); err == nil || !ran {
+		t.Fatalf("retry after backoff: ran=%t err=%v", ran, err)
+	}
+	if executions != 2 {
+		t.Fatalf("executions after backoff=%d want=2", executions)
+	}
+}
+
+func TestAutoSyncStopsRetryingAfterDailyFailureLimit(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	now := time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC)
+	if err := saveAutoSyncConfig(autoSyncConfig{
+		Enabled:             true,
+		DailyTime:           "08:00",
+		ScheduleEffectiveAt: "2026-07-20T08:00:00+08:00",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	executions := 0
+	execute := func() int {
+		executions++
+		return 1
+	}
+	for _, offset := range []time.Duration{0, 5 * time.Minute, 20 * time.Minute, 80 * time.Minute, 320 * time.Minute} {
+		if ran, err := runAutoSyncOnce(now.Add(offset), execute); err == nil || !ran {
+			t.Fatalf("failure at %s: ran=%t err=%v", offset, ran, err)
+		}
+	}
+	if ran, err := runAutoSyncOnce(now.Add(321*time.Minute), execute); err != nil || ran {
+		t.Fatalf("retry after daily limit: ran=%t err=%v", ran, err)
+	}
+	if executions != autoSyncMaxFailuresPerDay {
+		t.Fatalf("executions=%d want=%d", executions, autoSyncMaxFailuresPerDay)
+	}
+	if ran, err := runAutoSyncOnce(now.Add(24*time.Hour), execute); err == nil || !ran {
+		t.Fatalf("next-day retry: ran=%t err=%v", ran, err)
+	}
+}
+
 func TestAutoSyncDaemonRunUsesHiddenSchedulerEntry(t *testing.T) {
 	oldRunner := autoSyncRunDaemon
 	called := false

@@ -83,6 +83,72 @@ func TestTeamPrepareSendsModeAndReturnsUnmappedWithoutChunk(t *testing.T) {
 	}
 }
 
+func TestTeamPrepareTreatsOwnershipConflictAsBlockedWithoutChunk(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.URL.Path != "/session-syncs/prepare" {
+			t.Fatalf("unexpected request path %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"results":[{"session_ref":"team-conflict","source_key":"codex:team-conflict:main","action":"rejected","error_code":"TEAM_CONTEXT_CHANGED"}]}`))
+	}))
+	defer server.Close()
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, "team-conflict.jsonl")
+	if err := os.WriteFile(path, []byte("{}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	session := &SessionInfo{
+		SessionRef: "team-conflict",
+		AgentType:  "codex",
+		FilePath:   path,
+		Cwd:        "/workspace/mapped",
+	}
+	results, err := uploadSessionGroupIncrementalWithMode(
+		&Config{APIURL: server.URL, Token: "token"},
+		[]sessionWithFile{{info: session, filePath: path}},
+		session.SessionRef,
+		uploadModeTeam,
+	)
+	if err != nil {
+		t.Fatalf("ownership conflict should be non-retryable: %v", err)
+	}
+	if len(results) != 1 || results[0].Status != "blocked" || results[0].ErrorCode != "TEAM_CONTEXT_CHANGED" {
+		t.Fatalf("results=%+v", results)
+	}
+	if requests != 1 {
+		t.Fatalf("requests=%d want=1 prepare only", requests)
+	}
+}
+
+func TestTeamPrepareTreatsDuplicateIdentityAsBlockedWithoutChunk(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"results":[{"session_ref":"team-duplicate","source_key":"codex:team-duplicate:main","action":"rejected","error_code":"TEAM_SESSION_IDENTITY_CONFLICT"}]}`))
+	}))
+	defer server.Close()
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, "team-duplicate.jsonl")
+	if err := os.WriteFile(path, []byte("{}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	session := &SessionInfo{SessionRef: "team-duplicate", AgentType: "codex", FilePath: path, Cwd: "/workspace/mapped"}
+	results, err := uploadSessionGroupIncrementalWithMode(
+		&Config{APIURL: server.URL, Token: "token"},
+		[]sessionWithFile{{info: session, filePath: path}},
+		session.SessionRef,
+		uploadModeTeam,
+	)
+	if err != nil || len(results) != 1 || results[0].Status != "blocked" {
+		t.Fatalf("results=%+v err=%v", results, err)
+	}
+}
+
 func TestTeamSyncUnresolvedSnapshotReplacesAfterCompleteScan(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	if err := updateTeamSyncUnresolved(map[string]int{"/workspace/a": 2, "/workspace/b": 1}, true); err != nil {
@@ -133,16 +199,22 @@ func TestWriteSessionUploadErrorsIncludesConcreteReason(t *testing.T) {
 }
 
 func TestFormatTeamUploadSummaryShowsGroupsAndSessions(t *testing.T) {
-	got := formatTeamUploadSummary(13, 31, 143, 485, 0, 0, false)
+	got := formatTeamUploadSummary(13, 31, 143, 485, 0, 0, 0, 0, false)
 	want := "上传完成：成功 13 组（31 个 Session），待配置 143 组（485 个 Session）；运行 aida log 查看目录。"
 	if got != want {
 		t.Fatalf("summary=%q want=%q", got, want)
 	}
 
-	got = formatTeamUploadSummary(2, 4, 1, 3, 1, 2, true)
+	got = formatTeamUploadSummary(2, 4, 1, 3, 0, 0, 1, 2, true)
 	want = "上传完成：成功 2 组（4 个 Session），待配置 1 组（3 个 Session），失败 1 组（2 个 Session）"
 	if got != want {
 		t.Fatalf("failure summary=%q want=%q", got, want)
+	}
+
+	got = formatTeamUploadSummary(68, 281, 66, 253, 45, 118, 0, 0, false)
+	want = "上传完成：成功 68 组（281 个 Session），待配置 66 组（253 个 Session），归属冲突 45 组（118 个 Session，已跳过）；运行 aida log 查看目录。"
+	if got != want {
+		t.Fatalf("blocked summary=%q want=%q", got, want)
 	}
 }
 

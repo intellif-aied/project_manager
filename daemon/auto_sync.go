@@ -16,9 +16,18 @@ var autoSyncNow = time.Now
 var autoSyncPlatform = runtime.GOOS
 
 const (
-	autoSyncConfigSchemaVersion = 3
-	autoSyncTimezone            = "Asia/Shanghai"
+	autoSyncConfigSchemaVersion   = 3
+	autoSyncScheduleSchemaVersion = 2
+	autoSyncMaxFailuresPerDay     = 5
+	autoSyncTimezone              = "Asia/Shanghai"
 )
+
+var autoSyncFailureRetryDelays = [...]time.Duration{
+	5 * time.Minute,
+	15 * time.Minute,
+	time.Hour,
+	4 * time.Hour,
+}
 
 var autoSyncLocation = loadAutoSyncLocation()
 
@@ -58,6 +67,8 @@ type autoSyncSchedule struct {
 	SchemaVersion   int    `json:"schema_version"`
 	LastSuccessDate string `json:"last_success_date,omitempty"`
 	LastAttemptAt   string `json:"last_attempt_at,omitempty"`
+	LastFailureDate string `json:"last_failure_date,omitempty"`
+	FailureCount    int    `json:"failure_count,omitempty"`
 }
 
 func autoSyncDue(now time.Time, cfg autoSyncConfig, schedule autoSyncSchedule) bool {
@@ -79,16 +90,35 @@ func autoSyncDue(now time.Time, cfg autoSyncConfig, schedule autoSyncSchedule) b
 			return false
 		}
 	}
-	if schedule.LastSuccessDate == businessNow.Format("2006-01-02") {
+	businessDate := businessNow.Format("2006-01-02")
+	if schedule.LastSuccessDate == businessDate {
+		return false
+	}
+	if schedule.LastFailureDate == businessDate && schedule.FailureCount >= autoSyncMaxFailuresPerDay {
 		return false
 	}
 	if schedule.LastAttemptAt != "" {
 		lastAttempt, err := time.Parse(time.RFC3339, schedule.LastAttemptAt)
-		if err != nil || now.Sub(lastAttempt) < time.Minute {
+		if err != nil || now.Before(lastAttempt.Add(autoSyncFailureRetryDelay(schedule, businessDate))) {
 			return false
 		}
 	}
 	return true
+}
+
+func autoSyncFailureRetryDelay(schedule autoSyncSchedule, businessDate string) time.Duration {
+	failureCount := 0
+	if schedule.LastFailureDate == businessDate {
+		failureCount = schedule.FailureCount
+	}
+	if failureCount <= 1 {
+		return autoSyncFailureRetryDelays[0]
+	}
+	index := failureCount - 1
+	if index >= len(autoSyncFailureRetryDelays) {
+		index = len(autoSyncFailureRetryDelays) - 1
+	}
+	return autoSyncFailureRetryDelays[index]
 }
 
 func autoSyncDir() string {
@@ -210,7 +240,7 @@ func saveAutoSyncConfig(cfg autoSyncConfig) error {
 func loadAutoSyncSchedule() (autoSyncSchedule, error) {
 	data, err := os.ReadFile(autoSyncSchedulePath())
 	if os.IsNotExist(err) {
-		return autoSyncSchedule{SchemaVersion: 1}, nil
+		return autoSyncSchedule{SchemaVersion: autoSyncScheduleSchemaVersion}, nil
 	}
 	if err != nil {
 		return autoSyncSchedule{}, err
@@ -219,13 +249,14 @@ func loadAutoSyncSchedule() (autoSyncSchedule, error) {
 	if err := json.Unmarshal(data, &schedule); err != nil {
 		return autoSyncSchedule{}, err
 	}
+	if schedule.SchemaVersion < autoSyncScheduleSchemaVersion {
+		schedule.SchemaVersion = autoSyncScheduleSchemaVersion
+	}
 	return schedule, nil
 }
 
 func saveAutoSyncSchedule(schedule autoSyncSchedule) error {
-	if schedule.SchemaVersion == 0 {
-		schedule.SchemaVersion = 1
-	}
+	schedule.SchemaVersion = autoSyncScheduleSchemaVersion
 	data, err := json.MarshalIndent(schedule, "", "  ")
 	if err != nil {
 		return err
@@ -276,9 +307,21 @@ func runAutoSyncOnce(now time.Time, execute func() int) (bool, error) {
 		return false, err
 	}
 	if code := execute(); code != 0 {
+		failureDate := autoSyncBusinessTime(now).Format("2006-01-02")
+		if schedule.LastFailureDate == failureDate {
+			schedule.FailureCount++
+		} else {
+			schedule.LastFailureDate = failureDate
+			schedule.FailureCount = 1
+		}
+		if err := saveAutoSyncSchedule(schedule); err != nil {
+			return true, fmt.Errorf("automatic Session upload exited with code %d; save retry state: %w", code, err)
+		}
 		return true, fmt.Errorf("automatic Session upload exited with code %d", code)
 	}
 	schedule.LastSuccessDate = autoSyncBusinessTime(now).Format("2006-01-02")
+	schedule.LastFailureDate = ""
+	schedule.FailureCount = 0
 	if err := saveAutoSyncSchedule(schedule); err != nil {
 		return true, err
 	}

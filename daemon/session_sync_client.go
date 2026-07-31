@@ -181,6 +181,10 @@ func uploadSessionSourceIncrementalWithMode(
 			result.Status = "unmapped"
 			return result, nil
 		}
+		if uploadMode == uploadModeTeam && isNonRetryableTeamPrepareError(prepared.ErrorCode) {
+			result.Status = "blocked"
+			return result, nil
+		}
 		return result, fmt.Errorf("prepare rejected: %s %s", prepared.ErrorCode, prepared.NextAction)
 	}
 	if prepared.GenerationID == "" || prepared.ExpectedCursor < 0 || prepared.ExpectedCursor > fileInfo.Size() {
@@ -302,6 +306,15 @@ func uploadSessionSourceIncrementalWithMode(
 		result.Status = "processing"
 	}
 	return result, nil
+}
+
+func isNonRetryableTeamPrepareError(errorCode string) bool {
+	switch strings.TrimSpace(errorCode) {
+	case "TEAM_CONTEXT_CHANGED", "TEAM_SESSION_IDENTITY_CONFLICT":
+		return true
+	default:
+		return false
+	}
 }
 
 func prepareSessionSource(

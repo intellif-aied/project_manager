@@ -516,9 +516,11 @@ func cmdUpload(args []string) int {
 	succeededSessions := 0
 	failedSessions := 0
 	pendingSessions := 0
+	blockedSessions := 0
 	succeededSessionItems := 0
 	failedSessionItems := 0
 	pendingSessionItems := 0
+	blockedSessionItems := 0
 	unresolvedDirectories := map[string]int{}
 
 	for sessionIndex, s := range toUpload {
@@ -533,6 +535,7 @@ func cmdUpload(args []string) int {
 		if !errors.Is(incrementalErr, errSessionSyncNotEnabled) {
 			sessionFailed := false
 			sessionPending := false
+			sessionBlocked := false
 			sessionErrors := []string{}
 			for _, result := range incrementalResults {
 				if uploadMode == uploadModeTeam && result.ErrorCode == "TEAM_DIRECTORY_UNMAPPED" {
@@ -545,6 +548,12 @@ func cmdUpload(args []string) int {
 					unresolvedDirectories[directory]++
 					sessionPending = true
 					pendingSessionItems++
+					continue
+				}
+				if uploadMode == uploadModeTeam && result.Status == "blocked" && isNonRetryableTeamPrepareError(result.ErrorCode) {
+					sessionBlocked = true
+					blockedSessionItems++
+					sessionErrors = append(sessionErrors, result.SessionRef+": "+result.ErrorCode+"（归属冲突，已跳过）")
 					continue
 				}
 				if result.Status == "content_cleared" || result.ErrorCode != "" || result.Status == "failed" {
@@ -564,16 +573,21 @@ func cmdUpload(args []string) int {
 				failedSessionItems += len(allSessions) - len(incrementalResults)
 				sessionErrors = append(sessionErrors, incrementalErr.Error())
 			}
-			if sessionPending && !sessionFailed {
+			if sessionFailed {
+				printSessionUploadResult(os.Stdout, s, true)
+			} else if sessionBlocked {
+				printSessionUploadBlocked(os.Stdout, s)
+				blockedSessions++
+			} else if sessionPending {
 				printSessionUploadPending(os.Stdout, s)
 				pendingSessions++
 			} else {
-				printSessionUploadResult(os.Stdout, s, sessionFailed)
+				printSessionUploadResult(os.Stdout, s, false)
 			}
 			writeSessionUploadErrors(os.Stdout, sessionErrors)
 			if sessionFailed {
 				failedSessions++
-			} else if !sessionPending {
+			} else if !sessionPending && !sessionBlocked {
 				succeededSessions++
 			}
 			continue
@@ -679,15 +693,15 @@ func cmdUpload(args []string) int {
 	switch {
 	case totalFailed > 0:
 		if uploadMode == uploadModeTeam {
-			fmt.Printf("\n%s\n", formatTeamUploadSummary(succeededSessions, succeededSessionItems, pendingSessions, pendingSessionItems, failedSessions, failedSessionItems, true))
+			fmt.Printf("\n%s\n", formatTeamUploadSummary(succeededSessions, succeededSessionItems, pendingSessions, pendingSessionItems, blockedSessions, blockedSessionItems, failedSessions, failedSessionItems, true))
 		} else {
 			fmt.Printf("\n上传完成：成功 %d 个，失败 %d 个\n", succeededSessions, failedSessions)
 		}
-	case pendingSessions > 0:
-		fmt.Printf("\n%s\n", formatTeamUploadSummary(succeededSessions, succeededSessionItems, pendingSessions, pendingSessionItems, failedSessions, failedSessionItems, false))
+	case pendingSessions > 0 || blockedSessions > 0:
+		fmt.Printf("\n%s\n", formatTeamUploadSummary(succeededSessions, succeededSessionItems, pendingSessions, pendingSessionItems, blockedSessions, blockedSessionItems, failedSessions, failedSessionItems, false))
 	default:
 		if uploadMode == uploadModeTeam {
-			fmt.Printf("\n%s\n", formatTeamUploadSummary(succeededSessions, succeededSessionItems, pendingSessions, pendingSessionItems, failedSessions, failedSessionItems, false))
+			fmt.Printf("\n%s\n", formatTeamUploadSummary(succeededSessions, succeededSessionItems, pendingSessions, pendingSessionItems, blockedSessions, blockedSessionItems, failedSessions, failedSessionItems, false))
 		} else {
 			fmt.Printf("\n上传完成：成功 %d 个\n", succeededSessions)
 		}
@@ -698,14 +712,31 @@ func cmdUpload(args []string) int {
 	return 0
 }
 
-func formatTeamUploadSummary(succeededGroups, succeededSessions, pendingGroups, pendingSessions, failedGroups, failedSessions int, includeFailed bool) string {
+func formatTeamUploadSummary(succeededGroups, succeededSessions, pendingGroups, pendingSessions, blockedGroups, blockedSessions, failedGroups, failedSessions int, includeFailed bool) string {
 	if includeFailed {
+		if blockedGroups > 0 {
+			return fmt.Sprintf("上传完成：成功 %d 组（%d 个 Session），待配置 %d 组（%d 个 Session），归属冲突 %d 组（%d 个 Session，已跳过），失败 %d 组（%d 个 Session）", succeededGroups, succeededSessions, pendingGroups, pendingSessions, blockedGroups, blockedSessions, failedGroups, failedSessions)
+		}
 		return fmt.Sprintf("上传完成：成功 %d 组（%d 个 Session），待配置 %d 组（%d 个 Session），失败 %d 组（%d 个 Session）", succeededGroups, succeededSessions, pendingGroups, pendingSessions, failedGroups, failedSessions)
+	}
+	if blockedGroups > 0 && pendingGroups > 0 {
+		return fmt.Sprintf("上传完成：成功 %d 组（%d 个 Session），待配置 %d 组（%d 个 Session），归属冲突 %d 组（%d 个 Session，已跳过）；运行 aida log 查看目录。", succeededGroups, succeededSessions, pendingGroups, pendingSessions, blockedGroups, blockedSessions)
+	}
+	if blockedGroups > 0 {
+		return fmt.Sprintf("上传完成：成功 %d 组（%d 个 Session），归属冲突 %d 组（%d 个 Session，已跳过）", succeededGroups, succeededSessions, blockedGroups, blockedSessions)
 	}
 	if pendingGroups > 0 {
 		return fmt.Sprintf("上传完成：成功 %d 组（%d 个 Session），待配置 %d 组（%d 个 Session）；运行 aida log 查看目录。", succeededGroups, succeededSessions, pendingGroups, pendingSessions)
 	}
 	return fmt.Sprintf("上传完成：成功 %d 组（%d 个 Session）", succeededGroups, succeededSessions)
+}
+
+func printSessionUploadBlocked(output io.Writer, session *SessionInfo) {
+	summary := strings.TrimSpace(session.Summary)
+	if summary == "" {
+		summary = "Session"
+	}
+	fmt.Fprintf(output, "[归属冲突] %s  %s\n", formatLastActiveTime(session, "01-02 15:04"), trunc(summary, 60))
 }
 
 func printSessionUploadPending(output io.Writer, session *SessionInfo) {
