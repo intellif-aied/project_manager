@@ -16,9 +16,31 @@
 
 **Workstream**：围绕同一用户目标归并的一组交付物，最终日报通常以其作为内容主题。
 
+**Subject（稳定工作对象）**：系统默认个人日报中用于标识 Workstream 归属对象的最短、稳定名称。它可以是产品、项目、协议或业务事项，但不能是走读、调研、部署、修复、测试等活动，也不承担跨 Run 的持久业务身份。相同 Brief 内大小写不敏感且完全相同的 Subject 会合并为一个 Workstream。
+
+**可汇报主题（Reportable Theme）**：经过完整事实审阅后，因其代表当期主要目标、明确成果或必须关注的问题而进入 Final Report 的 Workstream。可核验不等于可汇报。
+
+**编辑选择（Editorial Selection）**：从已核验的候选工作中选择少数可汇报主题的语义判断。它决定报告重点和篇幅，不改变 Evidence Fact 的真实性、状态或环境。
+
+**支撑事实（Supporting Fact）**：用于说明某个可汇报主题的结果、验证、状态或后续动作，但不应独立生成 Workstream 的 Evidence Fact。
+
+**次要活动（Secondary Activity）**：有事实依据、但相对当期主要目标不值得占用独立日报条目的工作。它不是噪声，也不代表工作没有发生。
+
+**工作主线（Work Thread）**：用户围绕同一业务目标持续推进的一组工作事实。它可以跨 Session、跨代码仓库和跨日期存在，是 Workstream 归并的首要依据。
+
+**业务项目（Business Project）**：用户工作语境中的项目或事项边界。业务项目不等同于本地目录、代码仓库或 Git 分支；一个业务项目可以涉及多个仓库，一个仓库也可以服务多个业务项目。
+
+**技术关联信号（Technical Correlation Signal）**：用于辅助判断工作事实关系的结构化技术信息，例如 Git 仓库身份、分支、任务编号和模块路径。它只能增强工作主线判断，不能单独定义业务项目。
+
+**工作单元字典（Work Thread Dictionary）**：Report Context 中由短 `thread_ref` 和 Digest 目标组成的内部关联字典。Evidence Fact 通过短引用关联字典项；原始 Session 和 Work Unit 标识不提供给 Agent。该字典只帮助 Report Brief 归并，不进入 Brief 契约和最终报告。
+
 **Deliverable**：Workstream 内具有独立结果和交付状态的事项。测试服验证与生产发布必须拆成不同状态，不得互相替代。
 
 **Final Report**：用户最终看到并保存的日报或周报内容。两阶段个人日报只能基于已接受的 Report Brief 生成。
+
+**生产日报形态基线（Production Report Pattern Baseline）**：从多用户、多日期的生产日报中聚合出的结构分布，包括常见主题数量、层级、篇幅、合并颗粒度和表达方式。它约束整体呈现风格，不决定某个具体 Fact 是否应当出现。
+
+**员工最终稿参考（Employee Final Reference）**：某位员工已保存的最终日报，只反映该用户当次的取舍和表达偏好。它不是该用户日的标准答案，不能单独决定 Session 中其他真实主题应被保留或排除。
 
 **System Report Agent**：归属 Aida 系统专用账号、由平台统一维护模型、Prompt、系统 Report Skill 和系统 Report MCP 的默认报告 Agent。
 

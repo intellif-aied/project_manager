@@ -172,6 +172,7 @@ func TestContextBuildRequestUsesFrozenRepresentation(t *testing.T) {
 		},
 		ExecutionInput: map[string]any{
 			"report_context_representation": reportcontext.RepresentationWorkEvidence,
+			"report_agent_source":           "system",
 		},
 	}
 	request, err := contextBuildRequest(run, "selection-1")
@@ -180,6 +181,17 @@ func TestContextBuildRequestUsesFrozenRepresentation(t *testing.T) {
 	}
 	if request.Representation != reportcontext.RepresentationWorkEvidence {
 		t.Fatalf("representation = %q", request.Representation)
+	}
+	if !request.IncludeWorkThreads {
+		t.Fatal("system personal daily must include work threads")
+	}
+	run.ExecutionInput["report_agent_source"] = "personal"
+	request, err = contextBuildRequest(run, "selection-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.IncludeWorkThreads {
+		t.Fatal("personal report Agent must not include system work threads")
 	}
 	delete(run.ExecutionInput, "report_context_representation")
 	request, err = contextBuildRequest(run, "selection-1")

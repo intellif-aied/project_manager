@@ -533,6 +533,9 @@ func prepareReportResultContent(reportType, representation, summary, content str
 		return body, summary, nil
 	}
 	normalizedSummary := normalizeReportSummary(summary)
+	if reportType == reportTypePersonalDaily {
+		normalizedSummary = normalizePersonalDailyReportSummary(summary)
+	}
 	if normalizedSummary == "" {
 		return "", "", mcpErr("REPORT_SUMMARY_REQUIRED", "summary is required for this report run")
 	}
@@ -552,8 +555,16 @@ func prepareReportResultContent(reportType, representation, summary, content str
 var reportSummaryItemMarkerPattern = regexp.MustCompile(`(?m)(^|[[:space:]。！？；.!?;]|\\r\\n|\\n|\\r)([1-5])\.[ \t]+`)
 
 func normalizeReportSummary(summary string) string {
+	return normalizeReportSummaryWithPolicy(summary, false)
+}
+
+func normalizePersonalDailyReportSummary(summary string) string {
+	return normalizeReportSummaryWithPolicy(summary, true)
+}
+
+func normalizeReportSummaryWithPolicy(summary string, allowRepeatedNumbers bool) string {
 	normalized := strings.ReplaceAll(strings.ReplaceAll(strings.TrimSpace(summary), "\r\n", "\n"), "\r", "\n")
-	if items, ok := parseOrderedReportSummary(normalized); ok {
+	if items, ok := parseOrderedReportSummary(normalized, allowRepeatedNumbers); ok {
 		return formatOrderedReportSummary(items)
 	}
 	lines := make([]string, 0, 5)
@@ -584,7 +595,7 @@ func normalizeReportSummary(summary string) string {
 	return strings.Join(items, "\n")
 }
 
-func parseOrderedReportSummary(summary string) ([]string, bool) {
+func parseOrderedReportSummary(summary string, allowRepeatedNumbers bool) ([]string, bool) {
 	matches := reportSummaryItemMarkerPattern.FindAllStringSubmatchIndex(summary, -1)
 	if len(matches) == 0 || reportSummaryMarkerStart(summary, matches[0]) != 0 {
 		return nil, false
@@ -592,7 +603,7 @@ func parseOrderedReportSummary(summary string) ([]string, bool) {
 	items := make([]string, 0, len(matches))
 	for index, match := range matches {
 		number, err := strconv.Atoi(summary[match[4]:match[5]])
-		if err != nil || number != index+1 {
+		if err != nil || index == 0 && number != 1 || !allowRepeatedNumbers && number != index+1 {
 			return nil, false
 		}
 		itemEnd := len(summary)

@@ -115,7 +115,7 @@ func TestBuildRequestFreezesProjectionCompatibility(t *testing.T) {
 func TestPresentationProfileForEveryManagedReportType(t *testing.T) {
 	tests := map[string]PresentationProfile{
 		ReportTypePersonalDaily: {
-			SummaryFocus:    "个人当日推进的主要目标、关键成果、验证和整体状态；只有存在明确证据时才提及风险或阻塞。",
+			SummaryFocus:    "个人当日推进的主要项目与工作成果；Git、测试、构建、合并和部署只用于关联工作主题，不作为日报结论。",
 			ContentGrouping: "按个人工作目标归并；同一目标下的开发、文档、部署、验证和修复合并表达。",
 		},
 		ReportTypePersonalWeekly: {
@@ -162,14 +162,14 @@ func TestProjectPayloadForRepresentationKeepsHistoricalRunShape(t *testing.T) {
 		Sessions: []SessionSource{{SelectionID: "selection-1", Mode: "digest_v2", Digest: digest}},
 		Sources:  Sources{SessionDigest: digest},
 	}
-	legacy, err := projectPayloadForRepresentation(payload, "")
+	legacy, err := projectPayloadForRepresentation(payload, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(legacy.Sessions) != 1 || len(legacy.Sources.SessionDigest) == 0 || legacy.WorkEvidence != nil || legacy.PresentationProfile != nil {
 		t.Fatalf("historical run shape changed: %+v", legacy)
 	}
-	current, err := projectPayloadForRepresentation(payload, RepresentationWorkEvidence)
+	current, err := projectPayloadForRepresentation(payload, RepresentationWorkEvidence, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +191,7 @@ func TestProjectPayloadForRepresentationRejectsIncompleteProjection(t *testing.T
 		Sources:  Sources{SessionDigest: digest},
 	}
 
-	if _, err := projectPayloadForRepresentation(payload, RepresentationWorkEvidence); !errors.Is(err, ErrIncomplete) {
+	if _, err := projectPayloadForRepresentation(payload, RepresentationWorkEvidence, false); !errors.Is(err, ErrIncomplete) {
 		t.Fatalf("incomplete Projection must fail instead of exposing the frozen Digest, got %v", err)
 	}
 }
@@ -239,7 +239,7 @@ func TestProjectPayloadDoesNotAddFactRefsToOtherReportTypes(t *testing.T) {
 		Sources:  Sources{SessionDigest: digest},
 	}
 
-	projected, err := projectPayload(payload)
+	projected, err := projectPayloadWithThreads(payload, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +247,7 @@ func TestProjectPayloadDoesNotAddFactRefsToOtherReportTypes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(encoded), `"fact_ref"`) {
+	if strings.Contains(string(encoded), `"fact_ref"`) || strings.Contains(string(encoded), `"thread_ref"`) || strings.Contains(string(encoded), `"threads"`) {
 		t.Fatalf("non-personal-daily projection changed: %s", encoded)
 	}
 }
@@ -260,7 +260,20 @@ func TestProjectPayloadUsesReadableFactsAndOmitsRawGoals(t *testing.T) {
 		Sources:  Sources{SessionDigest: digest},
 	}
 
-	projected, err := projectPayload(payload)
+	withoutThreads, err := projectPayload(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(withoutThreads.WorkEvidence.Threads) != 0 {
+		t.Fatalf("personal report Agent received system work threads: %+v", withoutThreads.WorkEvidence.Threads)
+	}
+	for _, fact := range withoutThreads.WorkEvidence.Facts {
+		if len(fact.ThreadRefs) != 0 {
+			t.Fatalf("personal report Agent fact received system thread refs: %+v", fact)
+		}
+	}
+
+	projected, err := projectPayloadWithThreads(payload, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,6 +283,17 @@ func TestProjectPayloadUsesReadableFactsAndOmitsRawGoals(t *testing.T) {
 	evidence := projected.WorkEvidence
 	if len(evidence.Facts) != 3 {
 		t.Fatalf("report-bearing facts were lost: %+v", evidence.Facts)
+	}
+	if len(evidence.Threads) != 3 ||
+		evidence.Threads[0].ThreadRef != "thread-001" || evidence.Threads[0].Goal != "same goal" ||
+		evidence.Threads[1].ThreadRef != "thread-002" || evidence.Threads[1].Goal != "same goal" ||
+		evidence.Threads[2].ThreadRef != "thread-003" || evidence.Threads[2].Goal != "other goal" {
+		t.Fatalf("work thread dictionary was not preserved: %+v", evidence.Threads)
+	}
+	if strings.Join(evidence.Facts[0].ThreadRefs, ",") != "thread-001,thread-002" ||
+		strings.Join(evidence.Facts[1].ThreadRefs, ",") != "thread-003" ||
+		strings.Join(evidence.Facts[2].ThreadRefs, ",") != "thread-003" {
+		t.Fatalf("facts were not linked to their work threads: %+v", evidence.Facts)
 	}
 	if evidence.Facts[0].Kind != "result" ||
 		evidence.Facts[0].FactRef != "fact-001" ||
@@ -297,16 +321,64 @@ func TestProjectPayloadUsesReadableFactsAndOmitsRawGoals(t *testing.T) {
 	visible := string(encoded)
 	for _, forbidden := range []string{
 		`"fact_columns"`, `"lookup_columns"`, `"row_reference_base"`,
-		`"evidence_by_exact_goal"`, `"work_unit_ref"`, `"goal"`,
-		`"evidence_refs"`, `"selection_id"`, `"digest_sha256"`,
+		`"evidence_by_exact_goal"`, `"work_unit_ref"`, `"source_ref"`,
+		`"evidence_refs"`, `"selection_id"`, `"digest_sha256"`, `"session-1"`,
 	} {
 		if strings.Contains(visible, forbidden) {
 			t.Fatalf("work evidence leaked transport or raw goal field %s: %s", forbidden, visible)
 		}
 	}
-	if !strings.Contains(visible, `"facts":[{"fact_ref":"fact-001","kind":"result","text":"same result","source":"tool_result","observations":[{"date":"2026-07-23","observed_at":"2026-07-23T09:00:00+08:00","category":"implementation","status":"completed","occurrence_count":1`) ||
+	if !strings.Contains(visible, `"facts":[{"fact_ref":"fact-001","kind":"result","text":"same result","source":"tool_result","thread_refs":["thread-001","thread-002"],"observations":[{"date":"2026-07-23","observed_at":"2026-07-23T09:00:00+08:00","category":"implementation","status":"completed","occurrence_count":1`) ||
 		!strings.Contains(visible, `"fact_ref":"fact-003","kind":"unresolved","text":"follow up"`) {
 		t.Fatalf("work evidence is not readable object JSON: %s", visible)
+	}
+}
+
+func TestProjectPayloadWithoutThreadsKeepsSourceScopedWorkUnitIdentity(t *testing.T) {
+	var digest map[string]any
+	if err := json.Unmarshal(validFrozenDigestV2(), &digest); err != nil {
+		t.Fatal(err)
+	}
+	digest["returned_item_count"] = float64(2)
+	coverage := digest["coverage"].(map[string]any)
+	coverage["source_item_count"] = float64(2)
+	coverage["represented_item_count"] = float64(2)
+	items := digest["items"].([]any)
+	secondItemJSON, err := json.Marshal(items[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var secondItem map[string]any
+	if err := json.Unmarshal(secondItemJSON, &secondItem); err != nil {
+		t.Fatal(err)
+	}
+	secondItem["source_item_ref"] = "item-2"
+	secondItem["session_ref"] = "session-2"
+	digest["items"] = append(items, secondItem)
+
+	period := digest["report_period_summary"].(map[string]any)
+	days := period["days"].([]any)
+	highlights := days[0].(map[string]any)["highlights"].([]any)
+	highlights[0].(map[string]any)["source_ref"] = "session-1"
+	highlights[1].(map[string]any)["source_ref"] = "session-2"
+	highlights[1].(map[string]any)["work_unit_ref"] = "wu-1"
+	highlights[2].(map[string]any)["source_ref"] = "session-1"
+
+	encoded, err := json.Marshal(digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := Payload{
+		Run:      Run{ReportType: ReportTypePersonalDaily},
+		Sessions: []SessionSource{{SelectionID: "selection-1", Mode: "digest_v2", Digest: encoded}},
+		Sources:  Sources{SessionDigest: encoded},
+	}
+	projected, err := projectPayload(payload)
+	if err != nil {
+		t.Fatalf("source-scoped work units without exposed threads were rejected: %v", err)
+	}
+	if len(projected.WorkEvidence.Threads) != 0 {
+		t.Fatalf("personal Agent received system work threads: %+v", projected.WorkEvidence.Threads)
 	}
 }
 
@@ -315,15 +387,15 @@ func TestAppendWorkEvidenceFactAggregatesOnlyEquivalentObservations(t *testing.T
 	indexes := make(map[workEvidenceFactIdentity]int)
 	observationIndexes := make([]map[workEvidenceObservationIdentity]int, 0)
 	identity := workEvidenceFactIdentity{Kind: "result", Text: "same result", Source: "tool_result"}
-	appendWorkEvidenceFact(&projection, indexes, &observationIndexes, identity, WorkEvidenceObservation{
+	appendWorkEvidenceFact(&projection, indexes, &observationIndexes, identity, "thread-001", WorkEvidenceObservation{
 		Date: "2026-07-23", ObservedAt: "2026-07-23T09:00:00+08:00",
 		Category: "validation", Status: "completed",
 	})
-	appendWorkEvidenceFact(&projection, indexes, &observationIndexes, identity, WorkEvidenceObservation{
+	appendWorkEvidenceFact(&projection, indexes, &observationIndexes, identity, "thread-002", WorkEvidenceObservation{
 		Date: "2026-07-23", ObservedAt: "2026-07-23T10:00:00+08:00",
 		Category: "validation", Status: "completed",
 	})
-	appendWorkEvidenceFact(&projection, indexes, &observationIndexes, identity, WorkEvidenceObservation{
+	appendWorkEvidenceFact(&projection, indexes, &observationIndexes, identity, "thread-002", WorkEvidenceObservation{
 		Date: "2026-07-23", ObservedAt: "2026-07-23T11:00:00+08:00",
 		Category: "validation", Status: "failed",
 	})
@@ -334,6 +406,9 @@ func TestAppendWorkEvidenceFactAggregatesOnlyEquivalentObservations(t *testing.T
 		observations[0].ObservedAt != "2026-07-23T10:00:00+08:00" ||
 		observations[1].Status != "failed" || observations[1].OccurrenceCount != 1 {
 		t.Fatalf("observation status or occurrence evidence was lost: %+v", observations)
+	}
+	if strings.Join(projection.Facts[0].ThreadRefs, ",") != "thread-001,thread-002" {
+		t.Fatalf("fact thread links were not deduplicated: %+v", projection.Facts[0].ThreadRefs)
 	}
 }
 

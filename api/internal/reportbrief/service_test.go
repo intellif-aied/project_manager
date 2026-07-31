@@ -2,6 +2,7 @@ package reportbrief
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -101,6 +102,37 @@ func TestNormalizeDraftAcceptsNoReportableWorkWhenEveryFactIsExcluded(t *testing
 	}
 }
 
+func TestNormalizeDraftAcceptsSecondaryActivityExclusion(t *testing.T) {
+	payload, err := normalizeDraft(Draft{
+		Workstreams: []Workstream{{
+			Title: "核心协议设计", Objective: "完成核心交付方案",
+			Deliverables: []Deliverable{{
+				Result: "完成协议设计", State: "completed", Environment: "development",
+				Validation: "设计内容已完成复核", NextAction: "进入实现验证", FactRefs: []string{"fact-001"},
+			}},
+		}},
+		ExcludedFacts: []ExcludedFact{{FactRef: "fact-002", Reason: "secondary_activity"}},
+	}, personalDaily, Period{Start: "2026-07-29", End: "2026-07-29"}, map[string]struct{}{
+		"fact-001": {}, "fact-002": {},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := payload.ExcludedFacts[0].Reason; got != "secondary_activity" {
+		t.Fatalf("exclusion reason = %q, want secondary_activity", got)
+	}
+}
+
+func TestNormalizeDraftRejectsUnknownExclusionReason(t *testing.T) {
+	_, err := normalizeDraft(Draft{
+		NoReportableWork: true,
+		ExcludedFacts:    []ExcludedFact{{FactRef: "fact-001", Reason: "not_important"}},
+	}, personalDaily, Period{Start: "2026-07-29", End: "2026-07-29"}, map[string]struct{}{"fact-001": {}})
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "reason is invalid") {
+		t.Fatalf("error = %v, want invalid exclusion reason", err)
+	}
+}
+
 func TestNormalizeDraftMergesSameWorkstream(t *testing.T) {
 	payload, err := normalizeDraft(Draft{Workstreams: []Workstream{
 		{Title: "报告体验优化", Objective: "改善报告使用体验", Deliverables: []Deliverable{{
@@ -122,13 +154,194 @@ func TestNormalizeDraftMergesSameWorkstream(t *testing.T) {
 	}
 }
 
+func TestNormalizeDraftMergesSharedSubjectAcrossDifferentHeadings(t *testing.T) {
+	payload, err := normalizeDraft(Draft{Workstreams: []Workstream{
+		{Subject: " StaffDeck ", Title: "StaffDeck 部署", Objective: "提供可用服务", Deliverables: []Deliverable{{
+			Result: "完成服务部署", State: "completed", Environment: "development",
+			Validation: "服务健康检查通过", NextAction: "持续观察", FactRefs: []string{"fact-001"},
+		}}},
+		{Subject: "staffdeck", Title: "StaffDeck walkthrough", Objective: "完成代码走读", Deliverables: []Deliverable{{
+			Result: "完成代码走读文档", State: "validated", Environment: "test",
+			Validation: "文档示例验证通过", NextAction: "无", FactRefs: []string{"fact-002"},
+		}}},
+	}}, personalDaily, Period{Start: "2026-07-28", End: "2026-07-28"}, map[string]struct{}{
+		"fact-001": {}, "fact-002": {},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Workstreams) != 1 || len(payload.Workstreams[0].Deliverables) != 2 || payload.Workstreams[0].Subject != "StaffDeck" {
+		t.Fatalf("workstreams = %#v, want one subject-merged workstream", payload.Workstreams)
+	}
+}
+
+func TestNormalizeDraftKeepsDistinctBusinessSubjects(t *testing.T) {
+	payload, err := normalizeDraft(Draft{Workstreams: []Workstream{
+		{Subject: "baigong 任务分发协议", Title: "协议设计", Objective: "明确协议边界", Deliverables: []Deliverable{{
+			Result: "完成协议设计", State: "completed", Environment: "development",
+			Validation: "方案完成复核", NextAction: "进入实现", FactRefs: []string{"fact-001"},
+		}}},
+		{Subject: "baigong 交互原型", Title: "原型验证", Objective: "验证交互方案", Deliverables: []Deliverable{{
+			Result: "完成原型验证", State: "validated", Environment: "test",
+			Validation: "测试环境验证通过", NextAction: "收集反馈", FactRefs: []string{"fact-002"},
+		}}},
+	}}, personalDaily, Period{Start: "2026-07-30", End: "2026-07-30"}, map[string]struct{}{
+		"fact-001": {}, "fact-002": {},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Workstreams) != 2 {
+		t.Fatalf("workstreams = %#v, want distinct business subjects", payload.Workstreams)
+	}
+}
+
+func TestNormalizeDraftRejectsPartiallyMissingSubjects(t *testing.T) {
+	_, err := normalizeDraft(Draft{Workstreams: []Workstream{
+		{Subject: "报告生成", Title: "生成优化", Objective: "提高质量", Deliverables: []Deliverable{{
+			Result: "完成生成优化", State: "completed", Environment: "development",
+			Validation: "测试通过", NextAction: "继续观察", FactRefs: []string{"fact-001"},
+		}}},
+		{Title: "页面优化", Objective: "改善体验", Deliverables: []Deliverable{{
+			Result: "完成页面优化", State: "completed", Environment: "development",
+			Validation: "测试通过", NextAction: "继续观察", FactRefs: []string{"fact-002"},
+		}}},
+	}}, personalDaily, Period{Start: "2026-07-30", End: "2026-07-30"}, map[string]struct{}{
+		"fact-001": {}, "fact-002": {},
+	})
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "subject must be provided for every workstream") {
+		t.Fatalf("error = %v, want partial subject rejection", err)
+	}
+}
+
+func TestNormalizeDraftSubjectContractKeepsOnlyProjectOutcomes(t *testing.T) {
+	draft := Draft{Workstreams: []Workstream{{
+		Subject: "AIDA 日报", Title: "AI 日报生成质量优化", Objective: "旧字段不应进入新契约",
+		Deliverables: []Deliverable{{
+			Result: "优化日报工作主线关联，减少同一项目被拆分为多个事项",
+			State:  "blocked", Environment: "production",
+			Validation: "代码尚未合并", NextAction: "暂不建议上线",
+			FactRefs: []string{"fact-001"},
+		}},
+	}}}
+	payload, err := normalizeDraft(
+		draft,
+		personalDaily,
+		Period{Start: "2026-07-30", End: "2026-07-30"},
+		map[string]struct{}{"fact-001": {}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workstream := payload.Workstreams[0]
+	deliverable := workstream.Deliverables[0]
+	if workstream.Objective != "" || deliverable.State != "" || deliverable.Environment != "" ||
+		deliverable.Validation != "" || deliverable.NextAction != "" {
+		t.Fatalf("project-outcome subject contract retained audit fields: %#v", workstream)
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"objective", "state", "environment", "validation", "next_action", "暂不建议上线", "代码尚未合并"} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatalf("normalized project-outcome brief exposed %q: %s", forbidden, encoded)
+		}
+	}
+	if !strings.Contains(string(encoded), "减少同一项目被拆分为多个事项") {
+		t.Fatalf("normalized project-outcome brief lost project outcome: %s", encoded)
+	}
+}
+
+func TestNormalizeDraftSubjectContractDoesNotRejectWordingAsAQualityFailure(t *testing.T) {
+	for _, subject := range []string{"AIDA 日报", "系统代码库", "deployment"} {
+		t.Run(subject, func(t *testing.T) {
+			payload, err := normalizeDraft(Draft{Workstreams: []Workstream{{
+				Subject: subject,
+				Title:   "日报工作主线优化",
+				Deliverables: []Deliverable{{
+					Result:   "完成日报工作主线关联优化",
+					FactRefs: []string{"fact-001"},
+				}},
+			}}}, personalDaily, Period{Start: "2026-07-30", End: "2026-07-30"}, map[string]struct{}{"fact-001": {}})
+			if err != nil || len(payload.Workstreams) != 1 {
+				t.Fatalf("structurally valid Brief became a generation failure: payload=%#v err=%v", payload, err)
+			}
+		})
+	}
+}
+
+func TestNormalizeDraftSubjectContractRejectsOperationalTraceAndAgentJudgement(t *testing.T) {
+	for _, result := range []string{
+		"工程上达到可合并标准，相关测试与检查全部通过",
+		"代码尚未合并，暂不建议发布生产",
+		"记录 Run ID 并完成 deployment validation",
+		"评测认可该方案，聚合结论为 evidence_insufficient",
+		"新增评测能力；不改动日报正文逻辑与默认模型",
+		"完成工作单元关联能力，且不改动简报契约",
+		"评测体系仅涉及评测能力，不改变日报内容与交互",
+		"完成工作单元关联，原有简报契约保持不变",
+	} {
+		t.Run(result, func(t *testing.T) {
+			_, err := normalizeDraft(Draft{Workstreams: []Workstream{{
+				Subject: "AIDA 日报", Title: "日报生成质量优化",
+				Deliverables: []Deliverable{{Result: result, FactRefs: []string{"fact-001"}}},
+			}}}, personalDaily, Period{Start: "2026-07-31", End: "2026-07-31"}, map[string]struct{}{"fact-001": {}})
+			if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "operational trace or Agent judgement") {
+				t.Fatalf("result %q error=%v, want project-outcome rejection", result, err)
+			}
+		})
+	}
+
+	payload, err := normalizeDraft(Draft{Workstreams: []Workstream{{
+		Subject: "AIDA 日报", Title: "日报生成质量优化",
+		Deliverables: []Deliverable{{
+			Result:   "整理生产环境手写日报数据集，不以单一样本作为验收标准",
+			FactRefs: []string{"fact-001"},
+		}},
+	}}}, personalDaily, Period{Start: "2026-07-31", End: "2026-07-31"}, map[string]struct{}{"fact-001": {}})
+	if err != nil || len(payload.Workstreams) != 1 {
+		t.Fatalf("project outcome rejected: payload=%#v err=%v", payload, err)
+	}
+}
+
+func TestNormalizeDraftSubjectContractAllowsTruthfulFactExclusion(t *testing.T) {
+	for _, reason := range []string{"discussion", "duplicate", "trace", "low_reader_value"} {
+		t.Run(reason, func(t *testing.T) {
+			payload, err := normalizeDraft(Draft{
+				Workstreams: []Workstream{{
+					Subject: "AIDA 日报", Title: "日报生成优化",
+					Deliverables: []Deliverable{{
+						Result:   "优化日报项目成果表达",
+						FactRefs: []string{"fact-001"},
+					}},
+				}},
+				ExcludedFacts: []ExcludedFact{{FactRef: "fact-002", Reason: reason}},
+			}, personalDaily, Period{Start: "2026-07-30", End: "2026-07-30"}, map[string]struct{}{
+				"fact-001": {}, "fact-002": {},
+			})
+			if err != nil || len(payload.ExcludedFacts) != 1 {
+				t.Fatalf("truthful exclusion %q rejected: payload=%#v err=%v", reason, payload, err)
+			}
+		})
+	}
+}
+
 func TestValidateTextIssuesRejectsInternalDetails(t *testing.T) {
 	for _, text := range []string{
 		"后端返回 REPORT_SOURCE_UNAVAILABLE",
 		"镜像标签 20260727-a66ffdb-report-actions",
-		"兼容路由 /reports/daily",
 		"开放 UDP 123 并运行 systemd --user 服务",
-		"通知跳转到 /agent 页面",
+		"开放 3001 端口供局域网访问",
+		"已部署至 16.36 提供局域网访问",
+		"目标主机 16.74 已完成部署",
+		"在 16.36 环境完成 StaffDeck 部署",
+		"使用独立 Docker 网段 174.69.23.0/24",
+		"模型密钥将在 2026-07-31 到期",
+		"部署默认密码为 admin",
+		"部署默认密码 admin123",
+		"部署默认密码 `admin123`",
+		"部署默认密码 **admin123**",
 	} {
 		if len(validateTextIssues("content", text, 0, MaxPayloadBytes)) == 0 {
 			t.Fatalf("text %q should be rejected", text)
@@ -136,6 +349,95 @@ func TestValidateTextIssuesRejectsInternalDetails(t *testing.T) {
 	}
 	if issues := validateTextIssues("content", "完成错误提示、通知跳转和操作布局优化，并在生产环境验证", 0, MaxPayloadBytes); len(issues) != 0 {
 		t.Fatalf("reader-facing content rejected: %v", issues)
+	}
+	if issues := validateTextIssues("content", "建议登录后修改默认管理员密码", 0, MaxPayloadBytes); len(issues) != 0 {
+		t.Fatalf("credential hardening advice rejected: %v", issues)
+	}
+	if issues := validateTextIssues("content", "完成 Plannotator 0.25.0 安装，并将版本升级至 1.2", 0, MaxPayloadBytes); len(issues) != 0 {
+		t.Fatalf("software versions were mistaken for internal hosts: %v", issues)
+	}
+}
+
+func TestValidateTextIssuesKeepsCredentialAndUnrelatedExpiryInSeparateClauses(t *testing.T) {
+	text := "完成模型密钥轮换；测试证书将在 2026-08-01 到期"
+	if issues := validateTextIssues("content", text, 0, MaxPayloadBytes); len(issues) != 0 {
+		t.Fatalf("separate credential and expiry clauses were conflated: %v", issues)
+	}
+}
+
+func TestValidateResultBriefIssuesKeepsNoWorkStateConsistent(t *testing.T) {
+	noWork := Payload{NoReportableWork: true}
+	if issues := validateResultBriefIssues(
+		noWork,
+		noReportableResultText,
+		"## 工作概览\n\n本期无可核验的工作记录\n\n## 工作详情\n\n本期无可核验的工作记录",
+	); len(issues) != 0 {
+		t.Fatalf("valid no-work result rejected: %v", issues)
+	}
+	if issues := validateResultBriefIssues(noWork, "完成一项工作", "完成一项工作"); len(issues) != 2 {
+		t.Fatalf("no-work brief accepted contradictory result: %v", issues)
+	}
+
+	withWork := Payload{Workstreams: []Workstream{{Title: "日报优化"}}}
+	if issues := validateResultBriefIssues(withWork, "1. 完成日报优化", "### 日报优化\n\n完成实现"); len(issues) != 0 {
+		t.Fatalf("normal report result rejected: %v", issues)
+	}
+	if issues := validateResultBriefIssues(withWork, noReportableResultText, noReportableResultText); len(issues) != 1 {
+		t.Fatalf("non-empty brief accepted no-work claim: %v", issues)
+	}
+
+	twoWorkstreams := Payload{Workstreams: []Workstream{
+		{Subject: "任务分发协议", Title: "协议"},
+		{Subject: "任务协作原型", Title: "原型"},
+	}}
+	if issues := validateResultBriefIssues(
+		twoWorkstreams,
+		"1. 完成协议设计\n2. 完成原型验证",
+		"### 协议\n\n完成设计\n\n### 原型\n\n完成验证",
+	); len(issues) != 0 {
+		t.Fatalf("aligned report result rejected: %v", issues)
+	}
+	outcomeOnlyBrief := Payload{Workstreams: []Workstream{{
+		Subject: "AIDA 日报", Title: "日报生成质量优化",
+		Deliverables: []Deliverable{{Result: "优化日报工作主线关联"}},
+	}}}
+	if issues := validateResultBriefIssues(
+		outcomeOnlyBrief,
+		"1. 优化日报工作主线关联",
+		"### 日报生成质量优化\n\n优化日报工作主线关联，减少同一项目被拆分为多个事项。",
+	); len(issues) != 0 {
+		t.Fatalf("outcome-only result rejected: %v", issues)
+	}
+	if issues := validateResultBriefIssues(
+		twoWorkstreams,
+		"1. 完成协议设计",
+		"### 协议\n\n完成设计\n\n### 原型\n\n完成验证\n\n### 额外主题\n\n不应拆分",
+	); len(issues) != 2 {
+		t.Fatalf("misaligned report result accepted: %v", issues)
+	}
+	longContent := "### 协议\n\n" + strings.Repeat("完成协议机制说明。", 90) + "\n\n### 原型\n\n" + strings.Repeat("完成原型机制说明。", 90)
+	issues := validateResultBriefIssues(
+		twoWorkstreams,
+		"1. 完成协议设计\n2. 完成原型验证",
+		longContent,
+	)
+	if len(issues) != 1 || !strings.Contains(issues[0], "content length must not exceed 1200 characters") {
+		t.Fatalf("oversized subject-contract result accepted: %v", issues)
+	}
+	legacyBrief := Payload{Workstreams: []Workstream{{Title: "协议"}, {Title: "原型"}}}
+	if issues := validateResultBriefIssues(
+		legacyBrief,
+		"1. 完成协议设计",
+		"### 协议\n\n完成设计",
+	); len(issues) != 0 {
+		t.Fatalf("legacy subject-less brief must retain pre-contract validation: %v", issues)
+	}
+	if issues := validateResultBriefIssues(
+		legacyBrief,
+		"1. 完成协议设计",
+		longContent,
+	); len(issues) != 0 {
+		t.Fatalf("legacy subject-less result must retain pre-contract length behavior: %v", issues)
 	}
 }
 
@@ -154,7 +456,6 @@ func TestNormalizeDraftReturnsAllIdentifiableViolations(t *testing.T) {
 	}
 	wantParts := []string{
 		`title contains forbidden term "深链"`,
-		"objective contains internal route",
 		"result contains network port",
 		"validation contains command-line flag",
 		"released requires production environment",
@@ -164,6 +465,29 @@ func TestNormalizeDraftReturnsAllIdentifiableViolations(t *testing.T) {
 	for _, want := range wantParts {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error %q missing %q", err, want)
+		}
+	}
+}
+
+func TestReaderFacingTextSafeAllowsRouteWithoutInternalLocation(t *testing.T) {
+	if !ReaderFacingTextSafe("完成 /chat 页面验证") {
+		t.Fatal("reader-facing page route must not trigger a hard quality failure")
+	}
+	for _, value := range []string{
+		"访问 http://192.168.16.74/chat",
+		"配置保存在 /home/aied/project/.env",
+		"服务监听 UDP 3001 端口",
+		"调用 /api/v1/internal/report",
+		"检查 /admin/daily-report-value 页面",
+		"调用 /api?scope=self",
+		"查看 /admin#users",
+		"检查 /metrics。",
+		"检查 /api.",
+		"查看 /admin,",
+		"检查 /metrics;",
+	} {
+		if ReaderFacingTextSafe(value) {
+			t.Fatalf("sensitive location remains reader-facing safe: %q", value)
 		}
 	}
 }

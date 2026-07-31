@@ -45,6 +45,8 @@ type workEvidenceFactIdentity struct {
 }
 
 type workEvidenceFactCandidate struct {
+	ThreadKey   string
+	ThreadGoal  string
 	Identity    workEvidenceFactIdentity
 	Observation WorkEvidenceObservation
 	SourceRef   string
@@ -57,7 +59,7 @@ type workEvidenceObservationIdentity struct {
 	Status   string
 }
 
-func projectPayloadForRepresentation(payload Payload, representation string) (Payload, error) {
+func projectPayloadForRepresentation(payload Payload, representation string, includeWorkThreads bool) (Payload, error) {
 	switch representation {
 	case "":
 		return payload, nil
@@ -66,7 +68,7 @@ func projectPayloadForRepresentation(payload Payload, representation string) (Pa
 		if err != nil {
 			return Payload{}, err
 		}
-		projected, err := projectPayload(payload)
+		projected, err := projectPayloadWithThreads(payload, includeWorkThreads)
 		if err != nil {
 			return Payload{}, err
 		}
@@ -80,7 +82,7 @@ func projectPayloadForRepresentation(payload Payload, representation string) (Pa
 func presentationProfileFor(reportType string) (PresentationProfile, error) {
 	profiles := map[string]PresentationProfile{
 		ReportTypePersonalDaily: {
-			SummaryFocus:    "个人当日推进的主要目标、关键成果、验证和整体状态；只有存在明确证据时才提及风险或阻塞。",
+			SummaryFocus:    "个人当日推进的主要项目与工作成果；Git、测试、构建、合并和部署只用于关联工作主题，不作为日报结论。",
 			ContentGrouping: "按个人工作目标归并；同一目标下的开发、文档、部署、验证和修复合并表达。",
 		},
 		ReportTypePersonalWeekly: {
@@ -115,6 +117,10 @@ func presentationProfileFor(reportType string) (PresentationProfile, error) {
 // Report Agent. It compacts deterministic transport noise and exact duplicates,
 // but never ranks facts or decides which conclusion is semantically correct.
 func projectPayload(payload Payload) (Payload, error) {
+	return projectPayloadWithThreads(payload, false)
+}
+
+func projectPayloadWithThreads(payload Payload, includeWorkThreads bool) (Payload, error) {
 	if err := removeDuplicateLegacyDigest(&payload); err != nil {
 		return Payload{}, err
 	}
@@ -122,7 +128,8 @@ func projectPayload(payload Payload) (Payload, error) {
 		return payload, nil
 	}
 
-	workEvidence, err := projectDigestV2(payload.Sessions[0])
+	includeThreadContext := includeWorkThreads && payload.Run.ReportType == ReportTypePersonalDaily
+	workEvidence, err := projectDigestV2(payload.Sessions[0], includeThreadContext)
 	if err != nil {
 		return Payload{}, err
 	}
@@ -146,7 +153,7 @@ func removeDuplicateLegacyDigest(payload *Payload) error {
 	return nil
 }
 
-func projectDigestV2(session SessionSource) (WorkEvidence, error) {
+func projectDigestV2(session SessionSource, includeThreadContext bool) (WorkEvidence, error) {
 	var digest frozenDigestV2
 	if err := json.Unmarshal(session.Digest, &digest); err != nil {
 		return WorkEvidence{}, ErrIncomplete
@@ -170,7 +177,7 @@ func projectDigestV2(session SessionSource) (WorkEvidence, error) {
 		Facts: make([]WorkEvidenceFact, 0),
 	}
 
-	workUnitRefs := make(map[string]struct{})
+	workUnitKeys := make(map[string]struct{})
 	sourceItemRefs := make(map[string]struct{})
 	sessionRefs := make(map[string]struct{})
 	factIndexes := make(map[workEvidenceFactIdentity]int)
@@ -195,13 +202,6 @@ func projectDigestV2(session SessionSource) (WorkEvidence, error) {
 			return WorkEvidence{}, ErrIncomplete
 		}
 		for _, highlight := range day.Highlights {
-			if strings.TrimSpace(highlight.WorkUnitRef) == "" {
-				return WorkEvidence{}, ErrIncomplete
-			}
-			if _, exists := workUnitRefs[highlight.WorkUnitRef]; exists {
-				return WorkEvidence{}, ErrIncomplete
-			}
-			workUnitRefs[highlight.WorkUnitRef] = struct{}{}
 			sourceRef := strings.TrimSpace(highlight.SourceRef)
 			if sourceRef == "" {
 				hasMissingSourceRefs = true
@@ -210,6 +210,21 @@ func projectDigestV2(session SessionSource) (WorkEvidence, error) {
 				if _, exists := sessionRefs[sourceRef]; !exists {
 					return WorkEvidence{}, ErrIncomplete
 				}
+			}
+			workUnitRef := strings.TrimSpace(highlight.WorkUnitRef)
+			if workUnitRef == "" {
+				return WorkEvidence{}, ErrIncomplete
+			}
+			workUnitKey := sourceRef + "\x00" + workUnitRef
+			if _, exists := workUnitKeys[workUnitKey]; exists {
+				return WorkEvidence{}, ErrIncomplete
+			}
+			workUnitKeys[workUnitKey] = struct{}{}
+			threadKey := ""
+			threadGoal := ""
+			if includeThreadContext {
+				threadKey = workUnitKey
+				threadGoal = projectWorkThreadGoal(highlight.Goal)
 			}
 			category := strings.TrimSpace(highlight.Category)
 			if category == "" {
@@ -230,6 +245,7 @@ func projectDigestV2(session SessionSource) (WorkEvidence, error) {
 				factCandidates = append(
 					factCandidates,
 					workEvidenceFactCandidate{
+						ThreadKey: threadKey, ThreadGoal: threadGoal,
 						Identity: workEvidenceFactIdentity{
 							Kind: "result", Text: text, Source: statement.Source,
 						},
@@ -245,6 +261,7 @@ func projectDigestV2(session SessionSource) (WorkEvidence, error) {
 				factCandidates = append(
 					factCandidates,
 					workEvidenceFactCandidate{
+						ThreadKey: threadKey, ThreadGoal: threadGoal,
 						Identity: workEvidenceFactIdentity{
 							Kind: "unresolved", Text: unresolved.Text,
 						},
@@ -259,10 +276,23 @@ func projectDigestV2(session SessionSource) (WorkEvidence, error) {
 		return WorkEvidence{}, ErrIncomplete
 	}
 	sortWorkEvidenceCandidates(factCandidates)
+	threadRefs := make(map[string]string)
 	for _, candidate := range factCandidates {
+		threadRef := ""
+		if includeThreadContext {
+			threadRef = threadRefs[candidate.ThreadKey]
+			if threadRef == "" {
+				threadRef = fmt.Sprintf("thread-%03d", len(threadRefs)+1)
+				threadRefs[candidate.ThreadKey] = threadRef
+				projection.Threads = append(projection.Threads, WorkEvidenceThread{
+					ThreadRef: threadRef,
+					Goal:      candidate.ThreadGoal,
+				})
+			}
+		}
 		appendWorkEvidenceFact(
 			&projection, factIndexes, &factObservations,
-			candidate.Identity, candidate.Observation,
+			candidate.Identity, threadRef, candidate.Observation,
 		)
 	}
 	if len(projection.Facts) == 0 && digest.ReportPeriod.ResultWorkUnitCount > 0 {
@@ -326,6 +356,16 @@ func projectReportFactText(value string) string {
 		return ""
 	}
 	return lead
+}
+
+func projectWorkThreadGoal(value string) string {
+	text := strings.TrimSpace(value)
+	if text == "" {
+		return ""
+	}
+	text = projectReportFactBlocks(text)
+	text = stripGitOnlyClauses(stripMarkdownLinkTargets(text))
+	return strings.TrimSpace(text)
 }
 
 func projectReportFactBlocks(value string) string {
@@ -846,6 +886,7 @@ func appendWorkEvidenceFact(
 	indexes map[workEvidenceFactIdentity]int,
 	observationIndexes *[]map[workEvidenceObservationIdentity]int,
 	identity workEvidenceFactIdentity,
+	threadRef string,
 	observation WorkEvidenceObservation,
 ) {
 	index, exists := indexes[identity]
@@ -855,10 +896,24 @@ func appendWorkEvidenceFact(
 		projection.Facts = append(projection.Facts, WorkEvidenceFact{
 			Kind: identity.Kind, Text: identity.Text, Source: identity.Source,
 			Observations: []WorkEvidenceObservation{},
+			ThreadRefs:   []string{},
 		})
 		*observationIndexes = append(
 			*observationIndexes, make(map[workEvidenceObservationIdentity]int),
 		)
+	}
+	if threadRef != "" {
+		refs := projection.Facts[index].ThreadRefs
+		seen := false
+		for _, ref := range refs {
+			if ref == threadRef {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			projection.Facts[index].ThreadRefs = append(refs, threadRef)
+		}
 	}
 	observationIdentity := workEvidenceObservationIdentity{
 		Date: observation.Date, Category: observation.Category, Status: observation.Status,

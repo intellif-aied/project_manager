@@ -26,16 +26,17 @@ type Target struct {
 }
 
 type BuildRequest struct {
-	UserID            string
-	RunID             string
-	ReportType        string
-	Period            reportsource.Period
-	Timezone          string
-	TriggerSource     string
-	ModelID           string
-	Target            Target
-	SourceSelectionID string
-	Representation    string
+	UserID             string
+	RunID              string
+	ReportType         string
+	Period             reportsource.Period
+	Timezone           string
+	TriggerSource      string
+	ModelID            string
+	Target             Target
+	SourceSelectionID  string
+	Representation     string
+	IncludeWorkThreads bool
 }
 
 func (r BuildRequest) validate() error {
@@ -196,12 +197,18 @@ type Sources struct {
 
 // WorkEvidence is the deterministic Agent-facing projection of one frozen
 // Session Digest. It exposes report facts as ordinary JSON objects and keeps
-// Digest transport, audit, and raw user-goal fields out of the model context.
+// Digest transport and raw source identities out of the model context.
 type WorkEvidence struct {
-	Mode     string             `json:"mode"`
-	Timezone string             `json:"timezone,omitempty"`
-	Period   WorkEvidencePeriod `json:"period"`
-	Facts    []WorkEvidenceFact `json:"facts"`
+	Mode     string               `json:"mode"`
+	Timezone string               `json:"timezone,omitempty"`
+	Period   WorkEvidencePeriod   `json:"period"`
+	Threads  []WorkEvidenceThread `json:"threads,omitempty"`
+	Facts    []WorkEvidenceFact   `json:"facts"`
+}
+
+type WorkEvidenceThread struct {
+	ThreadRef string `json:"thread_ref"`
+	Goal      string `json:"goal,omitempty"`
 }
 
 type WorkEvidencePeriod struct {
@@ -214,6 +221,7 @@ type WorkEvidenceFact struct {
 	Kind         string                    `json:"kind"`
 	Text         string                    `json:"text"`
 	Source       string                    `json:"source,omitempty"`
+	ThreadRefs   []string                  `json:"thread_refs,omitempty"`
 	Observations []WorkEvidenceObservation `json:"observations"`
 }
 

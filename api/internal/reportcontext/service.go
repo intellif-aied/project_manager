@@ -81,7 +81,7 @@ func (s *Service) Build(ctx context.Context, request BuildRequest) (StoredContex
 		assembled.SourceState.Mode = sessions[0].Mode
 	}
 	assembled.Sources = Sources{SessionDigest: legacyDigest}
-	assembled, err = projectPayloadForRepresentation(assembled, request.Representation)
+	assembled, err = projectPayloadForRepresentation(assembled, request.Representation, request.IncludeWorkThreads)
 	if err != nil {
 		return StoredContext{}, err
 	}
