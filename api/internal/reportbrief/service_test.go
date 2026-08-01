@@ -46,6 +46,40 @@ func TestNormalizeDraftAcceptsCompleteEvidenceMap(t *testing.T) {
 	}
 }
 
+func TestNormalizeDraftAutomaticallyAccountsForUnselectedFacts(t *testing.T) {
+	payload, err := normalizeDraft(Draft{
+		Workstreams: []Workstream{{
+			Subject: "AIDA 日报", Title: "日报生成质量优化",
+			Deliverables: []Deliverable{{
+				Result: "优化日报项目成果表达", FactRefs: []string{"fact-001"},
+			}},
+		}},
+		ExcludedFacts: []ExcludedFact{{FactRef: "fact-003", Reason: "discussion"}},
+	}, personalDaily, Period{Start: "2026-07-31", End: "2026-07-31"}, map[string]struct{}{
+		"fact-001": {}, "fact-002": {}, "fact-003": {},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []ExcludedFact{
+		{FactRef: "fact-002", Reason: "not_selected"},
+		{FactRef: "fact-003", Reason: "discussion"},
+	}
+	if fmt.Sprint(payload.ExcludedFacts) != fmt.Sprint(want) {
+		t.Fatalf("excluded facts = %#v, want %#v", payload.ExcludedFacts, want)
+	}
+}
+
+func TestAcceptedBriefHidesAutomaticFactAccounting(t *testing.T) {
+	accepted := (Stored{Payload: Payload{ExcludedFacts: []ExcludedFact{
+		{FactRef: "fact-001", Reason: "not_selected"},
+		{FactRef: "fact-002", Reason: "discussion"},
+	}}}).Accepted()
+	if len(accepted.ExcludedFacts) != 1 || accepted.ExcludedFacts[0].FactRef != "fact-002" {
+		t.Fatalf("accepted Brief exposed automatic fact accounting: %#v", accepted.ExcludedFacts)
+	}
+}
+
 func TestNormalizeDraftRejectsInvalidEvidenceMaps(t *testing.T) {
 	available := map[string]struct{}{"fact-001": {}, "fact-002": {}}
 	base := Draft{Workstreams: []Workstream{{
@@ -60,7 +94,6 @@ func TestNormalizeDraftRejectsInvalidEvidenceMaps(t *testing.T) {
 		name  string
 		draft Draft
 	}{
-		{name: "unaccounted fact", draft: base},
 		{name: "included and excluded", draft: Draft{
 			Workstreams:   base.Workstreams,
 			ExcludedFacts: []ExcludedFact{{FactRef: "fact-001", Reason: "discussion"}, {FactRef: "fact-002", Reason: "trace"}},
@@ -99,6 +132,18 @@ func TestNormalizeDraftAcceptsNoReportableWorkWhenEveryFactIsExcluded(t *testing
 	}
 	if !payload.NoReportableWork || len(payload.Workstreams) != 0 {
 		t.Fatalf("unexpected no-work payload: %#v", payload)
+	}
+}
+
+func TestNormalizeDraftRequiresExplicitExclusionsForNoReportableWork(t *testing.T) {
+	_, err := normalizeDraft(
+		Draft{NoReportableWork: true},
+		personalDaily,
+		Period{Start: "2026-07-27", End: "2026-07-27"},
+		map[string]struct{}{"fact-001": {}},
+	)
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "must be explicitly excluded when no_reportable_work is true") {
+		t.Fatalf("error = %v, want explicit no-work exclusion", err)
 	}
 }
 
@@ -327,6 +372,24 @@ func TestNormalizeDraftSubjectContractAllowsTruthfulFactExclusion(t *testing.T) 
 	}
 }
 
+func TestNormalizeDraftRejectsCallerProvidedAutomaticExclusionReason(t *testing.T) {
+	_, err := normalizeDraft(Draft{
+		Workstreams: []Workstream{{
+			Subject: "AIDA 日报", Title: "日报生成优化",
+			Deliverables: []Deliverable{{
+				Result:   "优化日报项目成果表达",
+				FactRefs: []string{"fact-001"},
+			}},
+		}},
+		ExcludedFacts: []ExcludedFact{{FactRef: "fact-002", Reason: automaticExclusionReason}},
+	}, personalDaily, Period{Start: "2026-07-31", End: "2026-07-31"}, map[string]struct{}{
+		"fact-001": {}, "fact-002": {},
+	})
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "excluded fact reason is invalid") {
+		t.Fatalf("caller-provided automatic exclusion reason accepted: %v", err)
+	}
+}
+
 func TestValidateTextIssuesRejectsInternalDetails(t *testing.T) {
 	for _, text := range []string{
 		"后端返回 REPORT_SOURCE_UNAVAILABLE",
@@ -460,7 +523,6 @@ func TestNormalizeDraftReturnsAllIdentifiableViolations(t *testing.T) {
 		"validation contains command-line flag",
 		"released requires production environment",
 		"unknown fact_ref fact-999",
-		"fact_ref fact-001 is not accounted for",
 	}
 	for _, want := range wantParts {
 		if !strings.Contains(err.Error(), want) {

@@ -153,7 +153,8 @@ func TestMalformedBriefJSONCountsAgainstBoundRun(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected malformed brief_json to be rejected")
 	}
-	if service.runID != runID || !strings.Contains(service.rejectDetail, "valid Report Brief JSON") {
+	if service.runID != runID || !strings.Contains(service.rejectDetail, "valid Report Brief JSON") ||
+		!strings.Contains(service.rejectDetail, "unexpected end of JSON input") {
 		t.Fatalf("rejection run=%q detail=%q", service.runID, service.rejectDetail)
 	}
 }

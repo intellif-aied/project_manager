@@ -10,6 +10,7 @@ const (
 	MaxBriefInvalidAttempts  = 2
 	MaxResultInvalidAttempts = 1
 	FactRefJSONPattern       = `^fact-[0-9]{3,}$`
+	automaticExclusionReason = "not_selected"
 )
 
 var (
@@ -98,11 +99,17 @@ type Accepted struct {
 }
 
 func (s Stored) Accepted() Accepted {
+	explicitExclusions := make([]ExcludedFact, 0, len(s.Payload.ExcludedFacts))
+	for _, item := range s.Payload.ExcludedFacts {
+		if item.Reason != automaticExclusionReason {
+			explicitExclusions = append(explicitExclusions, item)
+		}
+	}
 	return Accepted{
 		Status: "accepted", SchemaVersion: s.Payload.SchemaVersion,
 		BriefHash: s.BriefHash, ReportType: s.Payload.ReportType,
 		Period: s.Payload.Period, Workstreams: s.Payload.Workstreams,
-		ExcludedFacts:    s.Payload.ExcludedFacts,
+		ExcludedFacts:    explicitExclusions,
 		NoReportableWork: s.Payload.NoReportableWork,
 	}
 }

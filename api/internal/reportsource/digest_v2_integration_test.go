@@ -64,13 +64,18 @@ func TestDigestV2SelectionFreezeReadAndWriteGuardIntegration(t *testing.T) {
 		t.Fatalf("attach without ready v2 digests must fail: %v", err)
 	}
 
+	activityStarts := []string{
+		"2026-07-01T01:00:00Z", // Outside the report period, but explicitly selected.
+		"2026-07-07T01:00:00Z",
+	}
+	activityEnds := []string{"2026-07-01T02:00:00Z", "2026-07-07T02:00:00Z"}
 	for index, sliceID := range fixture.sliceKeys {
 		digest := sessiondigestv2.EmptyDigest()
 		digest.WorkUnits = append(digest.WorkUnits, sessiondigestv2.WorkUnit{
 			WorkUnitRef:     "wu-v2-" + string(rune('a'+index)),
 			Sequence:        1,
-			ActivityStartAt: "2026-07-07T01:00:00Z",
-			ActivityEndAt:   "2026-07-07T02:00:00Z",
+			ActivityStartAt: activityStarts[index],
+			ActivityEndAt:   activityEnds[index],
 			PeriodRelation:  "unknown",
 			Goal: sessiondigestv2.Goal{
 				Text: "实现结果优先的 Digest", Source: "user_message",
@@ -175,11 +180,17 @@ func TestDigestV2SelectionFreezeReadAndWriteGuardIntegration(t *testing.T) {
 		}
 	}
 	if payload.ReportPeriod == nil ||
-		len(payload.ReportPeriod.Days) != 1 ||
-		len(payload.ReportPeriod.Days[0].Highlights) != 2 ||
+		payload.ReportPeriod.StartDate != period.Start ||
+		payload.ReportPeriod.EndDate != period.End ||
+		len(payload.ReportPeriod.Days) != 2 ||
+		payload.ReportPeriod.Days[0].Date != "2026-07-01" ||
+		payload.ReportPeriod.Days[1].Date != "2026-07-07" ||
+		len(payload.ReportPeriod.Days[0].Highlights) != 1 ||
+		len(payload.ReportPeriod.Days[1].Highlights) != 1 ||
 		!payload.ReportPeriod.Days[0].OutcomeCoverage.Complete ||
-		payload.ReportPeriod.Days[0].OutcomeCoverage.SourceCount != 2 ||
-		payload.ReportPeriod.Days[0].OutcomeCoverage.RepresentedCount != 2 {
+		!payload.ReportPeriod.Days[1].OutcomeCoverage.Complete ||
+		payload.ReportPeriod.Days[0].OutcomeCoverage.SourceCount != 1 ||
+		payload.ReportPeriod.Days[1].OutcomeCoverage.SourceCount != 1 {
 		t.Fatalf("selection-level report summary was not preserved: %+v", payload.ReportPeriod)
 	}
 	visible := string(page.FrozenPayload)

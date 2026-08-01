@@ -41,7 +41,7 @@ func (h *ReportMCPHandler) toolWriteReportBrief(r *http.Request, rawArgs json.Ra
 	if briefJSON != "" {
 		if err := json.Unmarshal([]byte(briefJSON), &draft); err != nil {
 			_, rejectErr := h.reportBrief.RejectInvalid(r.Context(), u.ID, runID,
-				"brief_json must contain one valid Report Brief JSON object")
+				"brief_json must contain one valid Report Brief JSON object: "+err.Error())
 			return nil, mapReportBriefError(rejectErr)
 		}
 	}

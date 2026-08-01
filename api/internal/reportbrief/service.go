@@ -472,9 +472,18 @@ func normalizeDraft(draft Draft, reportType string, period Period, available map
 		if _, ok := included[ref]; ok {
 			continue
 		}
-		if _, ok := excluded[ref]; !ok {
-			appendValidationIssue(&issues, "fact_ref "+ref+" is not accounted for")
+		if _, ok := excluded[ref]; ok {
+			continue
 		}
+		if draft.NoReportableWork {
+			appendValidationIssue(&issues, "fact_ref "+ref+" must be explicitly excluded when no_reportable_work is true")
+			continue
+		}
+		excluded[ref] = struct{}{}
+		payload.ExcludedFacts = append(payload.ExcludedFacts, ExcludedFact{
+			FactRef: ref,
+			Reason:  automaticExclusionReason,
+		})
 	}
 	sort.SliceStable(payload.ExcludedFacts, func(i, j int) bool {
 		return payload.ExcludedFacts[i].FactRef < payload.ExcludedFacts[j].FactRef

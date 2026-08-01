@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/aidashboard/api/internal/biztime"
 	"github.com/aidashboard/api/internal/sessiondigestv2"
@@ -136,8 +137,9 @@ func (s *Service) freezeSelectionV2ForRun(
 		if err != nil || sessiondigestv2.HashBytes(canonicalDigest) != row.DigestSHA256.String {
 			return ErrDigestCorrupt
 		}
-		digest, _, periodTruncated := sessiondigestv2.PrepareForPeriod(
+		digest, _, periodTruncated := prepareDigestV2ForSelectionMode(
 			digest,
+			selection.Mode,
 			periodStart,
 			periodEnd,
 			biztime.Location(),
@@ -211,7 +213,8 @@ func (s *Service) freezeSelectionV2ForRun(
 	page.Coverage.RepresentedItemCount = len(page.Items)
 	page.Coverage.Complete =
 		page.Coverage.SourceItemCount == page.Coverage.RepresentedItemCount
-	page.ReportPeriod = sessiondigestv2.MergeReportPeriodSummarySources(
+	page.ReportPeriod = mergeDigestV2SelectionSummaries(
+		selection.Mode,
 		periodSummaries,
 		selection.Period.Start,
 		selection.Period.End,
@@ -248,6 +251,44 @@ func (s *Service) freezeSelectionV2ForRun(
 		return ErrSelectionConflict
 	}
 	return nil
+}
+
+func prepareDigestV2ForSelectionMode(
+	digest sessiondigestv2.Digest,
+	selectionMode string,
+	periodStart, periodEnd time.Time,
+	location *time.Location,
+) (sessiondigestv2.Digest, []byte, bool) {
+	if selectionMode == "explicit" {
+		return sessiondigestv2.PrepareExplicitSelectionForPeriod(
+			digest, periodStart, periodEnd, location,
+		)
+	}
+	return sessiondigestv2.PrepareForPeriod(
+		digest, periodStart, periodEnd, location,
+	)
+}
+
+func mergeDigestV2SelectionSummaries(
+	selectionMode string,
+	summaries []sessiondigestv2.ReportPeriodSummarySource,
+	startDate, endDate string,
+	highlightLimit int,
+) *sessiondigestv2.ReportPeriodSummary {
+	if selectionMode == "explicit" {
+		return sessiondigestv2.MergeExplicitSelectionReportPeriodSummarySources(
+			summaries,
+			startDate,
+			endDate,
+			highlightLimit,
+		)
+	}
+	return sessiondigestv2.MergeReportPeriodSummarySources(
+		summaries,
+		startDate,
+		endDate,
+		highlightLimit,
+	)
 }
 
 func assembleDigestV2Payload(page digestV2ContentPage) ([]byte, error) {

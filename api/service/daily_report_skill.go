@@ -96,23 +96,31 @@ Use two distinct semantic passes in this same Agent Session.
 
 ### Pass 1: associate work, then submit the Brief
 
-- Read every work_evidence.fact and fact_ref. Every fact_ref must be included in at least one deliverable or excluded.
+- Read every work_evidence.fact and fact_ref before selecting reportable work. A Fact does not need to appear just because it is verifiable.
 - Use threads, thread_refs, user-authored goals, and repeated named work objects as correlation hints, never headings or report text.
-- subject is the shortest stable product, initiative, protocol, or business capability name. Reuse the same subject for the same work object; the server merges matches.
-- Group related implementation, investigation, documentation, fixes, validation, commits, and deployment under one subject. Split only when a manager could independently assign and review the business or engineering outcomes.
-- Evaluation tools, datasets, review packages, and documentation stay as deliverables of the product or initiative they support. Split one out only when the user explicitly treats it as an independent long-lived project.
+- First group Facts into a two-level map: stable project, product, protocol, or business capability -> its modules, candidates, experiments, and activities. Create Workstreams only from the first level.
+- Use exactly one subject per shared work object. Use the exact project name when present; otherwise use the shortest evidence-supported user-facing shared capability without inventing a brand.
+- Candidate IDs, model variants, stages, lanes, modules, repositories, directories, datasets, and evaluation runs are never subjects by themselves. Keep them inside deliverables.
+- Before submitting, compare every subject pair. Subjects sharing the same leading named entity but differing only by evaluation, training, research, documentation, or another activity must merge into that named entity.
+- A manual, document, report, or task package is an outcome, never a subject. Use the product or capability it supports.
+- Split a subject only when evidence gives it a separate goal and independently reviewable outcome. Group one subject's implementation, investigation, documentation, validation, fixes, and operations together.
+- Evaluation tools, datasets, review packages, and documentation are supporting evidence by default, not standalone deliverables. Keep one only when it is itself a main outcome the user directly advanced.
+- For personal_daily, keep at most three reader-worthy deliverables per workstream. Merge related Facts and cite only one to three representative non-duplicate fact_refs; references prove an outcome, not coverage.
 - Keep one to three workstreams by default and never more than five. Session, repository, CWD, branch, file, artifact type, tool call, duration, or detail never creates a workstream.
 - Treat Git data, paths, commands, tests, builds, merges, deployment, and other operational traces as hidden association evidence only. They must not appear as a deliverable or final report statement.
 - Describe what capability, design, problem, or user experience changed. Do not describe how code moved through development or release machinery.
 - Omit scope-boundary clauses such as only affects, does not change, or keeps something unchanged; they explain implementation boundaries, not completed work.
 - Context is partial evidence. Never infer that work was not merged, not released, not deployed, unfinished, or unsuitable for production because a later action is absent.
 - Assistant suggestions, cautions, release recommendations, and missing-state conclusions are not user work results. Include a decision or limitation only when the user explicitly stated it or frozen evidence directly records the outcome.
-- A Fact whose source starts with agent_claim contains Assistant-authored text. Even agent_claim_with_evidence means only that some evidence exists; it does not verify every sentence. Extract concrete work performed and discard its judgement, advice, audit result, and external-state claim.
+- A Fact whose source starts with agent_claim contains Assistant-authored text. Even agent_claim_with_evidence does not verify every sentence. Extract concrete work, discard advice and external-state claims, and preserve uncertainty: likely, possible, or insufficient evidence must never become confirmed.
 - Keep each reader-facing outcome as a deliverable with only result and fact_refs. Do not create state, environment, validation, next_action, recommendation, or audit fields.
 - Exclude preparation, discussion, traces, duplicates, and low reader-value operations. Use secondary_activity only for a real but minor independent item.
+- For a normal reportable Brief, normally keep excluded_facts empty and leave omitted Facts unreferenced. The server records every unreferenced Fact as not_selected in the stored Brief. Do not send not_selected yourself. If no_reportable_work is true, explicitly exclude every available Fact with a specific allowed reason.
 - Never expose Context field names, IDs, hashes, paths, commands, credentials, hosts, ports, repositories, raw codes, or internal implementation names.
-- Use natural Chinese and established names such as Report Agent, Report MCP, Report Context, Skill, Agent, and MCP. Use 报告/日报/周报, never 报表.
+- Separate names from prose. Preserve the literal spelling of established project, model, hardware, protocol, framework, and Skill terms such as Skill, RTL, CUDA, and H20; when evidence also contains a translated nickname, use the established literal. Use 报告/日报/周报, never 报表.
+- Write ordinary actions in plain Chinese and never coin a technical label for them: say 调整弹窗点击后的跳转, not 通知深链.
 - Build exactly this inner JSON shape: {"workstreams":[{"subject":"...","title":"...","deliverables":[{"result":"...","fact_refs":["fact-001"]}]}],"excluded_facts":[{"fact_ref":"fact-002","reason":"preparation|discussion|trace|duplicate|low_reader_value|secondary_activity"}],"no_reportable_work":false}.
+- Before calling, verify that the final deliverable closes the deliverables array, then the workstream object, then the workstreams array before excluded_facts. excluded_facts belongs to the root object, never inside a workstream.
 - Call write_report_brief with {"brief_json":"<serialized inner JSON object>"}. Never send run_id. Correct every REPORT_BRIEF_INVALID violation together and retry at most twice without reading Context again.
 - On REPORT_BRIEF_RETRY_EXHAUSTED, do not fail the run: compose a concise outcome report from the last Brief draft and call write_report_result without brief_hash.
 
@@ -124,9 +132,11 @@ Use two distinct semantic passes in this same Agent Session.
 - Write the capability, design, problem resolution, or user-facing change. Never add commit, merge, test, deployment, release, environment, validation, recommendation, inferred completion state, or next action.
 - Omit statements that a change only affects something, does not change something, or keeps something unchanged.
 - Do not add a conclusion such as 尚未发布, 不建议上线, 可以合并, or 待部署.
-- Treat summary as a reader-facing translation, not a shortened copy of the Brief. A teammate unfamiliar with the implementation must understand each item on first read.
-- In each summary item, use everyday Chinese to say what problem was solved or what outcome changed. Keep necessary user-facing project, product, and protocol names, but translate internal architecture labels, method names, and newly coined concepts instead of copying the workstream title or deliverable wording.
-- Prefer one short sentence with at most two clauses. For example, rewrite 优化日报工作主线关联与主题显著性 as 优化 AI 日报对项目工作的识别和筛选，减少同一件事被拆成多条; rewrite 构建约束式评测体系 as 建立日报效果对比方法，用真实数据检验生成质量.
+- Apply the same name-versus-prose distinction: copy established names literally, but explain everything else in everyday Chinese without invented technical labels.
+- Start each summary item with its accepted subject. Keep candidate and module labels subordinate; several candidates under one subject remain one summary item.
+- Preserve measured quantities exactly. Do not rewrite a percentage increase as a multiple unless the arithmetic is explicit and correct: an increase of X%% means a total of 1+X/100 times the baseline.
+- State an explicit resource constraint as observed. Never add whether work was not started, stopped, merged, released, or deployed; report the constraint or completed action instead.
+- Keep each summary item within 140 Chinese characters and mention at most two highest-value outcomes; leave supporting metrics and sub-results in the detail section. For example, rewrite 优化日报工作主线关联与主题显著性 as 优化 AI 日报对项目工作的识别和筛选，减少同一件事被拆成多条; rewrite 构建约束式评测体系 as 建立日报效果对比方法，用真实数据检验生成质量.
 - Produce summary as a Markdown ordered list with exactly one item per accepted workstream. Do not put blank lines between items or add 工作概览/工作详情; the server adds those headings.
 - If no_reportable_work is true, use only 本期无可核验的工作记录 without numbering.
 - Call write_report_result with {"brief_hash": accepted_brief.brief_hash, "summary": summary, "content": markdown}.

@@ -28,6 +28,22 @@ func MergeReportPeriodSummaries(
 	)
 }
 
+// MergeExplicitSelectionReportPeriodSummarySources keeps every day from the
+// explicitly selected sources while preserving the requested report period as
+// metadata.
+func MergeExplicitSelectionReportPeriodSummarySources(
+	sources []ReportPeriodSummarySource,
+	startDate, endDate string,
+	highlightLimit int,
+) *ReportPeriodSummary {
+	merged := MergeReportPeriodSummarySources(
+		sources, "", "", highlightLimit,
+	)
+	merged.StartDate = startDate
+	merged.EndDate = endDate
+	return merged
+}
+
 func MergeReportPeriodSummarySources(
 	sources []ReportPeriodSummarySource,
 	startDate, endDate string,

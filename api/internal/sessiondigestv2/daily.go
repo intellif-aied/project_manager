@@ -76,6 +76,30 @@ func PrepareForPeriod(
 	periodStart, periodEnd time.Time,
 	location *time.Location,
 ) (Digest, []byte, bool) {
+	return prepareReportPeriodView(
+		input, periodStart, periodEnd, location, false,
+	)
+}
+
+// PrepareExplicitSelectionForPeriod keeps every day from a manually selected
+// digest. The period still labels the requested report; it does not constrain
+// the evidence that the user explicitly selected.
+func PrepareExplicitSelectionForPeriod(
+	input Digest,
+	periodStart, periodEnd time.Time,
+	location *time.Location,
+) (Digest, []byte, bool) {
+	return prepareReportPeriodView(
+		input, periodStart, periodEnd, location, true,
+	)
+}
+
+func prepareReportPeriodView(
+	input Digest,
+	periodStart, periodEnd time.Time,
+	location *time.Location,
+	includeAllSelectedDays bool,
+) (Digest, []byte, bool) {
 	if location == nil {
 		location = defaultBusinessLocation
 	}
@@ -90,7 +114,8 @@ func PrepareForPeriod(
 		Days:      []DailySummary{},
 	}
 	for _, day := range digest.DailySummaries {
-		if day.Date < startDate || day.Date > endDate {
+		if !includeAllSelectedDays &&
+			(day.Date < startDate || day.Date > endDate) {
 			continue
 		}
 		accumulatePeriodCounts(&period, day)

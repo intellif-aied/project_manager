@@ -26,6 +26,8 @@
 
 **次要活动（Secondary Activity）**：有事实依据、但相对当期主要目标不值得占用独立日报条目的工作。它不是噪声，也不代表工作没有发生。
 
+**未选事实（Unselected Fact）**：System Report Flow 已审阅、但未被 Agent 选入正常 Report Brief，也未被 Agent 用具体原因显式排除的 Evidence Fact。Report Brief Module 以内部原因 `not_selected` 自动归档它，保证证据守恒；该原因不允许 Agent 主动提交，也不返回给 Final Report 写作阶段。
+
 **工作主线（Work Thread）**：用户围绕同一业务目标持续推进的一组工作事实。它可以跨 Session、跨代码仓库和跨日期存在，是 Workstream 归并的首要依据。
 
 **业务项目（Business Project）**：用户工作语境中的项目或事项边界。业务项目不等同于本地目录、代码仓库或 Git 分支；一个业务项目可以涉及多个仓库，一个仓库也可以服务多个业务项目。
