@@ -22,7 +22,7 @@
 
 | 环境 | Skill owner | Skill | MCP | 最近验证 | 验证依据 |
 | --- | --- | --- | --- | --- | --- |
-| 生产 | 10086 | aida-report@1.0.21 | aida-report-mcp@report-v1 | 2026-07-31 | `20260731-日报项目成果聚合与可读性优化生产发布`、运行配置、公共 Registry、默认 Agent 与真实 Session SkillRef |
+| 生产 | 10086 | aida-report@1.0.22 | aida-report-mcp@report-v1 | 2026-08-01 | `20260801-明确切片证据与日报选材生产发布`、运行配置、公共 Registry 与默认 Agent SkillRef |
 | 14.157 测试 | 100866 | aida-report@1.1.22 | aida-report-mcp@report-v1 | 2026-08-01 | `20260801-日报项目归并与概览保真测试发布`、运行环境、公共 Registry、默认 Agent 与真实 Session SkillRef |
 
 规则：
