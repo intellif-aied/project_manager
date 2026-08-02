@@ -222,25 +222,29 @@ func loadProjectMemoryContext(ctx context.Context, tx *sql.Tx, request BuildRequ
 	if len(hints) == 0 {
 		return nil, nil
 	}
+	return projectMemoryContextFromHints(hints), nil
+}
+
+func projectMemoryContextFromHints(hints []reportmemory.HistoricalProjectHint) *ProjectMemoryContext {
 	result := &ProjectMemoryContext{
 		Purpose:      "使用已整理的历史项目名称和别名，帮助归并当天 Evidence Facts。",
 		EvidenceRule: "历史提示不是当天事实；不得复制历史成果、状态、指标、日期或结论。",
+		GroupingRule: "anchor_fact_refs 只是项目锚点，不是完整清单。仅根据当天 Facts 判断其他成果是否服务于同一持续项目目标；有锚点的同一 Hint 必须遵守 workstream_subject 和 max_workstreams。candidate_only 项目只是可选命名词，不得为了使用候选而强行归并。无法由当天 Facts 证明关联时保持独立。",
 	}
 	for _, hint := range hints {
+		instruction := "anchor_fact_refs 是识别该项目的当天锚点，不是该项目当天工作的完整清单。仅依据其他当天 Facts 扩展；属于该项目的结果必须归入 workstream_subject 指定的唯一主线，历史名称不得作为成果证据。"
+		if hint.CandidateOnly {
+			instruction = "该项目没有确定的当天 Fact 锚点，只是最近有效 Project Memory 中的可选名称。仅当当天 Facts 自身明确支持该项目归属时采用，否则忽略；不得为了使用候选而合并工作。"
+		}
 		converted := HistoricalProjectHint{
 			ProjectRef: hint.ProjectRef, CanonicalName: hint.CanonicalName,
-			Aliases: hint.Aliases, MatchedFactRefs: hint.MatchedFactRef,
-			Confidence:  hint.Confidence,
-			Instruction: "仅用于项目命名和归并，不得作为当天成果证据。",
-		}
-		for _, recent := range hint.RecentContext {
-			converted.RecentContext = append(converted.RecentContext, HistoricalHintEntry{
-				Date: recent.Date, Overview: recent.Overview, ChildTopics: recent.ChildTopics,
-			})
+			Aliases: hint.Aliases, AnchorFactRefs: hint.MatchedFactRef,
+			Confidence: hint.Confidence, WorkstreamSubject: hint.CanonicalName, MaxWorkstreams: 1,
+			CandidateOnly: hint.CandidateOnly, Instruction: instruction,
 		}
 		result.Hints = append(result.Hints, converted)
 	}
-	return result, nil
+	return result
 }
 
 func normalizeFrozenPayload(raw json.RawMessage) (json.RawMessage, string, error) {

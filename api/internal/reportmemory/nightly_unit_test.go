@@ -116,8 +116,41 @@ func TestProposalValidationRejectsUnknownDecisionField(t *testing.T) {
 func TestProposalValidationRejectsActivityOnlyProjectName(t *testing.T) {
 	input := ConsolidationInput{CurrentThemes: []InputTheme{{ThemeRef: "theme-001", Title: "部署 GLM"}}}
 	raw := `{"schema_version":"project-memory-proposal/v1","decisions":[{"theme_ref":"theme-001","action":"create_new","canonical_name":"部署","confidence":0.9}]}`
-	if _, _, _, err := parseAndValidateProposal(raw, input); err == nil {
-		t.Fatal("activity-only project name must be rejected")
+	proposal, _, _, err := parseAndValidateProposal(raw, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := proposal.Decisions[0]; got.Action != "unresolved" || got.CanonicalName != "" {
+		t.Fatalf("invalid project name was not downgraded: %+v", got)
+	}
+}
+
+func TestProposalValidationDowngradesNarrativeProjectNameWithoutFailingBatch(t *testing.T) {
+	input := ConsolidationInput{CurrentThemes: []InputTheme{
+		{ThemeRef: "theme-001", Title: "Report Agent"},
+		{ThemeRef: "theme-002", Title: "Knowledge Map"},
+	}}
+	raw := `{"schema_version":"project-memory-proposal/v1","decisions":[{"theme_ref":"theme-001","action":"create_new","canonical_name":"完成 Report Agent 方案；下一步发布生产。","confidence":0.9},{"theme_ref":"theme-002","action":"create_new","canonical_name":"Knowledge Map","confidence":0.9}]}`
+	proposal, _, _, err := parseAndValidateProposal(raw, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proposal.Decisions[0].Action != "unresolved" || proposal.Decisions[1].Action != "create_new" {
+		t.Fatalf("one invalid name must not discard valid decisions: %+v", proposal.Decisions)
+	}
+}
+
+func TestNormalizeProposalAliasesKeepsNamesAndDropsNarrativeText(t *testing.T) {
+	aliases := normalizeProposalAliases([]string{"Report Agent", "完成 Report Agent 方案；下一步发布生产。"})
+	if len(aliases) != 1 || aliases[0] != "Report Agent" {
+		t.Fatalf("aliases = %#v", aliases)
+	}
+}
+
+func TestUpsertAliasRejectsNarrativeTextBeforeDatabaseWrite(t *testing.T) {
+	err := upsertAlias(t.Context(), nil, "project-1", historicalReport{}, "完成 Report Agent 方案；下一步发布生产。", "child_topic", 0.9)
+	if err != nil {
+		t.Fatalf("invalid alias should be ignored: %v", err)
 	}
 }
 

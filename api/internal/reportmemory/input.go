@@ -183,8 +183,13 @@ func loadInputProjects(ctx context.Context, database *sql.DB, userID, reportDate
 		); err != nil {
 			return nil, err
 		}
+		if !validProjectName(project.CanonicalName) {
+			continue
+		}
 		for _, alias := range aliases {
-			project.Aliases = appendUnique(project.Aliases, limitRunes(alias, titleRuneLimit))
+			if validProjectName(alias) {
+				project.Aliases = appendUnique(project.Aliases, alias)
+			}
 			if len(project.Aliases) >= maxAliasesPerProject {
 				break
 			}

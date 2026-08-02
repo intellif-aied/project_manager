@@ -125,3 +125,27 @@ func TestErrorDetailsForMCPRemovesSentinelMessage(t *testing.T) {
 		t.Fatalf("message = %q", got)
 	}
 }
+
+func TestDecodeReportBriefJSONCompletesOnlyMissingContainerClosers(t *testing.T) {
+	raw := `{"workstreams":[{"subject":"Symphony","title":"Symphony","deliverables":[{"result":"完成协议设计","fact_refs":["fact-001"]}]}],"excluded_facts":[],"no_reportable_work":false`
+	var draft reportbrief.Draft
+	if err := decodeReportBriefJSON(raw, &draft); err != nil {
+		t.Fatal(err)
+	}
+	if len(draft.Workstreams) != 1 || draft.Workstreams[0].Subject != "Symphony" {
+		t.Fatalf("draft = %#v", draft)
+	}
+}
+
+func TestDecodeReportBriefJSONDoesNotRepairContentOrBrokenStrings(t *testing.T) {
+	for _, raw := range []string{
+		`{"workstreams":[,`,
+		`{"workstreams":[{"subject":"Symphony}`,
+		`{"workstreams":]}`,
+	} {
+		var draft reportbrief.Draft
+		if err := decodeReportBriefJSON(raw, &draft); err == nil {
+			t.Fatalf("invalid JSON was repaired: %s", raw)
+		}
+	}
+}

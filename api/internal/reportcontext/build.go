@@ -36,9 +36,12 @@ func assemble(ctx context.Context, tx *sql.Tx, request BuildRequest) (Payload, e
 	if err != nil {
 		return Payload{}, err
 	}
-	continuity, err := loadContinuityContext(ctx, tx, request)
-	if err != nil {
-		return Payload{}, err
+	var continuity *ContinuityContext
+	if request.EnableContinuityContext {
+		continuity, err = loadContinuityContext(ctx, tx, request)
+		if err != nil {
+			return Payload{}, err
+		}
 	}
 	requirements, err := loadRequirements(ctx, tx, request, scope, startUTC, endExclusiveUTC)
 	if err != nil {

@@ -97,7 +97,7 @@ Use two distinct semantic passes in this same Agent Session.
 ### Pass 1: build and submit the Brief
 
 - Read every work_evidence.fact and fact_ref before selecting reportable work. A Fact does not need to appear just because it is verifiable.
-- project_memory_context: use canonical_name and aliases. continuity_context is fallback. History is not evidence; merge by parent, keep outcomes in deliverables; never copy outcomes or force unrelated Facts into it.
+- project_memory_context: use anchored workstream_subject/max_workstreams. Ignore candidate_only names unless today's Facts support them; never force one. Use continuity_context only if absent. History is never evidence.
 - Use threads, thread_refs, user-authored goals, and repeated named work objects as correlation hints, never headings or report text.
 - First group Facts into a two-level map: stable project, product, protocol, or business capability -> its modules, candidates, experiments, and activities. Create Workstreams only from the first level.
 - Use exactly one subject per shared work object. Use the exact project name when present; otherwise use the shortest evidence-supported user-facing shared capability without inventing a brand.

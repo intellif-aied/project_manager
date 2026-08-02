@@ -10,6 +10,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/aidashboard/api/internal/biztime"
+	"github.com/aidashboard/api/internal/reportmemory"
 	"github.com/aidashboard/api/internal/reportsource"
 	"github.com/aidashboard/api/internal/sessiondigestv2"
 )
@@ -18,6 +19,48 @@ type sourceStub struct {
 	page  reportsource.ContentPage
 	err   error
 	calls int
+}
+
+func TestProjectMemoryContextTreatsMatchedFactsAsAnchors(t *testing.T) {
+	context := projectMemoryContextFromHints([]reportmemory.HistoricalProjectHint{{
+		ProjectRef: "project-1", CanonicalName: "Symphony",
+		Aliases: []string{"Symphony 任务编排器"}, MatchedFactRef: []string{"fact-016"}, Confidence: 0.9,
+	}})
+	if context == nil || !strings.Contains(context.GroupingRule, "只是项目锚点，不是完整清单") {
+		t.Fatalf("grouping rule = %#v", context)
+	}
+	if len(context.Hints) != 1 || !strings.Contains(context.Hints[0].Instruction, "仅依据其他当天 Facts") ||
+		context.Hints[0].WorkstreamSubject != "Symphony" || context.Hints[0].MaxWorkstreams != 1 ||
+		strings.Join(context.Hints[0].AnchorFactRefs, ",") != "fact-016" {
+		t.Fatalf("hint instruction = %#v", context.Hints)
+	}
+	payload, err := json.Marshal(context)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(payload), "recent_context") || strings.Contains(string(payload), "continuity_context") {
+		t.Fatalf("compact Project Memory Context leaked historical content: %s", payload)
+	}
+	if strings.Contains(string(payload), "matched_fact_refs") || !strings.Contains(string(payload), "anchor_fact_refs") {
+		t.Fatalf("Project Memory Context did not expose the anchor contract: %s", payload)
+	}
+}
+
+func TestProjectMemoryContextKeepsUnanchoredCandidateOptional(t *testing.T) {
+	context := projectMemoryContextFromHints([]reportmemory.HistoricalProjectHint{{
+		ProjectRef: "project-1", CanonicalName: "芯片验证平台",
+		Aliases: []string{"CATP"}, MatchedFactRef: []string{}, CandidateOnly: true,
+	}})
+	if context == nil || len(context.Hints) != 1 {
+		t.Fatalf("context = %#v", context)
+	}
+	hint := context.Hints[0]
+	if !hint.CandidateOnly || len(hint.AnchorFactRefs) != 0 || hint.WorkstreamSubject != "芯片验证平台" {
+		t.Fatalf("candidate hint = %#v", hint)
+	}
+	if !strings.Contains(hint.Instruction, "否则忽略") || !strings.Contains(context.GroupingRule, "不得为了使用候选而强行归并") {
+		t.Fatalf("candidate contract = %#v", context)
+	}
 }
 
 func (s *sourceStub) ReadAttachedSelection(context.Context, string, string, string, string, reportsource.Period, string) (reportsource.ContentPage, error) {
@@ -40,9 +83,6 @@ func TestBuildPersonalDailyStoresCompleteFrozenContext(t *testing.T) {
 	mock.ExpectQuery("FROM users u LEFT JOIN teams").WithArgs("7").WillReturnRows(
 		sqlmock.NewRows([]string{"id", "name", "team_id", "team_name"}).AddRow("7", "测试用户", "team-1", "研发一组"),
 	)
-	mock.ExpectQuery("FROM daily_reports r").
-		WithArgs("7", "2026-07-16", continuityLookbackDays, continuityReportLimit).
-		WillReturnRows(sqlmock.NewRows([]string{"report_date", "content"}))
 	mock.ExpectQuery("FROM requirements r").WillReturnRows(emptyRequirementRows())
 	mock.ExpectQuery("FROM tasks t").WillReturnRows(emptyTaskRows())
 	mock.ExpectExec("INSERT INTO report_run_contexts").

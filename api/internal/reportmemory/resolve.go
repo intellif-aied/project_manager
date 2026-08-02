@@ -158,10 +158,10 @@ func syncHistoricalReports(ctx context.Context, tx *sql.Tx, userID, reportDate s
 
 func syncReport(ctx context.Context, tx *sql.Tx, userID string, report historicalReport) error {
 	for _, theme := range themesForHistoricalReport(report) {
-		normalized := normalizeName(theme.Title)
-		if utf8.RuneCountInString(normalized) < 2 {
+		if !validProjectName(theme.Title) {
 			continue
 		}
+		normalized := normalizeName(theme.Title)
 		deterministicID := uuid.NewSHA1(uuid.NameSpaceOID, []byte(userID+"\x00"+normalized)).String()
 		var projectID string
 		err := tx.QueryRowContext(ctx, `
@@ -192,8 +192,10 @@ func syncReport(ctx context.Context, tx *sql.Tx, userID string, report historica
 			return err
 		}
 		for _, child := range theme.Children {
-			if err := upsertAlias(ctx, tx, projectID, report, child, "child_topic", 0.95); err != nil {
-				return err
+			if validProjectName(child) {
+				if err := upsertAlias(ctx, tx, projectID, report, child, "child_topic", 0.95); err != nil {
+					return err
+				}
 			}
 		}
 		childrenValue := theme.Children
@@ -242,10 +244,10 @@ func reportFingerprint(reports []historicalReport) string {
 }
 
 func upsertAlias(ctx context.Context, tx *sql.Tx, projectID string, report historicalReport, alias, aliasType string, confidence float64) error {
-	normalized := normalizeName(alias)
-	if utf8.RuneCountInString(normalized) < 2 {
+	if !validProjectName(alias) {
 		return nil
 	}
+	normalized := normalizeName(alias)
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO report_project_aliases (
 			project_id, alias, normalized_alias, alias_type,
@@ -357,6 +359,9 @@ func loadProjects(ctx context.Context, tx *sql.Tx, userID, reportDate string) ([
 		); err != nil {
 			return nil, err
 		}
+		if !validProjectName(name) || !validProjectName(alias) {
+			continue
+		}
 		index, exists := indexes[id]
 		if !exists {
 			projects = append(projects, storedProject{ID: id, CanonicalName: name, LastSeenOn: lastSeen})
@@ -394,7 +399,17 @@ func resolveFact(fact FactInput, projects []storedProject, reportDate string) Fa
 	}
 	if len(resolution.CandidateList) > 0 {
 		resolution.Confidence = resolution.CandidateList[0].Score
-		if resolution.Confidence >= highConfidenceScore && containsSignal(resolution.CandidateList[0].Signals, "exact_alias") {
+		ambiguousExactAlias := false
+		if containsSignal(resolution.CandidateList[0].Signals, "exact_alias") {
+			for _, candidate := range resolution.CandidateList[1:] {
+				if containsSignal(candidate.Signals, "exact_alias") {
+					ambiguousExactAlias = true
+					break
+				}
+			}
+		}
+		if resolution.Confidence >= highConfidenceScore &&
+			containsSignal(resolution.CandidateList[0].Signals, "exact_alias") && !ambiguousExactAlias {
 			resolution.Decision = "matched"
 			resolution.ProjectRef = resolution.CandidateList[0].ProjectRef
 		}

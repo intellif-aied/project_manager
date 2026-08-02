@@ -26,18 +26,19 @@ type Target struct {
 }
 
 type BuildRequest struct {
-	UserID             string
-	RunID              string
-	ReportType         string
-	Period             reportsource.Period
-	Timezone           string
-	TriggerSource      string
-	ModelID            string
-	Target             Target
-	SourceSelectionID  string
-	Representation     string
-	IncludeWorkThreads bool
-	EnableMemoryShadow bool
+	UserID                  string
+	RunID                   string
+	ReportType              string
+	Period                  reportsource.Period
+	Timezone                string
+	TriggerSource           string
+	ModelID                 string
+	Target                  Target
+	SourceSelectionID       string
+	Representation          string
+	IncludeWorkThreads      bool
+	EnableMemoryShadow      bool
+	EnableContinuityContext bool
 }
 
 func (r BuildRequest) validate() error {
@@ -268,23 +269,20 @@ type ContinuityTheme struct {
 type ProjectMemoryContext struct {
 	Purpose      string                  `json:"purpose"`
 	EvidenceRule string                  `json:"evidence_rule"`
+	GroupingRule string                  `json:"grouping_rule"`
 	Hints        []HistoricalProjectHint `json:"hints"`
 }
 
 type HistoricalProjectHint struct {
-	ProjectRef      string                `json:"project_ref"`
-	CanonicalName   string                `json:"canonical_name"`
-	Aliases         []string              `json:"aliases,omitempty"`
-	MatchedFactRefs []string              `json:"matched_fact_refs"`
-	RecentContext   []HistoricalHintEntry `json:"recent_context,omitempty"`
-	Confidence      float64               `json:"confidence"`
-	Instruction     string                `json:"instruction"`
-}
-
-type HistoricalHintEntry struct {
-	Date        string   `json:"date"`
-	Overview    string   `json:"overview"`
-	ChildTopics []string `json:"child_topics,omitempty"`
+	ProjectRef        string   `json:"project_ref"`
+	CanonicalName     string   `json:"canonical_name"`
+	Aliases           []string `json:"aliases,omitempty"`
+	AnchorFactRefs    []string `json:"anchor_fact_refs"`
+	Confidence        float64  `json:"confidence"`
+	WorkstreamSubject string   `json:"workstream_subject"`
+	MaxWorkstreams    int      `json:"max_workstreams"`
+	CandidateOnly     bool     `json:"candidate_only,omitempty"`
+	Instruction       string   `json:"instruction"`
 }
 
 type Payload struct {

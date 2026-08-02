@@ -268,16 +268,17 @@ func contextBuildRequest(run Run, selectionID string) (reportcontext.BuildReques
 	if timezone == "" {
 		timezone = biztime.Zone
 	}
+	isSystemPersonalDaily := reportType == reportcontext.ReportTypePersonalDaily &&
+		stringValue(run.ExecutionInput, "report_agent_source") == "system"
 	request := reportcontext.BuildRequest{
 		UserID: run.UserID, RunID: run.ID, ReportType: reportType,
 		Period: period, Timezone: timezone,
 		TriggerSource: stringValue(run.InputRef, "trigger_source"), ModelID: run.ModelID,
 		Target: target, SourceSelectionID: selectionID,
-		Representation: stringValue(run.ExecutionInput, "report_context_representation"),
-		IncludeWorkThreads: reportType == reportcontext.ReportTypePersonalDaily &&
-			stringValue(run.ExecutionInput, "report_agent_source") == "system",
-		EnableMemoryShadow: reportType == reportcontext.ReportTypePersonalDaily &&
-			stringValue(run.ExecutionInput, "report_agent_source") == "system",
+		Representation:          stringValue(run.ExecutionInput, "report_context_representation"),
+		IncludeWorkThreads:      isSystemPersonalDaily,
+		EnableMemoryShadow:      isSystemPersonalDaily,
+		EnableContinuityContext: !isSystemPersonalDaily,
 	}
 	if reportType == "" || period.Start == "" || period.End == "" {
 		return reportcontext.BuildRequest{}, errors.New("frozen report run input is incomplete")

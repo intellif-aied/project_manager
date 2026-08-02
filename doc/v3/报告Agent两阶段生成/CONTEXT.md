@@ -22,7 +22,7 @@
 
 **记忆快照（Memory Snapshot）**：某个用户最近一次成功整理后的 Project Memory 版本。新的夜间整理失败时，报告生成继续使用上一份成功快照。
 
-**历史项目提示（Historical Project Hint）**：Report Agent 可见的非证据归类提示。它只包含与当天 Evidence Facts 高置信度相关的项目名称、别名和有限历史概览，用于命名与归并，不得成为当天成果证据。
+**历史项目提示（Historical Project Hint）**：Report Agent 可见的非证据归类提示。它只包含项目名称、经过过滤的短别名和当天 Fact 锚点，用于命名与归并，不得成为当天成果证据；没有确定锚点的最近有效项目只能作为可忽略的名称候选。
 
 **夜间记忆整理任务（Nightly Memory Consolidation Job）**：为当天产生或更新有效日报的 Aida 用户执行的夜间增量任务。它生成 Memory Proposal 并由 Aida 应用为新的 Memory Snapshot；任务失败不得影响日报生成。
 

@@ -18,18 +18,12 @@ type HintRequest struct {
 }
 
 type HistoricalProjectHint struct {
-	ProjectRef     string              `json:"project_ref"`
-	CanonicalName  string              `json:"canonical_name"`
-	Aliases        []string            `json:"aliases,omitempty"`
-	MatchedFactRef []string            `json:"matched_fact_refs"`
-	RecentContext  []HintRecentContext `json:"recent_context,omitempty"`
-	Confidence     float64             `json:"confidence"`
-}
-
-type HintRecentContext struct {
-	Date        string   `json:"date"`
-	Overview    string   `json:"overview"`
-	ChildTopics []string `json:"child_topics,omitempty"`
+	ProjectRef     string   `json:"project_ref"`
+	CanonicalName  string   `json:"canonical_name"`
+	Aliases        []string `json:"aliases,omitempty"`
+	MatchedFactRef []string `json:"matched_fact_refs"`
+	Confidence     float64  `json:"confidence"`
+	CandidateOnly  bool     `json:"candidate_only,omitempty"`
 }
 
 func LoadHistoricalHints(ctx context.Context, tx *sql.Tx, request HintRequest) ([]HistoricalProjectHint, error) {
@@ -93,11 +87,11 @@ func LoadHistoricalHints(ctx context.Context, tx *sql.Tx, request HintRequest) (
 	}
 	result := make([]HistoricalProjectHint, 0, len(byProject))
 	for _, item := range byProject {
-		aliases, recent, err := loadHintDetails(ctx, tx, request.UserID, item.ProjectRef, request.ReportDate)
+		aliases, err := loadHintAliases(ctx, tx, request.UserID, item.ProjectRef)
 		if err != nil {
 			return nil, err
 		}
-		item.Aliases, item.RecentContext = aliases, recent
+		item.Aliases = aliases
 		result = append(result, *item)
 	}
 	sort.SliceStable(result, func(i, j int) bool {
@@ -106,6 +100,25 @@ func LoadHistoricalHints(ctx context.Context, tx *sql.Tx, request HintRequest) (
 		}
 		return result[i].CanonicalName < result[j].CanonicalName
 	})
+	// Keep recently accepted projects as optional naming candidates even when
+	// deterministic alias matching finds no Fact anchor. This gives the Report
+	// Agent bounded project vocabulary without exposing historical outcomes.
+	for _, project := range projects {
+		if len(result) >= maxHistoricalHints {
+			break
+		}
+		if byProject[project.ID] != nil {
+			continue
+		}
+		aliases, err := loadHintAliases(ctx, tx, request.UserID, project.ID)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, HistoricalProjectHint{
+			ProjectRef: project.ID, CanonicalName: project.CanonicalName,
+			Aliases: aliases, MatchedFactRef: []string{}, CandidateOnly: true,
+		})
+	}
 	if len(result) > maxHistoricalHints {
 		result = result[:maxHistoricalHints]
 	}
@@ -130,7 +143,7 @@ func snapshotProjectRefs(payload []byte) map[string]bool {
 	return result
 }
 
-func loadHintDetails(ctx context.Context, tx *sql.Tx, userID, projectID, reportDate string) ([]string, []HintRecentContext, error) {
+func loadHintAliases(ctx context.Context, tx *sql.Tx, userID, projectID string) ([]string, error) {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT alias FROM report_project_aliases a
 		JOIN report_projects p ON p.id = a.project_id
@@ -138,41 +151,21 @@ func loadHintDetails(ctx context.Context, tx *sql.Tx, userID, projectID, reportD
 		ORDER BY a.source_weight DESC, a.source_report_date DESC, a.alias
 		LIMIT $3`, projectID, userID, maxAliasesPerProject)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	aliases := make([]string, 0, maxAliasesPerProject)
 	for rows.Next() {
 		var alias string
 		if err := rows.Scan(&alias); err != nil {
 			rows.Close()
-			return nil, nil, err
+			return nil, err
 		}
-		aliases = appendUnique(aliases, alias)
+		if validProjectName(alias) {
+			aliases = appendUnique(aliases, alias)
+		}
 	}
 	if err := rows.Close(); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	rows, err = tx.QueryContext(ctx, `
-		SELECT o.report_date::text, o.observed_title, o.child_topics_json
-		FROM report_project_occurrences o
-		JOIN report_projects p ON p.id = o.project_id
-		WHERE o.project_id = $1 AND p.user_id = $2 AND o.report_date < $3::date
-		ORDER BY o.report_date DESC, o.id DESC
-		LIMIT $4`, projectID, userID, reportDate, maxHistoricalExcerpt)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer rows.Close()
-	recent := make([]HintRecentContext, 0, maxHistoricalExcerpt)
-	for rows.Next() {
-		var item HintRecentContext
-		var children []byte
-		if err := rows.Scan(&item.Date, &item.Overview, &children); err != nil {
-			return nil, nil, err
-		}
-		_ = json.Unmarshal(children, &item.ChildTopics)
-		item.Overview = limitRunes(item.Overview, maxHistoryOverviewRune)
-		recent = append(recent, item)
-	}
-	return aliases, recent, rows.Err()
+	return aliases, nil
 }

@@ -39,7 +39,7 @@ func (h *ReportMCPHandler) toolWriteReportBrief(r *http.Request, rawArgs json.Ra
 	}
 	briefJSON := strings.TrimSpace(args.BriefJSON)
 	if briefJSON != "" {
-		if err := json.Unmarshal([]byte(briefJSON), &draft); err != nil {
+		if err := decodeReportBriefJSON(briefJSON, &draft); err != nil {
 			_, rejectErr := h.reportBrief.RejectInvalid(r.Context(), u.ID, runID,
 				"brief_json must contain one valid Report Brief JSON object: "+err.Error())
 			return nil, mapReportBriefError(rejectErr)
@@ -54,6 +54,64 @@ func (h *ReportMCPHandler) toolWriteReportBrief(r *http.Request, rawArgs json.Ra
 		return nil, mapReportBriefError(err)
 	}
 	return mcpTextResult(stored.Accepted()), nil
+}
+
+func decodeReportBriefJSON(raw string, output any) error {
+	err := json.Unmarshal([]byte(raw), output)
+	if err == nil {
+		return nil
+	}
+	repaired, ok := completeTruncatedJSON(raw)
+	if !ok || json.Unmarshal([]byte(repaired), output) != nil {
+		return err
+	}
+	return nil
+}
+
+// completeTruncatedJSON repairs only a syntactically complete JSON value that
+// is missing trailing object/array closers. It never edits strings, commas,
+// fields, or values; the decoded Brief still passes the full semantic validator.
+func completeTruncatedJSON(raw string) (string, bool) {
+	value := strings.TrimSpace(raw)
+	stack := make([]byte, 0, 8)
+	inString, escaped := false, false
+	for index := 0; index < len(value); index++ {
+		current := value[index]
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if current == '\\' {
+				escaped = true
+				continue
+			}
+			if current == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch current {
+		case '"':
+			inString = true
+		case '{':
+			stack = append(stack, '}')
+		case '[':
+			stack = append(stack, ']')
+		case '}', ']':
+			if len(stack) == 0 || stack[len(stack)-1] != current {
+				return "", false
+			}
+			stack = stack[:len(stack)-1]
+		}
+	}
+	if inString || escaped || len(stack) == 0 {
+		return "", false
+	}
+	for index := len(stack) - 1; index >= 0; index-- {
+		value += string(stack[index])
+	}
+	return value, true
 }
 
 func mapReportBriefError(err error) error {

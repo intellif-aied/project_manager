@@ -167,12 +167,11 @@ func TestMalformedBriefJSONCountsAgainstBoundRun(t *testing.T) {
 	ctx = context.WithValue(ctx, reportRunIDKey, runID)
 	request = request.WithContext(ctx)
 
-	_, err := handler.toolWriteReportBrief(request, json.RawMessage(`{"brief_json":"{"}`))
+	_, err := handler.toolWriteReportBrief(request, json.RawMessage(`{"brief_json":"{\"workstreams\":[,"}`))
 	if err == nil {
 		t.Fatal("expected malformed brief_json to be rejected")
 	}
-	if service.runID != runID || !strings.Contains(service.rejectDetail, "valid Report Brief JSON") ||
-		!strings.Contains(service.rejectDetail, "unexpected end of JSON input") {
+	if service.runID != runID || !strings.Contains(service.rejectDetail, "valid Report Brief JSON") {
 		t.Fatalf("rejection run=%q detail=%q", service.runID, service.rejectDetail)
 	}
 }

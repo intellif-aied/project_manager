@@ -24,6 +24,25 @@ func TestResolveFactMatchesExactChildAlias(t *testing.T) {
 	}
 }
 
+func TestResolveFactRejectsAliasSharedByMultipleProjects(t *testing.T) {
+	fact := FactInput{FactRef: "fact-001", Text: "完成使用手册整体复查"}
+	projects := []storedProject{
+		{
+			ID: "project-1", CanonicalName: "芯片验证平台", LastSeenOn: "2026-07-30",
+			Aliases: []storedAlias{{Text: "使用手册", Normalized: "使用手册", SourceType: sourceManualFinal, SourceWeight: 1}},
+		},
+		{
+			ID: "project-2", CanonicalName: "Aida", LastSeenOn: "2026-07-30",
+			Aliases: []storedAlias{{Text: "使用手册", Normalized: "使用手册", SourceType: sourceManualFinal, SourceWeight: 1}},
+		},
+	}
+
+	resolution := resolveFact(fact, projects, "2026-07-31")
+	if resolution.Decision != "unmatched" || resolution.ProjectRef != "" {
+		t.Fatalf("resolution = %#v, want ambiguous shared alias to remain unmatched", resolution)
+	}
+}
+
 func TestResolveFactKeepsUnrelatedWorkUnmatched(t *testing.T) {
 	projects := []storedProject{{
 		ID: "project-map", CanonicalName: "Knowledge Map", LastSeenOn: "2026-07-31",

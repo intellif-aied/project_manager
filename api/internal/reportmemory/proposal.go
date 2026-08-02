@@ -16,7 +16,10 @@ import (
 	"github.com/lib/pq"
 )
 
-const proposalSchema = "project-memory-proposal/v1"
+const (
+	proposalSchema       = "project-memory-proposal/v1"
+	projectNameRuneLimit = 48
+)
 
 var activityOnlyName = regexp.MustCompile(`^(修复|测试|部署|调研|优化|开发|验证|走读|讨论|排查|发布|上线)$`)
 
@@ -89,7 +92,7 @@ func parseAndValidateProposal(raw string, input ConsolidationInput) (MemoryPropo
 			}
 		case "create_new":
 			if !validProjectName(decision.CanonicalName) {
-				return MemoryProposal{}, nil, estimate, fmt.Errorf("decision %s has an invalid project name", decision.ThemeRef)
+				decision.Action, decision.ProjectRef, decision.CanonicalName, decision.Aliases = "unresolved", "", "", nil
 			}
 		case "unresolved":
 			decision.ProjectRef, decision.CanonicalName, decision.Aliases = "", "", nil
@@ -117,7 +120,11 @@ func ValidateProposal(raw []byte, input ConsolidationInput) (MemoryProposal, []b
 func validProjectName(value string) bool {
 	value = strings.TrimSpace(value)
 	count := utf8.RuneCountInString(value)
-	return count >= 2 && count <= titleRuneLimit && !activityOnlyName.MatchString(value)
+	if count < 2 || count > projectNameRuneLimit || activityOnlyName.MatchString(value) {
+		return false
+	}
+	return !strings.ContainsAny(value, "\r\n。；！？") &&
+		!strings.HasPrefix(value, "#") && !strings.HasPrefix(value, "- ")
 }
 
 func normalizeProposalAliases(values []string) []string {
@@ -222,7 +229,6 @@ func applyProposal(
 		}
 		themeTitle := themes[decision.ThemeRef].Title
 		item.Titles = appendUnique(item.Titles, themeTitle)
-		item.Aliases = appendUnique(item.Aliases, themeTitle)
 		for _, alias := range decision.Aliases {
 			item.Aliases = appendUnique(item.Aliases, alias)
 		}
