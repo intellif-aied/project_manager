@@ -13,6 +13,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/aidashboard/api/internal/autodailyreport"
+	"github.com/aidashboard/api/internal/reportbrief"
 	"github.com/aidashboard/api/internal/reportcontext"
 	"github.com/aidashboard/api/internal/reportsource"
 	"github.com/aidashboard/api/model"
@@ -172,6 +173,41 @@ func TestPrepareSystemReportResultKeepsStandardFormat(t *testing.T) {
 	}
 	if !strings.HasPrefix(content, "## 工作概览\n\n") || !strings.Contains(content, "\n\n## 工作详情\n\n") {
 		t.Fatalf("system result lost standard format: %q", content)
+	}
+}
+
+func TestPrepareSystemReportResultUsesAcceptedBriefTitleForSummary(t *testing.T) {
+	content, summary, err := prepareReportResultFromAcceptedBrief(
+		reportAIRun{
+			ContextRepresentation: reportcontext.RepresentationWorkEvidence,
+			ReportAgentSource:     managedAgentSourceSystem,
+		},
+		reportTypePersonalDaily,
+		writeReportResultArgs{
+			Content: "### Knowledge Map\n\n完成产品判断，并验证儿童睡前动画场景的权威来源发现流程。",
+			Summary: "1. Knowledge Map：完成产品判断，并完成儿童睡前动画场景的权威来源发现。",
+		},
+		reportbrief.Stored{Payload: reportbrief.Payload{Workstreams: []reportbrief.Workstream{{
+			Subject: "Knowledge Map",
+			Title:   "Knowledge Map：完成产品判断并落地 knowledge-map-search Skill",
+		}}}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantSummary := "1. Knowledge Map：完成产品判断并落地 knowledge-map-search Skill"
+	if summary != wantSummary {
+		t.Fatalf("summary = %q, want %q", summary, wantSummary)
+	}
+	parts := strings.SplitN(content, "\n\n## 工作详情\n\n", 2)
+	if len(parts) != 2 {
+		t.Fatalf("standard report sections missing: %q", content)
+	}
+	if strings.Contains(parts[0], "儿童睡前") {
+		t.Fatalf("supporting scenario leaked into overview: %q", parts[0])
+	}
+	if !strings.Contains(parts[1], "儿童睡前") {
+		t.Fatalf("supporting scenario was removed from details: %q", parts[1])
 	}
 }
 

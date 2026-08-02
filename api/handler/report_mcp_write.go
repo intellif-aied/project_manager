@@ -17,6 +17,7 @@ import (
 	"github.com/aidashboard/api/internal/autodailyreport"
 	"github.com/aidashboard/api/internal/reportbrief"
 	"github.com/aidashboard/api/internal/reportcontext"
+	"github.com/aidashboard/api/internal/reportmemory"
 	"github.com/aidashboard/api/internal/reportsource"
 	"github.com/aidashboard/api/model"
 	"github.com/lib/pq"
@@ -86,40 +87,49 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 	acceptedBriefHash := ""
 	degradedReason := ""
 	degradedContentReplaced := false
-	content, normalizedSummary, err := prepareReportResultForRun(*run, reportType, args)
-	if err != nil {
-		return nil, err
-	}
-	if h.briefEnabled && reportType == reportTypePersonalDaily && reportBriefRequiredForRun(*run) {
+	var content, normalizedSummary string
+	requiresBrief := h.briefEnabled && reportType == reportTypePersonalDaily && reportBriefRequiredForRun(*run)
+	if requiresBrief && strings.TrimSpace(args.BriefHash) != "" {
 		if h.reportBrief == nil {
 			return nil, errMCPInternal
 		}
-		if strings.TrimSpace(args.BriefHash) == "" {
-			degradedReason, err = h.reportBrief.DegradedWriteReason(r.Context(), u.ID, args.RunID)
-			if err != nil {
-				return nil, mapReportBriefError(err)
-			}
-			if !reportbrief.ReaderFacingTextSafe(normalizedSummary) || !reportbrief.ReaderFacingTextSafe(content) {
-				content, normalizedSummary, err = prepareReportResultContent(
-					reportType,
-					run.ContextRepresentation,
-					"1. 已根据本期工作记录生成日报，请检查并补充。",
-					"### 工作记录\n\n本期工作内容已完成整理，请结合实际情况检查并补充。",
-				)
-				if err != nil {
-					return nil, err
-				}
-				degradedContentReplaced = true
-			}
-		} else {
-			storedBrief, briefErr := h.reportBrief.ValidateForWrite(
-				r.Context(), u.ID, args.RunID, strings.TrimSpace(args.BriefHash), normalizedSummary, content,
+		storedBrief, briefErr := h.reportBrief.ValidateForWrite(
+			r.Context(), u.ID, args.RunID, strings.TrimSpace(args.BriefHash), args.Summary, args.Content,
+		)
+		if briefErr != nil {
+			return nil, mapReportBriefError(briefErr)
+		}
+		content, normalizedSummary, err = prepareReportResultFromAcceptedBrief(*run, reportType, args, storedBrief)
+		if err != nil {
+			return nil, err
+		}
+		briefSchemaVersion = storedBrief.Payload.SchemaVersion
+		acceptedBriefHash = storedBrief.BriefHash
+	} else {
+		content, normalizedSummary, err = prepareReportResultForRun(*run, reportType, args)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if requiresBrief && strings.TrimSpace(args.BriefHash) == "" {
+		if h.reportBrief == nil {
+			return nil, errMCPInternal
+		}
+		degradedReason, err = h.reportBrief.DegradedWriteReason(r.Context(), u.ID, args.RunID)
+		if err != nil {
+			return nil, mapReportBriefError(err)
+		}
+		if !reportbrief.ReaderFacingTextSafe(normalizedSummary) || !reportbrief.ReaderFacingTextSafe(content) {
+			content, normalizedSummary, err = prepareReportResultContent(
+				reportType,
+				run.ContextRepresentation,
+				"1. 已根据本期工作记录生成日报，请检查并补充。",
+				"### 工作记录\n\n本期工作内容已完成整理，请结合实际情况检查并补充。",
 			)
-			if briefErr != nil {
-				return nil, mapReportBriefError(briefErr)
+			if err != nil {
+				return nil, err
 			}
-			briefSchemaVersion = storedBrief.Payload.SchemaVersion
-			acceptedBriefHash = storedBrief.BriefHash
+			degradedContentReplaced = true
 		}
 	}
 	if content == "" {
@@ -268,6 +278,11 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, errMCPInternal
+	}
+	if reportType == reportTypePersonalDaily {
+		if err := reportmemory.QueueReportChangeDB(ctx, h.db, reportID, target.UserID, date, time.Now()); err != nil {
+			log.Printf("queue project memory after report generation failed: %v", err)
+		}
 	}
 
 	return mcpTextResult(map[string]any{
@@ -533,6 +548,18 @@ func prepareReportResultForRun(run reportAIRun, reportType string, args writeRep
 		return "", "", mcpErr("REPORT_SUMMARY_REQUIRED", "summary is required for this report run")
 	}
 	return content, summary, nil
+}
+
+func prepareReportResultFromAcceptedBrief(
+	run reportAIRun,
+	reportType string,
+	args writeReportResultArgs,
+	storedBrief reportbrief.Stored,
+) (string, string, error) {
+	if readerSummary, ok := storedBrief.ReaderSummary(); ok {
+		args.Summary = readerSummary
+	}
+	return prepareReportResultForRun(run, reportType, args)
 }
 
 func prepareReportResultContent(reportType, representation, summary, content string) (string, string, error) {

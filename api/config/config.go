@@ -33,6 +33,12 @@ type Config struct {
 	ManagedAgentReportSkillOwner   string
 	ManagedAgentReportSkillVersion string
 	ManagedAgentReportMCPURL       string
+	ProjectMemoryNightlyEnabled    bool
+	ProjectMemoryAgentID           string
+	ProjectMemoryModelID           string
+	ProjectMemorySkillOwner        string
+	ProjectMemorySkillVersion      string
+	ProjectMemoryMCPURL            string
 	ReportTwoPassEnabled           bool
 	AIDAPublicBaseURL              string
 	AIDAInternalMetricsAddr        string
@@ -81,6 +87,12 @@ func Load() *Config {
 		ManagedAgentReportSkillOwner:   getEnv("MANAGED_AGENT_REPORT_SKILL_OWNER", ""),
 		ManagedAgentReportSkillVersion: getEnv("MANAGED_AGENT_REPORT_SKILL_VERSION", ""),
 		ManagedAgentReportMCPURL:       getEnv("MANAGED_AGENT_REPORT_MCP_URL", ""),
+		ProjectMemoryNightlyEnabled:    getEnv("PROJECT_MEMORY_NIGHTLY_ENABLED", "false") == "true",
+		ProjectMemoryAgentID:           strings.TrimSpace(getEnv("PROJECT_MEMORY_AGENT_ID", "")),
+		ProjectMemoryModelID:           strings.TrimSpace(getEnv("PROJECT_MEMORY_MODEL_ID", "deepseek-v4-flash")),
+		ProjectMemorySkillOwner:        strings.TrimSpace(getEnv("PROJECT_MEMORY_SKILL_OWNER", "")),
+		ProjectMemorySkillVersion:      strings.TrimSpace(getEnv("PROJECT_MEMORY_SKILL_VERSION", "")),
+		ProjectMemoryMCPURL:            strings.TrimSpace(getEnv("PROJECT_MEMORY_MCP_URL", "")),
 		ReportTwoPassEnabled:           getEnv("REPORT_TWO_PASS_ENABLED", "false") == "true",
 		AIDAPublicBaseURL:              getEnv("AIDA_PUBLIC_BASE_URL", ""),
 		AIDAInternalMetricsAddr:        getEnv("AIDA_INTERNAL_METRICS_ADDR", ":9091"),
@@ -98,6 +110,27 @@ func Load() *Config {
 		MinioExternalEndpoint: getEnv("MINIO_EXTERNAL_ENDPOINT", ""),
 	}
 	return cfg
+}
+
+func (c *Config) ValidateProjectMemoryResources() error {
+	if c == nil || !c.ProjectMemoryNightlyEnabled {
+		return nil
+	}
+	missing := make([]string, 0, 4)
+	for key, value := range map[string]string{
+		"PROJECT_MEMORY_AGENT_ID":      c.ProjectMemoryAgentID,
+		"PROJECT_MEMORY_SKILL_OWNER":   c.ProjectMemorySkillOwner,
+		"PROJECT_MEMORY_SKILL_VERSION": c.ProjectMemorySkillVersion,
+		"PROJECT_MEMORY_MCP_URL":       c.ProjectMemoryMCPURL,
+	} {
+		if strings.TrimSpace(value) == "" {
+			missing = append(missing, key)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("project memory system resources are incomplete: %s", strings.Join(missing, ", "))
+	}
+	return nil
 }
 
 func (c *Config) ValidateEvaluationRuntime() error {

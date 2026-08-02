@@ -72,6 +72,24 @@ func TestReportRunTokenBindsUserAndRun(t *testing.T) {
 	}
 }
 
+func TestProjectMemoryTokenBindsUserAndJob(t *testing.T) {
+	const (
+		secret = "project-memory-test-secret"
+		jobRef = "2026-08-01|0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	)
+	token, err := MintProjectMemoryJobToken(&model.User{ID: "305", Username: "t03"}, secret, jobRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := extractAIHubIdentityWithPolicy(token, secret, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity.UID != 305 || identity.ProjectMemoryJobRef != jobRef || identity.ReportRunID != "" {
+		t.Fatalf("identity = %#v", identity)
+	}
+}
+
 func TestResolveReportRunIDUsesBoundRunWhenToolArgumentsAreEmpty(t *testing.T) {
 	const runID = "958458d9-8e65-489f-8bfc-0de80ff46752"
 	request := httptest.NewRequest("POST", "/api/v1/mcp/reports", nil)

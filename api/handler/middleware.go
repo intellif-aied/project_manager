@@ -19,9 +19,12 @@ const userKey contextKey = "user"
 
 const reportRunIDKey contextKey = "report_run_id"
 
+const projectMemoryJobRefKey contextKey = "project_memory_job_ref"
+
 type aiHubIdentity struct {
-	UID         int64
-	ReportRunID string
+	UID                 int64
+	ReportRunID         string
+	ProjectMemoryJobRef string
 }
 
 func AuthMiddleware(db *sql.DB, aiHubSecret string, aihub *service.AIHubClient) func(http.Handler) http.Handler {
@@ -66,6 +69,9 @@ func authMiddleware(db *sql.DB, aiHubSecret string, aihub *service.AIHubClient, 
 			ctx := context.WithValue(r.Context(), userKey, user)
 			if identity.ReportRunID != "" {
 				ctx = context.WithValue(ctx, reportRunIDKey, identity.ReportRunID)
+			}
+			if identity.ProjectMemoryJobRef != "" {
+				ctx = context.WithValue(ctx, projectMemoryJobRefKey, identity.ProjectMemoryJobRef)
 			}
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
@@ -124,7 +130,11 @@ func identityFromClaims(claims jwt.MapClaims) (aiHubIdentity, error) {
 		return aiHubIdentity{}, err
 	}
 	runID, _ := claims["report_run_id"].(string)
-	return aiHubIdentity{UID: uid, ReportRunID: strings.TrimSpace(runID)}, nil
+	memoryJobRef, _ := claims["project_memory_job_ref"].(string)
+	return aiHubIdentity{
+		UID: uid, ReportRunID: strings.TrimSpace(runID),
+		ProjectMemoryJobRef: strings.TrimSpace(memoryJobRef),
+	}, nil
 }
 
 func uidFromClaims(claims jwt.MapClaims) (int64, error) {

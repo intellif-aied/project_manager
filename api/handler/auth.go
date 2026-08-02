@@ -37,7 +37,25 @@ func MintReportRunToken(user *model.User, secret, runID string) (string, error) 
 	return mintAIHubCompatibleToken(user, secret, runID)
 }
 
+func MintProjectMemoryJobToken(user *model.User, secret, jobRef string) (string, error) {
+	jobRef = strings.TrimSpace(jobRef)
+	if jobRef == "" {
+		return "", errors.New("project memory job ref is required")
+	}
+	return mintAIHubCompatibleTokenWithClaims(user, secret, map[string]any{
+		"project_memory_job_ref": jobRef,
+	})
+}
+
 func mintAIHubCompatibleToken(user *model.User, secret, reportRunID string) (string, error) {
+	extra := map[string]any{}
+	if reportRunID != "" {
+		extra["report_run_id"] = reportRunID
+	}
+	return mintAIHubCompatibleTokenWithClaims(user, secret, extra)
+}
+
+func mintAIHubCompatibleTokenWithClaims(user *model.User, secret string, extra map[string]any) (string, error) {
 	if user == nil {
 		return "", errors.New("user is required")
 	}
@@ -57,8 +75,8 @@ func mintAIHubCompatibleToken(user *model.User, secret, reportRunID string) (str
 		"iat":      issuedAt.Unix(),
 		"exp":      now.Add(24 * time.Hour).Unix(),
 	}
-	if reportRunID != "" {
-		claims["report_run_id"] = reportRunID
+	for key, value := range extra {
+		claims[key] = value
 	}
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(secret))
 }

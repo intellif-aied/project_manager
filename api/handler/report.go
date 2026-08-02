@@ -5,11 +5,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/aidashboard/api/internal/biztime"
+	"github.com/aidashboard/api/internal/reportmemory"
 	"github.com/aidashboard/api/model"
 	"github.com/go-chi/chi/v5"
 	"github.com/lib/pq"
@@ -629,6 +631,9 @@ func (h *ReportHandler) Update(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	if err := reportmemory.QueueReportChangeDB(r.Context(), h.db, id, u.ID, reportDate, time.Now()); err != nil {
+		log.Printf("queue project memory after report save failed: %v", err)
+	}
 
 	h.Get(w, r)
 }
@@ -726,6 +731,9 @@ func (h *ReportHandler) SubmitReport(w http.ResponseWriter, r *http.Request) {
 	if err := tx.Commit(); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
+	}
+	if err := reportmemory.QueueReportChangeDB(r.Context(), h.db, id, u.ID, reportDate, time.Now()); err != nil {
+		log.Printf("queue project memory after report submit failed: %v", err)
 	}
 
 	h.Get(w, r)

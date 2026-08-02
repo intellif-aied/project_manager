@@ -40,6 +40,9 @@ func TestBuildPersonalDailyStoresCompleteFrozenContext(t *testing.T) {
 	mock.ExpectQuery("FROM users u LEFT JOIN teams").WithArgs("7").WillReturnRows(
 		sqlmock.NewRows([]string{"id", "name", "team_id", "team_name"}).AddRow("7", "测试用户", "team-1", "研发一组"),
 	)
+	mock.ExpectQuery("FROM daily_reports r").
+		WithArgs("7", "2026-07-16", continuityLookbackDays, continuityReportLimit).
+		WillReturnRows(sqlmock.NewRows([]string{"report_date", "content"}))
 	mock.ExpectQuery("FROM requirements r").WillReturnRows(emptyRequirementRows())
 	mock.ExpectQuery("FROM tasks t").WillReturnRows(emptyTaskRows())
 	mock.ExpectExec("INSERT INTO report_run_contexts").

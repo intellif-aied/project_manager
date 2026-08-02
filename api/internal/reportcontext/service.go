@@ -9,10 +9,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/aidashboard/api/internal/biztime"
 	"github.com/aidashboard/api/internal/observability"
+	"github.com/aidashboard/api/internal/reportmemory"
 	"github.com/aidashboard/api/internal/reportsource"
 )
 
@@ -84,6 +86,15 @@ func (s *Service) Build(ctx context.Context, request BuildRequest) (StoredContex
 	assembled, err = projectPayloadForRepresentation(assembled, request.Representation, request.IncludeWorkThreads)
 	if err != nil {
 		return StoredContext{}, err
+	}
+	if request.EnableMemoryShadow && assembled.WorkEvidence != nil {
+		memoryContext, err := loadProjectMemoryContext(ctx, tx, request, assembled.WorkEvidence)
+		if err != nil {
+			log.Printf("load Project Memory hints failed for run %s: %v", request.RunID, err)
+		} else if memoryContext != nil {
+			assembled.ProjectMemoryContext = memoryContext
+			assembled.ContinuityContext = nil
+		}
 	}
 
 	encoded, err := json.Marshal(assembled)
@@ -180,6 +191,56 @@ func (s *Service) Get(ctx context.Context, userID, runID string) (StoredContext,
 		return StoredContext{}, ErrIncomplete
 	}
 	return StoredContext{Payload: normalized, Hash: hash, Bytes: size}, nil
+}
+
+func loadProjectMemoryContext(ctx context.Context, tx *sql.Tx, request BuildRequest, evidence *WorkEvidence) (*ProjectMemoryContext, error) {
+	goalsByThread := make(map[string]string, len(evidence.Threads))
+	for _, thread := range evidence.Threads {
+		if goal := strings.TrimSpace(thread.Goal); goal != "" {
+			goalsByThread[thread.ThreadRef] = goal
+		}
+	}
+	facts := make([]reportmemory.FactInput, 0, len(evidence.Facts))
+	for _, fact := range evidence.Facts {
+		goals := make([]string, 0, len(fact.ThreadRefs))
+		for _, threadRef := range fact.ThreadRefs {
+			if goal := goalsByThread[threadRef]; goal != "" {
+				goals = append(goals, goal)
+			}
+		}
+		facts = append(facts, reportmemory.FactInput{
+			FactRef: fact.FactRef, Text: fact.Text, ThreadGoals: goals,
+		})
+	}
+	hints, err := reportmemory.LoadHistoricalHints(ctx, tx, reportmemory.HintRequest{
+		UserID:     request.Target.UserID,
+		ReportDate: request.Period.Start, Facts: facts,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(hints) == 0 {
+		return nil, nil
+	}
+	result := &ProjectMemoryContext{
+		Purpose:      "使用已整理的历史项目名称和别名，帮助归并当天 Evidence Facts。",
+		EvidenceRule: "历史提示不是当天事实；不得复制历史成果、状态、指标、日期或结论。",
+	}
+	for _, hint := range hints {
+		converted := HistoricalProjectHint{
+			ProjectRef: hint.ProjectRef, CanonicalName: hint.CanonicalName,
+			Aliases: hint.Aliases, MatchedFactRefs: hint.MatchedFactRef,
+			Confidence:  hint.Confidence,
+			Instruction: "仅用于项目命名和归并，不得作为当天成果证据。",
+		}
+		for _, recent := range hint.RecentContext {
+			converted.RecentContext = append(converted.RecentContext, HistoricalHintEntry{
+				Date: recent.Date, Overview: recent.Overview, ChildTopics: recent.ChildTopics,
+			})
+		}
+		result.Hints = append(result.Hints, converted)
+	}
+	return result, nil
 }
 
 func normalizeFrozenPayload(raw json.RawMessage) (json.RawMessage, string, error) {

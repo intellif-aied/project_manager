@@ -21,6 +21,7 @@ import (
 	"github.com/aidashboard/api/internal/reportbrief"
 	"github.com/aidashboard/api/internal/reportcontext"
 	"github.com/aidashboard/api/internal/reporteval"
+	"github.com/aidashboard/api/internal/reportmemory"
 	"github.com/aidashboard/api/internal/reportrun"
 	"github.com/aidashboard/api/internal/reportsource"
 	"github.com/aidashboard/api/internal/reportsourcecatalog"
@@ -30,6 +31,7 @@ import (
 	"github.com/aidashboard/api/internal/tokenanalytics"
 	"github.com/aidashboard/api/internal/tokenrollup"
 	"github.com/aidashboard/api/internal/usage"
+	"github.com/aidashboard/api/model"
 	"github.com/aidashboard/api/service"
 	"github.com/aidashboard/api/storage"
 	"github.com/go-chi/chi/v5"
@@ -40,6 +42,9 @@ func main() {
 	cfg := config.Load()
 	if err := cfg.ValidateManagedReportResources(); err != nil {
 		log.Fatalf("Invalid managed report resource configuration: %v", err)
+	}
+	if err := cfg.ValidateProjectMemoryResources(); err != nil {
+		log.Fatalf("Invalid project memory resource configuration: %v", err)
 	}
 	if err := cfg.ValidateEvaluationRuntime(); err != nil {
 		log.Fatalf("Invalid evaluation runtime configuration: %v", err)
@@ -158,12 +163,30 @@ func main() {
 		log.Fatalf("Failed to init auto daily report service: %v", err)
 	}
 	autoDailyReportAdminH := handler.NewAutoDailyReportAdminHandler(autoDailyReportService)
+	projectMemoryTokenMinter := func(user *model.User, jobRef string) (string, error) {
+		return handler.MintProjectMemoryJobToken(user, cfg.AIHubSecret, jobRef)
+	}
+	projectMemoryService, err := reportmemory.NewNightlyService(
+		database, service.NewManagedProjectMemoryResolver(
+			database, managedAgentClient, projectMemoryTokenMinter,
+			service.ProjectMemoryMCPCredentialSlot,
+		), reportmemory.NightlyConfig{
+			Enabled: cfg.ProjectMemoryNightlyEnabled, AgentID: cfg.ProjectMemoryAgentID,
+			ModelID: cfg.ProjectMemoryModelID, WorkerID: "api:" + hostname + ":project-memory",
+			StartHour: 2, EndHour: 6, ClaimBatch: 3,
+		},
+	)
+	if err != nil {
+		log.Fatalf("Failed to init project memory nightly service: %v", err)
+	}
 	dailyReportMCPH := handler.NewReportMCPHandler(database)
+	projectMemoryMCPH := handler.NewProjectMemoryMCPHandler(database)
 	dailyReportMCPH.ConfigureReportSourceSelection(reportSourceService)
 	dailyReportMCPH.ConfigureReportContext(reportContextService)
 	dailyReportMCPH.ConfigureReportBrief(reportBriefService, cfg.ReportTwoPassEnabled)
 	schedulerCtx, stopScheduler := context.WithCancel(context.Background())
 	defer stopScheduler()
+	projectMemoryService.Start(schedulerCtx)
 	metrics, err := observability.New(database, observability.WorkerCounts{
 		ReportRun: workerCounts.ReportRun, DigestBackground: workerCounts.DigestBackground,
 		DigestInteractive: workerCounts.DigestInteractive,
@@ -530,6 +553,7 @@ func main() {
 		r.Get("/teams/activity", teamH.Activity)
 
 		r.Post("/mcp/reports", dailyReportMCPH.Serve)
+		r.Post("/mcp/project-memory", projectMemoryMCPH.Serve)
 		r.Get("/report-source-capability", reportSourceH.Capability)
 		r.Get("/report-source-sessions", reportSourceH.ListCandidates)
 		r.Post("/report-source-selections", reportSourceH.CreateSelection)

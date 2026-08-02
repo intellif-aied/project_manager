@@ -36,6 +36,10 @@ func assemble(ctx context.Context, tx *sql.Tx, request BuildRequest) (Payload, e
 	if err != nil {
 		return Payload{}, err
 	}
+	continuity, err := loadContinuityContext(ctx, tx, request)
+	if err != nil {
+		return Payload{}, err
+	}
 	requirements, err := loadRequirements(ctx, tx, request, scope, startUTC, endExclusiveUTC)
 	if err != nil {
 		return Payload{}, err
@@ -56,13 +60,14 @@ func assemble(ctx context.Context, tx *sql.Tx, request BuildRequest) (Payload, e
 			ModelID:       request.ModelID,
 			Target:        request.Target,
 		},
-		Scope:         scope,
-		Coverage:      nonNilCoverage(coverage),
-		SourceReports: nonNilReports(reports),
-		Requirements:  nonNilRequirements(requirements),
-		Tasks:         nonNilTasks(tasks),
-		Sessions:      []SessionSource{},
-		SourceIssues:  nonNilIssues(issues),
+		Scope:             scope,
+		Coverage:          nonNilCoverage(coverage),
+		SourceReports:     nonNilReports(reports),
+		Requirements:      nonNilRequirements(requirements),
+		Tasks:             nonNilTasks(tasks),
+		Sessions:          []SessionSource{},
+		SourceIssues:      nonNilIssues(issues),
+		ContinuityContext: continuity,
 	}, nil
 }
 

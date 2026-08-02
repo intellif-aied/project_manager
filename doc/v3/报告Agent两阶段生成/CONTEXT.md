@@ -10,9 +10,35 @@
 
 **Report Context**：一次 Report Run 冻结的不可变事实快照，是 Report Brief 唯一允许使用的事实边界。
 
+**工作连续性上下文（Continuity Context）**：个人日报 Report Context 中的非证据归类提示。它从报告日期之前最近三份用户已保存日报提取一级主题、直接子主题和稳定名称，只帮助当前 Evidence Facts 识别跨日项目归属；其中的历史成果、状态、指标、日期和结论均不能作为当前日报事实。
+
+**项目记忆（Project Memory）**：从用户已保存或已提交日报中增量形成的稳定项目名称、别名、出现日期和来源记录。它只用于项目候选召回与归类，不是当天成果证据。第一阶段以影子模式运行，解析结果不会进入 Report Agent Context。
+
+**最终工作概览（Final Overview）**：一份日报最终保留内容中的“工作概览”或等价顶层编号事项。Project Memory 只从这里识别用户选择的工作主题，不从 Work Detail 反推项目。
+
+**自动结转稿（Auto-carried Report）**：由 System Report Agent 生成、用户未编辑也未显式保存，但按产品规则默认保留的日报。它可以作为弱历史参考，但不等同于用户确认。
+
+**记忆提议（Memory Proposal）**：Memory Resolver Agent 对当天主题与既有 Project Memory 关系给出的结构化建议。它不是数据库命令，必须经过 Aida 校验后才能应用。
+
+**记忆快照（Memory Snapshot）**：某个用户最近一次成功整理后的 Project Memory 版本。新的夜间整理失败时，报告生成继续使用上一份成功快照。
+
+**历史项目提示（Historical Project Hint）**：Report Agent 可见的非证据归类提示。它只包含与当天 Evidence Facts 高置信度相关的项目名称、别名和有限历史概览，用于命名与归并，不得成为当天成果证据。
+
+**夜间记忆整理任务（Nightly Memory Consolidation Job）**：为当天产生或更新有效日报的 Aida 用户执行的夜间增量任务。它生成 Memory Proposal 并由 Aida 应用为新的 Memory Snapshot；任务失败不得影响日报生成。
+
+**系统 Project Memory Agent（System Project Memory Agent）**：归属 Aida 系统专用账号、由平台统一维护模型、Prompt、Project Memory Skill 和 Project Memory MCP 的夜间整理 Agent。测试环境 owner 为 `100866`，生产环境 owner 为 `10086`；它不出现在普通用户资产列表，也不生成日报。
+
+**Project Memory Skill**：系统 Project Memory Agent 唯一加载的系统 Skill。它定义项目命名、父子归并、历史使用和 Memory Proposal 输出规则，不与 Report Skill 共用。
+
+**Project Memory MCP**：Project Memory Agent 的唯一数据通道。它使用绑定实际 Aida 用户和单个 Nightly Memory Consolidation Job 的短期凭证，提供一次有界 Context 读取和一次 Proposal 写回；系统执行账号不是被整理的数据归属者。
+
+**Project Memory Job Token**：Aida 为单个夜间记忆任务签发的短期 JWT，其中包含实际 Aida 用户身份和不可变 `project_memory_job_ref`。Project Memory MCP 依赖它隔离用户及任务，Agent 无需接触用户登录 Token。
+
 **Evidence Fact**：Report Context 中一条可引用的结果或未解决事实。每条事实拥有仅在当前 Context 内稳定的 `fact_ref`。
 
 **Report Brief**：Report Agent 第一次语义处理产生并由 Aida 校验接受的结构化中间产物。它把 Evidence Facts 组织为工作主题和交付物，但不是新的业务事实。
+
+**Summary 主标题（Summary Headline）**：带 Subject 的系统个人日报 Workstream 的 `title`。它只表达该工作对象的一至两个主要成果，是工作概览的唯一来源；Demo、测试案例、验证场景、指标和其他支撑信息只能进入 Deliverables 与正文。Final Report 不再从 Deliverables 二次选择 Summary 内容。
 
 **Workstream**：围绕同一用户目标归并的一组交付物，最终日报通常以其作为内容主题。
 

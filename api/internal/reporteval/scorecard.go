@@ -87,7 +87,10 @@ var allowedErrorTypes = map[string]bool{
 	"FACT_OMISSION": true, "FACT_HALLUCINATION": true, "STATUS_UPGRADE": true,
 	"ENVIRONMENT_MIX": true, "WRONG_GROUPING": true, "OVER_COMPRESSION": true,
 	"NOISE_RETENTION": true, "INTERNAL_LEAKAGE": true, "REPETITION": true,
-	"POOR_READABILITY": true,
+	"POOR_READABILITY":    true,
+	"PROJECT_FALSE_SPLIT": true, "PROJECT_FALSE_MERGE": true,
+	"HISTORY_FACT_LEAK": true, "SUPPORTING_DETAIL_PROMOTED": true,
+	"TERM_DISTORTION": true,
 }
 
 func AggregateReviews(bundleDir, aiReviewPath, goldReviewPath string) (EvaluationResult, error) {

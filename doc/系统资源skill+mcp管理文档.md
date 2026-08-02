@@ -23,7 +23,7 @@
 | 环境 | Skill owner | Skill | MCP | 最近验证 | 验证依据 |
 | --- | --- | --- | --- | --- | --- |
 | 生产 | 10086 | aida-report@1.0.22 | aida-report-mcp@report-v1 | 2026-08-01 | `20260801-明确切片证据与日报选材生产发布`、运行配置、公共 Registry 与默认 Agent SkillRef |
-| 14.157 测试 | 100866 | aida-report@1.1.22 | aida-report-mcp@report-v1 | 2026-08-01 | `20260801-日报项目归并与概览保真测试发布`、运行环境、公共 Registry、默认 Agent 与真实 Session SkillRef |
+| 14.157 测试 | 100866 | aida-report@1.1.26 | aida-report-mcp@report-v1 | 2026-08-01 | `20260801-最近三份日报连续主题上下文测试发布`、运行环境、公共 Registry、默认 Agent 与生产样本 A/B |
 
 规则：
 
@@ -155,3 +155,42 @@ Skill 是不可变资产。正文变化只允许发布新补丁版本，不允�
 1. 将 MANAGED_AGENT_REPORT_SKILL_VERSION 恢复为发布记录中的上一版本；
 2. 重启 API；
 3. 触发新 Run，核对 Agent SkillRef 和实际加载版本；
+
+## 10. Project Memory Resolver Agent
+
+Project Memory 是独立于报告生成的系统资产组，不属于用户 Report Agent，也不复用 Report Skill/MCP。其结构与 System Report Agent 一致：专用 Agent + 专用 Skill + 专用 MCP。
+
+测试服登记：
+
+| 环境 | owner | Agent ID | 模型 | Skill | MCP | 状态 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 14.157 测试 | 100866 | `aida-project-memory-system-test-v1`（managed v1） | `deepseek-v4-flash` | `aida-project-memory@project-memory-v1` | `aida-project-memory-mcp@project-memory-v1` | v4 完整链路通过 |
+| 生产 | 10086 | 待发布时登记 | `deepseek-v4-flash` | `aida-project-memory@project-memory-v1` | `aida-project-memory-mcp@project-memory-v1` | 禁用，发布前创建 |
+
+运行时配置：
+
+    PROJECT_MEMORY_NIGHTLY_ENABLED
+    PROJECT_MEMORY_AGENT_ID
+    PROJECT_MEMORY_MODEL_ID
+    PROJECT_MEMORY_SKILL_OWNER
+    PROJECT_MEMORY_SKILL_VERSION
+    PROJECT_MEMORY_MCP_URL
+
+固定边界：
+
+- Agent 必须加载专用 Project Memory Skill，只能调用专用 Project Memory MCP；
+- MCP 使用绑定实际 Aida 用户和单个 Memory Job 的短期 Token；测试 owner 100866、生产 owner 10086 只承担系统资产归属与模型额度，不成为业务数据用户；
+- `get_project_memory_context` 只返回 Aida 服务端已裁剪的 Project Memory Context，不提供 Session、Digest、完整日报或数据库访问；
+- `write_project_memory_result` 只接受通过服务端契约校验的 Proposal；Agent 不直接修改 Snapshot；
+- Agent、Skill、MCP 不写入普通用户资产 Profile，不出现在普通用户“我的 Agent / Skill / MCP”列表；
+- 测试与生产必须使用各自系统 owner 的独立 Agent，禁止跨环境引用；
+- Agent 修改后必须形成新版本并验证 JSON Proposal；不得原地覆盖已用于验收的版本；
+- Resolver 失败只保留上一份成功 Memory Snapshot，不得阻塞日报或向普通用户返回 Agent 原始错误；
+- 生产未登记 Agent ID 前，`PROJECT_MEMORY_NIGHTLY_ENABLED` 必须保持 `false`。
+
+测试资源证据：
+
+- Skill ID：`1d1c764f-8c59-4a36-8ca7-b6d6551c2042`，SHA256：`da0d326ea73e0b4f238855ab3590dc1148ef8769054f6c5bdcf7d1f62ee747f8`；
+- MCP Entry ID：`e0911fd6-5789-4b3a-adec-7e1f5e1f6853`；
+- v4 Session：`9bc83bb9-4403-4704-a031-561752782c19`；Snapshot：`bfc0adad-5e68-4b36-a0c4-dabefdf8f9bf`；
+- AIDA 普通用户资产接口不返回 Project Memory Agent。这里的“用户不可见”指 AIDA 产品视角不投影该系统资产。

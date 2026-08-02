@@ -80,6 +80,44 @@ func TestAcceptedBriefHidesAutomaticFactAccounting(t *testing.T) {
 	}
 }
 
+func TestReaderSummaryUsesOnlyAcceptedWorkstreamTitles(t *testing.T) {
+	stored := Stored{Payload: Payload{Workstreams: []Workstream{
+		{
+			Subject: "Knowledge Map",
+			Title:   "Knowledge Map：完成产品判断并落地 knowledge-map-search Skill",
+			Deliverables: []Deliverable{{
+				Result: "完成儿童睡前动画场景的权威来源发现",
+			}},
+		},
+		{
+			Subject: "AIDA 日报",
+			Title:   "AIDA 日报：明确主标题驱动 Summary 方案",
+		},
+	}}}
+
+	got, ok := stored.ReaderSummary()
+	if !ok {
+		t.Fatal("subject-contract Brief did not produce a reader summary")
+	}
+	want := "1. Knowledge Map：完成产品判断并落地 knowledge-map-search Skill\n" +
+		"2. AIDA 日报：明确主标题驱动 Summary 方案"
+	if got != want {
+		t.Fatalf("ReaderSummary() = %q, want %q", got, want)
+	}
+	if strings.Contains(got, "儿童睡前") {
+		t.Fatalf("supporting scenario leaked into reader summary: %q", got)
+	}
+}
+
+func TestReaderSummaryPreservesLegacyAndNoWorkContracts(t *testing.T) {
+	if got, ok := (Stored{Payload: Payload{Workstreams: []Workstream{{Title: "旧版 Brief"}}}}).ReaderSummary(); ok || got != "" {
+		t.Fatalf("legacy Brief summary = %q, %v; want caller-provided summary", got, ok)
+	}
+	if got, ok := (Stored{Payload: Payload{NoReportableWork: true}}).ReaderSummary(); !ok || got != noReportableResultText {
+		t.Fatalf("no-work summary = %q, %v", got, ok)
+	}
+}
+
 func TestNormalizeDraftRejectsInvalidEvidenceMaps(t *testing.T) {
 	available := map[string]struct{}{"fact-001": {}, "fact-002": {}}
 	base := Draft{Workstreams: []Workstream{{

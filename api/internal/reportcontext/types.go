@@ -37,6 +37,7 @@ type BuildRequest struct {
 	SourceSelectionID  string
 	Representation     string
 	IncludeWorkThreads bool
+	EnableMemoryShadow bool
 }
 
 func (r BuildRequest) validate() error {
@@ -242,20 +243,66 @@ type PresentationProfile struct {
 	ContentGrouping string `json:"content_grouping"`
 }
 
+// ContinuityContext carries historical naming and hierarchy hints only. It is
+// deliberately separated from WorkEvidence so prior reports can never satisfy
+// the evidence requirement for a current-period outcome.
+type ContinuityContext struct {
+	Purpose       string                    `json:"purpose"`
+	EvidenceRule  string                    `json:"evidence_rule"`
+	GroupingRule  string                    `json:"grouping_rule"`
+	RecentReports []ContinuityReportOutline `json:"recent_reports"`
+}
+
+type ContinuityReportOutline struct {
+	Date   string            `json:"date"`
+	Themes []ContinuityTheme `json:"themes"`
+}
+
+type ContinuityTheme struct {
+	Title    string   `json:"title"`
+	Children []string `json:"children,omitempty"`
+}
+
+// ProjectMemoryContext contains history-derived naming and grouping hints.
+// It is not WorkEvidence and can never satisfy a current-period fact.
+type ProjectMemoryContext struct {
+	Purpose      string                  `json:"purpose"`
+	EvidenceRule string                  `json:"evidence_rule"`
+	Hints        []HistoricalProjectHint `json:"hints"`
+}
+
+type HistoricalProjectHint struct {
+	ProjectRef      string                `json:"project_ref"`
+	CanonicalName   string                `json:"canonical_name"`
+	Aliases         []string              `json:"aliases,omitempty"`
+	MatchedFactRefs []string              `json:"matched_fact_refs"`
+	RecentContext   []HistoricalHintEntry `json:"recent_context,omitempty"`
+	Confidence      float64               `json:"confidence"`
+	Instruction     string                `json:"instruction"`
+}
+
+type HistoricalHintEntry struct {
+	Date        string   `json:"date"`
+	Overview    string   `json:"overview"`
+	ChildTopics []string `json:"child_topics,omitempty"`
+}
+
 type Payload struct {
-	SchemaVersion       string               `json:"schema_version"`
-	Run                 Run                  `json:"run"`
-	Scope               Scope                `json:"scope"`
-	Coverage            []CoverageItem       `json:"coverage"`
-	SourceReports       []SourceReport       `json:"source_reports"`
-	Requirements        []Requirement        `json:"requirements"`
-	Tasks               []Task               `json:"tasks"`
-	Sessions            []SessionSource      `json:"sessions,omitempty"`
-	SourceIssues        []SourceIssue        `json:"source_issues"`
-	SourceState         SourceState          `json:"source_state"`
-	Sources             Sources              `json:"sources,omitzero"`
-	WorkEvidence        *WorkEvidence        `json:"work_evidence,omitempty"`
-	PresentationProfile *PresentationProfile `json:"presentation_profile,omitempty"`
+	SchemaVersion        string                `json:"schema_version"`
+	Run                  Run                   `json:"run"`
+	Scope                Scope                 `json:"scope"`
+	Coverage             []CoverageItem        `json:"coverage"`
+	SourceReports        []SourceReport        `json:"source_reports"`
+	Requirements         []Requirement         `json:"requirements"`
+	Tasks                []Task                `json:"tasks"`
+	Sessions             []SessionSource       `json:"sessions,omitempty"`
+	SourceIssues         []SourceIssue         `json:"source_issues"`
+	SourceState          SourceState           `json:"source_state"`
+	Sources              Sources               `json:"sources,omitzero"`
+	WorkEvidence         *WorkEvidence         `json:"work_evidence,omitempty"`
+	PresentationProfile  *PresentationProfile  `json:"presentation_profile,omitempty"`
+	ContinuityContext    *ContinuityContext    `json:"continuity_context,omitempty"`
+	ProjectMemoryContext *ProjectMemoryContext `json:"project_memory_context,omitempty"`
 }
 
 func targetFromAny(value any) (Target, error) {

@@ -1,6 +1,10 @@
 package reportbrief
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+	"strings"
+)
 
 const (
 	SchemaVersion            = "report-brief/v1"
@@ -85,6 +89,30 @@ type Stored struct {
 	Payload     Payload
 	BriefHash   string
 	ContextHash string
+}
+
+// ReaderSummary returns the deterministic reader-facing summary for Briefs
+// that use the subject contract. The accepted workstream title is the sole
+// headline; deliverables remain supporting detail and cannot be promoted here.
+func (s Stored) ReaderSummary() (string, bool) {
+	if s.Payload.NoReportableWork {
+		return noReportableResultText, true
+	}
+	if len(s.Payload.Workstreams) == 0 {
+		return "", false
+	}
+	items := make([]string, 0, len(s.Payload.Workstreams))
+	for index, workstream := range s.Payload.Workstreams {
+		if strings.TrimSpace(workstream.Subject) == "" {
+			return "", false
+		}
+		title := strings.Join(strings.Fields(workstream.Title), " ")
+		if title == "" {
+			return "", false
+		}
+		items = append(items, fmt.Sprintf("%d. %s", index+1, title))
+	}
+	return strings.Join(items, "\n"), true
 }
 
 type Accepted struct {

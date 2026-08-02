@@ -85,3 +85,20 @@ func TestValidateManagedReportResourcesRequiresSkillVersion(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadProjectMemoryConfiguration(t *testing.T) {
+	t.Setenv("PROJECT_MEMORY_NIGHTLY_ENABLED", "true")
+	t.Setenv("PROJECT_MEMORY_AGENT_ID", "memory-resolver-test")
+	t.Setenv("PROJECT_MEMORY_MODEL_ID", "deepseek-v4-flash")
+	t.Setenv("PROJECT_MEMORY_SKILL_OWNER", "100866")
+	t.Setenv("PROJECT_MEMORY_SKILL_VERSION", "project-memory-v1")
+	t.Setenv("PROJECT_MEMORY_MCP_URL", "https://test.example.com/api/v1/mcp/project-memory")
+	config := Load()
+	if !config.ProjectMemoryNightlyEnabled || config.ProjectMemoryAgentID != "memory-resolver-test" ||
+		config.ProjectMemoryModelID != "deepseek-v4-flash" || config.ProjectMemorySkillOwner != "100866" {
+		t.Fatalf("project memory config = %#v", config)
+	}
+	if err := config.ValidateProjectMemoryResources(); err != nil {
+		t.Fatal(err)
+	}
+}

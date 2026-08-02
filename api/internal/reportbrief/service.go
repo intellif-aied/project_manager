@@ -181,10 +181,14 @@ func (s *Service) ValidateForWrite(ctx context.Context, userID, runID, briefHash
 	if contextHash != stored.ContextHash {
 		return Stored{}, ErrMismatch
 	}
+	effectiveSummary := summary
+	if readerSummary, ok := stored.ReaderSummary(); ok {
+		effectiveSummary = readerSummary
+	}
 	issues := make([]string, 0, 8)
-	appendValidationIssues(&issues, validateTextIssues("summary", normalizeText(summary), 0, MaxPayloadBytes))
+	appendValidationIssues(&issues, validateTextIssues("summary", normalizeText(effectiveSummary), 0, MaxPayloadBytes))
 	appendValidationIssues(&issues, validateTextIssues("content", normalizeText(content), 0, MaxPayloadBytes))
-	appendValidationIssues(&issues, validateResultBriefIssues(stored.Payload, summary, content))
+	appendValidationIssues(&issues, validateResultBriefIssues(stored.Payload, effectiveSummary, content))
 	if len(issues) > 0 {
 		validationErr := invalidError(ErrResultInvalid, issues)
 		attempts, attemptErr := s.recordInvalidAttempt(ctx, userID, runID, "result")

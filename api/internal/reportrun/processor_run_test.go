@@ -185,6 +185,9 @@ func TestContextBuildRequestUsesFrozenRepresentation(t *testing.T) {
 	if !request.IncludeWorkThreads {
 		t.Fatal("system personal daily must include work threads")
 	}
+	if !request.EnableMemoryShadow {
+		t.Fatal("system personal daily must enable Project Memory shadow")
+	}
 	run.ExecutionInput["report_agent_source"] = "personal"
 	request, err = contextBuildRequest(run, "selection-1")
 	if err != nil {
@@ -192,6 +195,9 @@ func TestContextBuildRequestUsesFrozenRepresentation(t *testing.T) {
 	}
 	if request.IncludeWorkThreads {
 		t.Fatal("personal report Agent must not include system work threads")
+	}
+	if request.EnableMemoryShadow {
+		t.Fatal("personal report Agent must not enable system Project Memory shadow")
 	}
 	delete(run.ExecutionInput, "report_context_representation")
 	request, err = contextBuildRequest(run, "selection-1")

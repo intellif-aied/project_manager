@@ -276,6 +276,8 @@ func contextBuildRequest(run Run, selectionID string) (reportcontext.BuildReques
 		Representation: stringValue(run.ExecutionInput, "report_context_representation"),
 		IncludeWorkThreads: reportType == reportcontext.ReportTypePersonalDaily &&
 			stringValue(run.ExecutionInput, "report_agent_source") == "system",
+		EnableMemoryShadow: reportType == reportcontext.ReportTypePersonalDaily &&
+			stringValue(run.ExecutionInput, "report_agent_source") == "system",
 	}
 	if reportType == "" || period.Start == "" || period.End == "" {
 		return reportcontext.BuildRequest{}, errors.New("frozen report run input is incomplete")

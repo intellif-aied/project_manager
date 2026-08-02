@@ -94,12 +94,14 @@ Create one reader-facing Chinese report. The frozen Context is the only evidence
 
 Use two distinct semantic passes in this same Agent Session.
 
-### Pass 1: associate work, then submit the Brief
+### Pass 1: build and submit the Brief
 
 - Read every work_evidence.fact and fact_ref before selecting reportable work. A Fact does not need to appear just because it is verifiable.
+- project_memory_context: use canonical_name and aliases. continuity_context is fallback. History is not evidence; merge by parent, keep outcomes in deliverables; never copy outcomes or force unrelated Facts into it.
 - Use threads, thread_refs, user-authored goals, and repeated named work objects as correlation hints, never headings or report text.
 - First group Facts into a two-level map: stable project, product, protocol, or business capability -> its modules, candidates, experiments, and activities. Create Workstreams only from the first level.
 - Use exactly one subject per shared work object. Use the exact project name when present; otherwise use the shortest evidence-supported user-facing shared capability without inventing a brand.
+- Write title as the complete reader-facing headline for that workstream: subject plus only one or two primary outcomes. Keep demos, test cases, validation scenarios, supporting metrics, and traces out of title; they may remain in deliverables.
 - Candidate IDs, model variants, stages, lanes, modules, repositories, directories, datasets, and evaluation runs are never subjects by themselves. Keep them inside deliverables.
 - Before submitting, compare every subject pair. Subjects sharing the same leading named entity but differing only by evaluation, training, research, documentation, or another activity must merge into that named entity.
 - A manual, document, report, or task package is an outcome, never a subject. Use the product or capability it supports.
@@ -133,10 +135,10 @@ Use two distinct semantic passes in this same Agent Session.
 - Omit statements that a change only affects something, does not change something, or keeps something unchanged.
 - Do not add a conclusion such as 尚未发布, 不建议上线, 可以合并, or 待部署.
 - Apply the same name-versus-prose distinction: copy established names literally, but explain everything else in everyday Chinese without invented technical labels.
-- Start each summary item with its accepted subject. Keep candidate and module labels subordinate; several candidates under one subject remain one summary item.
+- Do not select or rewrite Summary from deliverables. Build it by copying each accepted workstream title verbatim, in order, as one Markdown ordered-list item.
+- Keep candidate and module labels subordinate in the detail section; several candidates under one subject remain one summary item.
 - Preserve measured quantities exactly. Do not rewrite a percentage increase as a multiple unless the arithmetic is explicit and correct: an increase of X%% means a total of 1+X/100 times the baseline.
 - State an explicit resource constraint as observed. Never add whether work was not started, stopped, merged, released, or deployed; report the constraint or completed action instead.
-- Keep each summary item within 140 Chinese characters and mention at most two highest-value outcomes; leave supporting metrics and sub-results in the detail section. For example, rewrite 优化日报工作主线关联与主题显著性 as 优化 AI 日报对项目工作的识别和筛选，减少同一件事被拆成多条; rewrite 构建约束式评测体系 as 建立日报效果对比方法，用真实数据检验生成质量.
 - Produce summary as a Markdown ordered list with exactly one item per accepted workstream. Do not put blank lines between items or add 工作概览/工作详情; the server adds those headings.
 - If no_reportable_work is true, use only 本期无可核验的工作记录 without numbering.
 - Call write_report_result with {"brief_hash": accepted_brief.brief_hash, "summary": summary, "content": markdown}.
