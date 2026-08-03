@@ -165,7 +165,7 @@ Project Memory 是独立于报告生成的系统资产组，不属于用户 Repo
 | 环境 | owner | Agent ID | 模型 | Skill | MCP | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
 | 14.157 测试 | 100866 | `aida-project-memory-system-test-v1`（managed v1） | `deepseek-v4-flash` | `aida-project-memory@project-memory-v1` | `aida-project-memory-mcp@project-memory-v1` | v4 完整链路通过 |
-| 生产 | 10086 | `aida-project-memory-system-prod-v1`（managed v1） | `deepseek-v4-flash` | `aida-project-memory@project-memory-v4` | `aida-project-memory-mcp@project-memory-v1` | 已启用，等待首个真实用户日 Job |
+| 生产 | 10086 | `aida-project-memory-system-prod-v1`（managed v2） | `MiniMax-M2.5` | `aida-project-memory@project-memory-v4` | `aida-project-memory-mcp@project-memory-v1` | 已启用；最近 4 日冷启动 39/39 成功 |
 
 运行时配置：
 
@@ -201,3 +201,4 @@ Project Memory 是独立于报告生成的系统资产组，不属于用户 Repo
 - Project Memory Skill ID：`6e3c5bf2-b68c-4394-8a15-2f6190414bd7`，资源 SHA256：`9b5eeffd6a4f9c2453e763733c1ac79e0f4f7d45ffcd8f466096378a0ef68215`；
 - MCP Entry ID：`80b9dd2b-e7a1-40d3-a0e7-a0c06fefca7b`；
 - API `980ff3f`、migration `034`～`036`、生产 owner `10086` 的系统资产绑定已于 2026-08-03 核对。
+- 生产模型于 2026-08-03 切换为 `MiniMax-M2.5`；2026-07-31 至 2026-08-03 共 39 个用户日完成一次性冷启动，Job 与 Snapshot 均为 39/39 成功、0 错误。

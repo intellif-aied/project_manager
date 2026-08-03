@@ -10,7 +10,7 @@
 | Git 基线 | API `980ff3f8819b3f51bf2de9150d789d0db8cd7620`；Web、CLI 不变 |
 | API 镜像 | `20260803-980ff3f-project-memory-context`，digest `sha256:9b6d53537aafa3042df536829d62d3f6c40cf6caa1cd4252b0e83565e1bfc5c4` |
 | Report Skill | `10086/aida-report@1.1.29` |
-| Project Memory 资产 | Agent `aida-project-memory-system-prod-v1`；Skill `project-memory-v4`；MCP `project-memory-v1` |
+| Project Memory 资产 | Agent `aida-project-memory-system-prod-v1` managed v2；模型 `MiniMax-M2.5`；Skill `project-memory-v4`；MCP `project-memory-v1` |
 | 发布时间 | 2026-08-03 |
 
 ## 2. 完整范围清单
@@ -42,9 +42,10 @@
 1. 推送 `main@980ff3f`。
 2. 构建并推送不可变 API 镜像，Registry digest 为 `sha256:9b6d5353...`。
 3. 从生产 `aida-report@1.0.22` owner-qualified derive 发布 `10086/aida-report@1.1.29`；Skill ID `78dec1fb-1f9d-4351-abba-8dc8c200e44d`，资源 SHA256 `fad1841426d602a093de2740a3d84d4da2d588819566e736913e00a23f8d07`，回读正文 SHA256 `13f03ce291d6eb7851a5a8f0907e5e66edf6117735fc55a5991eb9de6e66a2cb`。
-4. 创建生产 Project Memory Skill `project-memory-v4`、MCP `project-memory-v1` 和 managed Agent v1；模型为 `deepseek-v4-flash`。
+4. 创建生产 Project Memory Skill `project-memory-v4`、MCP `project-memory-v1` 和 managed Agent；发布后按用户确认将 Agent 更新到 managed v2，模型切换为 `MiniMax-M2.5`。
 5. 只替换 API，自动执行 migration `034`～`036`；DB、Web、MinIO 未重启。
-6. 核对生产配置后开启 `PROJECT_MEMORY_NIGHTLY_ENABLED=true`；首个真实用户日 Job 由生产用户后续保存或生成日报触发。
+6. 核对生产配置后开启 `PROJECT_MEMORY_NIGHTLY_ENABLED=true`。
+7. 按用户确认执行一次冷启动：处理 2026-07-31 至 2026-08-03 所有有效用户日报，按日期从旧到新运行；共 39 个用户日，Job 与 Snapshot 均为 39/39 成功、0 错误。后续恢复正常夜间增量流程。
 
 ## 5. 发布后验收
 
@@ -58,7 +59,7 @@
 | 系统资产 | owner `10086`，Report/Memory Skill、MCP、Agent 绑定一致 |
 | 数据库锁 | 发布窗口 Lock waiters 为 0 |
 | API 日志 | 发布窗口无 panic、fatal、dead、failed、error |
-| Project Memory Job | 发布完成时为 0；等待真实用户日报事件触发，失败不阻塞日报 |
+| Project Memory Job | 最近 4 日冷启动 39/39 succeeded；模型均为 `MiniMax-M2.5`；错误数 0 |
 
 ## 6. 回退与停止条件
 
@@ -76,5 +77,7 @@
 所有发布项均有证据：是
 所有阻断项均为 0：是
 生产可以发布：是
-最终状态：已发布；首批真实用户 Job 进入持续观察
+最终状态：已发布；最近 4 日冷启动 39/39 成功，进入正常夜间增量流程
 ```
+
+冷启动完整日志：`/home/luoxian/aida/backups/project-memory-20260803T-production/cold-start-20260731-20260803.log`，SHA256 `e066de4a876eac0c1845d5ff33c1b832fa150882a098ae1a5863e948c845b9db`。
