@@ -44,6 +44,7 @@
 - [Project Memory 轻量项目记忆与影子解析方案](19-Project-Memory轻量项目记忆与影子解析方案-20260801.md)
 - [夜间 Project Memory 整理与日报历史参考方案](20-夜间Project-Memory整理与日报历史参考方案-20260802.md)
 - [Project Memory 批量评测结论与整改方案](21-Project-Memory批量评测结论与整改方案-20260802.md)
+- [Project Memory 可选长期上下文契约](22-Project-Memory可选长期上下文契约-20260803.md)
 
 ## 强制边界
 

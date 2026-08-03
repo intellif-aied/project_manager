@@ -274,15 +274,13 @@ type ProjectMemoryContext struct {
 }
 
 type HistoricalProjectHint struct {
-	ProjectRef        string   `json:"project_ref"`
-	CanonicalName     string   `json:"canonical_name"`
-	Aliases           []string `json:"aliases,omitempty"`
-	AnchorFactRefs    []string `json:"anchor_fact_refs"`
-	Confidence        float64  `json:"confidence"`
-	WorkstreamSubject string   `json:"workstream_subject"`
-	MaxWorkstreams    int      `json:"max_workstreams"`
-	CandidateOnly     bool     `json:"candidate_only,omitempty"`
-	Instruction       string   `json:"instruction"`
+	ProjectRef      string   `json:"project_ref"`
+	CanonicalName   string   `json:"canonical_name"`
+	Aliases         []string `json:"aliases,omitempty"`
+	RelatedFactRefs []string `json:"related_fact_refs"`
+	Confidence      float64  `json:"confidence"`
+	CandidateOnly   bool     `json:"candidate_only,omitempty"`
+	Instruction     string   `json:"instruction"`
 }
 
 type Payload struct {

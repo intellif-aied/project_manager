@@ -31,11 +31,11 @@ func TestReportSkillMarkdownUsesReportBriefForPersonalDaily(t *testing.T) {
 		"Read every work_evidence.fact and fact_ref before selecting reportable work",
 		"A Fact does not need to appear just because it is verifiable",
 		"project_memory_context",
-		"anchored workstream_subject/max_workstreams",
-		"Ignore candidate_only names unless today's Facts support them",
-		"never force one",
-		"Use continuity_context only if absent",
-		"History is never evidence",
+		"optional context, not evidence or assignment",
+		"Current Facts win",
+		"related_fact_refs suggest similarity, not identity",
+		"otherwise ignore it",
+		"candidate_only is weak",
 		"supporting evidence by default, not standalone deliverables",
 		"at most three reader-worthy deliverables per workstream",
 		"representative non-duplicate fact_refs",
@@ -108,6 +108,7 @@ func TestReportSkillMarkdownUsesReportBriefForPersonalDaily(t *testing.T) {
 		"released/production needs explicit", "Preserve every deliverable's state",
 		"Every fact_ref must be included in at least one deliverable or excluded",
 		"Evaluation tools, datasets, review packages, and documentation stay as deliverables",
+		"anchored workstream_subject/max_workstreams",
 	} {
 		if strings.Contains(markdown, forbidden) {
 			t.Fatalf("managed Report Context skill retains obsolete instruction %q", forbidden)

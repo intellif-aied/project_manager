@@ -21,17 +21,18 @@ type sourceStub struct {
 	calls int
 }
 
-func TestProjectMemoryContextTreatsMatchedFactsAsAnchors(t *testing.T) {
+func TestProjectMemoryContextKeepsMatchedFactsAsOptionalBackground(t *testing.T) {
 	context := projectMemoryContextFromHints([]reportmemory.HistoricalProjectHint{{
 		ProjectRef: "project-1", CanonicalName: "Symphony",
 		Aliases: []string{"Symphony 任务编排器"}, MatchedFactRef: []string{"fact-016"}, Confidence: 0.9,
 	}})
-	if context == nil || !strings.Contains(context.GroupingRule, "只是项目锚点，不是完整清单") {
+	if context == nil || !strings.Contains(context.GroupingRule, "不是归属要求") ||
+		!strings.Contains(context.GroupingRule, "两个相似项目不得因历史背景被合并") {
 		t.Fatalf("grouping rule = %#v", context)
 	}
-	if len(context.Hints) != 1 || !strings.Contains(context.Hints[0].Instruction, "仅依据其他当天 Facts") ||
-		context.Hints[0].WorkstreamSubject != "Symphony" || context.Hints[0].MaxWorkstreams != 1 ||
-		strings.Join(context.Hints[0].AnchorFactRefs, ",") != "fact-016" {
+	if len(context.Hints) != 1 || !strings.Contains(context.Hints[0].Instruction, "不是项目归属结论") ||
+		!strings.Contains(context.Hints[0].Instruction, "自行判断是否采用") ||
+		strings.Join(context.Hints[0].RelatedFactRefs, ",") != "fact-016" {
 		t.Fatalf("hint instruction = %#v", context.Hints)
 	}
 	payload, err := json.Marshal(context)
@@ -41,8 +42,13 @@ func TestProjectMemoryContextTreatsMatchedFactsAsAnchors(t *testing.T) {
 	if strings.Contains(string(payload), "recent_context") || strings.Contains(string(payload), "continuity_context") {
 		t.Fatalf("compact Project Memory Context leaked historical content: %s", payload)
 	}
-	if strings.Contains(string(payload), "matched_fact_refs") || !strings.Contains(string(payload), "anchor_fact_refs") {
-		t.Fatalf("Project Memory Context did not expose the anchor contract: %s", payload)
+	for _, forbidden := range []string{"matched_fact_refs", "anchor_fact_refs", "workstream_subject", "max_workstreams"} {
+		if strings.Contains(string(payload), forbidden) {
+			t.Fatalf("Project Memory Context retained coercive field %q: %s", forbidden, payload)
+		}
+	}
+	if !strings.Contains(string(payload), "related_fact_refs") {
+		t.Fatalf("Project Memory Context did not expose optional Fact relations: %s", payload)
 	}
 }
 
@@ -55,10 +61,10 @@ func TestProjectMemoryContextKeepsUnanchoredCandidateOptional(t *testing.T) {
 		t.Fatalf("context = %#v", context)
 	}
 	hint := context.Hints[0]
-	if !hint.CandidateOnly || len(hint.AnchorFactRefs) != 0 || hint.WorkstreamSubject != "芯片验证平台" {
+	if !hint.CandidateOnly || len(hint.RelatedFactRefs) != 0 {
 		t.Fatalf("candidate hint = %#v", hint)
 	}
-	if !strings.Contains(hint.Instruction, "否则忽略") || !strings.Contains(context.GroupingRule, "不得为了使用候选而强行归并") {
+	if !strings.Contains(hint.Instruction, "通常应忽略") || !strings.Contains(hint.Instruction, "不得为了使用候选而合并工作") {
 		t.Fatalf("candidate contract = %#v", context)
 	}
 }
