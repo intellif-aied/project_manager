@@ -105,3 +105,68 @@ func TestEnsureSystemdUnitLeavesActiveServiceRunning(t *testing.T) {
 		t.Fatalf("active ensure rewrote unit: %v", err)
 	}
 }
+
+func TestStartAutoSyncBackgroundFallsBackWhenSystemdUserManagerIsUnavailable(t *testing.T) {
+	systemdStarts := 0
+	detachedStarts := 0
+	err := startAutoSyncBackgroundWithFallback(
+		func() error { return errAutoSyncSystemdUnavailable },
+		func() error {
+			systemdStarts++
+			return nil
+		},
+		func() error {
+			detachedStarts++
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if systemdStarts != 0 || detachedStarts != 1 {
+		t.Fatalf("starts: systemd=%d detached=%d, want systemd=0 detached=1", systemdStarts, detachedStarts)
+	}
+}
+
+func TestStartAutoSyncBackgroundPrefersSystemdUserManager(t *testing.T) {
+	systemdStarts := 0
+	detachedStarts := 0
+	err := startAutoSyncBackgroundWithFallback(
+		func() error { return nil },
+		func() error {
+			systemdStarts++
+			return nil
+		},
+		func() error {
+			detachedStarts++
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if systemdStarts != 1 || detachedStarts != 0 {
+		t.Fatalf("starts: systemd=%d detached=%d, want systemd=1 detached=0", systemdStarts, detachedStarts)
+	}
+}
+
+func TestAutoSyncDetachedPIDFileRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "daemon.pid")
+	if err := writeAutoSyncPID(path, 12345); err != nil {
+		t.Fatal(err)
+	}
+	pid, err := readAutoSyncPID(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pid != 12345 {
+		t.Fatalf("pid = %d, want 12345", pid)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Fatalf("pid mode = %o, want 600", info.Mode().Perm())
+	}
+}

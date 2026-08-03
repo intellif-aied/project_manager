@@ -172,7 +172,7 @@ func TestAutoSyncEnablePersistsFutureScheduleAfterConfirmation(t *testing.T) {
 	}
 }
 
-func TestAutoSyncEnableRejectsLinuxWithoutSystemdUserManager(t *testing.T) {
+func TestAutoSyncEnableRejectsWhenNoBackgroundSupervisorIsAvailable(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	oldChecker := autoSyncCheckBackgroundSupport
 	autoSyncCheckBackgroundSupport = func() error { return errAutoSyncSystemdUnavailable }
