@@ -1,6 +1,6 @@
 # 系统资源 Skill 与 MCP 管理
 
-> 最近核对：2026-07-31
+> 最近核对：2026-08-03
 >
 > 适用项目：/home/intellif/dev/project_manager
 
@@ -22,7 +22,7 @@
 
 | 环境 | Skill owner | Skill | MCP | 最近验证 | 验证依据 |
 | --- | --- | --- | --- | --- | --- |
-| 生产 | 10086 | aida-report@1.0.22 | aida-report-mcp@report-v1 | 2026-08-01 | `20260801-明确切片证据与日报选材生产发布`、运行配置、公共 Registry 与默认 Agent SkillRef |
+| 生产 | 10086 | aida-report@1.1.29 | aida-report-mcp@report-v1 | 2026-08-03 | `20260803-Project-Memory可选上下文生产发布`、运行配置与公共 Registry |
 | 14.157 测试 | 100866 | aida-report@1.1.26 | aida-report-mcp@report-v1 | 2026-08-01 | `20260801-最近三份日报连续主题上下文测试发布`、运行环境、公共 Registry、默认 Agent 与生产样本 A/B |
 
 规则：
@@ -165,7 +165,7 @@ Project Memory 是独立于报告生成的系统资产组，不属于用户 Repo
 | 环境 | owner | Agent ID | 模型 | Skill | MCP | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
 | 14.157 测试 | 100866 | `aida-project-memory-system-test-v1`（managed v1） | `deepseek-v4-flash` | `aida-project-memory@project-memory-v1` | `aida-project-memory-mcp@project-memory-v1` | v4 完整链路通过 |
-| 生产 | 10086 | 待发布时登记 | `deepseek-v4-flash` | `aida-project-memory@project-memory-v1` | `aida-project-memory-mcp@project-memory-v1` | 禁用，发布前创建 |
+| 生产 | 10086 | `aida-project-memory-system-prod-v1`（managed v1） | `deepseek-v4-flash` | `aida-project-memory@project-memory-v4` | `aida-project-memory-mcp@project-memory-v1` | 已启用，等待首个真实用户日 Job |
 
 运行时配置：
 
@@ -194,3 +194,10 @@ Project Memory 是独立于报告生成的系统资产组，不属于用户 Repo
 - MCP Entry ID：`e0911fd6-5789-4b3a-adec-7e1f5e1f6853`；
 - v4 Session：`9bc83bb9-4403-4704-a031-561752782c19`；Snapshot：`bfc0adad-5e68-4b36-a0c4-dabefdf8f9bf`；
 - AIDA 普通用户资产接口不返回 Project Memory Agent。这里的“用户不可见”指 AIDA 产品视角不投影该系统资产。
+
+生产资源证据：
+
+- Report Skill ID：`78dec1fb-1f9d-4351-abba-8dc8c200e44d`，资源 SHA256：`fad1841426d602a093de2740a3d84d4da2d588819566e736913e00a23f8d07`；
+- Project Memory Skill ID：`6e3c5bf2-b68c-4394-8a15-2f6190414bd7`，资源 SHA256：`9b5eeffd6a4f9c2453e763733c1ac79e0f4f7d45ffcd8f466096378a0ef68215`；
+- MCP Entry ID：`80b9dd2b-e7a1-40d3-a0e7-a0c06fefca7b`；
+- API `980ff3f`、migration `034`～`036`、生产 owner `10086` 的系统资产绑定已于 2026-08-03 核对。
