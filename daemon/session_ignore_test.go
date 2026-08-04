@@ -46,3 +46,19 @@ func TestDirectoryContainsSessionUsesPathBoundary(t *testing.T) {
 		t.Fatal("prefix sibling must not match")
 	}
 }
+
+func TestIgnoreRuleHelpersDeduplicateAndRemove(t *testing.T) {
+	sessions := appendIgnoredSession(nil, ignoredSession{AgentType: "codex", SessionRef: "one"})
+	sessions = appendIgnoredSession(sessions, ignoredSession{AgentType: "codex", SessionRef: "one"})
+	if len(sessions) != 1 {
+		t.Fatalf("sessions=%+v", sessions)
+	}
+	if got := removeIgnoredSession(sessions, ignoredSession{AgentType: "codex", SessionRef: "one"}); len(got) != 0 {
+		t.Fatalf("remaining=%+v", got)
+	}
+	directories := appendIgnoredDirectory(nil, "/work/private")
+	directories = appendIgnoredDirectory(directories, "/work/private/")
+	if len(directories) != 1 {
+		t.Fatalf("directories=%+v", directories)
+	}
+}
