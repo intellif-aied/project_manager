@@ -215,7 +215,7 @@ export const appRoutes: AppRoute[] = [
   },
   {
     path: "/admin/daily-report-value",
-    title: "生产日报价值观察",
+    title: "AI日报当日汇总",
     icon: <FileSearchOutlined />,
     menuGroup: "AI 管理",
     menuOrder: 63,

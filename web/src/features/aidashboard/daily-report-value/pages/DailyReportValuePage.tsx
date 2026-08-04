@@ -10,7 +10,6 @@ import {
   message,
   Select,
   Space,
-  Statistic,
   Table,
   Tag,
   Typography
@@ -52,12 +51,16 @@ function reportModeColor(mode: DailyReportValueUserDay["report_mode"]) {
 function contentChange(row: DailyReportValueUserDay) {
   if (row.report_mode !== "ai_generated") return { label: "—", rank: 4 };
   const band = rowDiff(row)?.text.change_band;
-  if (band === "unchanged") return { label: "未修改", color: "green", rank: 2 };
+  if (band === "unchanged") return { label: "未修改", rank: 2 };
   if (band === "light") return { label: "修改较少", color: "blue", rank: 1 };
   if (band === "medium" || band === "heavy") {
     return { label: "修改较多", color: "orange", rank: 0 };
   }
-  return { label: "未记录AI原稿", rank: 3 };
+  return { label: "—", rank: 3 };
+}
+
+function percentage(value: number, total: number) {
+  return total > 0 ? `${(value / total) * 100}%` : "0%";
 }
 
 function alignDiffLines(left: string, right: string): DiffLine[] {
@@ -168,10 +171,8 @@ export function DailyReportValuePage() {
   const data = observation.data;
   const metrics = data?.metrics;
   const changedCount = (metrics?.content_light ?? 0) + (metrics?.content_significant ?? 0);
-  const missingOriginalCount = Math.max(
-    (metrics?.ai_reports ?? 0) - (metrics?.content_comparable ?? 0),
-    0
-  );
+  const reportDateLabel = dayjs(reportDate).format("M月D日");
+  const summaryText = `${reportDateLabel}，${metrics?.total_reports ?? 0}人填写日报，${metrics?.ai_reports ?? 0}人使用AI生成；其中${metrics?.content_unchanged ?? 0}份未修改，${changedCount}份有调整。`;
   const sortedItems = useMemo(
     () =>
       [...(data?.items ?? [])].sort((left, right) => {
@@ -297,26 +298,87 @@ export function DailyReportValuePage() {
         <Typography.Text type="secondary">
           {dayjs(reportDate).format("YYYY年MM月DD日")}
         </Typography.Text>
-        <Typography.Title level={3}>
-          当天共{metrics?.total_reports ?? 0}人填写日报：{metrics?.ai_reports ?? 0}人使用AI生成，
-          {metrics?.handwritten_reports ?? 0}人手工填写
-        </Typography.Title>
-        <div className="daily-value__summary-grid">
-          <Statistic title="已填写日报" value={metrics?.total_reports ?? 0} suffix="人" />
-          <Statistic title="AI生成" value={metrics?.ai_reports ?? 0} suffix="人" />
-          <Statistic title="手工填写" value={metrics?.handwritten_reports ?? 0} suffix="人" />
-          <Statistic title="AI内容未修改" value={metrics?.content_unchanged ?? 0} suffix="份" />
-          <Statistic title="AI内容有修改" value={changedCount} suffix="份" />
+        <Typography.Title level={3}>{summaryText}</Typography.Title>
+        <div className="daily-value__summary-panels">
+          <section className="daily-value__summary-panel">
+            <div className="daily-value__panel-heading">
+              <Typography.Text type="secondary">日报填写方式</Typography.Text>
+              <strong>
+                {metrics?.total_reports ?? 0}
+                <small>人</small>
+              </strong>
+            </div>
+            <div className="daily-value__distribution-bar" aria-label="日报填写方式分布">
+              <span
+                className="daily-value__bar-segment is-ai"
+                style={{ width: percentage(metrics?.ai_reports ?? 0, metrics?.total_reports ?? 0) }}
+              />
+              <span
+                className="daily-value__bar-segment is-handwritten"
+                style={{
+                  width: percentage(metrics?.handwritten_reports ?? 0, metrics?.total_reports ?? 0)
+                }}
+              />
+            </div>
+            <div className="daily-value__legend">
+              <div>
+                <span className="daily-value__legend-dot is-ai" />
+                <span>AI生成</span>
+                <strong>{metrics?.ai_reports ?? 0}人</strong>
+              </div>
+              <div>
+                <span className="daily-value__legend-dot is-handwritten" />
+                <span>手工填写</span>
+                <strong>{metrics?.handwritten_reports ?? 0}人</strong>
+              </div>
+            </div>
+          </section>
+
+          <section className="daily-value__summary-panel">
+            <div className="daily-value__panel-heading">
+              <Typography.Text type="secondary">AI日报修改情况</Typography.Text>
+              <strong>
+                {metrics?.ai_reports ?? 0}
+                <small>份</small>
+              </strong>
+            </div>
+            <div className="daily-value__distribution-bar" aria-label="AI生成后的内容变化分布">
+              <span
+                className="daily-value__bar-segment is-unchanged"
+                style={{
+                  width: percentage(metrics?.content_unchanged ?? 0, metrics?.ai_reports ?? 0)
+                }}
+              />
+              <span
+                className="daily-value__bar-segment is-light"
+                style={{ width: percentage(metrics?.content_light ?? 0, metrics?.ai_reports ?? 0) }}
+              />
+              <span
+                className="daily-value__bar-segment is-significant"
+                style={{
+                  width: percentage(metrics?.content_significant ?? 0, metrics?.ai_reports ?? 0)
+                }}
+              />
+            </div>
+            <div className="daily-value__legend is-content-change">
+              <div>
+                <span className="daily-value__legend-dot is-unchanged" />
+                <span>未修改</span>
+                <strong>{metrics?.content_unchanged ?? 0}份</strong>
+              </div>
+              <div>
+                <span className="daily-value__legend-dot is-light" />
+                <span>修改较少</span>
+                <strong>{metrics?.content_light ?? 0}份</strong>
+              </div>
+              <div>
+                <span className="daily-value__legend-dot is-significant" />
+                <span>修改较多</span>
+                <strong>{metrics?.content_significant ?? 0}份</strong>
+              </div>
+            </div>
+          </section>
         </div>
-        <Typography.Text type="secondary">
-          AI内容有修改：修改较少 {metrics?.content_light ?? 0} 份，修改较多{" "}
-          {metrics?.content_significant ?? 0} 份。
-        </Typography.Text>
-        {missingOriginalCount > 0 ? (
-          <Typography.Text type="secondary" className="daily-value__missing-note">
-            另有 {missingOriginalCount} 份AI日报没有留存生成时的原稿，因此不展示修改情况。
-          </Typography.Text>
-        ) : null}
       </Card>
 
       <Card
