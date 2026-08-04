@@ -3,10 +3,8 @@
 package main
 
 import (
-	"fmt"
 	"os"
 	"os/exec"
-	"strings"
 	"sync"
 
 	"golang.org/x/sys/windows"
@@ -40,8 +38,8 @@ func restartAutoSyncBackground() error {
 	_ = stopAutoSyncBackground()
 	return startAutoSyncBackground()
 }
-func acquireAutoSyncFileLock(string) (func(), error) {
-	name, err := windows.UTF16PtrFromString("Global\\AidaAutoSync")
+func acquireAutoSyncFileLock(path string) (func(), error) {
+	name, err := windows.UTF16PtrFromString("Global\\AidaAutoSync-" + autoSyncLockIdentity(path))
 	if err != nil {
 		return nil, err
 	}
@@ -56,6 +54,3 @@ func acquireAutoSyncFileLock(string) (func(), error) {
 	var once sync.Once
 	return func() { once.Do(func() { _ = windows.CloseHandle(handle) }) }, nil
 }
-
-var _ = fmt.Sprintf
-var _ = strings.TrimSpace
