@@ -24,7 +24,6 @@ build-release-binaries:
 		$(GO_DOCKER_IMAGE) \
 		sh -c 'CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "-s -w -X main.Version=$(VERSION) -X main.DefaultReleaseURL=$(RELEASE_URL)" -o /app/dist/aida-linux-amd64 . && \
 		       CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags "-s -w -X main.Version=$(VERSION) -X main.DefaultReleaseURL=$(RELEASE_URL)" -o /app/dist/aida-darwin-arm64 . && \
-		       CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags "-s -w -X main.Version=$(VERSION) -X main.DefaultReleaseURL=$(RELEASE_URL)" -o /app/dist/aida-darwin-amd64 . && \
 		       CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "-s -w -X main.Version=$(VERSION) -X main.DefaultReleaseURL=$(RELEASE_URL)" -o /app/dist/aida-windows-amd64.exe .'
 
 # Backward-compatible default: build the local test release package.
@@ -52,7 +51,6 @@ define package_release
 	mkdir -p "$(1)"
 	cp dist/aida-linux-amd64 "$(1)/aida-linux-amd64"
 	cp dist/aida-darwin-arm64 "$(1)/aida-darwin-arm64"
-	cp dist/aida-darwin-amd64 "$(1)/aida-darwin-amd64"
 	cp dist/aida-windows-amd64.exe "$(1)/aida-windows-amd64.exe"
 	cp install.sh "$(1)/install.sh"
 	cp install.ps1 "$(1)/install.ps1"
@@ -64,7 +62,7 @@ define package_release
 	perl -0pi -e 's|^\$$DefaultInternalApiUrl = .*|\$$DefaultInternalApiUrl = "$(4)"|m' "$(1)/install.ps1"
 	chmod 755 "$(1)/install.sh"
 	echo "$(VERSION)" > "$(1)/aida-latest.txt"
-	cd "$(1)" && $(SHA256SUM) aida-linux-amd64 aida-darwin-arm64 aida-darwin-amd64 aida-windows-amd64.exe install.sh install.ps1 aida-latest.txt > SHA256SUMS.txt
+	cd "$(1)" && $(SHA256SUM) aida-linux-amd64 aida-darwin-arm64 aida-windows-amd64.exe install.sh install.ps1 aida-latest.txt > SHA256SUMS.txt
 	@echo "release directory ready: ./$(1)"
 	@echo "publish its contents to: $(2)"
 	@echo "install command:"
