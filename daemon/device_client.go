@@ -449,6 +449,12 @@ func cmdUpload(args []string) int {
 
 	home, _ := os.UserHomeDir()
 	sessions := scanSessionsForCommand(filepath.Join(home, ".claude", "projects"), filepath.Join(home, ".codex", "sessions"), true, true)
+	ignoreConfig, err := loadSessionIgnoreConfig()
+	if err != nil {
+		fmt.Println("无法读取忽略配置，为保护隐私已停止上传，请检查 ~/.aida/ignore.json")
+		return 1
+	}
+	sessions = filterIgnoredSessionGroups(sessions, ignoreConfig)
 
 	if len(sessions) == 0 {
 		if uploadMode == uploadModeTeam {
