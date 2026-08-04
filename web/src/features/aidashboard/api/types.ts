@@ -1574,6 +1574,7 @@ export interface DailyReportValueUserDay {
   team_name?: string;
   report_date: string;
   report_id?: string;
+  report_mode: "ai_generated" | "handwritten" | "no_report";
   run_count: number;
   successful_run_count: number;
   last_failure_stage?: string;
@@ -1602,6 +1603,10 @@ export interface DailyReportValueMetrics {
   total_reports: number;
   ai_reports: number;
   handwritten_reports: number;
+  content_comparable: number;
+  content_unchanged: number;
+  content_light: number;
+  content_significant: number;
   total_runs: number;
   successful_runs: number;
   comparable_outcomes: number;

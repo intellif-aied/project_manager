@@ -91,12 +91,49 @@ func TestCalculateValueMetricsDoesNotCountFailedAttemptAsAIReport(t *testing.T) 
 		Outcomes: map[string][]valueOutcome{},
 	}
 	items := aggregateValueDays(facts, date, false)
+	if items[0].ReportMode != "handwritten" {
+		t.Fatalf("report mode = %q", items[0].ReportMode)
+	}
 	metrics, _, _, failures, _ := calculateValueMetrics(items, facts, date)
 	if metrics.TotalReports != 1 || metrics.AIReports != 0 || metrics.HandwrittenReports != 1 {
 		t.Fatalf("metrics = %#v", metrics)
 	}
 	if failures["building_context"] != 1 {
 		t.Fatalf("failure stages = %#v", failures)
+	}
+}
+
+func TestCalculateValueMetricsSummarizesCurrentAIContent(t *testing.T) {
+	date := "2026-07-28"
+	generatedAt := time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC)
+	unchangedKey := valueDayKey("user-1", date)
+	changedKey := valueDayKey("user-2", date)
+	handwrittenKey := valueDayKey("user-3", date)
+	facts := valueFacts{
+		People: map[string]valueUserDay{
+			unchangedKey:   {UserID: "user-1", UserName: "张三", ReportDate: date},
+			changedKey:     {UserID: "user-2", UserName: "李四", ReportDate: date},
+			handwrittenKey: {UserID: "user-3", UserName: "王五", ReportDate: date},
+		},
+		Reports: map[string]currentDailyReport{
+			unchangedKey:   {ID: "report-1", UserID: "user-1", ReportDate: date, Content: "AI 原稿", RunID: "run-1", GenerationMode: "managed_agent"},
+			changedKey:     {ID: "report-2", UserID: "user-2", ReportDate: date, Content: "完全不同的最终日报内容", RunID: "run-2", GenerationMode: "managed_agent"},
+			handwrittenKey: {ID: "report-3", UserID: "user-3", ReportDate: date, Content: "手写日报", GenerationMode: "default"},
+		},
+		Runs: map[string][]valueRun{
+			unchangedKey: {{ID: "run-1", Status: "succeeded", Snapshot: testValueSnapshot("report-1", "AI 原稿", generatedAt)}},
+			changedKey:   {{ID: "run-2", Status: "succeeded", Snapshot: testValueSnapshot("report-2", "原始内容完全不相关且长度足够长", generatedAt)}},
+		},
+		Outcomes: map[string][]valueOutcome{},
+	}
+
+	items := aggregateValueDays(facts, date, false)
+	metrics, _, _, _, _ := calculateValueMetrics(items, facts, date)
+	if metrics.TotalReports != 3 || metrics.AIReports != 2 || metrics.HandwrittenReports != 1 {
+		t.Fatalf("report counts = %#v", metrics)
+	}
+	if metrics.ContentComparable != 2 || metrics.ContentUnchanged != 1 || metrics.ContentSignificant != 1 {
+		t.Fatalf("content counts = %#v", metrics)
 	}
 }
 

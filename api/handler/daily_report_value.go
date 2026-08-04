@@ -89,6 +89,7 @@ type valueUserDay struct {
 	TeamName         string              `json:"team_name,omitempty"`
 	ReportDate       string              `json:"report_date"`
 	ReportID         string              `json:"report_id,omitempty"`
+	ReportMode       string              `json:"report_mode"`
 	RunCount         int                 `json:"run_count"`
 	SuccessfulRuns   int                 `json:"successful_run_count"`
 	LastFailureStage string              `json:"last_failure_stage,omitempty"`
@@ -110,6 +111,10 @@ type valueMetrics struct {
 	TotalReports            int        `json:"total_reports"`
 	AIReports               int        `json:"ai_reports"`
 	HandwrittenReports      int        `json:"handwritten_reports"`
+	ContentComparable       int        `json:"content_comparable"`
+	ContentUnchanged        int        `json:"content_unchanged"`
+	ContentLight            int        `json:"content_light"`
+	ContentSignificant      int        `json:"content_significant"`
 	TotalRuns               int        `json:"total_runs"`
 	SuccessfulRuns          int        `json:"successful_runs"`
 	ComparableOutcomes      int        `json:"comparable_outcomes"`
@@ -447,10 +452,18 @@ func aggregateValueDays(facts valueFacts, reportDate string, includeContent bool
 		report, hasReport := facts.Reports[key]
 		if hasReport {
 			item.ReportID = report.ID
+			if report.RunID != "" || report.GenerationMode == "managed_agent" {
+				item.ReportMode = "ai_generated"
+			} else {
+				item.ReportMode = "handwritten"
+			}
 			item.DownstreamReuse = report.Downstream
 			if includeContent {
 				item.CurrentContent = report.Content
 			}
+		}
+		if !hasReport {
+			item.ReportMode = "no_report"
 		}
 		var currentRunIndex = -1
 		for index := range runs {
@@ -586,6 +599,23 @@ func calculateValueMetrics(items []valueUserDay, facts valueFacts, reportDate st
 				metrics.AIReports++
 			} else {
 				metrics.HandwrittenReports++
+			}
+		}
+		if item.ReportMode == "ai_generated" {
+			contentDiff := item.Diff
+			if contentDiff == nil {
+				contentDiff = item.ObservedDiff
+			}
+			if contentDiff != nil {
+				metrics.ContentComparable++
+				switch contentDiff.Text.ChangeBand {
+				case reportvalue.ChangeUnchanged:
+					metrics.ContentUnchanged++
+				case reportvalue.ChangeLight:
+					metrics.ContentLight++
+				case reportvalue.ChangeMedium, reportvalue.ChangeHeavy:
+					metrics.ContentSignificant++
+				}
 			}
 		}
 		metrics.TotalRuns += item.RunCount
