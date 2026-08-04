@@ -388,6 +388,25 @@ func runAutoSyncDaemon() int {
 	return 0
 }
 
+func runAutoSyncTick() int {
+	release, err := acquireAutoSyncNamedLock("tick.lock")
+	if errors.Is(err, errAutoSyncLockHeld) {
+		return 0
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "获取自动同步调度锁失败：%v\n", err)
+		return 1
+	}
+	defer release()
+	if _, err := runAutoSyncOnce(autoSyncNow(), runAutoSyncExecuteProcess); err != nil {
+		if logFile, openErr := os.OpenFile(filepath.Join(autoSyncDir(), "daemon.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600); openErr == nil {
+			fmt.Fprintf(logFile, "%s AutoSync: %v\n", autoSyncNow().Format(time.RFC3339), err)
+			logFile.Close()
+		}
+	}
+	return 0
+}
+
 func runAutoSyncExecute(update func() error, upload func() int, output io.Writer) int {
 	if err := update(); err != nil {
 		fmt.Fprintf(output, "版本检查或更新失败：%v；继续自动上传全部 Session\n", err)
@@ -531,6 +550,8 @@ func cmdAutoSync(args []string, input io.Reader, output io.Writer) int {
 		return 0
 	case "daemon-run":
 		return autoSyncRunDaemon()
+	case "tick":
+		return runAutoSyncTick()
 	case "execute":
 		return autoSyncExecute()
 	case "upload-all":
