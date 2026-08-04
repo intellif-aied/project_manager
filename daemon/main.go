@@ -158,6 +158,8 @@ func run(args []string) int {
 		return cmdUpload(args[1:])
 	case "log":
 		return cmdTeamSyncLog(os.Stdout)
+	case "ignore":
+		return cmdIgnore(args[1:])
 	case "clients":
 		return cmdClients()
 	case "upload-client":
@@ -207,6 +209,7 @@ func writeUsage(output io.Writer) {
   upload                选择并上传 Session
   upload --all          上传全部 Session
   upload --team         按团队目录配置上传全部 Session
+  ignore                管理不上传的 Session 和工作目录
   log                   查看团队模式待配置目录
   clients               检测其他受支持客户端
   upload-client         显式选择并上传其他客户端 Session
