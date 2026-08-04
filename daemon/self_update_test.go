@@ -31,6 +31,18 @@ func TestChecksumForFile(t *testing.T) {
 	}
 }
 
+func TestReleaseBinaryNameSupportsBothMacArchitectures(t *testing.T) {
+	for _, test := range []struct {
+		arch string
+		want string
+	}{{"arm64", "aida-darwin-arm64"}, {"amd64", "aida-darwin-amd64"}} {
+		got, err := releaseBinaryName("darwin", test.arch)
+		if err != nil || got != test.want {
+			t.Fatalf("arch=%s got=%q err=%v", test.arch, got, err)
+		}
+	}
+}
+
 func TestQuoteWindowsBatchArg(t *testing.T) {
 	if got := quoteWindowsBatchArg(`upload --project 100%`); got != `"upload --project 100%%"` {
 		t.Fatalf("quoteWindowsBatchArg()=%q", got)

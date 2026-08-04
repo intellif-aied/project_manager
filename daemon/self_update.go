@@ -239,6 +239,8 @@ func releaseBinaryName(goos, goarch string) (string, error) {
 		return "aida-linux-amd64", nil
 	case "darwin/arm64":
 		return "aida-darwin-arm64", nil
+	case "darwin/amd64":
+		return "aida-darwin-amd64", nil
 	case "windows/amd64":
 		return "aida-windows-amd64.exe", nil
 	default:

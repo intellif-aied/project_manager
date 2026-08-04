@@ -68,19 +68,20 @@ detect_binary_name() {
     case "$(uname -s)" in
         Linux) os="linux" ;;
         Darwin) os="darwin" ;;
-        *) die "unsupported OS: $(uname -s). Current release provides linux/amd64 and darwin/arm64." ;;
+        *) die "unsupported OS: $(uname -s). Current release provides linux/amd64, darwin/amd64 and darwin/arm64." ;;
     esac
 
     case "$(uname -m)" in
         x86_64|amd64) arch="amd64" ;;
         arm64|aarch64) arch="arm64" ;;
-        *) die "unsupported architecture: $(uname -m). Current release provides linux/amd64 and darwin/arm64." ;;
+        *) die "unsupported architecture: $(uname -m). Current release provides linux/amd64, darwin/amd64 and darwin/arm64." ;;
     esac
 
     case "$os/$arch" in
         linux/amd64) echo "aida-linux-amd64" ;;
+		darwin/amd64) echo "aida-darwin-amd64" ;;
         darwin/arm64) echo "aida-darwin-arm64" ;;
-        *) die "unsupported platform: $os/$arch. Current release provides linux/amd64 and darwin/arm64." ;;
+        *) die "unsupported platform: $os/$arch. Current release provides linux/amd64, darwin/amd64 and darwin/arm64." ;;
     esac
 }
 
