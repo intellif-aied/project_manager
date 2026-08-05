@@ -74,13 +74,22 @@ http://192.168.14.157:9000/statics-live/aida
 
 ### 4.1 构建
 
+测试服 CLI 必须使用独立测试版本号，格式为：
+
+```text
+<正式候选版本>-test.<YYYYMMDD>.<当日序号>
+```
+
+例如正式候选版本为 `0.1.27` 时，首个测试包使用 `0.1.27-test.20260805.1`。重复测试只增加最后的序号，不修改根目录 `VERSION`，也不占用后续正式版本号。禁止用同一个版本号覆盖测试包，否则已安装该版本的客户端会跳过下载，无法通过正常安装流程取得新产物。
+
 ```bash
 cd /home/intellif/dev/project_manager/daemon
 go test ./... -count=1
 go vet ./...
 
 cd /home/intellif/dev/project_manager
-make release-test-dir
+TEST_CLI_VERSION=0.1.27-test.20260805.1
+make VERSION="$TEST_CLI_VERSION" release-test-dir
 cd aida-releases-test
 sha256sum -c SHA256SUMS.txt
 ./aida-linux-amd64 version
@@ -88,7 +97,8 @@ sha256sum -c SHA256SUMS.txt
 
 确认：
 
-- `aida-latest.txt` 等于根目录 `VERSION`；
+- `aida-latest.txt` 和三个二进制内置版本均等于本次 `TEST_CLI_VERSION`；
+- 根目录 `VERSION` 保持正式候选版本，不因测试轮次递增；
 - 三个平台二进制、两个安装脚本、`SHA256SUMS.txt` 和 `aida-latest.txt` 齐全；
 - 安装脚本使用测试 API 和测试 CLI 分发地址，不包含生产地址。
 

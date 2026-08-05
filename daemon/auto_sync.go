@@ -339,6 +339,7 @@ func runAutoSyncExecuteProcess() int {
 	}
 	defer logFile.Close()
 	command := exec.Command(executable, "auto-sync", "execute")
+	configureAutoSyncBackgroundCommand(command)
 	command.Stdin = nil
 	command.Stdout = logFile
 	command.Stderr = logFile
@@ -420,6 +421,7 @@ func runAutoSyncUploadAllProcess() int {
 		return 1
 	}
 	command := exec.Command(executable, "auto-sync", "upload-all")
+	configureAutoSyncBackgroundCommand(command)
 	command.Stdin = nil
 	command.Stdout = os.Stdout
 	command.Stderr = os.Stderr
