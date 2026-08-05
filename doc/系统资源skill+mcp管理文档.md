@@ -23,7 +23,7 @@
 | 环境 | Skill owner | Skill | MCP | 最近验证 | 验证依据 |
 | --- | --- | --- | --- | --- | --- |
 | 生产 | 10086 | aida-report@1.1.29 | aida-report-mcp@report-v1 | 2026-08-03 | `20260803-Project-Memory可选上下文生产发布`、运行配置与公共 Registry |
-| 14.157 测试 | 100866 | aida-report@1.1.26 | aida-report-mcp@report-v1 | 2026-08-01 | `20260801-最近三份日报连续主题上下文测试发布`、运行环境、公共 Registry、默认 Agent 与生产样本 A/B |
+| 14.157 测试 | 100866 | aida-report@1.1.30 | aida-report-mcp@report-v1 | 2026-08-05 | `20260805-个人日报单层正文测试发布`、运行环境、公共 Registry 与两个生产样本回放 |
 
 规则：
 

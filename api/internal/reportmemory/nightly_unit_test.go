@@ -63,6 +63,39 @@ func TestWorkstreamsFromBriefKeepsBoundedParentChildOutline(t *testing.T) {
 	}
 }
 
+func TestConsolidationThemesUsesBriefSubjectsForUnchangedAIReport(t *testing.T) {
+	report := historicalReport{
+		generationMode: "managed_agent", sourceType: "auto_carried",
+		content: "1. IF-Knowledge：完成 GPGPU 调研并推进儿童睡前场景",
+	}
+	themes := consolidationThemes(report, []InputWorkstream{{Subject: "IF-Knowledge"}})
+	if len(themes) != 1 || themes[0].Title != "IF-Knowledge" {
+		t.Fatalf("themes=%#v", themes)
+	}
+}
+
+func TestConsolidationThemesUsesSingleLayerFinalReportForHumanEditedReport(t *testing.T) {
+	report := historicalReport{
+		generationMode: "managed_agent", sourceType: sourceHumanEdited,
+		content: "1. 芯片验证平台：完成测试执行模块方案设计",
+	}
+	themes := consolidationThemes(report, []InputWorkstream{{Subject: "旧 Brief 主题"}})
+	if len(themes) != 1 || themes[0].Title != "芯片验证平台：完成测试执行模块方案设计" {
+		t.Fatalf("themes=%#v", themes)
+	}
+}
+
+func TestHistoricalOverviewUsesBriefSubjectsForUnchangedAIReport(t *testing.T) {
+	report := historicalReport{
+		generationMode: "managed_agent", sourceType: "explicit_saved",
+		content:      "1. IF-Knowledge：完成 GPGPU 调研并推进儿童睡前场景",
+		briefPayload: `{"workstreams":[{"subject":"IF-Knowledge"},{"subject":"InfoAgent"}]}`,
+	}
+	if got := historicalOverviewForMemory(report); got != "1. IF-Knowledge\n2. InfoAgent" {
+		t.Fatalf("overview=%q", got)
+	}
+}
+
 func TestSnapshotProjectRefsUsesOnlyCanonicalSnapshotShape(t *testing.T) {
 	refs := snapshotProjectRefs([]byte(`{"projects":[{"project_ref":"project-1"},{"ProjectRef":"legacy-shadow"}]}`))
 	if !refs["project-1"] || refs["legacy-shadow"] {

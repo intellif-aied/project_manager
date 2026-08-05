@@ -494,7 +494,7 @@ func TestValidateResultBriefIssuesKeepsNoWorkStateConsistent(t *testing.T) {
 	if issues := validateResultBriefIssues(
 		twoWorkstreams,
 		"1. 完成协议设计\n2. 完成原型验证",
-		"### 协议\n\n完成设计\n\n### 原型\n\n完成验证",
+		"1. 完成协议设计\n2. 完成原型验证",
 	); len(issues) != 0 {
 		t.Fatalf("aligned report result rejected: %v", issues)
 	}
@@ -505,18 +505,18 @@ func TestValidateResultBriefIssuesKeepsNoWorkStateConsistent(t *testing.T) {
 	if issues := validateResultBriefIssues(
 		outcomeOnlyBrief,
 		"1. 优化日报工作主线关联",
-		"### 日报生成质量优化\n\n优化日报工作主线关联，减少同一项目被拆分为多个事项。",
+		"1. 优化日报工作主线关联",
 	); len(issues) != 0 {
 		t.Fatalf("outcome-only result rejected: %v", issues)
 	}
 	if issues := validateResultBriefIssues(
 		twoWorkstreams,
 		"1. 完成协议设计",
-		"### 协议\n\n完成设计\n\n### 原型\n\n完成验证\n\n### 额外主题\n\n不应拆分",
+		"1. 完成协议设计\n2. 完成原型验证\n3. 不应拆分",
 	); len(issues) != 2 {
 		t.Fatalf("misaligned report result accepted: %v", issues)
 	}
-	longContent := "### 协议\n\n" + strings.Repeat("完成协议机制说明。", 90) + "\n\n### 原型\n\n" + strings.Repeat("完成原型机制说明。", 90)
+	longContent := "1. " + strings.Repeat("完成协议机制说明。", 90) + "\n2. " + strings.Repeat("完成原型机制说明。", 90)
 	issues := validateResultBriefIssues(
 		twoWorkstreams,
 		"1. 完成协议设计\n2. 完成原型验证",

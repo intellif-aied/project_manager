@@ -129,19 +129,11 @@ Use two distinct semantic passes in this same Agent Session.
 ### Pass 2: write only from the accepted Brief
 
 - Treat the returned normalized Brief as the only writing source. Never return to Context or reconstruct excluded facts.
-- Use exactly one descriptive level-three heading per accepted workstream in the same order.
-- Under each heading, write only the accepted deliverable results. Use one concise paragraph for one result; put each result on its own Markdown ordered-list line when there are several.
-- Write the capability, design, problem resolution, or user-facing change. Never add commit, merge, test, deployment, release, environment, validation, recommendation, inferred completion state, or next action.
-- Omit statements that a change only affects something, does not change something, or keeps something unchanged.
-- Do not add a conclusion such as 尚未发布, 不建议上线, 可以合并, or 待部署.
-- Apply the same name-versus-prose distinction: copy established names literally, but explain everything else in everyday Chinese without invented technical labels.
-- Do not select or rewrite Summary from deliverables. Build it by copying each accepted workstream title verbatim, in order, as one Markdown ordered-list item.
-- Keep candidate and module labels subordinate in the detail section; several candidates under one subject remain one summary item.
-- Preserve measured quantities exactly. Do not rewrite a percentage increase as a multiple unless the arithmetic is explicit and correct: an increase of X%% means a total of 1+X/100 times the baseline.
-- State an explicit resource constraint as observed. Never add whether work was not started, stopped, merged, released, or deployed; report the constraint or completed action instead.
-- Produce summary as a Markdown ordered list with exactly one item per accepted workstream. Do not put blank lines between items or add 工作概览/工作详情; the server adds those headings.
+- Build one canonical report by copying each accepted workstream title verbatim, in order, as one Markdown ordered-list item. Use the exact same ordered list for summary and content.
+- Keep one item per accepted workstream, normally one to three and never more than five. Do not add headings, detail paragraphs, nested lists, blank lines, 工作概览, or 工作详情.
+- Do not expand titles from deliverables or add commit, merge, test, deployment, release, environment, validation, recommendation, inferred completion state, or next action.
 - If no_reportable_work is true, use only 本期无可核验的工作记录 without numbering.
-- Call write_report_result with {"brief_hash": accepted_brief.brief_hash, "summary": summary, "content": markdown}.
+- Call write_report_result with {"brief_hash": accepted_brief.brief_hash, "summary": report, "content": report}.
 - Correct every REPORT_RESULT_INVALID violation together once. On REPORT_RESULT_RETRY_EXHAUSTED, retry the same summary and content without brief_hash. If write_report_failure returns REPORT_DEGRADED_RESULT_REQUIRED, immediately write without brief_hash.
 
 ## 3. Direct flow: interpret the evidence
@@ -155,11 +147,11 @@ Use two distinct semantic passes in this same Agent Session.
 ## 4. Direct flow: write the report
 
 - Write an outcome-led narrative about the capability, design, problem resolution, or user-facing change.
-- For personal_daily, use one level-three heading per workstream and apply the same reader-facing, everyday-Chinese translation rule to the ordered-list summary. Do not add 工作概览 or 工作详情.
+- For personal_daily, write one canonical Markdown ordered list with one concise outcome item per workstream, normally one to three and never more than five. Use the exact same list for summary and content. Do not add headings, nested lists, 工作概览, or 工作详情.
 - For other report types, use level-two workstream headings and one plain-text summary paragraph.
 - Do not create independent 明日计划, 下周计划, 后续计划, 建议, or 待协调 sections. Never invent future actions.
 - If there is no reportable fact, use only 本期无可核验的工作记录.
-- Call write_report_result exactly once with {"summary": summary, "content": markdown}. Never pass a report identity field.
+- Call write_report_result exactly once with {"summary": report, "content": report} for personal_daily; keep the existing summary and content fields for other report types. Never pass a report identity field.
 
 ## 5. Keep internals private
 

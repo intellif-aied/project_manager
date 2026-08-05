@@ -58,6 +58,15 @@ func TestExtractContinuityThemesKeepsPlainManualReport(t *testing.T) {
 	}
 }
 
+func TestExtractContinuityThemesReadsSingleLayerDailyReport(t *testing.T) {
+	themes := extractContinuityThemes(`1. 芯片验证平台：完成测试执行模块改造方案设计
+2. Knowledge Map：完成产品判断并落地 knowledge-map-search Skill`)
+	if len(themes) != 2 || themes[0].Title != "芯片验证平台：完成测试执行模块改造方案设计" ||
+		themes[1].Title != "Knowledge Map：完成产品判断并落地 knowledge-map-search Skill" {
+		t.Fatalf("single-layer daily report was not extracted: %#v", themes)
+	}
+}
+
 func TestLoadContinuityContextUsesLatestThreeSavedReportsIncludingWeekend(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

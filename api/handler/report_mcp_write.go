@@ -577,17 +577,19 @@ func prepareReportResultContent(reportType, representation, summary, content str
 	if normalizedSummary == "" {
 		return "", "", mcpErr("REPORT_SUMMARY_REQUIRED", "summary is required for this report run")
 	}
+	if reportType == reportTypePersonalDaily {
+		// The accepted workstream titles are the canonical, reader-facing daily
+		// report. Keep summary for snapshots and downstream compatibility, but do
+		// not render it as a second section alongside an expanded detail body.
+		return normalizedSummary, normalizedSummary, nil
+	}
 	if normalized, removed := stripLeadingWorkSummary(body); removed {
 		body = normalized
 		if body == "" {
 			return "", "", mcpErr("INVALID_ARGUMENT", "content body is required after the work summary")
 		}
 	}
-	if reportType != reportTypePersonalDaily {
-		return "## 工作总结\n\n" + normalizedSummary + "\n\n" + body, normalizedSummary, nil
-	}
-	body = normalizeReportDetailHeadings(body)
-	return "## 工作概览\n\n" + normalizedSummary + "\n\n## 工作详情\n\n" + body, normalizedSummary, nil
+	return "## 工作总结\n\n" + normalizedSummary + "\n\n" + body, normalizedSummary, nil
 }
 
 var reportSummaryItemMarkerPattern = regexp.MustCompile(`(?m)(^|[[:space:]。！？；.!?;]|\\r\\n|\\n|\\r)([1-5])\.[ \t]+`)
@@ -597,7 +599,21 @@ func normalizeReportSummary(summary string) string {
 }
 
 func normalizePersonalDailyReportSummary(summary string) string {
-	return normalizeReportSummaryWithPolicy(summary, true)
+	normalized := normalizeReportSummaryWithPolicy(summary, true)
+	if normalized == "" || normalized == "本期无可核验的工作记录" || countPersonalDailySummaryItems(normalized) > 0 {
+		return normalized
+	}
+	return "1. " + normalized
+}
+
+func countPersonalDailySummaryItems(value string) int {
+	count := 0
+	for _, line := range strings.Split(value, "\n") {
+		if reportSummaryItemMarkerPattern.MatchString(strings.TrimSpace(line)) {
+			count++
+		}
+	}
+	return count
 }
 
 func normalizeReportSummaryWithPolicy(summary string, allowRepeatedNumbers bool) string {
@@ -705,24 +721,6 @@ func stripLeadingWorkSummary(content string) (string, bool) {
 		}
 	}
 	return "", true
-}
-
-func normalizeReportDetailHeadings(content string) string {
-	lines := strings.Split(strings.ReplaceAll(strings.TrimSpace(content), "\r\n", "\n"), "\n")
-	inFence := false
-	for index, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
-			inFence = !inFence
-			continue
-		}
-		if inFence || !strings.HasPrefix(trimmed, "## ") {
-			continue
-		}
-		indentLength := len(line) - len(strings.TrimLeft(line, " \t"))
-		lines[index] = line[:indentLength] + "### " + strings.TrimPrefix(trimmed, "## ")
-	}
-	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
 
 func reportResultHash(content string) string {

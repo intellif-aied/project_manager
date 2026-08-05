@@ -156,7 +156,7 @@ func TestPreparePersonalReportResultPreservesSkillMarkdown(t *testing.T) {
 	}
 }
 
-func TestPrepareSystemReportResultKeepsStandardFormat(t *testing.T) {
+func TestPrepareSystemPersonalDailyUsesSingleLayerReport(t *testing.T) {
 	content, _, err := prepareReportResultForRun(
 		reportAIRun{
 			ContextRepresentation: reportcontext.RepresentationWorkEvidence,
@@ -171,8 +171,8 @@ func TestPrepareSystemReportResultKeepsStandardFormat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(content, "## 工作概览\n\n") || !strings.Contains(content, "\n\n## 工作详情\n\n") {
-		t.Fatalf("system result lost standard format: %q", content)
+	if content != "1. 完成系统报告。" {
+		t.Fatalf("system result is not a single-layer report: %q", content)
 	}
 }
 
@@ -199,15 +199,11 @@ func TestPrepareSystemReportResultUsesAcceptedBriefTitleForSummary(t *testing.T)
 	if summary != wantSummary {
 		t.Fatalf("summary = %q, want %q", summary, wantSummary)
 	}
-	parts := strings.SplitN(content, "\n\n## 工作详情\n\n", 2)
-	if len(parts) != 2 {
-		t.Fatalf("standard report sections missing: %q", content)
+	if content != wantSummary {
+		t.Fatalf("content = %q, want canonical brief titles %q", content, wantSummary)
 	}
-	if strings.Contains(parts[0], "儿童睡前") {
-		t.Fatalf("supporting scenario leaked into overview: %q", parts[0])
-	}
-	if !strings.Contains(parts[1], "儿童睡前") {
-		t.Fatalf("supporting scenario was removed from details: %q", parts[1])
+	if strings.Contains(content, "儿童睡前") {
+		t.Fatalf("supporting scenario leaked into canonical report: %q", content)
 	}
 }
 
@@ -250,8 +246,8 @@ func TestPrepareReportResultContentForWorkEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "## 工作概览\n\n完成日报结构优化。 已通过验证。\n\n## 工作详情\n\n### 日报结构优化\n\n完成实现。"
-	if content != want || summary != "完成日报结构优化。 已通过验证。" {
+	want := "1. 完成日报结构优化。 已通过验证。"
+	if content != want || summary != want {
 		t.Fatalf("content=%q summary=%q", content, summary)
 	}
 
@@ -268,8 +264,8 @@ func TestPrepareReportResultContentForWorkEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want = "## 工作概览\n\n完成日报结构优化。\n\n## 工作详情\n\n### 日报结构优化\n\n完成实现。"
-	if content != want || summary != "完成日报结构优化。" {
+	want = "1. 完成日报结构优化。"
+	if content != want || summary != want {
 		t.Fatalf("normalized duplicate content=%q summary=%q", content, summary)
 	}
 }
@@ -285,7 +281,7 @@ func TestPrepareReportResultContentPreservesOrderedSummary(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantSummary := "1. 完成报告入口整合。\n2. 修复生成失败提示。"
-	wantContent := "## 工作概览\n\n" + wantSummary + "\n\n## 工作详情\n\n### 报告体验优化\n\n完成实现。"
+	wantContent := wantSummary
 	if summary != wantSummary || content != wantContent {
 		t.Fatalf("content=%q summary=%q", content, summary)
 	}
@@ -302,7 +298,7 @@ func TestPrepareReportResultContentSplitsInlineOrderedSummary(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantSummary := "1. 完成安全审计模块。\n2. 完成报告 Agent 优化。\n3. 完成生产运行排查。"
-	if summary != wantSummary || !strings.Contains(content, "## 工作概览\n\n"+wantSummary+"\n\n## 工作详情") {
+	if summary != wantSummary || content != wantSummary {
 		t.Fatalf("content=%q summary=%q", content, summary)
 	}
 }

@@ -53,7 +53,13 @@ func buildConsolidationInput(ctx context.Context, database *sql.DB, job queuedJo
 	}
 	report.sourceType, report.sourceWeight = classifyNightlySource(report, hasOutcome)
 	input.SourceType, input.SourceWeight = report.sourceType, report.sourceWeight
-	themes := ExtractThemes(limitRunes(report.content, maxOverviewRunes))
+	for _, workstream := range workstreamsFromBrief(report.briefPayload) {
+		input.BriefWorkstreams = append(input.BriefWorkstreams, workstream)
+		if len(input.BriefWorkstreams) >= maxCurrentThemes {
+			break
+		}
+	}
+	themes := consolidationThemes(report, input.BriefWorkstreams)
 	if len(themes) > maxCurrentThemes {
 		themes = themes[:maxCurrentThemes]
 	}
@@ -64,12 +70,6 @@ func buildConsolidationInput(ctx context.Context, database *sql.DB, job queuedJo
 	}
 	if len(input.CurrentThemes) == 0 {
 		return input, nil, 0, errors.New("final overview has no project memory themes")
-	}
-	for _, workstream := range workstreamsFromBrief(report.briefPayload) {
-		input.BriefWorkstreams = append(input.BriefWorkstreams, workstream)
-		if len(input.BriefWorkstreams) >= maxCurrentThemes {
-			break
-		}
 	}
 	projects, err := loadInputProjects(ctx, database, job.UserID, job.ReportDate, input.CurrentThemes)
 	if err != nil {
@@ -84,6 +84,21 @@ func buildConsolidationInput(ctx context.Context, database *sql.DB, job queuedJo
 
 	payload, estimate, err := marshalWithinBudget(input)
 	return input, payload, estimate, err
+}
+
+func consolidationThemes(report historicalReport, workstreams []InputWorkstream) []Theme {
+	if report.generationMode == "managed_agent" && report.sourceType != sourceHumanEdited && len(workstreams) > 0 {
+		themes := make([]Theme, 0, len(workstreams))
+		for _, workstream := range workstreams {
+			if subject := sanitizeTitle(workstream.Subject); subject != "" {
+				themes = append(themes, Theme{Title: subject})
+			}
+		}
+		if len(themes) > 0 {
+			return themes
+		}
+	}
+	return ExtractThemes(limitRunes(report.content, maxOverviewRunes))
 }
 
 func workstreamsFromBrief(raw string) []InputWorkstream {
@@ -263,16 +278,31 @@ func loadRecentOverviews(ctx context.Context, database *sql.DB, userID, reportDa
 			return nil, err
 		}
 		report.sourceType, report.sourceWeight = classifyNightlySource(report, hasOutcome)
-		overview := overviewSection(normalizeMarkdown(report.content))
-		if strings.TrimSpace(overview) == "" {
-			overview = report.content
-		}
+		overview := historicalOverviewForMemory(report)
 		result = append(result, HistoricalReport{
 			Date: report.date, Overview: limitRunes(strings.TrimSpace(overview), maxHistoryOverviewRune),
 			SourceType: report.sourceType, SourceWeight: report.sourceWeight,
 		})
 	}
 	return result, rows.Err()
+}
+
+func historicalOverviewForMemory(report historicalReport) string {
+	if report.generationMode == "managed_agent" && report.sourceType != sourceHumanEdited {
+		workstreams := workstreamsFromBrief(report.briefPayload)
+		if len(workstreams) > 0 {
+			lines := make([]string, 0, len(workstreams))
+			for index, workstream := range workstreams {
+				lines = append(lines, fmt.Sprintf("%d. %s", index+1, workstream.Subject))
+			}
+			return strings.Join(lines, "\n")
+		}
+	}
+	overview := overviewSection(normalizeMarkdown(report.content))
+	if strings.TrimSpace(overview) == "" {
+		overview = report.content
+	}
+	return overview
 }
 
 func marshalWithinBudget(input ConsolidationInput) ([]byte, int, error) {

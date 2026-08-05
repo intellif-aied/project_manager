@@ -549,8 +549,8 @@ func validateResultBriefIssues(payload Payload, summary, content string) []strin
 	if countOrderedSummaryItems(summary) != len(payload.Workstreams) {
 		issues = append(issues, "summary item count must match accepted brief workstreams")
 	}
-	if countLevelThreeHeadings(content) != len(payload.Workstreams) {
-		issues = append(issues, "content level-three heading count must match accepted brief workstreams")
+	if countOrderedSummaryItems(content) != len(payload.Workstreams) {
+		issues = append(issues, "content item count must match accepted brief workstreams")
 	}
 	maxContentRunes := maxPersonalDailyContentRunesPerWorkstream * len(payload.Workstreams)
 	if len([]rune(strings.TrimSpace(content))) > maxContentRunes {
@@ -564,17 +564,6 @@ func countOrderedSummaryItems(value string) int {
 	count := 0
 	for _, line := range strings.Split(strings.ReplaceAll(value, "\r\n", "\n"), "\n") {
 		if orderedSummaryLine.MatchString(strings.TrimSpace(line)) {
-			count++
-		}
-	}
-	return count
-}
-
-func countLevelThreeHeadings(value string) int {
-	value = strings.ReplaceAll(strings.ReplaceAll(value, `\r\n`, "\n"), `\n`, "\n")
-	count := 0
-	for _, line := range strings.Split(strings.ReplaceAll(value, "\r\n", "\n"), "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "### ") {
 			count++
 		}
 	}
