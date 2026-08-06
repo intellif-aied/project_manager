@@ -2,9 +2,11 @@ package config
 
 import (
 	"fmt"
+	"net/mail"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -52,6 +54,16 @@ type Config struct {
 	Environment                    string
 	EvaluationEnabled              bool
 	EvaluationInstanceID           string
+	ReportEmailEnabled             bool
+	ReportEmailTimezone            string
+	ReportEmailTimeOfDay           string
+	ReportEmailSMTPHost            string
+	ReportEmailSMTPPort            int
+	ReportEmailSMTPUsername        string
+	ReportEmailSMTPPassword        string
+	ReportEmailSMTPFrom            string
+	ReportEmailSMTPFromName        string
+	ReportEmailSMTPTLSMode         string
 
 	MinioEndpoint         string
 	MinioAccessKey        string
@@ -105,6 +117,16 @@ func Load() *Config {
 		Environment:                    strings.TrimSpace(strings.ToLower(getEnv("AIDA_ENVIRONMENT", "development"))),
 		EvaluationEnabled:              getEnv("AIDA_EVALUATION_ENABLED", "false") == "true",
 		EvaluationInstanceID:           strings.TrimSpace(getEnv("AIDA_EVALUATION_INSTANCE_ID", "")),
+		ReportEmailEnabled:             getEnv("REPORT_EMAIL_ENABLED", "false") == "true",
+		ReportEmailTimezone:            strings.TrimSpace(getEnv("REPORT_EMAIL_TIMEZONE", "Asia/Shanghai")),
+		ReportEmailTimeOfDay:           strings.TrimSpace(getEnv("REPORT_EMAIL_TIME_OF_DAY", "08:00")),
+		ReportEmailSMTPHost:            strings.TrimSpace(getEnv("REPORT_EMAIL_SMTP_HOST", "")),
+		ReportEmailSMTPPort:            getEnvInt("REPORT_EMAIL_SMTP_PORT", 587),
+		ReportEmailSMTPUsername:        strings.TrimSpace(getEnv("REPORT_EMAIL_SMTP_USERNAME", "")),
+		ReportEmailSMTPPassword:        getEnv("REPORT_EMAIL_SMTP_PASSWORD", ""),
+		ReportEmailSMTPFrom:            strings.TrimSpace(getEnv("REPORT_EMAIL_SMTP_FROM", "")),
+		ReportEmailSMTPFromName:        strings.TrimSpace(getEnv("REPORT_EMAIL_SMTP_FROM_NAME", "Aida 日报")),
+		ReportEmailSMTPTLSMode:         strings.TrimSpace(strings.ToLower(getEnv("REPORT_EMAIL_SMTP_TLS_MODE", "starttls"))),
 
 		MinioEndpoint:         getEnv("MINIO_ENDPOINT", ""),
 		MinioAccessKey:        getEnv("MINIO_ACCESS_KEY", ""),
@@ -114,6 +136,47 @@ func Load() *Config {
 		MinioExternalEndpoint: getEnv("MINIO_EXTERNAL_ENDPOINT", ""),
 	}
 	return cfg
+}
+
+func (c *Config) ValidateReportEmail() error {
+	if c == nil || !c.ReportEmailEnabled {
+		return nil
+	}
+	missing := make([]string, 0, 4)
+	for key, value := range map[string]string{
+		"REPORT_EMAIL_SMTP_HOST":     c.ReportEmailSMTPHost,
+		"REPORT_EMAIL_SMTP_FROM":     c.ReportEmailSMTPFrom,
+		"REPORT_EMAIL_SMTP_USERNAME": c.ReportEmailSMTPUsername,
+		"REPORT_EMAIL_SMTP_PASSWORD": c.ReportEmailSMTPPassword,
+	} {
+		if strings.TrimSpace(value) == "" {
+			missing = append(missing, key)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("report email configuration is incomplete: %s", strings.Join(missing, ", "))
+	}
+	if c.ReportEmailSMTPPort < 1 || c.ReportEmailSMTPPort > 65535 {
+		return fmt.Errorf("REPORT_EMAIL_SMTP_PORT must be between 1 and 65535")
+	}
+	if c.ReportEmailTimezone == "" || c.ReportEmailTimeOfDay == "" {
+		return fmt.Errorf("report email timezone and time of day are required")
+	}
+	if _, err := time.LoadLocation(c.ReportEmailTimezone); err != nil {
+		return fmt.Errorf("REPORT_EMAIL_TIMEZONE is invalid: %w", err)
+	}
+	if _, err := time.Parse("15:04", c.ReportEmailTimeOfDay); err != nil {
+		return fmt.Errorf("REPORT_EMAIL_TIME_OF_DAY must use HH:MM: %w", err)
+	}
+	if parsed, err := mail.ParseAddress(c.ReportEmailSMTPFrom); err != nil || parsed.Address != c.ReportEmailSMTPFrom {
+		return fmt.Errorf("REPORT_EMAIL_SMTP_FROM must be a plain email address")
+	}
+	switch c.ReportEmailSMTPTLSMode {
+	case "starttls", "implicit":
+	default:
+		return fmt.Errorf("REPORT_EMAIL_SMTP_TLS_MODE must be starttls or implicit")
+	}
+	return nil
 }
 
 func (c *Config) ValidateProjectMemoryResources() error {
