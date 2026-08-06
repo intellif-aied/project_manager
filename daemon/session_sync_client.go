@@ -16,6 +16,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/aidashboard/daemon/internal/workspaceidentity"
 )
 
 const (
@@ -71,6 +73,7 @@ type prepareSessionRequest struct {
 	LastActivityAt   *time.Time             `json:"last_activity_at,omitempty"`
 	CWD              string                 `json:"cwd,omitempty"`
 	ProjectName      string                 `json:"project_name,omitempty"`
+	RepositoryKey    string                 `json:"repository_key,omitempty"`
 	Sources          []prepareSourceRequest `json:"sources"`
 }
 
@@ -354,7 +357,7 @@ func prepareSessionSourceWithMode(
 				ParentSessionRef: parentSessionRef, ForkedAt: timePointer(session.ForkedAt), ForkSource: session.ForkSource,
 				Summary: session.Summary, StartedAt: timePointer(session.StartedAt),
 				LastActivityAt: timePointer(session.LastActiveAt()), CWD: session.Cwd,
-				ProjectName: sessionProjectDisplay(session),
+				ProjectName: sessionProjectDisplay(session), RepositoryKey: workspaceidentity.RepositoryKey(session.Cwd),
 				Sources: []prepareSourceRequest{{
 					SourceRole: "main", SourceKey: sourceKey, LocalSize: localSize,
 					PrefixCheckpointHash: prefixHash, PrefixCheckpointAlgorithmVersion: prefixCheckpointAlgorithm,

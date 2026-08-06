@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	ResolverVersion        = "project-memory-resolver/v4"
+	ResolverVersion        = "project-memory-resolver/v5"
 	maxInputTokens         = 8000
 	maxOutputTokens        = 1500
 	maxCurrentThemes       = 8
@@ -80,17 +80,21 @@ type ConsolidationInput struct {
 type InputWorkstream struct {
 	Subject      string   `json:"subject"`
 	Deliverables []string `json:"deliverables,omitempty"`
+	FactRefs     []string `json:"fact_refs,omitempty"`
 }
 
 type InputTheme struct {
-	ThemeRef string `json:"theme_ref"`
-	Title    string `json:"title"`
+	ThemeRef      string   `json:"theme_ref"`
+	Title         string   `json:"title"`
+	FactRefs      []string `json:"fact_refs,omitempty"`
+	WorkspaceRefs []string `json:"workspace_refs,omitempty"`
 }
 
 type InputProject struct {
 	ProjectRef    string   `json:"project_ref"`
 	CanonicalName string   `json:"canonical_name"`
 	Aliases       []string `json:"aliases,omitempty"`
+	WorkspaceRefs []string `json:"workspace_refs,omitempty"`
 	LastSeenOn    string   `json:"last_seen_on"`
 	SourceType    string   `json:"source_type"`
 	SourceWeight  float64  `json:"source_weight"`

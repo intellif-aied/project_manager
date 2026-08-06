@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
 const (
@@ -15,6 +16,10 @@ const (
 	MaxResultInvalidAttempts = 1
 	FactRefJSONPattern       = `^fact-[0-9]{3,}$`
 	automaticExclusionReason = "not_selected"
+	readerHeadlineRuneLimit  = 52
+	readerSubjectRuneLimit   = 36
+	readerResultRuneLimit    = 120
+	readerMaxDeliverables    = 3
 )
 
 var (
@@ -106,13 +111,72 @@ func (s Stored) ReaderSummary() (string, bool) {
 		if strings.TrimSpace(workstream.Subject) == "" {
 			return "", false
 		}
-		title := strings.Join(strings.Fields(workstream.Title), " ")
+		title := compactReaderText(workstream.Title, readerHeadlineRuneLimit)
 		if title == "" {
 			return "", false
 		}
 		items = append(items, fmt.Sprintf("%d. %s", index+1, title))
 	}
 	return strings.Join(items, "\n"), true
+}
+
+// ReaderReport renders the accepted Brief as one deterministic daily-report
+// body. A workstream with one outcome stays compact; multiple outcomes are
+// grouped beneath their shared subject so the report keeps useful detail
+// without reintroducing a separate overview/details structure.
+func (s Stored) ReaderReport() (string, string, bool) {
+	summary, ok := s.ReaderSummary()
+	if !ok || s.Payload.NoReportableWork {
+		return summary, summary, ok
+	}
+	lines := make([]string, 0, len(s.Payload.Workstreams)*3)
+	for index, workstream := range s.Payload.Workstreams {
+		subject := compactReaderText(workstream.Subject, readerSubjectRuneLimit)
+		if subject == "" {
+			return "", "", false
+		}
+		results := make([]string, 0, len(workstream.Deliverables))
+		for _, deliverable := range workstream.Deliverables {
+			if len(results) >= readerMaxDeliverables {
+				break
+			}
+			if result := compactReaderText(deliverable.Result, readerResultRuneLimit); result != "" {
+				results = append(results, result)
+			}
+		}
+		if len(results) <= 1 {
+			title := compactReaderText(workstream.Title, readerHeadlineRuneLimit)
+			if title == "" {
+				return "", "", false
+			}
+			lines = append(lines, fmt.Sprintf("%d. %s", index+1, title))
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("%d. %s", index+1, subject))
+		for _, result := range results {
+			lines = append(lines, "   - "+result)
+		}
+	}
+	return strings.Join(lines, "\n"), summary, true
+}
+
+func compactReaderText(value string, limit int) string {
+	value = strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+	value = strings.NewReplacer("**", "", string(rune(96)), "").Replace(value)
+	if limit <= 0 || utf8.RuneCountInString(value) <= limit {
+		return value
+	}
+	runes := []rune(value)
+	for index := limit - 1; index >= limit/2; index-- {
+		if strings.ContainsRune("。；;！!?", runes[index]) {
+			return strings.TrimSpace(string(runes[:index+1]))
+		}
+	}
+	end := limit
+	if end > 1 {
+		end--
+	}
+	return strings.TrimSpace(string(runes[:end])) + "…"
 }
 
 type Accepted struct {

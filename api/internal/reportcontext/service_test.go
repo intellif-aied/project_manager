@@ -13,6 +13,7 @@ import (
 	"github.com/aidashboard/api/internal/reportmemory"
 	"github.com/aidashboard/api/internal/reportsource"
 	"github.com/aidashboard/api/internal/sessiondigestv2"
+	"github.com/lib/pq"
 )
 
 type sourceStub struct {
@@ -26,13 +27,12 @@ func TestProjectMemoryContextKeepsMatchedFactsAsOptionalBackground(t *testing.T)
 		ProjectRef: "project-1", CanonicalName: "Symphony",
 		Aliases: []string{"Symphony 任务编排器"}, MatchedFactRef: []string{"fact-016"}, Confidence: 0.9,
 	}})
-	if context == nil || !strings.Contains(context.GroupingRule, "不是归属要求") ||
+	if context == nil || !strings.Contains(context.GroupingRule, "不是成果证据或强制归属") ||
 		!strings.Contains(context.GroupingRule, "两个相似项目不得因历史背景被合并") {
 		t.Fatalf("grouping rule = %#v", context)
 	}
 	if len(context.Hints) != 1 || !strings.Contains(context.Hints[0].Instruction, "不是项目归属结论") ||
-		!strings.Contains(context.Hints[0].Instruction, "自行判断是否采用") ||
-		strings.Join(context.Hints[0].RelatedFactRefs, ",") != "fact-016" {
+		!strings.Contains(context.Hints[0].Instruction, "自行判断是否采用") {
 		t.Fatalf("hint instruction = %#v", context.Hints)
 	}
 	payload, err := json.Marshal(context)
@@ -47,8 +47,62 @@ func TestProjectMemoryContextKeepsMatchedFactsAsOptionalBackground(t *testing.T)
 			t.Fatalf("Project Memory Context retained coercive field %q: %s", forbidden, payload)
 		}
 	}
-	if !strings.Contains(string(payload), "related_fact_refs") {
-		t.Fatalf("Project Memory Context did not expose optional Fact relations: %s", payload)
+	if strings.Contains(string(payload), "related_fact_refs") {
+		t.Fatalf("Project Memory Context retained the duplicate compatibility union: %s", payload)
+	}
+}
+
+func TestProjectMemoryContextPreservesWorkspaceSemanticParentSignal(t *testing.T) {
+	context := projectMemoryContextFromHints([]reportmemory.HistoricalProjectHint{{
+		ProjectRef: "project-1", CanonicalName: "芯片验证平台",
+		Aliases: []string{"版本流", "用例筛选工作台"}, MatchedFactRef: []string{"fact-001", "fact-062"},
+		SemanticFactRef: []string{"fact-001"}, WorkspaceFactRef: []string{"fact-001", "fact-062"},
+		Confidence: 0.9, MatchBasis: "workspace_semantic",
+	}})
+	if context == nil || len(context.Hints) != 1 {
+		t.Fatalf("context = %#v", context)
+	}
+	hint := context.Hints[0]
+	if hint.MatchBasis != "workspace_semantic" || hint.CandidateOnly {
+		t.Fatalf("workspace semantic hint = %#v", hint)
+	}
+	if !strings.Contains(hint.Instruction, "高可信的父项目命名参考") ||
+		!strings.Contains(hint.Instruction, "工作空间候选") ||
+		strings.Join(hint.SemanticFactRefs, ",") != "fact-001" ||
+		strings.Join(hint.WorkspaceFactRefs, ",") != "fact-001,fact-062" {
+		t.Fatalf("workspace semantic instruction = %#v", hint)
+	}
+}
+
+func TestObserveSelectionWorkspacesRetriesWithoutPoisoningReportContextTransaction(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mock.ExpectBegin()
+	mock.ExpectExec("pg_advisory_xact_lock").
+		WithArgs("report-workspace:7").
+		WillReturnError(&pq.Error{Code: "40001"})
+	mock.ExpectRollback()
+	mock.ExpectBegin()
+	mock.ExpectExec("pg_advisory_xact_lock").
+		WithArgs("report-workspace:7").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("SELECT selection.id::text, item.session_id::text,").
+		WithArgs("selection-1", "7").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"selection_id", "session_id", "slice_id", "revision_id", "start_cursor", "end_cursor",
+			"activity_start_at", "activity_end_at", "cwd", "repository_key",
+		}))
+	mock.ExpectCommit()
+
+	svc := &Service{db: db}
+	if _, err := svc.observeSelectionWorkspaces(context.Background(), "7", "selection-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -61,7 +115,7 @@ func TestProjectMemoryContextKeepsUnanchoredCandidateOptional(t *testing.T) {
 		t.Fatalf("context = %#v", context)
 	}
 	hint := context.Hints[0]
-	if !hint.CandidateOnly || len(hint.RelatedFactRefs) != 0 {
+	if !hint.CandidateOnly || len(hint.SemanticFactRefs) != 0 || len(hint.WorkspaceFactRefs) != 0 {
 		t.Fatalf("candidate hint = %#v", hint)
 	}
 	if !strings.Contains(hint.Instruction, "通常应忽略") || !strings.Contains(hint.Instruction, "不得为了使用候选而合并工作") {
@@ -1511,4 +1565,25 @@ func emptyRequirementRows() *sqlmock.Rows {
 
 func emptyTaskRows() *sqlmock.Rows {
 	return sqlmock.NewRows([]string{"id", "requirement_id", "requirement_title", "title", "status", "priority", "progress", "due_date", "creator_id", "creator_name", "creator_team_id", "creator_team_name", "responsibles", "updated_at"})
+}
+
+func TestWorkEvidenceSourceRefsRemainInternal(t *testing.T) {
+	projection := WorkEvidence{}
+	indexes := map[workEvidenceFactIdentity]int{}
+	observationIndexes := []map[workEvidenceObservationIdentity]int{}
+	appendWorkEvidenceFact(
+		&projection, indexes, &observationIndexes,
+		workEvidenceFactIdentity{Kind: "result", Text: "完成方案"}, "thread-001",
+		WorkEvidenceObservation{Date: "2026-08-05", Status: "completed"}, "private-session-ref",
+	)
+	if len(projection.Facts) != 1 || len(projection.Facts[0].SourceRefs) != 1 {
+		t.Fatalf("internal source refs = %#v", projection.Facts)
+	}
+	payload, err := json.Marshal(projection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(payload), "private-session-ref") {
+		t.Fatalf("Report Context leaked source ref: %s", payload)
+	}
 }

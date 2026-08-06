@@ -173,7 +173,7 @@ func main() {
 		), reportmemory.NightlyConfig{
 			Enabled: cfg.ProjectMemoryNightlyEnabled, AgentID: cfg.ProjectMemoryAgentID,
 			ModelID: cfg.ProjectMemoryModelID, WorkerID: "api:" + hostname + ":project-memory",
-			StartHour: 2, EndHour: 6, ClaimBatch: 3,
+			StartHour: cfg.ProjectMemoryStartHour, EndHour: cfg.ProjectMemoryEndHour, ClaimBatch: 3,
 		},
 	)
 	if err != nil {

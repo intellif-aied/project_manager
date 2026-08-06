@@ -67,3 +67,15 @@ _Avoid_: 发布结论、模型排名
 **Evaluation Bundle**:
 包含 Manifest、Case、Source Evidence、Artifact、Final 和运行指标的不可变评测输入包。
 _Avoid_: 数据库连接、临时 Prompt
+
+**Project Association Regression Case**:
+由固定当日事实、Workspace 证据、历史 Project Memory 快照和 Gold Association Baseline 组成的项目归并回归样本。
+_Avoid_: 某员工案例、临时 A/B Run
+
+**Gold Association Baseline**:
+人工确认哪些当天事实必须、可以或不得归入哪个项目，以及哪些工作必须保持独立；它只判断项目关联，不规定日报全文。
+_Avoid_: 标准日报、Employee Final Reference
+
+**Controlled Source Archive**:
+位于受控评测存储中的原始 Session、Slice、Context 和运行映射；代码仓库只保存匿名 Case、Hash 和 Gold Association Baseline。
+_Avoid_: Git 测试数据、生产实时数据

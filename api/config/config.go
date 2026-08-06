@@ -39,6 +39,8 @@ type Config struct {
 	ProjectMemorySkillOwner        string
 	ProjectMemorySkillVersion      string
 	ProjectMemoryMCPURL            string
+	ProjectMemoryStartHour         int
+	ProjectMemoryEndHour           int
 	ReportTwoPassEnabled           bool
 	AIDAPublicBaseURL              string
 	AIDAInternalMetricsAddr        string
@@ -93,6 +95,8 @@ func Load() *Config {
 		ProjectMemorySkillOwner:        strings.TrimSpace(getEnv("PROJECT_MEMORY_SKILL_OWNER", "")),
 		ProjectMemorySkillVersion:      strings.TrimSpace(getEnv("PROJECT_MEMORY_SKILL_VERSION", "")),
 		ProjectMemoryMCPURL:            strings.TrimSpace(getEnv("PROJECT_MEMORY_MCP_URL", "")),
+		ProjectMemoryStartHour:         getEnvInt("PROJECT_MEMORY_START_HOUR", 2),
+		ProjectMemoryEndHour:           getEnvInt("PROJECT_MEMORY_END_HOUR", 6),
 		ReportTwoPassEnabled:           getEnv("REPORT_TWO_PASS_ENABLED", "false") == "true",
 		AIDAPublicBaseURL:              getEnv("AIDA_PUBLIC_BASE_URL", ""),
 		AIDAInternalMetricsAddr:        getEnv("AIDA_INTERNAL_METRICS_ADDR", ":9091"),
@@ -184,6 +188,18 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func getEnvInt(key string, fallback int) int {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return fallback
+	}
+	return value
 }
 
 func getWorkerCount(key string) (int, error) {

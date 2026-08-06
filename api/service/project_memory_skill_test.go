@@ -6,12 +6,13 @@ import (
 )
 
 func TestProjectMemorySkillUsesValidatedParentAndAliasContract(t *testing.T) {
-	if ProjectMemorySkillVersion != "project-memory-v4" {
+	if ProjectMemorySkillVersion != "project-memory-v5" {
 		t.Fatalf("version = %q", ProjectMemorySkillVersion)
 	}
 	markdown := ProjectMemorySkillMarkdown()
 	required := []string{
 		"First compare all current_theme items and build a parent map",
+		"workspace_refs are opaque continuity evidence",
 		"create_new: create a stable project",
 		"include both the complete child name and the remaining child phrase",
 		"芯片验证平台使用手册 and 使用手册",

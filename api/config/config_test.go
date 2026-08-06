@@ -93,9 +93,12 @@ func TestLoadProjectMemoryConfiguration(t *testing.T) {
 	t.Setenv("PROJECT_MEMORY_SKILL_OWNER", "100866")
 	t.Setenv("PROJECT_MEMORY_SKILL_VERSION", "project-memory-v1")
 	t.Setenv("PROJECT_MEMORY_MCP_URL", "https://test.example.com/api/v1/mcp/project-memory")
+	t.Setenv("PROJECT_MEMORY_START_HOUR", "0")
+	t.Setenv("PROJECT_MEMORY_END_HOUR", "24")
 	config := Load()
 	if !config.ProjectMemoryNightlyEnabled || config.ProjectMemoryAgentID != "memory-resolver-test" ||
-		config.ProjectMemoryModelID != "deepseek-v4-flash" || config.ProjectMemorySkillOwner != "100866" {
+		config.ProjectMemoryModelID != "deepseek-v4-flash" || config.ProjectMemorySkillOwner != "100866" ||
+		config.ProjectMemoryStartHour != 0 || config.ProjectMemoryEndHour != 24 {
 		t.Fatalf("project memory config = %#v", config)
 	}
 	if err := config.ValidateProjectMemoryResources(); err != nil {

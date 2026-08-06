@@ -556,6 +556,15 @@ func prepareReportResultFromAcceptedBrief(
 	args writeReportResultArgs,
 	storedBrief reportbrief.Stored,
 ) (string, string, error) {
+	if reportType == reportTypePersonalDaily && strings.TrimSpace(run.ReportAgentSource) != managedAgentSourcePersonal {
+		formatMode := strings.TrimSpace(args.FormatMode)
+		if formatMode != "" && formatMode != standardReportFormatMode {
+			return "", "", mcpErr("INVALID_ARGUMENT", "format_mode must be standard for a system report run")
+		}
+		if content, summary, ok := storedBrief.ReaderReport(); ok {
+			return content, summary, nil
+		}
+	}
 	if readerSummary, ok := storedBrief.ReaderSummary(); ok {
 		args.Summary = readerSummary
 	}

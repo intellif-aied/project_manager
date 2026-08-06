@@ -292,7 +292,7 @@ func projectDigestV2(session SessionSource, includeThreadContext bool) (WorkEvid
 		}
 		appendWorkEvidenceFact(
 			&projection, factIndexes, &factObservations,
-			candidate.Identity, threadRef, candidate.Observation,
+			candidate.Identity, threadRef, candidate.Observation, candidate.SourceRef,
 		)
 	}
 	if len(projection.Facts) == 0 && digest.ReportPeriod.ResultWorkUnitCount > 0 {
@@ -888,6 +888,7 @@ func appendWorkEvidenceFact(
 	identity workEvidenceFactIdentity,
 	threadRef string,
 	observation WorkEvidenceObservation,
+	sourceRefs ...string,
 ) {
 	index, exists := indexes[identity]
 	if !exists {
@@ -901,6 +902,11 @@ func appendWorkEvidenceFact(
 		*observationIndexes = append(
 			*observationIndexes, make(map[workEvidenceObservationIdentity]int),
 		)
+	}
+	for _, sourceRef := range sourceRefs {
+		if sourceRef != "" {
+			projection.Facts[index].SourceRefs = appendUniqueString(projection.Facts[index].SourceRefs, sourceRef)
+		}
 	}
 	if threadRef != "" {
 		refs := projection.Facts[index].ThreadRefs
@@ -944,4 +950,13 @@ func appendWorkEvidenceFact(
 		existing.Category = observation.Category
 		existing.Status = observation.Status
 	}
+}
+
+func appendUniqueString(values []string, value string) []string {
+	for _, current := range values {
+		if current == value {
+			return values
+		}
+	}
+	return append(values, value)
 }

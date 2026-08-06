@@ -38,6 +38,7 @@ type PrepareSession struct {
 	LastActivityAt   *time.Time      `json:"last_activity_at,omitempty"`
 	CWD              string          `json:"cwd,omitempty"`
 	ProjectName      string          `json:"project_name,omitempty"`
+	RepositoryKey    string          `json:"repository_key,omitempty"`
 	Sources          []PrepareSource `json:"sources"`
 }
 
@@ -77,6 +78,9 @@ func ValidatePrepare(request PrepareRequest) error {
 			return fmt.Errorf("%w: canonical session identity is required and legacy agent types are forbidden", ErrInvalidRequest)
 		}
 		identity := agentType + "\n" + sessionRef
+		if key := strings.TrimSpace(session.RepositoryKey); key != "" && !validRepositoryKey(key) {
+			return fmt.Errorf("%w: repository_key must be a lowercase SHA-256 hash", ErrInvalidRequest)
+		}
 		if _, exists := seen[identity]; exists {
 			return fmt.Errorf("%w: duplicate session identity", ErrInvalidRequest)
 		}
@@ -97,6 +101,18 @@ func ValidatePrepare(request PrepareRequest) error {
 		return fmt.Errorf("%w: at least one canonical source is required", ErrInvalidRequest)
 	}
 	return nil
+}
+
+func validRepositoryKey(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	for _, current := range value {
+		if (current < '0' || current > '9') && (current < 'a' || current > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func validUsageCapability(value string) bool {

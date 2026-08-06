@@ -9,21 +9,26 @@ import (
 	"strings"
 )
 
-const maxHistoricalHints = 5
+const maxHistoricalHints = 3
 
 type HintRequest struct {
 	UserID     string
+	RunID      string
 	ReportDate string
 	Facts      []FactInput
 }
 
 type HistoricalProjectHint struct {
-	ProjectRef     string   `json:"project_ref"`
-	CanonicalName  string   `json:"canonical_name"`
-	Aliases        []string `json:"aliases,omitempty"`
-	MatchedFactRef []string `json:"matched_fact_refs"`
-	Confidence     float64  `json:"confidence"`
-	CandidateOnly  bool     `json:"candidate_only,omitempty"`
+	ProjectRef    string   `json:"project_ref"`
+	CanonicalName string   `json:"canonical_name"`
+	Aliases       []string `json:"aliases,omitempty"`
+	// MatchedFactRef is the compatibility union exposed to older callers.
+	MatchedFactRef   []string `json:"matched_fact_refs"`
+	SemanticFactRef  []string `json:"semantic_fact_refs,omitempty"`
+	WorkspaceFactRef []string `json:"workspace_fact_refs,omitempty"`
+	Confidence       float64  `json:"confidence"`
+	CandidateOnly    bool     `json:"candidate_only,omitempty"`
+	MatchBasis       string   `json:"match_basis,omitempty"`
 }
 
 func LoadHistoricalHints(ctx context.Context, tx *sql.Tx, request HintRequest) ([]HistoricalProjectHint, error) {
@@ -59,6 +64,20 @@ func LoadHistoricalHints(ctx context.Context, tx *sql.Tx, request HintRequest) (
 	}
 	projects = filtered
 	byProject := map[string]*HistoricalProjectHint{}
+	workspaceMatches, err := loadWorkspaceHintMatches(ctx, tx, request)
+	if err != nil {
+		return nil, err
+	}
+	for projectRef, match := range workspaceMatches {
+		if !acceptedRefs[projectRef] {
+			continue
+		}
+		byProject[projectRef] = &HistoricalProjectHint{
+			ProjectRef: projectRef, CanonicalName: match.CanonicalName,
+			MatchedFactRef: match.FactRefs, WorkspaceFactRef: match.FactRefs, Confidence: match.Confidence,
+			CandidateOnly: true, MatchBasis: "workspace",
+		}
+	}
 	for _, fact := range request.Facts {
 		resolution := resolveFact(fact, projects, request.ReportDate)
 		if resolution.Decision != "matched" || resolution.Confidence < highConfidenceScore || resolution.ProjectRef == "" {
@@ -70,7 +89,7 @@ func LoadHistoricalHints(ctx context.Context, tx *sql.Tx, request HintRequest) (
 				if candidate.ProjectRef == resolution.ProjectRef {
 					item = &HistoricalProjectHint{
 						ProjectRef: resolution.ProjectRef, CanonicalName: candidate.CanonicalName,
-						Confidence: resolution.Confidence,
+						Confidence: resolution.Confidence, MatchBasis: "semantic",
 					}
 					break
 				}
@@ -80,6 +99,11 @@ func LoadHistoricalHints(ctx context.Context, tx *sql.Tx, request HintRequest) (
 			}
 			byProject[resolution.ProjectRef] = item
 		}
+		if item.MatchBasis == "workspace" {
+			item.MatchBasis = "workspace_semantic"
+		}
+		item.CandidateOnly = false
+		item.SemanticFactRef = appendUnique(item.SemanticFactRef, fact.FactRef)
 		item.MatchedFactRef = appendUnique(item.MatchedFactRef, fact.FactRef)
 		if resolution.Confidence > item.Confidence {
 			item.Confidence = resolution.Confidence
@@ -100,29 +124,56 @@ func LoadHistoricalHints(ctx context.Context, tx *sql.Tx, request HintRequest) (
 		}
 		return result[i].CanonicalName < result[j].CanonicalName
 	})
-	// Keep recently accepted projects as optional naming candidates even when
-	// deterministic alias matching finds no Fact anchor. This gives the Report
-	// Agent bounded project vocabulary without exposing historical outcomes.
-	for _, project := range projects {
-		if len(result) >= maxHistoricalHints {
-			break
-		}
-		if byProject[project.ID] != nil {
-			continue
-		}
-		aliases, err := loadHintAliases(ctx, tx, request.UserID, project.ID)
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, HistoricalProjectHint{
-			ProjectRef: project.ID, CanonicalName: project.CanonicalName,
-			Aliases: aliases, MatchedFactRef: []string{}, CandidateOnly: true,
-		})
-	}
 	if len(result) > maxHistoricalHints {
 		result = result[:maxHistoricalHints]
 	}
 	return result, nil
+}
+
+type workspaceHintMatch struct {
+	CanonicalName string
+	FactRefs      []string
+	Confidence    float64
+}
+
+func loadWorkspaceHintMatches(ctx context.Context, tx *sql.Tx, request HintRequest) (map[string]workspaceHintMatch, error) {
+	result := make(map[string]workspaceHintMatch)
+	if strings.TrimSpace(request.RunID) == "" {
+		return result, nil
+	}
+	rows, err := tx.QueryContext(ctx, `
+		SELECT link.project_id::text, project.canonical_name, source.fact_ref,
+		       (link.confidence * (0.7 + link.source_weight * 0.3))::float8
+		FROM report_run_fact_sources source
+		JOIN report_source_selections selection ON selection.attached_run_id = source.run_id
+		JOIN report_source_selection_items item
+		  ON item.selection_id = selection.id AND item.session_ref_snapshot = source.session_ref
+		JOIN report_workspace_evidence evidence
+		  ON evidence.source_session_id = item.session_id
+		JOIN report_project_workspace_links link ON link.workspace_id = evidence.workspace_id
+		JOIN report_projects project ON project.id = link.project_id
+		WHERE source.run_id = $1 AND project.user_id = $2
+		  AND project.first_seen_on < $3::date AND project.status <> 'ended'
+		ORDER BY link.confidence DESC, link.last_seen_on DESC`, request.RunID, request.UserID, request.ReportDate)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var projectRef, name, factRef string
+		var confidence float64
+		if err := rows.Scan(&projectRef, &name, &factRef, &confidence); err != nil {
+			return nil, err
+		}
+		current := result[projectRef]
+		current.CanonicalName = name
+		current.FactRefs = appendUnique(current.FactRefs, factRef)
+		if confidence > current.Confidence {
+			current.Confidence = confidence
+		}
+		result[projectRef] = current
+	}
+	return result, rows.Err()
 }
 
 func snapshotProjectRefs(payload []byte) map[string]bool {

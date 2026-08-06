@@ -278,6 +278,7 @@ func contextBuildRequest(run Run, selectionID string) (reportcontext.BuildReques
 		Representation:          stringValue(run.ExecutionInput, "report_context_representation"),
 		IncludeWorkThreads:      isSystemPersonalDaily,
 		EnableMemoryShadow:      isSystemPersonalDaily,
+		EnableWorkspaceMemory:   isSystemPersonalDaily,
 		EnableContinuityContext: !isSystemPersonalDaily,
 	}
 	if reportType == "" || period.Start == "" || period.End == "" {

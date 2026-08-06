@@ -5,7 +5,7 @@ import "strings"
 const (
 	ProjectMemorySkillSlug    = "aida-project-memory"
 	ProjectMemorySkillName    = "Aida Project Memory Skill"
-	ProjectMemorySkillVersion = "project-memory-v4"
+	ProjectMemorySkillVersion = "project-memory-v5"
 	ProjectMemoryMCPSlug      = "aida-project-memory-mcp"
 	ProjectMemoryMCPVersion   = "project-memory-v1"
 )
@@ -22,7 +22,7 @@ Maintain naming and grouping memory for one user. This is not report writing.
 
 1. Call get_project_memory_context exactly once with {}.
 2. Treat the returned Context as the complete input. Do not read Sessions, Git, files, reports, or any other MCP.
-3. First compare all current_theme items and build a parent map. Themes that clearly serve the same named product, project, protocol, or business capability must use the same parent canonical_name even when one theme is documentation, deployment, a module, or a fix. Do not let one report create separate parent projects for a parent and its child work.
+3. First compare all current_theme items and build a parent map. Themes that clearly serve the same named product, project, protocol, or business capability must use the same parent canonical_name even when one theme is documentation, deployment, a module, or a fix. Do not let one report create separate parent projects for a parent and its child work. workspace_refs are opaque continuity evidence supplied by Aida: repeated refs may support linking related themes, but never override a conflicting current title or create a project name by themselves.
 4. Decide once for every current_theme:
    - link_existing: link to one supplied candidate project only.
    - create_new: create a stable project, product, protocol, or business-capability name.

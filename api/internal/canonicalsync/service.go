@@ -146,7 +146,7 @@ func registerSession(ctx context.Context, tx *sql.Tx, userID string, request Pre
 		if last == nil {
 			last = request.StartedAt
 		}
-		_, err = tx.ExecContext(ctx, `UPDATE sessions SET cwd=COALESCE(NULLIF($1,''),cwd),project_name=COALESCE(NULLIF($2,''),project_name),summary=COALESCE(NULLIF($3,''),summary),last_activity_at=CASE WHEN $4::timestamptz IS NULL THEN last_activity_at ELSE GREATEST(last_activity_at,$4) END,updated_at=now() WHERE id=$5`, request.CWD, request.ProjectName, request.Summary, last, id)
+		_, err = tx.ExecContext(ctx, `UPDATE sessions SET cwd=COALESCE(NULLIF($1,''),cwd),project_name=COALESCE(NULLIF($2,''),project_name),repository_key=COALESCE(NULLIF($3,''),repository_key),summary=COALESCE(NULLIF($4,''),summary),last_activity_at=CASE WHEN $5::timestamptz IS NULL THEN last_activity_at ELSE GREATEST(last_activity_at,$5) END,updated_at=now() WHERE id=$6`, request.CWD, request.ProjectName, request.RepositoryKey, request.Summary, last, id)
 		return id, status, err
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -161,7 +161,7 @@ func registerSession(ctx context.Context, tx *sql.Tx, userID string, request Pre
 	if request.LastActivityAt != nil && !request.LastActivityAt.IsZero() {
 		last = request.LastActivityAt.UTC()
 	}
-	err = tx.QueryRowContext(ctx, `INSERT INTO sessions (session_ref,user_id,agent_type,parent_session_ref,forked_at,fork_source,started_at,last_activity_at,cwd,project_name,summary,content_status) VALUES ($1,$2,$3,NULLIF($4,''),$5,NULLIF($6,''),$7,$8,NULLIF($9,''),NULLIF($10,''),NULLIF($11,''),'uploading') RETURNING id,content_status`, request.SessionRef, userID, request.AgentType, request.ParentSessionRef, request.ForkedAt, request.ForkSource, started, last, request.CWD, request.ProjectName, request.Summary).Scan(&id, &status)
+	err = tx.QueryRowContext(ctx, `INSERT INTO sessions (session_ref,user_id,agent_type,parent_session_ref,forked_at,fork_source,started_at,last_activity_at,cwd,project_name,repository_key,summary,content_status) VALUES ($1,$2,$3,NULLIF($4,''),$5,NULLIF($6,''),$7,$8,NULLIF($9,''),NULLIF($10,''),NULLIF($11,''),NULLIF($12,''),'uploading') RETURNING id,content_status`, request.SessionRef, userID, request.AgentType, request.ParentSessionRef, request.ForkedAt, request.ForkSource, started, last, request.CWD, request.ProjectName, request.RepositoryKey, request.Summary).Scan(&id, &status)
 	return id, status, err
 }
 

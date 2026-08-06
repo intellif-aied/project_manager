@@ -53,7 +53,8 @@ type historicalBrief struct {
 	Workstreams []struct {
 		Subject      string `json:"subject"`
 		Deliverables []struct {
-			Result string `json:"result"`
+			Result   string   `json:"result"`
+			FactRefs []string `json:"fact_refs"`
 		} `json:"deliverables"`
 	} `json:"workstreams"`
 }

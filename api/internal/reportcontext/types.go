@@ -38,6 +38,7 @@ type BuildRequest struct {
 	Representation          string
 	IncludeWorkThreads      bool
 	EnableMemoryShadow      bool
+	EnableWorkspaceMemory   bool
 	EnableContinuityContext bool
 }
 
@@ -225,6 +226,9 @@ type WorkEvidenceFact struct {
 	Source       string                    `json:"source,omitempty"`
 	ThreadRefs   []string                  `json:"thread_refs,omitempty"`
 	Observations []WorkEvidenceObservation `json:"observations"`
+	// SourceRefs are internal provenance used to connect an accepted Brief back
+	// to frozen Session slices. They are stored separately and never exposed.
+	SourceRefs []string `json:"-"`
 }
 
 type WorkEvidenceObservation struct {
@@ -274,13 +278,15 @@ type ProjectMemoryContext struct {
 }
 
 type HistoricalProjectHint struct {
-	ProjectRef      string   `json:"project_ref"`
-	CanonicalName   string   `json:"canonical_name"`
-	Aliases         []string `json:"aliases,omitempty"`
-	RelatedFactRefs []string `json:"related_fact_refs"`
-	Confidence      float64  `json:"confidence"`
-	CandidateOnly   bool     `json:"candidate_only,omitempty"`
-	Instruction     string   `json:"instruction"`
+	ProjectRef        string   `json:"project_ref"`
+	CanonicalName     string   `json:"canonical_name"`
+	Aliases           []string `json:"aliases,omitempty"`
+	SemanticFactRefs  []string `json:"semantic_fact_refs,omitempty"`
+	WorkspaceFactRefs []string `json:"workspace_fact_refs,omitempty"`
+	Confidence        float64  `json:"confidence"`
+	CandidateOnly     bool     `json:"candidate_only,omitempty"`
+	MatchBasis        string   `json:"match_basis,omitempty"`
+	Instruction       string   `json:"instruction"`
 }
 
 type Payload struct {

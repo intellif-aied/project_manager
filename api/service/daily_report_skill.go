@@ -97,17 +97,19 @@ Use two distinct semantic passes in this same Agent Session.
 ### Pass 1: build and submit the Brief
 
 - Read every work_evidence.fact and fact_ref before selecting reportable work. A Fact does not need to appear just because it is verifiable.
-- project_memory_context is optional context, not evidence or assignment. Current Facts win; related_fact_refs suggest similarity, not identity. Use supported history; otherwise ignore it; candidate_only is weak.
+- project_memory_context is optional context, not evidence or assignment. Current Facts always determine the reportable outcomes and win on any conflict.
+- For a workspace_semantic Hint, semantic_fact_refs are strong current-day anchors and workspace_fact_refs are co-located candidates. Use canonical_name for anchored compatible Facts unless they name a conflicting project or goal. Other Hints remain weak.
+- Final parent check is mandatory: merge two or more proposed Workstreams containing one Hint's semantic_fact_refs under canonical_name. Keep a workspace-only Workstream separate unless its current Facts clearly fit.
 - Use threads, thread_refs, user-authored goals, and repeated named work objects as correlation hints, never headings or report text.
 - First group Facts into a two-level map: stable project, product, protocol, or business capability -> its modules, candidates, experiments, and activities. Create Workstreams only from the first level.
 - Use exactly one subject per shared work object. Use the exact project name when present; otherwise use the shortest evidence-supported user-facing shared capability without inventing a brand.
-- Write title as the complete reader-facing headline for that workstream: subject plus only one or two primary outcomes. Keep demos, test cases, validation scenarios, supporting metrics, and traces out of title; they may remain in deliverables.
+- Write title as one natural headline of 16–52 Chinese characters: subject plus one primary outcome only. Never use Markdown bold, a nested list, a colon followed by implementation details, or metrics in title. Keep demos, test cases, validation scenarios, supporting metrics, and traces out of title; they may remain in deliverables.
 - Candidate IDs, model variants, stages, lanes, modules, repositories, directories, datasets, and evaluation runs are never subjects by themselves. Keep them inside deliverables.
 - Before submitting, compare every subject pair. Subjects sharing the same leading named entity but differing only by evaluation, training, research, documentation, or another activity must merge into that named entity.
 - A manual, document, report, or task package is an outcome, never a subject. Use the product or capability it supports.
 - Split a subject only when evidence gives it a separate goal and independently reviewable outcome. Group one subject's implementation, investigation, documentation, validation, fixes, and operations together.
 - Evaluation tools, datasets, review packages, and documentation are supporting evidence by default, not standalone deliverables. Keep one only when it is itself a main outcome the user directly advanced.
-- For personal_daily, keep at most three reader-worthy deliverables per workstream. Merge related Facts and cite only one to three representative non-duplicate fact_refs; references prove an outcome, not coverage.
+- For personal_daily, keep one or two reader-worthy deliverables per workstream by default; use a third only for an independent necessary outcome that would otherwise be lost. Each result should normally be 35–120 Chinese characters and state one outcome plus the minimum useful detail. Do not enumerate every API, component, interaction, test case, configuration, or implementation step. Merge related Facts and cite only one to three representative non-duplicate fact_refs; references prove an outcome, not coverage.
 - Keep one to three workstreams by default and never more than five. Session, repository, CWD, branch, file, artifact type, tool call, duration, or detail never creates a workstream.
 - Treat Git data, paths, commands, tests, builds, merges, deployment, and other operational traces as hidden association evidence only. They must not appear as a deliverable or final report statement.
 - Describe what capability, design, problem, or user experience changed. Do not describe how code moved through development or release machinery.
@@ -126,14 +128,14 @@ Use two distinct semantic passes in this same Agent Session.
 - Call write_report_brief with {"brief_json":"<serialized inner JSON object>"}. Never send run_id. Correct every REPORT_BRIEF_INVALID violation together and retry at most twice without reading Context again.
 - On REPORT_BRIEF_RETRY_EXHAUSTED, do not fail the run: compose a concise outcome report from the last Brief draft and call write_report_result without brief_hash.
 
-### Pass 2: write only from the accepted Brief
+### Pass 2: finalize one canonical report from the accepted Brief
 
 - Treat the returned normalized Brief as the only writing source. Never return to Context or reconstruct excluded facts.
-- Build one canonical report by copying each accepted workstream title verbatim, in order, as one Markdown ordered-list item. Use the exact same ordered list for summary and content.
-- Keep one item per accepted workstream, normally one to three and never more than five. Do not add headings, detail paragraphs, nested lists, blank lines, 工作概览, or 工作详情.
-- Do not expand titles from deliverables or add commit, merge, test, deployment, release, environment, validation, recommendation, inferred completion state, or next action.
+- Do not perform another semantic selection. The server deterministically renders the accepted Brief into one report body.
+- A workstream with one accepted outcome stays one ordered-list item. When it has multiple outcomes, the server uses subject as the ordered-list item and renders deliverable results as its nested bullet items, at most three concise results.
+- Do not add headings, 工作概览, 工作详情, commit, merge, test, deployment, release, environment, validation, recommendation, inferred completion state, or next action.
 - If no_reportable_work is true, use only 本期无可核验的工作记录 without numbering.
-- Call write_report_result with {"brief_hash": accepted_brief.brief_hash, "summary": report, "content": report}.
+- Call write_report_result with {"brief_hash": accepted_brief.brief_hash, "summary": report, "content": report}; the compatibility fields may contain the accepted title list because the server replaces them from the accepted Brief.
 - Correct every REPORT_RESULT_INVALID violation together once. On REPORT_RESULT_RETRY_EXHAUSTED, retry the same summary and content without brief_hash. If write_report_failure returns REPORT_DEGRADED_RESULT_REQUIRED, immediately write without brief_hash.
 
 ## 3. Direct flow: interpret the evidence
@@ -147,7 +149,7 @@ Use two distinct semantic passes in this same Agent Session.
 ## 4. Direct flow: write the report
 
 - Write an outcome-led narrative about the capability, design, problem resolution, or user-facing change.
-- For personal_daily, write one canonical Markdown ordered list with one concise outcome item per workstream, normally one to three and never more than five. Use the exact same list for summary and content. Do not add headings, nested lists, 工作概览, or 工作详情.
+- For personal_daily, write one Markdown ordered list, normally one to three and never more than five top-level items. A shared subject may contain nested bullet outcomes. Do not add headings, 工作概览, or 工作详情.
 - For other report types, use level-two workstream headings and one plain-text summary paragraph.
 - Do not create independent 明日计划, 下周计划, 后续计划, 建议, or 待协调 sections. Never invent future actions.
 - If there is no reportable fact, use only 本期无可核验的工作记录.

@@ -11,11 +11,13 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/aidashboard/api/internal/biztime"
 	"github.com/aidashboard/api/internal/observability"
 	"github.com/aidashboard/api/internal/reportmemory"
 	"github.com/aidashboard/api/internal/reportsource"
+	"github.com/lib/pq"
 )
 
 const SchemaVersion = "report-context/v1"
@@ -63,6 +65,11 @@ func (s *Service) Build(ctx context.Context, request BuildRequest) (StoredContex
 	if err != nil {
 		return StoredContext{}, err
 	}
+	if request.EnableWorkspaceMemory && request.SourceSelectionID != "" {
+		if _, err := s.observeSelectionWorkspaces(ctx, request.UserID, request.SourceSelectionID); err != nil {
+			log.Printf("observe report workspaces failed for run %s: %v", request.RunID, err)
+		}
+	}
 
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: false})
 	if err != nil {
@@ -86,6 +93,11 @@ func (s *Service) Build(ctx context.Context, request BuildRequest) (StoredContex
 	assembled, err = projectPayloadForRepresentation(assembled, request.Representation, request.IncludeWorkThreads)
 	if err != nil {
 		return StoredContext{}, err
+	}
+	if assembled.WorkEvidence != nil && request.SourceSelectionID != "" {
+		if err := storeFactSources(ctx, tx, request.RunID, assembled.WorkEvidence); err != nil {
+			return StoredContext{}, err
+		}
 	}
 	if request.EnableMemoryShadow && assembled.WorkEvidence != nil {
 		memoryContext, err := loadProjectMemoryContext(ctx, tx, request, assembled.WorkEvidence)
@@ -128,6 +140,75 @@ func (s *Service) Build(ctx context.Context, request BuildRequest) (StoredContex
 	}
 	observability.ObservePayload("context", len(payload))
 	return StoredContext{Payload: payload, Hash: hash, Bytes: len(payload)}, nil
+}
+
+const workspaceObservationAttempts = 3
+
+// observeSelectionWorkspaces keeps optional identity materialization outside
+// the Report Context transaction. PostgreSQL aborts a transaction after a
+// serialization/deadlock error, so swallowing that error inside Build would
+// make the mandatory context write fail as well.
+func (s *Service) observeSelectionWorkspaces(ctx context.Context, userID, selectionID string) (reportmemory.WorkspaceEvidenceStats, error) {
+	var stats reportmemory.WorkspaceEvidenceStats
+	var lastErr error
+	for attempt := 0; attempt < workspaceObservationAttempts; attempt++ {
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return stats, err
+		}
+		stats, err = reportmemory.ObserveSelectionWorkspaces(ctx, tx, userID, selectionID)
+		if err == nil {
+			err = tx.Commit()
+		} else {
+			_ = tx.Rollback()
+		}
+		if err == nil {
+			return stats, nil
+		}
+		lastErr = err
+		if !retryableWorkspaceObservationError(err) || attempt+1 == workspaceObservationAttempts {
+			break
+		}
+		timer := time.NewTimer(time.Duration(attempt+1) * 20 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return stats, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return stats, lastErr
+}
+
+func retryableWorkspaceObservationError(err error) bool {
+	var pqErr *pq.Error
+	if !errors.As(err, &pqErr) {
+		return false
+	}
+	switch string(pqErr.Code) {
+	case "40001", "40P01", "23505":
+		return true
+	default:
+		return false
+	}
+}
+
+func storeFactSources(ctx context.Context, tx *sql.Tx, runID string, evidence *WorkEvidence) error {
+	if tx == nil || evidence == nil {
+		return nil
+	}
+	for _, fact := range evidence.Facts {
+		for _, sourceRef := range fact.SourceRefs {
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO report_run_fact_sources (run_id, fact_ref, session_ref)
+				VALUES ($1, $2, $3)
+				ON CONFLICT (run_id, fact_ref, session_ref) DO NOTHING`,
+				runID, fact.FactRef, sourceRef); err != nil {
+				return fmt.Errorf("store report fact source: %w", err)
+			}
+		}
+	}
+	return nil
 }
 
 // BuildPersonal remains as a compatibility wrapper while all callers move to
@@ -212,8 +293,12 @@ func loadProjectMemoryContext(ctx context.Context, tx *sql.Tx, request BuildRequ
 			FactRef: fact.FactRef, Text: fact.Text, ThreadGoals: goals,
 		})
 	}
+	hintRunID := ""
+	if request.EnableWorkspaceMemory {
+		hintRunID = request.RunID
+	}
 	hints, err := reportmemory.LoadHistoricalHints(ctx, tx, reportmemory.HintRequest{
-		UserID:     request.Target.UserID,
+		UserID: request.Target.UserID, RunID: hintRunID,
 		ReportDate: request.Period.Start, Facts: facts,
 	})
 	if err != nil {
@@ -229,7 +314,7 @@ func projectMemoryContextFromHints(hints []reportmemory.HistoricalProjectHint) *
 	result := &ProjectMemoryContext{
 		Purpose:      "提供用户近期项目名称和别名作为可选背景，帮助理解当天工作；是否关联由当天 Facts 决定。",
 		EvidenceRule: "历史提示不是当天事实；不得复制历史成果、状态、指标、日期或结论。",
-		GroupingRule: "project_memory_context 不是归属要求。related_fact_refs 只说明当天 Facts 与历史名称存在可能联系，不证明属于同一项目。当天出现新的项目名称、目标或边界时以当天 Facts 为准；两个相似项目不得因历史背景被合并；无法确认时忽略 Hint，并使用当天事实支持的中性名称。",
+		GroupingRule: "project_memory_context 不是成果证据或强制归属。match_basis=workspace_semantic 且 candidate_only=false 时，semantic_fact_refs 是项目语义锚点，workspace_fact_refs 只是同工作空间候选；当天 Facts 没有出现冲突项目或目标时，可用 canonical_name 归并锚点及兼容的别名和子能力。其他 Hint 仍是弱参考；两个相似项目不得因历史背景被合并。",
 	}
 	for _, hint := range hints {
 		instruction := "这是根据名称或别名相似性召回的历史背景，不是项目归属结论。结合当天 Facts 自行判断是否采用；冲突、不确定或已切换项目时忽略。历史名称不得作为成果证据。"
@@ -238,9 +323,16 @@ func projectMemoryContextFromHints(hints []reportmemory.HistoricalProjectHint) *
 		}
 		converted := HistoricalProjectHint{
 			ProjectRef: hint.ProjectRef, CanonicalName: hint.CanonicalName,
-			Aliases: hint.Aliases, RelatedFactRefs: hint.MatchedFactRef,
-			Confidence:    hint.Confidence,
+			Aliases:          hint.Aliases,
+			SemanticFactRefs: hint.SemanticFactRef, WorkspaceFactRefs: hint.WorkspaceFactRef,
+			Confidence: hint.Confidence, MatchBasis: hint.MatchBasis,
 			CandidateOnly: hint.CandidateOnly, Instruction: instruction,
+		}
+		switch hint.MatchBasis {
+		case "workspace_semantic":
+			converted.Instruction = "semantic_fact_refs 通过当天名称/别名语义锚定该历史项目，workspace_fact_refs 仅表示同工作空间候选。这是高可信的父项目命名参考，但不是当天成果证据；锚点应采用 canonical_name，工作空间候选只有在当天目标兼容且无其他项目冲突时才归入，并保留具体工作为子成果。"
+		case "workspace":
+			converted.Instruction = "这是由当天 Fact 所在 Workspace 召回的历史项目弱参考，只用于辅助项目命名与归并。当天事实兼容时可采用；出现新项目名称、目标冲突或无法确认时忽略。历史内容不得作为当天成果。"
 		}
 		result.Hints = append(result.Hints, converted)
 	}

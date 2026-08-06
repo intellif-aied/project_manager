@@ -20,6 +20,10 @@ func main() {
 	switch os.Args[1] {
 	case "validate":
 		validateCommand(os.Args[2:])
+	case "validate-association":
+		validateAssociationCommand(os.Args[2:])
+	case "evaluate-association":
+		evaluateAssociationCommand(os.Args[2:])
 	case "freeze-source":
 		freezeSourceCommand(os.Args[2:])
 	case "run":
@@ -33,6 +37,50 @@ func main() {
 	default:
 		usage()
 	}
+}
+
+func evaluateAssociationCommand(arguments []string) {
+	flags := flag.NewFlagSet("evaluate-association", flag.ExitOnError)
+	manifestPath := flags.String("manifest", "", "Project Association dataset manifest JSON")
+	candidatesPath := flags.String("candidates", "", "candidate Brief workstream subjects JSON")
+	_ = flags.Parse(arguments)
+	if strings.TrimSpace(*manifestPath) == "" || strings.TrimSpace(*candidatesPath) == "" {
+		fatal(fmt.Errorf("manifest and candidates are required"))
+	}
+	dataset, err := reporteval.LoadProjectAssociationDataset(*manifestPath)
+	if err != nil {
+		fatal(err)
+	}
+	candidates, err := reporteval.LoadProjectAssociationCandidates(*candidatesPath)
+	if err != nil {
+		fatal(err)
+	}
+	result, err := reporteval.EvaluateProjectAssociation(dataset, candidates)
+	if err != nil {
+		fatal(err)
+	}
+	payload, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		fatal(err)
+	}
+	_, _ = os.Stdout.Write(append(payload, '\n'))
+	if !result.Passed {
+		os.Exit(1)
+	}
+}
+
+func validateAssociationCommand(arguments []string) {
+	flags := flag.NewFlagSet("validate-association", flag.ExitOnError)
+	manifestPath := flags.String("manifest", "", "Project Association dataset manifest JSON")
+	_ = flags.Parse(arguments)
+	if strings.TrimSpace(*manifestPath) == "" {
+		fatal(fmt.Errorf("manifest is required"))
+	}
+	dataset, err := reporteval.LoadProjectAssociationDataset(*manifestPath)
+	if err != nil {
+		fatal(err)
+	}
+	fmt.Printf("valid Project Association dataset: %s (%d cases)\n", dataset.DatasetVersion, len(dataset.Cases))
 }
 
 func aggregateCommand(arguments []string) {
@@ -271,7 +319,7 @@ func decodeFile(path string, output any) error {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: daily-report-eval <validate|freeze-source|run|verify|prepare-review|aggregate> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: daily-report-eval <validate|validate-association|evaluate-association|freeze-source|run|verify|prepare-review|aggregate> [flags]")
 	os.Exit(2)
 }
 

@@ -232,6 +232,13 @@ func applyProposal(
 		for _, alias := range decision.Aliases {
 			item.Aliases = appendUnique(item.Aliases, alias)
 		}
+		for _, workspaceRef := range themes[decision.ThemeRef].WorkspaceRefs {
+			if err := upsertProjectWorkspaceLink(
+				ctx, tx, job, input, projectID, workspaceRef, decision.ThemeRef, decision.Confidence,
+			); err != nil {
+				return "", err
+			}
+		}
 	}
 	for _, item := range applied {
 		report := historicalReport{id: job.ReportID, date: job.ReportDate, sourceType: input.SourceType, sourceWeight: input.SourceWeight}
@@ -298,6 +305,48 @@ func applyProposal(
 		return "", err
 	}
 	return snapshotID, tx.Commit()
+}
+
+func upsertProjectWorkspaceLink(
+	ctx context.Context, tx *sql.Tx, job queuedJob, input ConsolidationInput,
+	projectID, workspaceID, themeRef string, confidence float64,
+) error {
+	if strings.TrimSpace(workspaceID) == "" || confidence < 0.6 {
+		return nil
+	}
+	var ownerMatches bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS (SELECT 1 FROM report_workspaces WHERE id = $1 AND user_id = $2)`,
+		workspaceID, job.UserID).Scan(&ownerMatches); err != nil || !ownerMatches {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, `
+		INSERT INTO report_project_workspace_link_evidence (
+			project_id, workspace_id, report_id, theme_ref, report_date, confidence, source_weight
+		) VALUES ($1, $2, $3, $4, $5::date, $6, $7)
+		ON CONFLICT (project_id, workspace_id, report_id, theme_ref) DO NOTHING`,
+		projectID, workspaceID, job.ReportID, themeRef, job.ReportDate, confidence, input.SourceWeight)
+	if err != nil {
+		return err
+	}
+	delta := int64(0)
+	if affected, affectedErr := result.RowsAffected(); affectedErr == nil {
+		delta = affected
+	}
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO report_project_workspace_links (
+			project_id, workspace_id, confidence, source_weight, evidence_count,
+			first_seen_on, last_seen_on, resolver_version
+		) VALUES ($1, $2, $3, $4, GREATEST($5, 1), $6::date, $6::date, $7)
+		ON CONFLICT (project_id, workspace_id) DO UPDATE SET
+			confidence = GREATEST(report_project_workspace_links.confidence, EXCLUDED.confidence),
+			source_weight = GREATEST(report_project_workspace_links.source_weight, EXCLUDED.source_weight),
+			evidence_count = report_project_workspace_links.evidence_count + $5,
+			first_seen_on = LEAST(report_project_workspace_links.first_seen_on, EXCLUDED.first_seen_on),
+			last_seen_on = GREATEST(report_project_workspace_links.last_seen_on, EXCLUDED.last_seen_on),
+			resolver_version = EXCLUDED.resolver_version, updated_at = now()`,
+		projectID, workspaceID, confidence, input.SourceWeight, delta, job.ReportDate, ResolverVersion)
+	return err
 }
 
 func currentMemoryPayload(ctx context.Context, tx *sql.Tx, userID, currentReportID string) ([]byte, error) {

@@ -49,6 +49,7 @@ type PrepareSessionRequest struct {
 	LastActivityAt   *time.Time             `json:"last_activity_at,omitempty"`
 	CWD              string                 `json:"cwd,omitempty"`
 	ProjectName      string                 `json:"project_name,omitempty"`
+	RepositoryKey    string                 `json:"repository_key,omitempty"`
 	Sources          []PrepareSourceRequest `json:"sources"`
 }
 
@@ -173,6 +174,10 @@ func (s *SyncService) prepareOnce(ctx context.Context, userID, uploadMode string
 	request.ParentSessionRef = strings.TrimSpace(request.ParentSessionRef)
 	request.ForkSource = strings.TrimSpace(request.ForkSource)
 	request.CWD = strings.TrimSpace(request.CWD)
+	request.RepositoryKey = strings.TrimSpace(request.RepositoryKey)
+	if request.RepositoryKey != "" && !validSHA256(request.RepositoryKey) {
+		return nil, fmt.Errorf("%w: repository_key must be a lowercase SHA-256 hash", ErrInvalidSyncRequest)
+	}
 	if uploadMode == UploadModeTeam && filepath.IsAbs(request.CWD) {
 		request.CWD = filepath.Clean(request.CWD)
 	}
@@ -375,16 +380,16 @@ func lockOrCreateTeamSession(
 	err = tx.QueryRowContext(ctx, `
 		INSERT INTO sessions (
 			session_ref, user_id, agent_type, parent_session_ref, forked_at, fork_source,
-			started_at, last_activity_at, cwd, project_name, summary, content_status,
+			started_at, last_activity_at, cwd, project_name, repository_key, summary, content_status,
 			team_upload_team_id, team_sync_path_id, team_uploaded_by_user_id
 		) VALUES (
 			$1, $2, $3, NULLIF($4, ''), $5, NULLIF($6, ''),
-			$7, $8, NULLIF($9, ''), NULLIF($10, ''), NULLIF($11, ''), 'uploading',
-			$12, $13, $14
+			$7, $8, NULLIF($9, ''), NULLIF($10, ''), NULLIF($11, ''), NULLIF($12, ''), 'uploading',
+			$13, $14, $15
 		)
 		RETURNING id, content_status`,
 		request.SessionRef, ownerID, request.AgentType, request.ParentSessionRef, request.ForkedAt, request.ForkSource,
-		startedAt, lastActivityAt, request.CWD, request.ProjectName, request.Summary,
+		startedAt, lastActivityAt, request.CWD, request.ProjectName, request.RepositoryKey, request.Summary,
 		upload.TeamID, upload.PathID, upload.ActorID,
 	).Scan(&sessionID, &contentStatus)
 	return sessionID, contentStatus, err
@@ -402,11 +407,12 @@ func updateSessionMetadata(ctx context.Context, tx *sql.Tx, sessionID string, re
 			fork_source = COALESCE(NULLIF($3, ''), fork_source),
 			cwd = COALESCE(NULLIF($4, ''), cwd),
 			project_name = COALESCE(NULLIF($5, ''), project_name),
-			summary = COALESCE(NULLIF($6, ''), summary),
-			last_activity_at = CASE WHEN $7::timestamptz IS NULL THEN last_activity_at ELSE GREATEST(last_activity_at, $7) END,
+			repository_key = COALESCE(NULLIF($6, ''), repository_key),
+			summary = COALESCE(NULLIF($7, ''), summary),
+			last_activity_at = CASE WHEN $8::timestamptz IS NULL THEN last_activity_at ELSE GREATEST(last_activity_at, $8) END,
 			updated_at = now()
-		WHERE id = $8`, request.ParentSessionRef, request.ForkedAt, request.ForkSource,
-		request.CWD, request.ProjectName, request.Summary, lastActivity, sessionID)
+		WHERE id = $9`, request.ParentSessionRef, request.ForkedAt, request.ForkSource,
+		request.CWD, request.ProjectName, request.RepositoryKey, request.Summary, lastActivity, sessionID)
 	return err
 }
 
@@ -442,14 +448,14 @@ func lockOrCreateSession(
 	err = tx.QueryRowContext(ctx, `
 		INSERT INTO sessions (
 			session_ref, user_id, agent_type, parent_session_ref, forked_at, fork_source,
-			started_at, last_activity_at, cwd, project_name, summary, content_status
+			started_at, last_activity_at, cwd, project_name, repository_key, summary, content_status
 		) VALUES (
 			$1, $2, $3, NULLIF($4, ''), $5, NULLIF($6, ''),
-			$7, $8, NULLIF($9, ''), NULLIF($10, ''), NULLIF($11, ''), 'uploading'
+			$7, $8, NULLIF($9, ''), NULLIF($10, ''), NULLIF($11, ''), NULLIF($12, ''), 'uploading'
 		)
 		RETURNING id, content_status`,
 		request.SessionRef, userID, request.AgentType, request.ParentSessionRef, request.ForkedAt, request.ForkSource,
-		startedAt, lastActivityAt, request.CWD, request.ProjectName, request.Summary,
+		startedAt, lastActivityAt, request.CWD, request.ProjectName, request.RepositoryKey, request.Summary,
 	).Scan(&sessionID, &contentStatus)
 	return sessionID, contentStatus, err
 }

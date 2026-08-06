@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/aidashboard/daemon/internal/sessionadapter"
+	"github.com/aidashboard/daemon/internal/workspaceidentity"
 )
 
 const prefixCheckpointAlgorithm = "sha256-prefix-v1"
@@ -94,6 +95,7 @@ func (uploader *Uploader) prepareFamily(ctx context.Context, family []sessionada
 		LastActivityAt   *time.Time      `json:"last_activity_at,omitempty"`
 		CWD              string          `json:"cwd,omitempty"`
 		ProjectName      string          `json:"project_name,omitempty"`
+		RepositoryKey    string          `json:"repository_key,omitempty"`
 		Sources          []sourceRequest `json:"sources"`
 	}
 	request := struct {
@@ -118,6 +120,7 @@ func (uploader *Uploader) prepareFamily(ctx context.Context, family []sessionada
 			ForkedAt: timePointer(descriptor.ForkedAt), ForkSource: descriptor.ForkSource,
 			Summary: descriptor.Summary, StartedAt: timePointer(descriptor.StartedAt),
 			LastActivityAt: timePointer(descriptor.LastActivityAt), CWD: descriptor.CWD, ProjectName: descriptor.ProjectName,
+			RepositoryKey: workspaceidentity.RepositoryKey(descriptor.CWD),
 		}
 		if materialized.CanonicalPath != "" {
 			if materialized.SourceFormat != "aida_event_v1" {

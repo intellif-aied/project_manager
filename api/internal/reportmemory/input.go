@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 	"unicode"
@@ -52,6 +53,11 @@ func buildConsolidationInput(ctx context.Context, database *sql.DB, job queuedJo
 		return input, nil, 0, err
 	}
 	report.sourceType, report.sourceWeight = classifyNightlySource(report, hasOutcome)
+	if stats, shadowErr := materializeWorkspaceEvidenceForReport(ctx, database, job.UserID, job.ReportID); shadowErr != nil {
+		log.Printf("project memory workspace shadow materialization failed for user=%s report=%s: %v", job.UserID, job.ReportID, shadowErr)
+	} else if stats.EvidenceCreated > 0 {
+		log.Printf("project memory workspace shadow materialized user=%s report=%s identities=%d evidence=%d", job.UserID, job.ReportID, stats.IdentitiesObserved, stats.EvidenceCreated)
+	}
 	input.SourceType, input.SourceWeight = report.sourceType, report.sourceWeight
 	for _, workstream := range workstreamsFromBrief(report.briefPayload) {
 		input.BriefWorkstreams = append(input.BriefWorkstreams, workstream)
@@ -59,14 +65,30 @@ func buildConsolidationInput(ctx context.Context, database *sql.DB, job queuedJo
 			break
 		}
 	}
-	themes := consolidationThemes(report, input.BriefWorkstreams)
-	if len(themes) > maxCurrentThemes {
-		themes = themes[:maxCurrentThemes]
+	workspaceRefs, err := loadWorkspaceRefsByFact(ctx, database, job.UserID, job.ReportID)
+	if err != nil {
+		return input, nil, 0, err
 	}
-	for index, theme := range themes {
-		input.CurrentThemes = append(input.CurrentThemes, InputTheme{
-			ThemeRef: fmt.Sprintf("theme-%03d", index+1), Title: limitRunes(theme.Title, titleRuneLimit),
-		})
+	if report.generationMode == "managed_agent" && report.sourceType != sourceHumanEdited && len(input.BriefWorkstreams) > 0 {
+		for index, workstream := range input.BriefWorkstreams {
+			theme := InputTheme{ThemeRef: fmt.Sprintf("theme-%03d", index+1), Title: workstream.Subject, FactRefs: workstream.FactRefs}
+			for _, factRef := range workstream.FactRefs {
+				for _, workspaceRef := range workspaceRefs[factRef] {
+					theme.WorkspaceRefs = appendUnique(theme.WorkspaceRefs, workspaceRef)
+				}
+			}
+			input.CurrentThemes = append(input.CurrentThemes, theme)
+		}
+	} else {
+		themes := consolidationThemes(report, input.BriefWorkstreams)
+		if len(themes) > maxCurrentThemes {
+			themes = themes[:maxCurrentThemes]
+		}
+		for index, theme := range themes {
+			input.CurrentThemes = append(input.CurrentThemes, InputTheme{
+				ThemeRef: fmt.Sprintf("theme-%03d", index+1), Title: limitRunes(theme.Title, titleRuneLimit),
+			})
+		}
 	}
 	if len(input.CurrentThemes) == 0 {
 		return input, nil, 0, errors.New("final overview has no project memory themes")
@@ -121,6 +143,11 @@ func workstreamsFromBrief(raw string) []InputWorkstream {
 			if text != "" {
 				workstream.Deliverables = appendUnique(workstream.Deliverables, text)
 			}
+			for _, factRef := range deliverable.FactRefs {
+				if strings.TrimSpace(factRef) != "" {
+					workstream.FactRefs = appendUnique(workstream.FactRefs, factRef)
+				}
+			}
 			if len(workstream.Deliverables) >= 4 {
 				break
 			}
@@ -131,6 +158,33 @@ func workstreamsFromBrief(raw string) []InputWorkstream {
 		}
 	}
 	return result
+}
+
+func loadWorkspaceRefsByFact(ctx context.Context, database *sql.DB, userID, reportID string) (map[string][]string, error) {
+	result := make(map[string][]string)
+	rows, err := database.QueryContext(ctx, `
+		SELECT DISTINCT source.fact_ref, evidence.workspace_id::text
+		FROM daily_reports report
+		JOIN report_run_fact_sources source ON source.run_id = report.managed_agent_run_id
+		JOIN report_source_selections selection ON selection.attached_run_id = source.run_id
+		JOIN report_source_selection_items item
+		  ON item.selection_id = selection.id AND item.session_ref_snapshot = source.session_ref
+		JOIN report_workspace_evidence evidence
+		  ON evidence.source_session_id = item.session_id
+		WHERE report.id = $1 AND report.user_id = $2
+		ORDER BY source.fact_ref, evidence.workspace_id::text`, reportID, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var factRef, workspaceRef string
+		if err := rows.Scan(&factRef, &workspaceRef); err != nil {
+			return nil, err
+		}
+		result[factRef] = appendUnique(result[factRef], workspaceRef)
+	}
+	return result, rows.Err()
 }
 
 func classifyNightlySource(report historicalReport, hasOutcome bool) (string, float64) {
@@ -160,7 +214,9 @@ func loadInputProjects(ctx context.Context, database *sql.DB, userID, reportDate
 		SELECT p.id::text, p.canonical_name, p.last_seen_on::text,
 		       p.canonical_source_type, p.canonical_source_weight::float8,
 		       COALESCE(array_agg(a.alias ORDER BY a.source_weight DESC, a.source_report_date DESC)
-		           FILTER (WHERE a.alias IS NOT NULL), '{}')
+		           FILTER (WHERE a.alias IS NOT NULL), '{}'),
+		       COALESCE((SELECT array_agg(link.workspace_id::text ORDER BY link.last_seen_on DESC)
+		           FROM report_project_workspace_links link WHERE link.project_id = p.id), '{}')
 		FROM report_projects p
 		LEFT JOIN report_project_aliases a ON a.project_id = p.id
 		WHERE p.user_id = $1 AND p.first_seen_on < $2::date AND p.status <> 'ended'
@@ -191,12 +247,15 @@ func loadInputProjects(ctx context.Context, database *sql.DB, userID, reportDate
 	rankedProjects := make([]ranked, 0)
 	for rows.Next() {
 		var project InputProject
-		var aliases pq.StringArray
+		var aliases, workspaceRefs pq.StringArray
 		if err := rows.Scan(
 			&project.ProjectRef, &project.CanonicalName, &project.LastSeenOn,
-			&project.SourceType, &project.SourceWeight, &aliases,
+			&project.SourceType, &project.SourceWeight, &aliases, &workspaceRefs,
 		); err != nil {
 			return nil, err
+		}
+		for _, workspaceRef := range workspaceRefs {
+			project.WorkspaceRefs = appendUnique(project.WorkspaceRefs, workspaceRef)
 		}
 		if !validProjectName(project.CanonicalName) {
 			continue
@@ -228,8 +287,12 @@ func loadInputProjects(ctx context.Context, database *sql.DB, userID, reportDate
 
 func inputProjectSimilarity(project InputProject, themes []InputTheme) float64 {
 	best := 0.0
+	workspaceMatched := false
 	texts := append([]string{project.CanonicalName}, project.Aliases...)
 	for _, theme := range themes {
+		if stringSlicesIntersect(project.WorkspaceRefs, theme.WorkspaceRefs) {
+			workspaceMatched = true
+		}
 		for _, value := range texts {
 			left, right := normalizeName(theme.Title), normalizeName(value)
 			score := ngramDice(left, right)
@@ -241,7 +304,23 @@ func inputProjectSimilarity(project InputProject, themes []InputTheme) float64 {
 			}
 		}
 	}
+	if workspaceMatched {
+		best += 1.2
+	}
 	return best + project.SourceWeight*0.05
+}
+
+func stringSlicesIntersect(left, right []string) bool {
+	seen := make(map[string]bool, len(left))
+	for _, value := range left {
+		seen[value] = true
+	}
+	for _, value := range right {
+		if seen[value] {
+			return true
+		}
+	}
+	return false
 }
 
 func loadRecentOverviews(ctx context.Context, database *sql.DB, userID, reportDate string) ([]HistoricalReport, error) {

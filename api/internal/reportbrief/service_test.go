@@ -765,3 +765,58 @@ func TestReaderFacingTextSafetyRetainsTechnologyAndRejectsLocations(t *testing.T
 		t.Fatal("internal locations must require the generic degraded fallback")
 	}
 }
+
+func TestReaderReportUsesCompactAndHierarchicalItems(t *testing.T) {
+	stored := Stored{Payload: Payload{Workstreams: []Workstream{
+		{Subject: "日报体验", Title: "优化日报生成体验", Deliverables: []Deliverable{{Result: "调整日报生成入口"}}},
+		{Subject: "AI Coding 提效支撑", Title: "推进 AI Coding 训练与数据生成", Deliverables: []Deliverable{
+			{Result: "Qwen3-4B 训练推进至 40%"},
+			{Result: "GLM5.2-FP8 数据生成推进至 12%"},
+		}},
+	}}}
+	content, summary, ok := stored.ReaderReport()
+	if !ok {
+		t.Fatal("ReaderReport() was not available")
+	}
+	wantContent := "1. 优化日报生成体验\n2. AI Coding 提效支撑\n   - Qwen3-4B 训练推进至 40%\n   - GLM5.2-FP8 数据生成推进至 12%"
+	if content != wantContent {
+		t.Fatalf("content = %q, want %q", content, wantContent)
+	}
+	wantSummary := "1. 优化日报生成体验\n2. 推进 AI Coding 训练与数据生成"
+	if summary != wantSummary {
+		t.Fatalf("summary = %q, want %q", summary, wantSummary)
+	}
+}
+
+func TestReaderReportCompactsVerboseBriefWithoutBreakingTheReport(t *testing.T) {
+	stored := Stored{Payload: Payload{Workstreams: []Workstream{{
+		Subject: "DeepSeek-V4 Flash 训练与评测",
+		Title:   "**DeepSeek-V4 Flash 训练与评测：完成 KernelBench 评测与训练配置整理** - 不应作为标题的一部分",
+		Deliverables: []Deliverable{
+			{Result: "完成 KernelBench 多轮评测并梳理结果，补充大量实现过程、配置项、测试用例和逐项排查记录；这些展开内容不应占据日报正文。 "},
+			{Result: "收敛训练配置并补齐关键参数校验。"},
+			{Result: "补充第三项独立且必要的评测结论。"},
+		},
+	}}}}
+	content, summary, ok := stored.ReaderReport()
+	if !ok {
+		t.Fatal("ReaderReport() was not available")
+	}
+	if strings.Contains(content, "**") || !strings.Contains(content, "第三项独立且必要") {
+		t.Fatalf("reader report did not preserve up to three useful outcomes: %q", content)
+	}
+	if len([]rune(content)) > 300 || len([]rune(summary)) > 80 {
+		t.Fatalf("reader output is too long: content=%d summary=%d", len([]rune(content)), len([]rune(summary)))
+	}
+}
+
+func TestCompactReaderTextMarksAnUnfinishedLongSentence(t *testing.T) {
+	value := strings.Repeat("长", readerResultRuneLimit+16)
+	got := compactReaderText(value, readerResultRuneLimit)
+	if !strings.HasSuffix(got, "…") {
+		t.Fatalf("compactReaderText() = %q, want explicit truncation marker", got)
+	}
+	if len([]rune(got)) != readerResultRuneLimit {
+		t.Fatalf("compactReaderText() length = %d, want %d", len([]rune(got)), readerResultRuneLimit)
+	}
+}

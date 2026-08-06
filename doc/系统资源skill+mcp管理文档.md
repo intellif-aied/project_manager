@@ -1,6 +1,6 @@
 # 系统资源 Skill 与 MCP 管理
 
-> 最近核对：2026-08-03
+> 最近核对：2026-08-06
 >
 > 适用项目：/home/intellif/dev/project_manager
 
@@ -23,7 +23,7 @@
 | 环境 | Skill owner | Skill | MCP | 最近验证 | 验证依据 |
 | --- | --- | --- | --- | --- | --- |
 | 生产 | 10086 | aida-report@1.1.29 | aida-report-mcp@report-v1 | 2026-08-03 | `20260803-Project-Memory可选上下文生产发布`、运行配置与公共 Registry |
-| 14.157 测试 | 100866 | aida-report@1.1.30 | aida-report-mcp@report-v1 | 2026-08-05 | `20260805-个人日报单层正文测试发布`、运行环境、公共 Registry 与两个生产样本回放 |
+| 14.157 测试 | 100866 | aida-report@1.1.36 | aida-report-mcp@report-v1 | 2026-08-06 | `20260806-Project关联评测数据集与强关联回归测试发布`、运行环境、公共 Registry 与固定数据集回放 |
 
 规则：
 
@@ -164,7 +164,7 @@ Project Memory 是独立于报告生成的系统资产组，不属于用户 Repo
 
 | 环境 | owner | Agent ID | 模型 | Skill | MCP | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| 14.157 测试 | 100866 | `aida-project-memory-system-test-v1`（managed v1） | `deepseek-v4-flash` | `aida-project-memory@project-memory-v1` | `aida-project-memory-mcp@project-memory-v1` | v4 完整链路通过 |
+| 14.157 测试 | 100866 | `aida-project-memory-system-test-v1`（managed v2） | `deepseek-v4-flash` | `aida-project-memory@project-memory-v5` | `aida-project-memory-mcp@project-memory-v1` | v5 Workspace 关联完整链路通过 |
 | 生产 | 10086 | `aida-project-memory-system-prod-v1`（managed v2） | `MiniMax-M2.5` | `aida-project-memory@project-memory-v4` | `aida-project-memory-mcp@project-memory-v1` | 已启用；最近 4 日冷启动 39/39 成功 |
 
 运行时配置：
@@ -190,10 +190,12 @@ Project Memory 是独立于报告生成的系统资产组，不属于用户 Repo
 
 测试资源证据：
 
+- Report Skill ID：`f8ca3cb4-d002-4c6c-97a3-eaf4ba4fb32e`，资源 SHA256：`dcdf56dfe745cbcc406469f2f71cd53873f9cdf1dd68a1481e70f3d28abfa0d6`；
 - Skill ID：`1d1c764f-8c59-4a36-8ca7-b6d6551c2042`，SHA256：`da0d326ea73e0b4f238855ab3590dc1148ef8769054f6c5bdcf7d1f62ee747f8`；
 - MCP Entry ID：`e0911fd6-5789-4b3a-adec-7e1f5e1f6853`；
 - v4 Session：`9bc83bb9-4403-4704-a031-561752782c19`；Snapshot：`bfc0adad-5e68-4b36-a0c4-dabefdf8f9bf`；
 - AIDA 普通用户资产接口不返回 Project Memory Agent。这里的“用户不可见”指 AIDA 产品视角不投影该系统资产。
+- v5 Skill 已绑定到 managed v2；2026-07-30 Snapshot `efc68072-42d9-4502-bf17-fb8653e6b346` 完成 Workspace 关联回归。
 
 生产资源证据：
 
