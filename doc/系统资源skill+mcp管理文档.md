@@ -22,7 +22,7 @@
 
 | 环境 | Skill owner | Skill | MCP | 最近验证 | 验证依据 |
 | --- | --- | --- | --- | --- | --- |
-| 生产 | 10086 | aida-report@1.1.29 | aida-report-mcp@report-v1 | 2026-08-03 | `20260803-Project-Memory可选上下文生产发布`、运行配置与公共 Registry |
+| 生产 | 10086 | aida-report@1.1.31 | aida-report-mcp@report-v1 | 2026-08-06 | `20260806-Project-Memory工作空间关联生产发布`、运行配置与公共 Registry |
 | 14.157 测试 | 100866 | aida-report@1.1.36 | aida-report-mcp@report-v1 | 2026-08-06 | `20260806-Project关联评测数据集与强关联回归测试发布`、运行环境、公共 Registry 与固定数据集回放 |
 
 规则：
@@ -165,7 +165,7 @@ Project Memory 是独立于报告生成的系统资产组，不属于用户 Repo
 | 环境 | owner | Agent ID | 模型 | Skill | MCP | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
 | 14.157 测试 | 100866 | `aida-project-memory-system-test-v1`（managed v2） | `deepseek-v4-flash` | `aida-project-memory@project-memory-v5` | `aida-project-memory-mcp@project-memory-v1` | v5 Workspace 关联完整链路通过 |
-| 生产 | 10086 | `aida-project-memory-system-prod-v1`（managed v2） | `MiniMax-M2.5` | `aida-project-memory@project-memory-v4` | `aida-project-memory-mcp@project-memory-v1` | 已启用；最近 4 日冷启动 39/39 成功 |
+| 生产 | 10086 | `aida-project-memory-system-prod-v1`（managed v3） | `MiniMax-M2.5` | `aida-project-memory@project-memory-v5` | `aida-project-memory-mcp@project-memory-v1` | 已启用；Workspace 关联输入上线 |
 
 运行时配置：
 
@@ -199,8 +199,8 @@ Project Memory 是独立于报告生成的系统资产组，不属于用户 Repo
 
 生产资源证据：
 
-- Report Skill ID：`78dec1fb-1f9d-4351-abba-8dc8c200e44d`，资源 SHA256：`fad1841426d602a093de2740a3d84d4da2d588819566e736913e00a23f8d07`；
-- Project Memory Skill ID：`6e3c5bf2-b68c-4394-8a15-2f6190414bd7`，资源 SHA256：`9b5eeffd6a4f9c2453e763733c1ac79e0f4f7d45ffcd8f466096378a0ef68215`；
+- Report Skill ID：`337467d9-b0dd-42c2-9b1a-6900c472fd91`，资源 SHA256：`dcdf56dfe745cbcc406469f2f71cd53873f9cdf1dd68a1481e70f3d28abfa0d6`；
+- Project Memory Skill ID：`f21207a3-cabb-437e-a5be-1a1fcb5da141`，资源 SHA256：`0d7c8ed8614e5fd6bcf79c48a7cd69b4d630e65633fdda79aa7c20b3dff5dc3e`；
 - MCP Entry ID：`80b9dd2b-e7a1-40d3-a0e7-a0c06fefca7b`；
 - API `980ff3f`、migration `034`～`036`、生产 owner `10086` 的系统资产绑定已于 2026-08-03 核对。
 - 生产模型于 2026-08-03 切换为 `MiniMax-M2.5`；2026-07-31 至 2026-08-03 共 39 个用户日完成一次性冷启动，Job 与 Snapshot 均为 39/39 成功、0 错误。
