@@ -105,3 +105,24 @@ func TestLoadProjectMemoryConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestValidateReportEmail(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  Config
+		wantErr bool
+	}{
+		{name: "disabled accepts empty config", config: Config{}},
+		{name: "enabled requires credentials", config: Config{ReportEmailEnabled: true}, wantErr: true},
+		{name: "invalid port", config: Config{ReportEmailEnabled: true, ReportEmailSMTPHost: "smtp.example.com", ReportEmailSMTPPort: 70000, ReportEmailSMTPUsername: "sender", ReportEmailSMTPPassword: "secret", ReportEmailSMTPFrom: "sender@example.com", ReportEmailTimezone: "Asia/Shanghai", ReportEmailTimeOfDay: "08:00", ReportEmailSMTPTLSMode: "starttls"}, wantErr: true},
+		{name: "invalid time", config: Config{ReportEmailEnabled: true, ReportEmailSMTPHost: "smtp.example.com", ReportEmailSMTPPort: 587, ReportEmailSMTPUsername: "sender", ReportEmailSMTPPassword: "secret", ReportEmailSMTPFrom: "sender@example.com", ReportEmailTimezone: "Asia/Shanghai", ReportEmailTimeOfDay: "8am", ReportEmailSMTPTLSMode: "starttls"}, wantErr: true},
+		{name: "valid starttls", config: Config{ReportEmailEnabled: true, ReportEmailSMTPHost: "smtp.example.com", ReportEmailSMTPPort: 587, ReportEmailSMTPUsername: "sender", ReportEmailSMTPPassword: "secret", ReportEmailSMTPFrom: "sender@example.com", ReportEmailTimezone: "Asia/Shanghai", ReportEmailTimeOfDay: "08:00", ReportEmailSMTPTLSMode: "starttls"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := test.config.ValidateReportEmail(); (err != nil) != test.wantErr {
+				t.Fatalf("error = %v, wantErr %v", err, test.wantErr)
+			}
+		})
+	}
+}

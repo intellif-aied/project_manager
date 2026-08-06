@@ -20,6 +20,7 @@ import (
 	"github.com/aidashboard/api/internal/pricing"
 	"github.com/aidashboard/api/internal/reportbrief"
 	"github.com/aidashboard/api/internal/reportcontext"
+	"github.com/aidashboard/api/internal/reportemail"
 	"github.com/aidashboard/api/internal/reporteval"
 	"github.com/aidashboard/api/internal/reportmemory"
 	"github.com/aidashboard/api/internal/reportrun"
@@ -48,6 +49,9 @@ func main() {
 	}
 	if err := cfg.ValidateEvaluationRuntime(); err != nil {
 		log.Fatalf("Invalid evaluation runtime configuration: %v", err)
+	}
+	if err := cfg.ValidateReportEmail(); err != nil {
+		log.Fatalf("Invalid report email configuration: %v", err)
 	}
 	workerCounts, err := config.LoadWorkerCounts()
 	if err != nil {
@@ -179,6 +183,30 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to init project memory nightly service: %v", err)
 	}
+	var reportEmailStore reportemail.Store
+	var reportEmailMailer reportemail.Mailer
+	if cfg.ReportEmailEnabled {
+		reportEmailStore, err = reportemail.NewPostgresStore(database)
+		if err != nil {
+			log.Fatalf("Failed to init report email store: %v", err)
+		}
+		reportEmailMailer, err = reportemail.NewSMTPMailer(reportemail.SMTPConfig{
+			Host: cfg.ReportEmailSMTPHost, Port: cfg.ReportEmailSMTPPort,
+			Username: cfg.ReportEmailSMTPUsername, Password: cfg.ReportEmailSMTPPassword,
+			From: cfg.ReportEmailSMTPFrom, FromName: cfg.ReportEmailSMTPFromName,
+			TLSMode: cfg.ReportEmailSMTPTLSMode,
+		})
+		if err != nil {
+			log.Fatalf("Failed to init report email sender: %v", err)
+		}
+	}
+	dailyReportEmailService, err := reportemail.NewService(reportEmailStore, reportEmailMailer, reportemail.Config{
+		Enabled: cfg.ReportEmailEnabled, Timezone: cfg.ReportEmailTimezone,
+		TimeOfDay: cfg.ReportEmailTimeOfDay, WorkerID: "api:" + hostname + ":report-email",
+	})
+	if err != nil {
+		log.Fatalf("Failed to init report email service: %v", err)
+	}
 	dailyReportMCPH := handler.NewReportMCPHandler(database)
 	projectMemoryMCPH := handler.NewProjectMemoryMCPHandler(database)
 	dailyReportMCPH.ConfigureReportSourceSelection(reportSourceService)
@@ -187,6 +215,7 @@ func main() {
 	schedulerCtx, stopScheduler := context.WithCancel(context.Background())
 	defer stopScheduler()
 	projectMemoryService.Start(schedulerCtx)
+	dailyReportEmailService.Start(schedulerCtx)
 	metrics, err := observability.New(database, observability.WorkerCounts{
 		ReportRun: workerCounts.ReportRun, DigestBackground: workerCounts.DigestBackground,
 		DigestInteractive: workerCounts.DigestInteractive,
