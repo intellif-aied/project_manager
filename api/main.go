@@ -191,17 +191,16 @@ func main() {
 			log.Fatalf("Failed to init report email store: %v", err)
 		}
 		reportEmailMailer, err = reportemail.NewSMTPMailer(reportemail.SMTPConfig{
-			Host: cfg.ReportEmailSMTPHost, Port: cfg.ReportEmailSMTPPort,
-			Username: cfg.ReportEmailSMTPUsername, Password: cfg.ReportEmailSMTPPassword,
-			From: cfg.ReportEmailSMTPFrom, FromName: cfg.ReportEmailSMTPFromName,
-			TLSMode: cfg.ReportEmailSMTPTLSMode,
+			Host: "smtp.exmail.qq.com", Port: 465,
+			Username: cfg.ReportEmailAddress, Password: cfg.ReportEmailPassword,
+			From: cfg.ReportEmailAddress, FromName: "Aida 日报", TLSMode: "implicit",
 		})
 		if err != nil {
 			log.Fatalf("Failed to init report email sender: %v", err)
 		}
 	}
 	dailyReportEmailService, err := reportemail.NewService(reportEmailStore, reportEmailMailer, reportemail.Config{
-		Enabled: cfg.ReportEmailEnabled, Timezone: cfg.ReportEmailTimezone,
+		Enabled: cfg.ReportEmailEnabled, Timezone: "Asia/Shanghai",
 		TimeOfDay: cfg.ReportEmailTimeOfDay, WorkerID: "api:" + hostname + ":report-email",
 	})
 	if err != nil {

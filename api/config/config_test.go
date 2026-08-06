@@ -113,10 +113,10 @@ func TestValidateReportEmail(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "disabled accepts empty config", config: Config{}},
-		{name: "enabled requires credentials", config: Config{ReportEmailEnabled: true}, wantErr: true},
-		{name: "invalid port", config: Config{ReportEmailEnabled: true, ReportEmailSMTPHost: "smtp.example.com", ReportEmailSMTPPort: 70000, ReportEmailSMTPUsername: "sender", ReportEmailSMTPPassword: "secret", ReportEmailSMTPFrom: "sender@example.com", ReportEmailTimezone: "Asia/Shanghai", ReportEmailTimeOfDay: "08:00", ReportEmailSMTPTLSMode: "starttls"}, wantErr: true},
-		{name: "invalid time", config: Config{ReportEmailEnabled: true, ReportEmailSMTPHost: "smtp.example.com", ReportEmailSMTPPort: 587, ReportEmailSMTPUsername: "sender", ReportEmailSMTPPassword: "secret", ReportEmailSMTPFrom: "sender@example.com", ReportEmailTimezone: "Asia/Shanghai", ReportEmailTimeOfDay: "8am", ReportEmailSMTPTLSMode: "starttls"}, wantErr: true},
-		{name: "valid starttls", config: Config{ReportEmailEnabled: true, ReportEmailSMTPHost: "smtp.example.com", ReportEmailSMTPPort: 587, ReportEmailSMTPUsername: "sender", ReportEmailSMTPPassword: "secret", ReportEmailSMTPFrom: "sender@example.com", ReportEmailTimezone: "Asia/Shanghai", ReportEmailTimeOfDay: "08:00", ReportEmailSMTPTLSMode: "starttls"}},
+		{name: "enabled requires address and password", config: Config{ReportEmailEnabled: true, ReportEmailAddress: "sender@example.com", ReportEmailTimeOfDay: "08:00"}, wantErr: true},
+		{name: "invalid time", config: Config{ReportEmailEnabled: true, ReportEmailAddress: "sender@example.com", ReportEmailPassword: "secret", ReportEmailTimeOfDay: "8am"}, wantErr: true},
+		{name: "invalid address", config: Config{ReportEmailEnabled: true, ReportEmailAddress: "not-an-email", ReportEmailPassword: "secret", ReportEmailTimeOfDay: "08:00"}, wantErr: true},
+		{name: "valid Tencent enterprise email", config: Config{ReportEmailEnabled: true, ReportEmailAddress: "sender@example.com", ReportEmailPassword: "secret", ReportEmailTimeOfDay: "08:00"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -124,5 +124,29 @@ func TestValidateReportEmail(t *testing.T) {
 				t.Fatalf("error = %v, wantErr %v", err, test.wantErr)
 			}
 		})
+	}
+}
+
+func TestLoadReportEmailUsesThreeSettings(t *testing.T) {
+	t.Setenv("REPORT_EMAIL_ADDRESS", "sender@example.com")
+	t.Setenv("REPORT_EMAIL_PASSWORD", "secret")
+	t.Setenv("REPORT_EMAIL_TIME_OF_DAY", "09:30")
+	config := Load()
+	if !config.ReportEmailEnabled || config.ReportEmailAddress != "sender@example.com" ||
+		config.ReportEmailPassword != "secret" || config.ReportEmailTimeOfDay != "09:30" {
+		t.Fatalf("report email config = %#v", config)
+	}
+}
+
+func TestLoadReportEmailCanBePausedWithoutClearingCredentials(t *testing.T) {
+	t.Setenv("REPORT_EMAIL_ENABLED", "false")
+	t.Setenv("REPORT_EMAIL_ADDRESS", "sender@example.com")
+	t.Setenv("REPORT_EMAIL_PASSWORD", "secret")
+	config := Load()
+	if config.ReportEmailEnabled {
+		t.Fatal("report email must remain disabled while REPORT_EMAIL_ENABLED=false")
+	}
+	if config.ReportEmailAddress != "sender@example.com" || config.ReportEmailPassword != "secret" {
+		t.Fatal("pausing report email must preserve credentials")
 	}
 }
