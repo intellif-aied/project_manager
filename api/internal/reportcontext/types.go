@@ -277,6 +277,19 @@ type ProjectMemoryContext struct {
 	Hints        []HistoricalProjectHint `json:"hints"`
 }
 
+// WorkspaceContext preserves current-day source boundaries without exposing
+// paths, repository identities, or persistent database IDs to the Agent.
+type WorkspaceContext struct {
+	Purpose      string               `json:"purpose"`
+	GroupingRule string               `json:"grouping_rule"`
+	Groups       []WorkspaceFactGroup `json:"groups"`
+}
+
+type WorkspaceFactGroup struct {
+	WorkspaceRef string   `json:"workspace_ref"`
+	FactRefs     []string `json:"fact_refs"`
+}
+
 type HistoricalProjectHint struct {
 	ProjectRef        string   `json:"project_ref"`
 	CanonicalName     string   `json:"canonical_name"`
@@ -305,6 +318,7 @@ type Payload struct {
 	PresentationProfile  *PresentationProfile  `json:"presentation_profile,omitempty"`
 	ContinuityContext    *ContinuityContext    `json:"continuity_context,omitempty"`
 	ProjectMemoryContext *ProjectMemoryContext `json:"project_memory_context,omitempty"`
+	WorkspaceContext     *WorkspaceContext     `json:"workspace_context,omitempty"`
 }
 
 func targetFromAny(value any) (Target, error) {

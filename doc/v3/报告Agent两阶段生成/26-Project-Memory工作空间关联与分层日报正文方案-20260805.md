@@ -169,3 +169,24 @@ Run `ad63cff9-8bae-4a30-9abd-95beb662ed6d` 使用独立 `exe.dev` Workspace：Co
 - 现有客户端只提供整段 Session CWD / repository key，尚不支持同一 Session 内按时间切换 Workspace；本期不声称解决该场景。
 - Workspace 是弱关联，同一 Workspace 可召回多个项目；Report Agent 仍需根据当天 Facts 选择或忽略。
 - 分层正文恢复了信息量，但 Deliverable 文字长度仍由 Brief 质量决定；本期不增加会导致日报失败的新硬校验。
+
+## 12. Phase 5：当天 Workspace 边界进入 Report Context
+
+2026-08-06 的生产样本同时包含 AIDA 与 Knowledge Map 两个 Session。服务端已识别为两个 Workspace，但原 Context 只提供打平后的 Facts，Report Agent 因两边都出现 MCP，将 Knowledge Map 的授权工作错误命名为“AIDA 文档访问授权”。
+
+本阶段新增匿名 `workspace_context`：
+
+- 只提供 `workspace-001` 等当前 Run 内短引用及对应 `fact_refs`，不暴露 CWD、Git remote、数据库 Workspace ID 或哈希；
+- 不同 `workspace_ref` 的 Facts 默认分开，相同技术词（例如 MCP）不能作为跨 Workspace 合并依据；
+- 当天 Facts 明确指向同一业务项目，或一个带当天语义锚点的 Project Memory Hint 覆盖两组兼容 Facts 时，仍允许跨 Workspace 归并；
+- 只有一个有效 Workspace 时不增加该 Context，避免无意义 Token 开销；加载失败时保持日报可生成，不把质量提示升级成生成阻断。
+
+测试服使用同一组两个真实 Session 连续回归：
+
+- Run `4a5d4ff0-0fb7-4431-87d3-a26c8d473789` 验证两个匿名 Workspace 能稳定隔离 AIDA 与 Knowledge Map，原始路径和持久化身份未进入 Context；
+- 修复 Source Selection 复用问题：Workspace Evidence 会复用首次选择时保存的记录，读取时必须按 Session、Projection Revision 与 Slice Cursor 关联，不能错误要求 Evidence 属于当前 Selection；回归测试已覆盖；
+- Report Skill 最终测试版本为 `100866/aida-report@1.1.40`，同一 Workspace 默认先形成一个 Workstream；只有当天 Facts 明确出现不同项目名时才拆分，未命名模块归入组内已有的平台或项目父级；
+- Run `a6f6f539-80b6-42fb-93b9-e2df36baf65e` 证明跨 Workspace 隔离有效，但 MiniMax 仍把同一 AIDA Workspace 拆成“日报页面”和“客户端同步”两个主项；
+- Run `71fc148a-c744-4dfe-af9d-ea304788f30b` 在更明确的 Skill 下仍被 MiniMax 拆成四个模块，并生成过多细节。说明继续堆叠提示词不能稳定解决父级命名；不能因此增加按 CWD 强制合并或更严格的失败型校验，以免误伤同一 Workspace 内真实存在多个项目的场景。
+
+当前阶段可确认的是 Workspace 边界和 Evidence 复用机制有效；稳定父级项目名仍应优先依赖 Project Memory 的当天语义锚点。没有 Memory Hint 时，Workspace 只能用于防止跨项目误合并，不能被当成唯一项目归属。
