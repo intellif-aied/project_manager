@@ -74,6 +74,61 @@ func TestProjectMemoryContextPreservesWorkspaceSemanticParentSignal(t *testing.T
 	}
 }
 
+func TestLoadWorkspaceContextKeepsDifferentWorkspacesSeparate(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mock.ExpectBegin()
+	mock.ExpectQuery("JOIN report_workspace_evidence evidence[[:space:]]+ON evidence.source_session_id = item.session_id[[:space:]]+AND evidence.content_projection_revision_id = item.content_projection_revision_id[[:space:]]+AND evidence.start_cursor = item.start_cursor[[:space:]]+AND evidence.end_cursor = item.end_cursor").
+		WithArgs("run-1", "selection-1").
+		WillReturnRows(sqlmock.NewRows([]string{"fact_ref", "workspace_id", "observed_from"}).
+			AddRow("fact-001", "knowledge-map-workspace", time.Date(2026, 8, 5, 9, 0, 0, 0, time.UTC)).
+			AddRow("fact-002", "aida-workspace", time.Date(2026, 8, 5, 10, 0, 0, 0, time.UTC)).
+			AddRow("fact-003", "aida-workspace", time.Date(2026, 8, 5, 10, 0, 0, 0, time.UTC)))
+	mock.ExpectRollback()
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspaceContext, err := loadWorkspaceContext(context.Background(), tx, "run-1", "selection-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if workspaceContext == nil || len(workspaceContext.Groups) != 2 {
+		t.Fatalf("workspace context = %#v", workspaceContext)
+	}
+	if workspaceContext.Groups[0].WorkspaceRef != "workspace-001" ||
+		strings.Join(workspaceContext.Groups[0].FactRefs, ",") != "fact-001" {
+		t.Fatalf("first workspace group = %#v", workspaceContext.Groups[0])
+	}
+	if workspaceContext.Groups[1].WorkspaceRef != "workspace-002" ||
+		strings.Join(workspaceContext.Groups[1].FactRefs, ",") != "fact-002,fact-003" {
+		t.Fatalf("second workspace group = %#v", workspaceContext.Groups[1])
+	}
+	payload, err := json.Marshal(workspaceContext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(payload), "knowledge-map-workspace") || strings.Contains(string(payload), "aida-workspace") {
+		t.Fatalf("raw workspace identity leaked into context: %s", payload)
+	}
+	if !strings.Contains(workspaceContext.GroupingRule, "不同 workspace_ref") ||
+		!strings.Contains(workspaceContext.GroupingRule, "同一 workspace_ref") ||
+		!strings.Contains(workspaceContext.GroupingRule, "默认只生成一个 Workstream") ||
+		!strings.Contains(workspaceContext.GroupingRule, "未命名模块归入该父级") {
+		t.Fatalf("workspace grouping rule = %q", workspaceContext.GroupingRule)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestObserveSelectionWorkspacesRetriesWithoutPoisoningReportContextTransaction(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

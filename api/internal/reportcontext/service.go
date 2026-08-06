@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"time"
 
@@ -99,6 +100,14 @@ func (s *Service) Build(ctx context.Context, request BuildRequest) (StoredContex
 			return StoredContext{}, err
 		}
 	}
+	if request.EnableWorkspaceMemory && assembled.WorkEvidence != nil && request.SourceSelectionID != "" {
+		workspaceContext, err := loadWorkspaceContext(ctx, tx, request.RunID, request.SourceSelectionID)
+		if err != nil {
+			log.Printf("load report workspace context failed for run %s: %v", request.RunID, err)
+		} else if workspaceContext != nil {
+			assembled.WorkspaceContext = workspaceContext
+		}
+	}
 	if request.EnableMemoryShadow && assembled.WorkEvidence != nil {
 		memoryContext, err := loadProjectMemoryContext(ctx, tx, request, assembled.WorkEvidence)
 		if err != nil {
@@ -140,6 +149,90 @@ func (s *Service) Build(ctx context.Context, request BuildRequest) (StoredContex
 	}
 	observability.ObservePayload("context", len(payload))
 	return StoredContext{Payload: payload, Hash: hash, Bytes: len(payload)}, nil
+}
+
+func loadWorkspaceContext(ctx context.Context, tx *sql.Tx, runID, selectionID string) (*WorkspaceContext, error) {
+	if tx == nil || strings.TrimSpace(runID) == "" || strings.TrimSpace(selectionID) == "" {
+		return nil, nil
+	}
+	rows, err := tx.QueryContext(ctx, `
+		SELECT source.fact_ref, evidence.workspace_id::text, MIN(evidence.observed_from)
+		FROM report_run_fact_sources source
+		JOIN report_source_selections selection
+		  ON selection.id = $2::uuid AND selection.attached_run_id = source.run_id
+		JOIN report_source_selection_items item
+		  ON item.selection_id = selection.id AND item.session_ref_snapshot = source.session_ref
+		JOIN report_workspace_evidence evidence
+		  ON evidence.source_session_id = item.session_id
+		 AND evidence.content_projection_revision_id = item.content_projection_revision_id
+		 AND evidence.start_cursor = item.start_cursor
+		 AND evidence.end_cursor = item.end_cursor
+		WHERE source.run_id = $1
+		GROUP BY source.fact_ref, evidence.workspace_id
+		ORDER BY MIN(evidence.observed_from), evidence.workspace_id, source.fact_ref`, runID, selectionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	type workspaceGroup struct {
+		workspaceID string
+		firstSeen   time.Time
+		factRefs    map[string]struct{}
+	}
+	groupsByID := make(map[string]*workspaceGroup)
+	for rows.Next() {
+		var factRef, workspaceID string
+		var observedFrom time.Time
+		if err := rows.Scan(&factRef, &workspaceID, &observedFrom); err != nil {
+			return nil, err
+		}
+		factRef = strings.TrimSpace(factRef)
+		workspaceID = strings.TrimSpace(workspaceID)
+		if factRef == "" || workspaceID == "" {
+			continue
+		}
+		group := groupsByID[workspaceID]
+		if group == nil {
+			group = &workspaceGroup{workspaceID: workspaceID, firstSeen: observedFrom, factRefs: make(map[string]struct{})}
+			groupsByID[workspaceID] = group
+		} else if observedFrom.Before(group.firstSeen) {
+			group.firstSeen = observedFrom
+		}
+		group.factRefs[factRef] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(groupsByID) < 2 {
+		return nil, nil
+	}
+	groups := make([]*workspaceGroup, 0, len(groupsByID))
+	for _, group := range groupsByID {
+		groups = append(groups, group)
+	}
+	sort.Slice(groups, func(i, j int) bool {
+		if !groups[i].firstSeen.Equal(groups[j].firstSeen) {
+			return groups[i].firstSeen.Before(groups[j].firstSeen)
+		}
+		return groups[i].workspaceID < groups[j].workspaceID
+	})
+	result := &WorkspaceContext{
+		Purpose:      "保留当天事实的工作空间边界，帮助区分同时推进的不同工作；workspace_ref 不是项目名称或成果证据。",
+		GroupingRule: "不同 workspace_ref 的 Facts 默认分开；相同技术词（例如 MCP）不能作为跨工作空间合并依据。同一 workspace_ref 默认只生成一个 Workstream，只有当天 Facts 明确出现不同项目名时才拆分。组内若只有一个明确项目或平台名，未命名模块归入该父级；否则采用最短且重复出现的明确名称。当天 Facts 或 project_memory_context 明确指向同一项目时，仍允许跨工作空间归并。",
+		Groups:       make([]WorkspaceFactGroup, 0, len(groups)),
+	}
+	for index, group := range groups {
+		factRefs := make([]string, 0, len(group.factRefs))
+		for factRef := range group.factRefs {
+			factRefs = append(factRefs, factRef)
+		}
+		sort.Strings(factRefs)
+		result.Groups = append(result.Groups, WorkspaceFactGroup{
+			WorkspaceRef: fmt.Sprintf("workspace-%03d", index+1),
+			FactRefs:     factRefs,
+		})
+	}
+	return result, nil
 }
 
 const workspaceObservationAttempts = 3

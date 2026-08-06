@@ -100,9 +100,10 @@ Use two distinct semantic passes in this same Agent Session.
 - project_memory_context is optional context, not evidence or assignment. Current Facts always determine the reportable outcomes and win on any conflict.
 - For a workspace_semantic Hint, semantic_fact_refs are strong current-day anchors and workspace_fact_refs are co-located candidates. Use canonical_name for anchored compatible Facts unless they name a conflicting project or goal. Other Hints remain weak.
 - Final parent check is mandatory: merge two or more proposed Workstreams containing one Hint's semantic_fact_refs under canonical_name. Keep a workspace-only Workstream separate unless its current Facts clearly fit.
-- Use threads, thread_refs, user-authored goals, and repeated named work objects as correlation hints, never headings or report text.
-- First group Facts into a two-level map: stable project, product, protocol, or business capability -> its modules, candidates, experiments, and activities. Create Workstreams only from the first level.
-- Use exactly one subject per shared work object. Use the exact project name when present; otherwise use the shortest evidence-supported user-facing shared capability without inventing a brand.
+- Keep workspace_context groups separate. Default to one Workstream per group. Split only for distinct project names in Facts. Use the group's named project/platform as parent; put unnamed modules below. Hints may link groups; MCP cannot.
+- Use threads, user-authored goals, and repeated work objects only as correlation hints, never report text.
+- Group Facts into a two-level map. Create Workstreams only from the first level: stable projects, products, or capabilities; keep modules and activities below.
+- Use one subject per shared work object. Prefer an exact project name; otherwise use the shortest evidence-supported user-facing capability without inventing a brand.
 - Write title as one natural headline of 16–52 Chinese characters: subject plus one primary outcome only. Never use Markdown bold, a nested list, a colon followed by implementation details, or metrics in title. Keep demos, test cases, validation scenarios, supporting metrics, and traces out of title; they may remain in deliverables.
 - Candidate IDs, model variants, stages, lanes, modules, repositories, directories, datasets, and evaluation runs are never subjects by themselves. Keep them inside deliverables.
 - Before submitting, compare every subject pair. Subjects sharing the same leading named entity but differing only by evaluation, training, research, documentation, or another activity must merge into that named entity.
