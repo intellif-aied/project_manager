@@ -8,13 +8,13 @@ import (
 	"github.com/aidashboard/api/internal/reportbrief"
 )
 
-func TestManagedReportToolsetIncludesBriefOnlyWhenEnabled(t *testing.T) {
+func TestManagedReportToolsetUsesSingleCompiledResultWrite(t *testing.T) {
 	disabled := reportMCPToolsForToolsetWithBrief(managedReportMCPToolset, false)
 	if len(disabled) != 3 {
 		t.Fatalf("disabled managed tools=%d, want 3", len(disabled))
 	}
 	enabled := reportMCPToolsForToolsetWithBrief(managedReportMCPToolset, true)
-	want := []string{toolGetReportContext, toolWriteReportBrief, toolWriteReportResult, toolWriteReportFailure}
+	want := []string{toolGetReportContext, toolWriteReportResult, toolWriteReportFailure}
 	if len(enabled) != len(want) {
 		t.Fatalf("enabled managed tools=%d, want %d", len(enabled), len(want))
 	}
@@ -23,9 +23,9 @@ func TestManagedReportToolsetIncludesBriefOnlyWhenEnabled(t *testing.T) {
 			t.Fatalf("tool[%d]=%v, want %s", index, got, want[index])
 		}
 	}
-	for _, tool := range reportMCPToolsForToolsetWithBrief("", true) {
+	for _, tool := range enabled {
 		if tool["name"] == toolWriteReportBrief {
-			t.Fatal("legacy full toolset must not expose write_report_brief")
+			t.Fatal("managed toolset must not expose write_report_brief")
 		}
 	}
 }
@@ -52,7 +52,7 @@ func TestPersonalReportToolsetIsRunBoundWithoutBrief(t *testing.T) {
 	}
 }
 
-func TestManagedReportResultToolRequiresStandardFormatMode(t *testing.T) {
+func TestManagedReportResultToolAcceptsStructuredDraft(t *testing.T) {
 	tools := reportMCPToolsForToolsetWithBrief(managedReportMCPToolset, true)
 	for _, tool := range tools {
 		if tool["name"] != toolWriteReportResult {
@@ -60,16 +60,19 @@ func TestManagedReportResultToolRequiresStandardFormatMode(t *testing.T) {
 		}
 		schema := tool["inputSchema"].(map[string]any)
 		properties := schema["properties"].(map[string]any)
-		mode, exists := properties["format_mode"]
-		if !exists {
-			t.Fatal("managed write_report_result does not expose format_mode")
+		if _, exists := properties["content"]; exists {
+			t.Fatal("managed compiled write must not ask the model to render content")
 		}
-		if !reflect.DeepEqual(mode, map[string]any{"type": "string", "enum": []string{"standard"}}) {
-			t.Fatalf("format_mode schema = %#v", mode)
+		if _, exists := properties["brief_hash"]; exists {
+			t.Fatal("managed compiled write must not expose brief_hash")
 		}
 		required := schema["required"].([]string)
-		if !reflect.DeepEqual(required, []string{"content", "format_mode"}) {
+		if !reflect.DeepEqual(required, []string{"workstreams", "no_reportable_work"}) {
 			t.Fatalf("managed write required = %#v", required)
+		}
+		workstreams, ok := properties["workstreams"].(map[string]any)
+		if !ok || workstreams["type"] != "array" {
+			t.Fatalf("workstreams schema = %#v", properties["workstreams"])
 		}
 		return
 	}

@@ -15,7 +15,7 @@ import (
 	"github.com/lib/pq"
 )
 
-const consolidationInputSchema = "project-memory-consolidation-input/v1"
+const consolidationInputSchema = "project-memory-consolidation-input/v2"
 
 func buildConsolidationInput(ctx context.Context, database *sql.DB, job queuedJob) (ConsolidationInput, []byte, int, error) {
 	input := ConsolidationInput{
@@ -98,11 +98,12 @@ func buildConsolidationInput(ctx context.Context, database *sql.DB, job queuedJo
 		return input, nil, 0, err
 	}
 	input.CandidateProjects = projects
-	history, err := loadRecentOverviews(ctx, database, job.UserID, job.ReportDate)
+	history, err := loadHistoricalContext(ctx, database, job.UserID, job.ReportDate)
 	if err != nil {
 		return input, nil, 0, err
 	}
-	input.RecentOverviews = history
+	input.RecentOverviews = history.RecentOverviews
+	input.HistoricalAnchors = history.ProjectAnchors
 
 	payload, estimate, err := marshalWithinBudget(input)
 	return input, payload, estimate, err
@@ -215,6 +216,16 @@ func loadInputProjects(ctx context.Context, database *sql.DB, userID, reportDate
 		       p.canonical_source_type, p.canonical_source_weight::float8,
 		       COALESCE(array_agg(a.alias ORDER BY a.source_weight DESC, a.source_report_date DESC)
 		           FILTER (WHERE a.alias IS NOT NULL), '{}'),
+		       COALESCE((SELECT array_agg(recent_cue.cue)
+		           FROM (
+		               SELECT cue.value AS cue, max(occurrence.report_date) AS last_seen
+		               FROM report_project_occurrences occurrence
+		               CROSS JOIN LATERAL jsonb_array_elements_text(occurrence.workstream_cues_json) cue(value)
+		               WHERE occurrence.project_id = p.id
+		               GROUP BY cue.value
+		               ORDER BY last_seen DESC, cue.value
+		               LIMIT $3
+		           ) recent_cue), '{}'),
 		       COALESCE((SELECT array_agg(link.workspace_id::text ORDER BY link.last_seen_on DESC)
 		           FROM report_project_workspace_links link WHERE link.project_id = p.id), '{}')
 		FROM report_projects p
@@ -222,20 +233,21 @@ func loadInputProjects(ctx context.Context, database *sql.DB, userID, reportDate
 		WHERE p.user_id = $1 AND p.first_seen_on < $2::date AND p.status <> 'ended'
 		  AND EXISTS (
 			SELECT 1
-			FROM report_project_memory_snapshots snapshot
+			FROM (
+				SELECT snapshot.project_memory_json
+				FROM report_project_memory_snapshots snapshot
+				WHERE snapshot.user_id = $1 AND snapshot.report_date < $2::date
+				ORDER BY snapshot.report_date DESC, snapshot.created_at DESC
+				LIMIT $4
+			) recent_snapshot
 			CROSS JOIN LATERAL jsonb_array_elements(
-				COALESCE(snapshot.project_memory_json->'projects', '[]'::jsonb)
+				COALESCE(recent_snapshot.project_memory_json->'projects', '[]'::jsonb)
 			) accepted
-			WHERE snapshot.id = (
-				SELECT latest.id FROM report_project_memory_snapshots latest
-				WHERE latest.user_id = $1 AND latest.report_date < $2::date
-				ORDER BY latest.report_date DESC, latest.created_at DESC LIMIT 1
-			)
-			  AND accepted->>'project_ref' = p.id::text
+			WHERE accepted->>'project_ref' = p.id::text
 		  )
 		GROUP BY p.id
 		ORDER BY p.last_seen_on DESC, p.id
-		LIMIT 40`, userID, reportDate)
+		LIMIT 40`, userID, reportDate, maxWorkstreamCues, maxMemorySnapshotDepth)
 	if err != nil {
 		return nil, err
 	}
@@ -247,10 +259,10 @@ func loadInputProjects(ctx context.Context, database *sql.DB, userID, reportDate
 	rankedProjects := make([]ranked, 0)
 	for rows.Next() {
 		var project InputProject
-		var aliases, workspaceRefs pq.StringArray
+		var aliases, workstreamCues, workspaceRefs pq.StringArray
 		if err := rows.Scan(
 			&project.ProjectRef, &project.CanonicalName, &project.LastSeenOn,
-			&project.SourceType, &project.SourceWeight, &aliases, &workspaceRefs,
+			&project.SourceType, &project.SourceWeight, &aliases, &workstreamCues, &workspaceRefs,
 		); err != nil {
 			return nil, err
 		}
@@ -268,6 +280,15 @@ func loadInputProjects(ctx context.Context, database *sql.DB, userID, reportDate
 				break
 			}
 		}
+		for _, cue := range workstreamCues {
+			if validProjectName(cue) {
+				project.WorkstreamCues = appendUnique(project.WorkstreamCues, cue)
+			}
+			if len(project.WorkstreamCues) >= maxWorkstreamCues {
+				break
+			}
+		}
+		project.MatchedThemes = matchingThemeRefs(project, themes)
 		score := inputProjectSimilarity(project, themes)
 		rankedProjects = append(rankedProjects, ranked{project: project, score: score})
 	}
@@ -288,26 +309,61 @@ func loadInputProjects(ctx context.Context, database *sql.DB, userID, reportDate
 func inputProjectSimilarity(project InputProject, themes []InputTheme) float64 {
 	best := 0.0
 	workspaceMatched := false
-	texts := append([]string{project.CanonicalName}, project.Aliases...)
 	for _, theme := range themes {
 		if stringSlicesIntersect(project.WorkspaceRefs, theme.WorkspaceRefs) {
 			workspaceMatched = true
 		}
-		for _, value := range texts {
-			left, right := normalizeName(theme.Title), normalizeName(value)
-			score := ngramDice(left, right)
-			if strings.Contains(left, right) || strings.Contains(right, left) {
-				score += 0.3
-			}
-			if score > best {
-				best = score
-			}
+		if score := projectThemeNameScore(project, theme, true); score > best {
+			best = score
 		}
 	}
 	if workspaceMatched {
 		best += 1.2
 	}
+	if len(project.MatchedThemes) > 1 {
+		best += minFloat(float64(len(project.MatchedThemes)-1)*0.1, 0.3)
+	}
 	return best + project.SourceWeight*0.05
+}
+
+func matchingThemeRefs(project InputProject, themes []InputTheme) []string {
+	result := make([]string, 0, len(themes))
+	for _, theme := range themes {
+		if projectThemeNameScore(project, theme, false) >= 0.62 {
+			result = append(result, theme.ThemeRef)
+		}
+	}
+	return result
+}
+
+func projectThemeNameScore(project InputProject, theme InputTheme, includeCues bool) float64 {
+	texts := append([]string{project.CanonicalName}, project.Aliases...)
+	if includeCues {
+		texts = append(texts, project.WorkstreamCues...)
+	}
+	best := 0.0
+	left := normalizeName(theme.Title)
+	for _, value := range texts {
+		right := normalizeName(value)
+		if left == "" || right == "" {
+			continue
+		}
+		score := ngramDice(left, right)
+		if strings.Contains(left, right) || strings.Contains(right, left) {
+			score += 0.3
+		}
+		if score > best {
+			best = score
+		}
+	}
+	return best
+}
+
+func minFloat(left, right float64) float64 {
+	if left < right {
+		return left
+	}
+	return right
 }
 
 func stringSlicesIntersect(left, right []string) bool {
@@ -323,7 +379,12 @@ func stringSlicesIntersect(left, right []string) bool {
 	return false
 }
 
-func loadRecentOverviews(ctx context.Context, database *sql.DB, userID, reportDate string) ([]HistoricalReport, error) {
+type historicalContext struct {
+	RecentOverviews []HistoricalReport
+	ProjectAnchors  []HistoricalReport
+}
+
+func loadHistoricalContext(ctx context.Context, database *sql.DB, userID, reportDate string) (historicalContext, error) {
 	rows, err := database.QueryContext(ctx, `
 		SELECT r.id::text, r.report_date::text,
 		       COALESCE(NULLIF(r.submitted_content, ''), r.content),
@@ -341,12 +402,16 @@ func loadRecentOverviews(ctx context.Context, database *sql.DB, userID, reportDa
 		  AND r.status IN ('saved', 'submitted')
 		  AND NULLIF(BTRIM(COALESCE(NULLIF(r.submitted_content, ''), r.content, '')), '') IS NOT NULL
 		ORDER BY r.report_date DESC, r.updated_at DESC
-		LIMIT $3`, userID, reportDate, maxRecentReports)
+		LIMIT $3`, userID, reportDate, maxRecentReports+maxHistoricalAnchors)
 	if err != nil {
-		return nil, err
+		return historicalContext{}, err
 	}
 	defer rows.Close()
-	result := make([]HistoricalReport, 0, maxRecentReports)
+	result := historicalContext{
+		RecentOverviews: make([]HistoricalReport, 0, maxRecentReports),
+		ProjectAnchors:  make([]HistoricalReport, 0, maxHistoricalAnchors),
+	}
+	index := 0
 	for rows.Next() {
 		var report historicalReport
 		var hasOutcome bool
@@ -354,16 +419,37 @@ func loadRecentOverviews(ctx context.Context, database *sql.DB, userID, reportDa
 			&report.id, &report.date, &report.content, &report.generationMode, &report.edited,
 			&report.generatedContentSHA256, &report.briefPayload, &hasOutcome,
 		); err != nil {
-			return nil, err
+			return historicalContext{}, err
 		}
 		report.sourceType, report.sourceWeight = classifyNightlySource(report, hasOutcome)
-		overview := historicalOverviewForMemory(report)
-		result = append(result, HistoricalReport{
-			Date: report.date, Overview: limitRunes(strings.TrimSpace(overview), maxHistoryOverviewRune),
-			SourceType: report.sourceType, SourceWeight: report.sourceWeight,
-		})
+		item := HistoricalReport{Date: report.date, SourceType: report.sourceType, SourceWeight: report.sourceWeight}
+		if index < maxRecentReports {
+			item.Overview = limitRunes(strings.TrimSpace(historicalOverviewForMemory(report)), maxHistoryOverviewRune)
+			result.RecentOverviews = append(result.RecentOverviews, item)
+		} else {
+			item.Overview = limitRunes(historicalProjectAnchor(report), maxHistoryAnchorRunes)
+			if item.Overview != "" {
+				result.ProjectAnchors = append(result.ProjectAnchors, item)
+			}
+		}
+		index++
 	}
 	return result, rows.Err()
+}
+
+func historicalProjectAnchor(report historicalReport) string {
+	themes := themesForHistoricalReport(report)
+	names := make([]string, 0, minInt(len(themes), maxCurrentThemes))
+	for _, theme := range themes {
+		name := limitRunes(sanitizeTitle(theme.Title), titleRuneLimit)
+		if validProjectName(name) {
+			names = appendUnique(names, name)
+		}
+		if len(names) >= maxCurrentThemes {
+			break
+		}
+	}
+	return strings.Join(names, "；")
 }
 
 func historicalOverviewForMemory(report historicalReport) string {
@@ -395,6 +481,8 @@ func marshalWithinBudget(input ConsolidationInput) ([]byte, int, error) {
 			return payload, estimate, nil
 		}
 		switch {
+		case len(input.HistoricalAnchors) > 0:
+			input.HistoricalAnchors = input.HistoricalAnchors[:len(input.HistoricalAnchors)-1]
 		case len(input.RecentOverviews) > 0:
 			input.RecentOverviews = input.RecentOverviews[:len(input.RecentOverviews)-1]
 		case len(input.CandidateProjects) > 0:

@@ -26,9 +26,14 @@ const (
 type ManagedAgentRunStatusSyncer struct {
 	db         *sql.DB
 	client     *ManagedAgentClient
+	fallback   ManagedReportFallback
 	interval   time.Duration
 	timeout    time.Duration
 	batchLimit int
+}
+
+type ManagedReportFallback interface {
+	WriteReportFallback(context.Context, string) error
 }
 
 type managedAgentRunStatusRow struct {
@@ -50,6 +55,11 @@ func NewManagedAgentRunStatusSyncer(db *sql.DB, client *ManagedAgentClient) *Man
 		timeout:    ManagedAgentRunTimeout,
 		batchLimit: 100,
 	}
+}
+
+func (s *ManagedAgentRunStatusSyncer) ConfigureReportFallback(fallback ManagedReportFallback) *ManagedAgentRunStatusSyncer {
+	s.fallback = fallback
+	return s
 }
 
 func (s *ManagedAgentRunStatusSyncer) Start(ctx context.Context) {
@@ -148,6 +158,14 @@ func (s *ManagedAgentRunStatusSyncer) refreshRun(ctx context.Context, run manage
 	if run.isReportAgentRun() && status == "succeeded" && !run.hasReportWriteback() {
 		if !reportWritebackGraceElapsed(task, now) {
 			status = "running"
+		} else if s.fallback != nil {
+			if err := s.fallback.WriteReportFallback(ctx, run.ID); err != nil {
+				log.Printf("managed report fallback write failed for run %s: %v", run.ID, err)
+				status = "failed"
+				errMsg = reportWritebackMissingErrorMessage
+			} else {
+				return nil
+			}
 		} else {
 			status = "failed"
 			errMsg = reportWritebackMissingErrorMessage

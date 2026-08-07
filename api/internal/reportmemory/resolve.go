@@ -338,13 +338,26 @@ func contentSHA256(content string) string {
 
 func loadProjects(ctx context.Context, tx *sql.Tx, userID, reportDate string) ([]storedProject, error) {
 	rows, err := tx.QueryContext(ctx, `
-		SELECT p.id::text, p.canonical_name, p.last_seen_on::text,
-		       a.alias, a.normalized_alias, a.alias_type,
-		       a.source_type, a.source_weight::float8
-		FROM report_projects p
-		JOIN report_project_aliases a ON a.project_id = p.id
-		WHERE p.user_id = $1 AND p.first_seen_on < $2::date AND p.status <> 'ended'
-		ORDER BY p.last_seen_on DESC, p.id, a.alias_type, a.normalized_alias`, userID, reportDate)
+		SELECT source.project_id, source.canonical_name, source.last_seen_on,
+		       source.term, source.normalized_term, source.term_type,
+		       source.source_type, source.source_weight
+		FROM (
+			SELECT p.id::text AS project_id, p.canonical_name, p.last_seen_on::text,
+			       a.alias AS term, a.normalized_alias AS normalized_term, a.alias_type AS term_type,
+			       a.source_type, a.source_weight::float8
+			FROM report_projects p
+			JOIN report_project_aliases a ON a.project_id = p.id
+			WHERE p.user_id = $1 AND p.first_seen_on < $2::date AND p.status <> 'ended'
+			UNION ALL
+			SELECT p.id::text, p.canonical_name, p.last_seen_on::text,
+			       cue.value, cue.value, 'workstream_cue',
+			       occurrence.source_type, occurrence.source_weight::float8
+			FROM report_projects p
+			JOIN report_project_occurrences occurrence ON occurrence.project_id = p.id
+			CROSS JOIN LATERAL jsonb_array_elements_text(occurrence.workstream_cues_json) cue(value)
+			WHERE p.user_id = $1 AND p.first_seen_on < $2::date AND p.status <> 'ended'
+		) source
+		ORDER BY source.last_seen_on DESC, source.project_id, source.term_type, source.normalized_term`, userID, reportDate)
 	if err != nil {
 		return nil, err
 	}
@@ -363,11 +376,24 @@ func loadProjects(ctx context.Context, tx *sql.Tx, userID, reportDate string) ([
 		if !validProjectName(name) || !validProjectName(alias) {
 			continue
 		}
+		if aliasType == "workstream_cue" {
+			normalizedAlias = normalizeName(alias)
+		}
 		index, exists := indexes[id]
 		if !exists {
 			projects = append(projects, storedProject{ID: id, CanonicalName: name, LastSeenOn: lastSeen})
 			index = len(projects) - 1
 			indexes[id] = index
+		}
+		duplicate := false
+		for _, existing := range projects[index].Aliases {
+			if existing.Normalized == normalizedAlias && existing.Type == aliasType {
+				duplicate = true
+				break
+			}
+		}
+		if duplicate {
+			continue
 		}
 		projects[index].Aliases = append(projects[index].Aliases, storedAlias{
 			Text: alias, Normalized: normalizedAlias, Type: aliasType,

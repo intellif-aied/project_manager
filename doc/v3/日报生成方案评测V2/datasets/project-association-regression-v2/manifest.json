@@ -1,0 +1,145 @@
+{
+  "schema_version": "project-association-regression/v1",
+  "dataset_version": "project-association-regression/v2",
+  "controlled_archive_version": "project-association-source-archive/20260806.2",
+  "cases": [
+    {
+      "case_id": "pa-001",
+      "report_date": "2026-08-05",
+      "source_set_sha256": "1be7dcd206d0e91c4c377846ce657ad1c2a60c8e9b7224f373642c6ec5a9443a",
+      "source_item_count": 10,
+      "tags": ["difficult-positive", "module-aliases", "workspace-semantic"],
+      "expected_workstreams": [
+        {"canonical_name": "芯片验证平台", "aliases": ["版本流", "用例筛选工作台"], "requirement": "required", "fact_scope": "all_reportable"}
+      ],
+      "forbidden_merges": []
+    },
+    {
+      "case_id": "pa-002",
+      "report_date": "2026-08-06",
+      "source_set_sha256": "7aa4663d1d59258a8822c2964c4da6c36f81f8e49cacb9d4670f8fa9beffeaa3",
+      "source_item_count": 5,
+      "tags": ["difficult-positive", "module-aliases", "parent-project-missing", "source-covered"],
+      "expected_workstreams": [
+        {"canonical_name": "芯片验证平台", "aliases": [], "requirement": "required", "fact_scope": "all_reportable"}
+      ],
+      "forbidden_merges": []
+    },
+    {
+      "case_id": "pa-101",
+      "report_date": "2026-08-03",
+      "source_set_sha256": "71016d97bd21cf7684290c49c9a864f31538af8930aa912ace0cfc4234851009",
+      "source_item_count": 6,
+      "tags": ["cold-start-seed", "continuous-project", "model-training"],
+      "expected_workstreams": [
+        {"canonical_name": "AI Coding 提效支撑", "aliases": ["Ai coding 提效支撑"], "requirement": "allowed", "fact_scope": "all_reportable"}
+      ],
+      "forbidden_merges": []
+    },
+    {
+      "case_id": "pa-102",
+      "report_date": "2026-08-04",
+      "source_set_sha256": "7963f4a28bd77a249e70644dcd6c44db56cf3ec36cf55f23be44c983276603b5",
+      "source_item_count": 8,
+      "tags": ["continuous-project", "multi-model"],
+      "expected_workstreams": [
+        {"canonical_name": "AI Coding 提效支撑", "aliases": ["Ai coding 提效支撑"], "requirement": "required", "fact_scope": "all_reportable"}
+      ],
+      "forbidden_merges": []
+    },
+    {
+      "case_id": "pa-103",
+      "report_date": "2026-08-05",
+      "source_set_sha256": "856802913cb00269eb6c12a4d7a5a68d01eeb8e34f9ef532be31702442f5a506",
+      "source_item_count": 10,
+      "tags": ["continuous-project", "evaluation-and-data-pipeline"],
+      "expected_workstreams": [
+        {"canonical_name": "AI Coding 提效支撑", "aliases": ["Ai coding 提效支撑"], "requirement": "required", "fact_scope": "all_reportable"}
+      ],
+      "forbidden_merges": []
+    },
+    {
+      "case_id": "pa-104",
+      "report_date": "2026-08-06",
+      "source_set_sha256": "7c7ae4cc9c68890f65024d796f491b3f3673ec71517a00d08406179c898e1166",
+      "source_item_count": 5,
+      "tags": ["continuous-project", "partial-source-coverage", "temporal-state-risk", "context-detail-overload"],
+      "expected_workstreams": [
+        {"canonical_name": "AI Coding 提效支撑", "aliases": ["Ai coding 提效支撑"], "requirement": "required", "fact_scope": "all_reportable"}
+      ],
+      "forbidden_merges": []
+    },
+    {
+      "case_id": "pa-201",
+      "report_date": "2026-08-03",
+      "source_set_sha256": "3af8628f6ad5296ba1a566c883c626c6e793c8eec9158df8e121feb1da520aa5",
+      "source_item_count": 1,
+      "tags": ["algorithm-research", "cold-start-seed", "continuous-project"],
+      "expected_workstreams": [
+        {"canonical_name": "KV Cache 压缩算法研发", "aliases": ["OSCAR", "1-bit KV Cache"], "requirement": "allowed", "fact_scope": "all_reportable"}
+      ],
+      "forbidden_merges": []
+    },
+    {
+      "case_id": "pa-202",
+      "report_date": "2026-08-04",
+      "source_set_sha256": "3af8628f6ad5296ba1a566c883c626c6e793c8eec9158df8e121feb1da520aa5",
+      "source_item_count": 1,
+      "tags": ["continuous-project", "algorithm-evaluation"],
+      "expected_workstreams": [
+        {"canonical_name": "KV Cache 压缩算法研发", "aliases": ["OSCAR"], "requirement": "required", "fact_scope": "all_reportable"}
+      ],
+      "forbidden_merges": []
+    },
+    {
+      "case_id": "pa-203",
+      "report_date": "2026-08-05",
+      "source_set_sha256": "8c58ea39e2167716f0c3dbfb468d9c066dd6656e3aea12b4a6c8c5ab9bd7147a",
+      "source_item_count": 3,
+      "tags": ["project-switch-boundary", "must-not-overmerge"],
+      "expected_workstreams": [
+        {"canonical_name": "KV Cache 压缩算法研发", "aliases": ["OSCAR"], "requirement": "required", "fact_scope": "matching_facts"},
+        {"canonical_name": "v5 精度评测套件", "aliases": ["v5 suite", "精度评测套件"], "requirement": "required", "fact_scope": "matching_facts"}
+      ],
+      "forbidden_merges": [
+        {"left": "KV Cache 压缩算法研发", "right": "v5 精度评测套件"}
+      ]
+    },
+    {
+      "case_id": "pa-204",
+      "report_date": "2026-08-06",
+      "source_set_sha256": "58ca5e8cfe1dc2381b651633192b1875bbae36a46649202e96a32a674e7af273",
+      "source_item_count": 9,
+      "tags": ["continuous-project", "context-overload", "project-memory-semantic", "current-work-selection"],
+      "expected_workstreams": [
+        {"canonical_name": "KV Cache 压缩算法研发", "aliases": ["KV Cache 压缩算法"], "requirement": "required", "fact_scope": "all_reportable"}
+      ],
+      "forbidden_merges": []
+    },
+    {
+      "case_id": "pa-301",
+      "report_date": "2026-08-06",
+      "source_set_sha256": "db07f2d0bd7d4b5d648293164f6fe31ff0b9a5d2975d0e0ddaac1333e37a508b",
+      "source_item_count": 1,
+      "tags": ["parent-project-missing", "uncertainty-preservation", "source-covered", "agent-claim-heavy"],
+      "expected_workstreams": [
+        {"canonical_name": "nnp412量化适配", "aliases": ["nnp412"], "requirement": "required", "fact_scope": "all_reportable"}
+      ],
+      "forbidden_merges": []
+    },
+    {
+      "case_id": "pa-401",
+      "report_date": "2026-08-06",
+      "source_set_sha256": "5ab94e91eda78d0f6662972e5056a24cd45090e86f811c10ec2571788d731bb7",
+      "source_item_count": 3,
+      "tags": ["partial-source-coverage", "coverage-negative", "multi-workspace", "must-not-overmerge"],
+      "expected_workstreams": [
+        {"canonical_name": "KV Cache 压缩算法研发", "aliases": ["OSCAR", "HY3"], "requirement": "allowed", "fact_scope": "matching_facts"},
+        {"canonical_name": "Wan2.1 推理加速", "aliases": ["turbodiffusion", "B200 MXFP8"], "requirement": "allowed", "fact_scope": "matching_facts"}
+      ],
+      "forbidden_merges": [
+        {"left": "KV Cache 压缩算法研发", "right": "Wan2.1 推理加速"}
+      ]
+    }
+  ]
+}

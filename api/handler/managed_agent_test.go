@@ -2193,10 +2193,14 @@ func TestReportRunDedupeScopeIncludesPrivateExecutionIdentity(t *testing.T) {
 	}
 }
 
-func expectReportRunSubmission(mock sqlmock.Sqlmock, userID, agentID, modelID, idempotencyKey, runID string, inputRefArgs ...driver.Value) {
+func expectReportRunSubmission(mock sqlmock.Sqlmock, userID, agentID, modelID, idempotencyKey, runID string, jsonArgs ...driver.Value) {
 	var inputRefArg driver.Value = sqlmock.AnyArg()
-	if len(inputRefArgs) > 0 {
-		inputRefArg = inputRefArgs[0]
+	if len(jsonArgs) > 0 {
+		inputRefArg = jsonArgs[0]
+	}
+	var executionInputArg driver.Value = sqlmock.AnyArg()
+	if len(jsonArgs) > 1 {
+		executionInputArg = jsonArgs[1]
 	}
 	mock.ExpectQuery("(?s)SELECT r.id::text.*FROM ai_runs.*idempotency_key").
 		WithArgs(userID, reportAgentRunBusinessType, idempotencyKey).
@@ -2207,13 +2211,77 @@ func expectReportRunSubmission(mock sqlmock.Sqlmock, userID, agentID, modelID, i
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery("(?s)INSERT INTO ai_runs.*RETURNING id::text").
 		WithArgs(userID, reportAgentRunBusinessType, agentID, sqlmock.AnyArg(), modelID,
-			inputRefArg, sqlmock.AnyArg(), 3600, idempotencyKey,
+			inputRefArg, executionInputArg, 3600, idempotencyKey,
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(runID))
 	mock.ExpectExec("INSERT INTO report_run_variant_manifests").
 		WithArgs(runID, sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
+}
+
+func TestExecuteSystemReportAgentScheduleUsesSystemAccount(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	systemAgent := model.ManagedAgent{
+		AgentID: "system-report", Name: "系统报告 Agent", Engine: "claude-code", CurrentVersionID: 7,
+		Instructions: defaultReportAgentMarker + "\n" + defaultManagedAgentMarker,
+	}
+	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Header.Get("Authorization") {
+		case "Bearer user-token":
+			writeJSON(w, http.StatusOK, model.ListManagedAgentsResponse{})
+		case "Bearer platform-token":
+			writeJSON(w, http.StatusOK, model.ListManagedAgentsResponse{Agents: []model.ManagedAgent{systemAgent}})
+		default:
+			t.Fatalf("authorization = %q", r.Header.Get("Authorization"))
+		}
+	}))
+	defer platform.Close()
+
+	schedule := model.ManagedAgentSchedule{
+		ID: "schedule-system", UserID: "2", Name: "每日个人日报", AgentID: "system-report",
+		RunKind: scheduleRunKindReport, ModelID: strPtr("MiniMax-M2.5"),
+		ReportConfig: map[string]string{"report_type": reportTypePersonalWeekly},
+		ScheduleType: "weekly", Weekdays: []int{1}, TimeOfDay: "08:00", Timezone: "Asia/Shanghai",
+		StartPromptValues: map[string]string{},
+	}
+	now := time.Date(2026, 8, 7, 0, 0, 0, 0, time.UTC)
+	idempotencyKey := schedule.ID + ":" + now.UTC().Format(time.RFC3339Nano)
+	expectReportRunSubmission(mock, "2", "system-report", "deepseek-v4-flash", idempotencyKey, "run-system",
+		jsonStringArg{require: []string{`"report_skill_slug":"aida-report"`, `"model_id":"deepseek-v4-flash"`}},
+		jsonStringArg{require: []string{`"report_agent_source":"system"`, `"system_report_account":true`}},
+	)
+	mock.ExpectExec("UPDATE managed_agent_schedules").
+		WithArgs(now, "run-system", "", "schedule-system", "2").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectQuery("SELECT id::text").WithArgs("run-system", "2").
+		WillReturnRows(sqlmock.NewRows(aiRunColumns()).AddRow(
+			"run-system", "2", reportAgentRunBusinessType, nil, "managed_session", "system-report",
+			nil, nil, nil, "deepseek-v4-flash", "pending", []byte(`{}`), []byte(`{}`), nil, nil, nil, now,
+		))
+
+	reportSource, err := reportsource.NewService(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := NewManagedAgentHandlerWithDefaults(db, service.NewManagedAgentClient(platform.URL, "platform-token"), testManagedAgentDefaults())
+	h.ConfigureReportSourceSelection(reportSource)
+	client := h.client.WithToken("user-token")
+	run, err := h.executeReportAgentScheduleRun(context.Background(), client, schedule, &model.User{ID: "2", Username: "tester"}, "user-token", "MiniMax-M2.5", map[string]any{"trigger_source": "schedule"}, now, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run == nil || run.ID != "run-system" {
+		t.Fatalf("run = %#v", run)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestExecuteManagedAgentScheduleRunCreatesPendingRunWithoutExternalSubmission(t *testing.T) {
@@ -2660,6 +2728,62 @@ func TestCreateReportAgentScheduleUsesLocalProfileWhenPlatformTypeIsGeneric(t *t
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestCreateReportAgentScheduleAcceptsSystemReportAgent(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	systemAgent := model.ManagedAgent{
+		AgentID: "system-report", Name: "系统报告 Agent", Engine: "claude-code",
+		Instructions: defaultReportAgentMarker + "\n" + defaultManagedAgentMarker,
+	}
+	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/my/agents" {
+			t.Fatalf("unexpected platform request: %s %s", r.Method, r.URL.Path)
+		}
+		switch r.Header.Get("Authorization") {
+		case "Bearer user-token":
+			writeJSON(w, http.StatusOK, model.ListManagedAgentsResponse{})
+		case "Bearer platform-token":
+			writeJSON(w, http.StatusOK, model.ListManagedAgentsResponse{Agents: []model.ManagedAgent{systemAgent}})
+		default:
+			t.Fatalf("authorization = %q", r.Header.Get("Authorization"))
+		}
+	}))
+	defer platform.Close()
+
+	now := time.Date(2026, 8, 7, 10, 0, 0, 0, time.UTC)
+	mock.ExpectQuery("SELECT agent_id, business_type, report_types").
+		WithArgs("2", "system-report").
+		WillReturnRows(sqlmock.NewRows([]string{"agent_id", "business_type", "report_types", "is_default_report"}).
+			AddRow("system-report", managedAgentBusinessReport, []byte(`["personal_daily"]`), true))
+	mock.ExpectQuery("INSERT INTO managed_agent_schedules").
+		WithArgs("2", "每日个人日报", "system-report", scheduleRunKindReport, "MiniMax-M2.5", "", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), "daily", sqlmock.AnyArg(), "19:00", "Asia/Shanghai", true, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("schedule-system-report"))
+	mock.ExpectQuery("SELECT s.id::text").
+		WithArgs("schedule-system-report", "2").
+		WillReturnRows(sqlmock.NewRows(agentScheduleColumns()).
+			AddRow("schedule-system-report", "2", "每日个人日报", "system-report", scheduleRunKindReport, "MiniMax-M2.5", "", []byte(`{}`), []byte(`{}`), []byte(`{"report_type":"personal_daily"}`), "daily", []byte(`[]`), "19:00", "Asia/Shanghai", true, now, nil, nil, nil, nil, nil, nil, nil, now, now))
+
+	h := NewManagedAgentHandlerWithDefaults(db, service.NewManagedAgentClient(platform.URL, "platform-token"), testManagedAgentDefaults())
+	body := `{"name":"每日个人日报","agent_id":"system-report","run_kind":"report_agent","enabled":true,"trigger_config":{"schedule_type":"daily","time_of_day":"19:00"},"run_config":{"model_id":"MiniMax-M2.5","start_prompt_values":{},"report_config":{"report_type":"personal_daily"}}}`
+	req := httptest.NewRequest(http.MethodPost, "/ai-assets/agent-schedules", bytes.NewBufferString(body))
+	req.Header.Set("Authorization", "Bearer user-token")
+	req = requestWithUser(req, &model.User{ID: "2", Name: "测试用户", Role: "employee"})
+	rec := httptest.NewRecorder()
+
+	h.CreateAgentSchedule(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -237,7 +237,9 @@ func main() {
 	}()
 	log.Printf("Internal metrics listening on %s", cfg.AIDAInternalMetricsAddr)
 	handler.NewManagedAgentScheduleRunner(managedAgentH).Start(schedulerCtx)
-	service.NewManagedAgentRunStatusSyncer(database, managedAgentClient).Start(schedulerCtx)
+	service.NewManagedAgentRunStatusSyncer(database, managedAgentClient).
+		ConfigureReportFallback(dailyReportMCPH).
+		Start(schedulerCtx)
 	reportSourceCatalogReconciler, err := reportsourcecatalog.NewReconciler(database)
 	if err != nil {
 		log.Fatalf("Failed to init report source catalog reconciler: %v", err)

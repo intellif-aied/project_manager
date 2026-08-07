@@ -40,11 +40,13 @@ type reportAIRun struct {
 }
 
 type writeReportResultArgs struct {
-	RunID      string `json:"run_id"`
-	Content    string `json:"content"`
-	Summary    string `json:"summary,omitempty"`
-	BriefHash  string `json:"brief_hash,omitempty"`
-	FormatMode string `json:"format_mode,omitempty"`
+	RunID            string                   `json:"run_id"`
+	Content          string                   `json:"content"`
+	Summary          string                   `json:"summary,omitempty"`
+	BriefHash        string                   `json:"brief_hash,omitempty"`
+	FormatMode       string                   `json:"format_mode,omitempty"`
+	Workstreams      []reportbrief.Workstream `json:"workstreams,omitempty"`
+	NoReportableWork bool                     `json:"no_reportable_work,omitempty"`
 }
 
 type writeReportFailureArgs struct {
@@ -87,6 +89,7 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 	acceptedBriefHash := ""
 	degradedReason := ""
 	degradedContentReplaced := false
+	compileWarnings := []string{}
 	var content, normalizedSummary string
 	requiresBrief := h.briefEnabled && reportType == reportTypePersonalDaily && reportBriefRequiredForRun(*run)
 	if requiresBrief && strings.TrimSpace(args.BriefHash) != "" {
@@ -105,31 +108,33 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 		}
 		briefSchemaVersion = storedBrief.Payload.SchemaVersion
 		acceptedBriefHash = storedBrief.BriefHash
+	} else if requiresBrief {
+		if h.reportBrief == nil {
+			return nil, errMCPInternal
+		}
+		compiled, compileErr := h.reportBrief.Compile(r.Context(), u.ID, args.RunID, reportbrief.Draft{
+			Workstreams:      args.Workstreams,
+			NoReportableWork: args.NoReportableWork,
+		})
+		if compileErr != nil {
+			return nil, mapReportBriefError(compileErr)
+		}
+		var ok bool
+		content, normalizedSummary, ok = compiled.Stored.ReaderReport()
+		if !ok {
+			return nil, errMCPInternal
+		}
+		briefSchemaVersion = compiled.Stored.Payload.SchemaVersion
+		acceptedBriefHash = compiled.Stored.BriefHash
+		compileWarnings = compiled.Warnings
+		if compiled.Mode != reportbrief.CompileModeAccepted {
+			degradedReason = compiled.Mode
+			degradedContentReplaced = compiled.Mode == reportbrief.CompileModeFallback
+		}
 	} else {
 		content, normalizedSummary, err = prepareReportResultForRun(*run, reportType, args)
 		if err != nil {
 			return nil, err
-		}
-	}
-	if requiresBrief && strings.TrimSpace(args.BriefHash) == "" {
-		if h.reportBrief == nil {
-			return nil, errMCPInternal
-		}
-		degradedReason, err = h.reportBrief.DegradedWriteReason(r.Context(), u.ID, args.RunID)
-		if err != nil {
-			return nil, mapReportBriefError(err)
-		}
-		if !reportbrief.ReaderFacingTextSafe(normalizedSummary) || !reportbrief.ReaderFacingTextSafe(content) {
-			content, normalizedSummary, err = prepareReportResultContent(
-				reportType,
-				run.ContextRepresentation,
-				"1. 已根据本期工作记录生成日报，请检查并补充。",
-				"### 工作记录\n\n本期工作内容已完成整理，请结合实际情况检查并补充。",
-			)
-			if err != nil {
-				return nil, err
-			}
-			degradedContentReplaced = true
 		}
 	}
 	if content == "" {
@@ -256,6 +261,9 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 			outputPayload["report_generation_degraded_content_replaced"] = true
 		}
 	}
+	if len(compileWarnings) > 0 {
+		outputPayload["report_compile_warnings"] = compileWarnings
+	}
 	copyReportRunMetadata(outputPayload, run.InputRef)
 	outputRef, _ := json.Marshal(outputPayload)
 	finalizeResult, err := tx.ExecContext(ctx, `
@@ -296,6 +304,29 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 		"updated_by_user":      false,
 		"degraded":             degradedReason != "",
 	}), nil
+}
+
+// WriteReportFallback completes a managed report run when the Agent session
+// terminates without invoking the write tool. The normal guarded write path is
+// reused so identity, edit-conflict, source, and idempotency checks stay intact.
+func (h *ReportMCPHandler) WriteReportFallback(ctx context.Context, runID string) error {
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return errors.New("report run id is required")
+	}
+	var userID string
+	if err := h.db.QueryRowContext(ctx, `SELECT user_id::text FROM ai_runs WHERE id::text = $1`, runID).Scan(&userID); err != nil {
+		return err
+	}
+	user, err := loadAidaUserByID(h.db, userID)
+	if err != nil {
+		return err
+	}
+	request := (&http.Request{}).WithContext(context.WithValue(
+		context.WithValue(ctx, userKey, user), reportRunIDKey, runID,
+	))
+	_, err = h.toolWriteReportResult(request, json.RawMessage(`{}`))
+	return err
 }
 
 func (h *ReportMCPHandler) loadFrozenReportSourceRefs(ctx context.Context, userID string, run *reportAIRun) (frozenReportSourceRefs, error) {

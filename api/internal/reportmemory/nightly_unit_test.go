@@ -55,6 +55,61 @@ func TestMarshalWithinBudgetDropsHistoryBeforeCandidates(t *testing.T) {
 	}
 }
 
+func TestMarshalWithinBudgetDropsOlderAnchorsBeforeRecentOverviews(t *testing.T) {
+	recent := strings.Repeat("近期", 1200)
+	anchor := strings.Repeat("锚点", 5000)
+	input := ConsolidationInput{
+		SchemaVersion: consolidationInputSchema, ResolverVersion: ResolverVersion,
+		CurrentThemes:     []InputTheme{{ThemeRef: "theme-001", Title: "芯片验证平台"}},
+		RecentOverviews:   []HistoricalReport{{Date: "2026-08-05", Overview: recent}},
+		HistoricalAnchors: []HistoricalReport{{Date: "2026-07-01", Overview: anchor}},
+	}
+	payload, estimate, err := marshalWithinBudget(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if estimate > maxInputTokens || strings.Contains(string(payload), anchor) {
+		t.Fatalf("historical anchor was not trimmed first: estimate=%d", estimate)
+	}
+	if !strings.Contains(string(payload), recent) {
+		t.Fatal("recent overview was trimmed before the older anchor")
+	}
+}
+
+func TestProjectMemoryHistoryUsesTenRecentAndTenAnchorReports(t *testing.T) {
+	if maxRecentReports != 10 || maxHistoricalAnchors != 10 || maxMemorySnapshotDepth != 20 {
+		t.Fatalf("history windows = recent:%d anchors:%d snapshots:%d", maxRecentReports, maxHistoricalAnchors, maxMemorySnapshotDepth)
+	}
+}
+
+func TestHistoricalProjectAnchorKeepsNamesWithoutDeliverableDetails(t *testing.T) {
+	report := historicalReport{
+		generationMode: "managed_agent", sourceType: "explicit_saved",
+		briefPayload: `{"workstreams":[{"subject":"AI Coding 提效支撑","deliverables":[{"result":"完整后端测试通过并发布生产"}]},{"subject":"芯片验证平台"}]}`,
+	}
+	if got := historicalProjectAnchor(report); got != "AI Coding 提效支撑；芯片验证平台" {
+		t.Fatalf("anchor = %q", got)
+	}
+}
+
+func TestMatchingThemeRefsMarksBroadParentWithoutGenericCueInflation(t *testing.T) {
+	themes := []InputTheme{
+		{ThemeRef: "theme-001", Title: "Qwen3 4B DSpark训练"},
+		{ThemeRef: "theme-002", Title: "GLM5.2 DSpark训练"},
+	}
+	parent := InputProject{
+		CanonicalName: "AI Coding 提效支撑",
+		Aliases:       []string{"Qwen3-4B", "GLM-5.2"},
+	}
+	if got := matchingThemeRefs(parent, themes); len(got) != 2 || got[0] != "theme-001" || got[1] != "theme-002" {
+		t.Fatalf("parent matched themes = %#v", got)
+	}
+	child := InputProject{CanonicalName: "Qwen3 4B DSpark训练", WorkstreamCues: []string{"DSpark"}}
+	if got := matchingThemeRefs(child, themes); len(got) != 1 || got[0] != "theme-001" {
+		t.Fatalf("child matched themes = %#v", got)
+	}
+}
+
 func TestWorkstreamsFromBriefKeepsBoundedParentChildOutline(t *testing.T) {
 	raw := `{"workstreams":[{"subject":"IF-Knowledge","deliverables":[{"result":"完成 knowledge-map-search Skill，并应用到儿童睡前卡通动画生成场景"},{"result":"完成 Knowledge Map 产品判断"}]}]}`
 	workstreams := workstreamsFromBrief(raw)
@@ -177,6 +232,88 @@ func TestNormalizeProposalAliasesKeepsNamesAndDropsNarrativeText(t *testing.T) {
 	aliases := normalizeProposalAliases([]string{"Report Agent", "完成 Report Agent 方案；下一步发布生产。"})
 	if len(aliases) != 1 || aliases[0] != "Report Agent" {
 		t.Fatalf("aliases = %#v", aliases)
+	}
+}
+
+func TestProposalValidationKeepsBoundedWorkstreamCues(t *testing.T) {
+	input := ConsolidationInput{CurrentThemes: []InputTheme{{ThemeRef: "theme-001", Title: "芯片验证平台"}}}
+	raw := `{"schema_version":"project-memory-proposal/v1","decisions":[{"theme_ref":"theme-001","action":"create_new","canonical_name":"芯片验证平台","workstream_cues":["调用执行","ctp CLI","版本流","完成完整后端测试；准备发布。"],"confidence":0.9}]}`
+	proposal, _, _, err := parseAndValidateProposal(raw, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := proposal.Decisions[0].WorkstreamCues
+	if len(got) != 3 || got[0] != "调用执行" || got[1] != "ctp CLI" || got[2] != "版本流" {
+		t.Fatalf("workstream cues = %#v", got)
+	}
+}
+
+func TestProposalCompilerReparentsLowWeightChildrenToStrongHumanParent(t *testing.T) {
+	input := ConsolidationInput{
+		CurrentThemes: []InputTheme{
+			{ThemeRef: "theme-001", Title: "Qwen3 4B DSpark训练"},
+			{ThemeRef: "theme-002", Title: "GLM5.2 DSpark训练"},
+		},
+		CandidateProjects: []InputProject{
+			{ProjectRef: "parent", CanonicalName: "AI Coding 提效支撑", SourceType: sourceHumanEdited, SourceWeight: 1, MatchedThemes: []string{"theme-001", "theme-002"}},
+			{ProjectRef: "qwen", CanonicalName: "Qwen3 4B DSpark训练", SourceType: "auto_carried", SourceWeight: 0.5, MatchedThemes: []string{"theme-001"}},
+			{ProjectRef: "glm", CanonicalName: "GLM5.2 DSpark训练", SourceType: "auto_carried", SourceWeight: 0.5, MatchedThemes: []string{"theme-002"}},
+		},
+	}
+	raw := `{"schema_version":"project-memory-proposal/v1","decisions":[{"theme_ref":"theme-001","action":"link_existing","project_ref":"qwen","confidence":0.95},{"theme_ref":"theme-002","action":"link_existing","project_ref":"glm","confidence":0.95}]}`
+	proposal, _, _, err := parseAndValidateProposal(raw, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, decision := range proposal.Decisions {
+		if decision.Action != "link_existing" || decision.ProjectRef != "parent" {
+			t.Fatalf("decision was not reparented: %+v", decision)
+		}
+	}
+}
+
+func TestProposalCompilerDoesNotForceSingleThemeOrEqualWeightConflict(t *testing.T) {
+	input := ConsolidationInput{
+		CurrentThemes: []InputTheme{
+			{ThemeRef: "theme-001", Title: "Qwen3 4B DSpark训练"},
+			{ThemeRef: "theme-002", Title: "独立人工项目"},
+		},
+		CandidateProjects: []InputProject{
+			{ProjectRef: "parent", CanonicalName: "AI Coding 提效支撑", SourceType: sourceHumanEdited, SourceWeight: 1, MatchedThemes: []string{"theme-001", "theme-002"}},
+			{ProjectRef: "qwen", CanonicalName: "Qwen3 4B DSpark训练", SourceType: "auto_carried", SourceWeight: 0.5, MatchedThemes: []string{"theme-001"}},
+			{ProjectRef: "independent", CanonicalName: "独立人工项目", SourceType: sourceManualFinal, SourceWeight: 1, MatchedThemes: []string{"theme-002"}},
+		},
+	}
+	raw := `{"schema_version":"project-memory-proposal/v1","decisions":[{"theme_ref":"theme-001","action":"link_existing","project_ref":"qwen","confidence":0.95},{"theme_ref":"theme-002","action":"link_existing","project_ref":"independent","confidence":0.95}]}`
+	proposal, _, _, err := parseAndValidateProposal(raw, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proposal.Decisions[0].ProjectRef != "parent" || proposal.Decisions[1].ProjectRef != "independent" {
+		t.Fatalf("strong conflicting project was overwritten: %+v", proposal.Decisions)
+	}
+}
+
+func TestDerivedProjectKeysKeepsStableMixedIdentifiers(t *testing.T) {
+	tests := []struct {
+		name string
+		want []string
+	}{
+		{name: "nnp412量化适配", want: []string{"nnp412"}},
+		{name: "GLM-5.2 DSpark训练", want: []string{"GLM-5.2"}},
+		{name: "芯片验证平台", want: nil},
+	}
+	for _, test := range tests {
+		got := derivedProjectKeys(test.name)
+		if strings.Join(got, ",") != strings.Join(test.want, ",") {
+			t.Fatalf("derivedProjectKeys(%q) = %#v, want %#v", test.name, got, test.want)
+		}
+	}
+}
+
+func TestMarshalStringArrayUsesArrayForEmptyCues(t *testing.T) {
+	if got := string(marshalStringArray(nil)); got != "[]" {
+		t.Fatalf("empty cue JSON = %q", got)
 	}
 }
 

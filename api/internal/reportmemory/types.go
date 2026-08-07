@@ -5,7 +5,7 @@ import (
 	"database/sql"
 )
 
-const AlgorithmVersion = "project-memory-shadow/v6"
+const AlgorithmVersion = "project-memory-shadow/v7"
 
 type FactInput struct {
 	FactRef     string

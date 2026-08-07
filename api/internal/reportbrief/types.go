@@ -20,6 +20,9 @@ const (
 	readerSubjectRuneLimit   = 36
 	readerResultRuneLimit    = 120
 	readerMaxDeliverables    = 3
+	CompileModeAccepted      = "accepted"
+	CompileModeRepaired      = "repaired"
+	CompileModeFallback      = "fallback"
 )
 
 var (
@@ -94,6 +97,14 @@ type Stored struct {
 	Payload     Payload
 	BriefHash   string
 	ContextHash string
+}
+
+// Compiled is the outcome of one managed Report Draft submission. Quality
+// defects are represented as a mode and warnings instead of another model pass.
+type Compiled struct {
+	Stored   Stored
+	Mode     string
+	Warnings []string
 }
 
 // ReaderSummary returns the deterministic reader-facing summary for Briefs

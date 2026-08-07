@@ -294,6 +294,7 @@ type HistoricalProjectHint struct {
 	ProjectRef        string   `json:"project_ref"`
 	CanonicalName     string   `json:"canonical_name"`
 	Aliases           []string `json:"aliases,omitempty"`
+	WorkstreamCues    []string `json:"workstream_cues,omitempty"`
 	SemanticFactRefs  []string `json:"semantic_fact_refs,omitempty"`
 	WorkspaceFactRefs []string `json:"workspace_fact_refs,omitempty"`
 	Confidence        float64  `json:"confidence"`

@@ -2,7 +2,7 @@
 
 ## 1. 适用范围
 
-数据集标识：`project-association-regression/v1`。
+当前数据集标识：`project-association-regression/v2`。V1 为不可变历史版本，V2 完整继承 V1 并新增 2026-08-06 的 5 个典型用户日。
 
 用于验证：
 
@@ -17,19 +17,23 @@
 
 仓库内：
 
-    doc/v3/日报生成方案评测V2/datasets/project-association-regression-v1/
+    doc/v3/日报生成方案评测V2/datasets/project-association-regression-v2/
       README.md
       manifest.json
 
 受控数据：
 
-    /home/intellif/evaluation/project-association-regression-v1/
+    /home/intellif/evaluation/project-association-regression-v2/
       manifest.json
+      contexts/
+      source-items/
+      baselines/
+      SHA256SUMS.txt
       candidate-<skill-version>.json
 
 原始 Session、Slice 或冻结来源可能保存在其他受控目录，具体路径由受控 `manifest.json` 的 `source_archive` 指向。不要依靠历史会话中的路径。
 
-## 3. V1 样本含义
+## 3. V2 样本含义
 
 | Case | 角色 | 固定门槛 |
 | --- | --- | --- |
@@ -39,10 +43,21 @@
 | `pa-201` | 冷启动种子 | 建立“KV Cache 压缩算法研发”方向，不要求历史召回 |
 | `pa-202` | 连续项目 | 必须归入“KV Cache 压缩算法研发” |
 | `pa-203` | 项目边界 | “KV Cache 压缩算法研发”和“精度评测套件”必须同时存在且保持独立 |
+| `pa-002` | 模块别名困难正样本 | 必须从“调用执行、版本流、ctp CLI、提单支持”恢复“芯片验证平台” |
+| `pa-104` | 连续项目、部分 Source 覆盖 | 必须保持“AI Coding 提效支撑”；Source 未覆盖的最终状态不纳入自动项目门槛 |
+| `pa-204` | 大 Context 当前工作选择 | 必须选择当天 OSCAR 工作并恢复“KV Cache 压缩算法研发” |
+| `pa-301` | Agent Claim 与确定性边界 | 必须恢复“nnp412量化适配”；是否保留事实不确定性由人工复核 |
+| `pa-401` | Source Coverage 反例 | 两个父项目只允许命中、不强制命中，但“KV Cache 压缩算法研发”与“Wan2.1 推理加速”不得误并 |
 
 员工姓名只存在于受控 Archive；不要写回 Git Manifest。
 
 ## 4. 开始评测
+
+涉及 Project Memory 的候选回归，先读取伴随历史参数集：
+
+    doc/v3/日报生成方案评测V2/datasets/project-memory-history-v1/README.md
+
+受控数据位于 `/home/intellif/evaluation/project-memory-history-v1/`。对每个 Case 的目标日期，只能加载同一 Subject 且日期早于目标日期的日报；目标当天和未来日报不得进入 Project Memory。没有绑定历史 Subject 的 Case 维持冷启动，不得临时借用其他员工历史。
 
 在测试服务器执行：
 
@@ -52,17 +67,17 @@
 先校验 Manifest：
 
     go run ./cmd/daily-report-eval validate-association \
-      --manifest ../doc/v3/日报生成方案评测V2/datasets/project-association-regression-v1/manifest.json
+      --manifest ../doc/v3/日报生成方案评测V2/datasets/project-association-regression-v2/manifest.json
 
 预期输出包含：
 
-    valid Project Association dataset: project-association-regression/v1 (7 cases)
+    valid Project Association dataset: project-association-regression/v2 (12 cases)
 
 如果这里失败，停止评测并修复数据结构；不要调用 Agent 绕过校验。
 
 ## 5. 什么时候需要重放 Agent
 
-以下改动需要重放 7 个 Case：
+以下改动需要重放 12 个 Case：
 
 - Project Memory Context、Workspace Identity、关联证据或 Resolver 变化；
 - Report Skill 的项目归并指令变化；
@@ -98,21 +113,21 @@ subject 必须来自数据库中的 `report_run_briefs.brief_payload.workstreams
 
 将结果按受控 Manifest 的 Case 映射写入：
 
-    /home/intellif/evaluation/project-association-regression-v1/candidate-<skill-version>.json
+    /home/intellif/evaluation/project-association-regression-v2/candidate-<skill-version>.json
 
 候选文件必须包含：
 
     {
       "schema_version": "project-association-candidates/v1",
-      "dataset_version": "project-association-regression/v1",
+      "dataset_version": "project-association-regression/v2",
       "cases": []
     }
 
 ## 7. 执行确定性评测
 
     go run ./cmd/daily-report-eval evaluate-association \
-      --manifest ../doc/v3/日报生成方案评测V2/datasets/project-association-regression-v1/manifest.json \
-      --candidates /home/intellif/evaluation/project-association-regression-v1/candidate-<skill-version>.json
+      --manifest ../doc/v3/日报生成方案评测V2/datasets/project-association-regression-v2/manifest.json \
+      --candidates /home/intellif/evaluation/project-association-regression-v2/candidate-<skill-version>.json
 
 通过条件：
 
@@ -121,7 +136,7 @@ subject 必须来自数据库中的 `report_run_briefs.brief_payload.workstreams
 - `forbidden_merges` 中的两个项目没有落入同一 Workstream；
 - 命令返回码为 0，输出顶层 `passed: true`。
 
-两个冷启动种子 Case 没有父项目强制命中门槛，但仍要求生成成功并进入候选记录。
+两个冷启动种子 Case 没有父项目强制命中门槛，但仍要求生成成功并进入候选记录。`pa-401` 同样不强制补出 Source 无法支持的父项目，它只检查不得误并；不能将该 Case 的项目未命中解释为关联能力失败。
 
 ## 8. 人工复核边界
 
@@ -132,17 +147,17 @@ subject 必须来自数据库中的 `report_run_briefs.brief_payload.workstreams
 - 专业术语是否保留原意；
 - 是否出现当天 Facts 无法支持的结论。
 
-人工不得为了让候选通过而临时修改 v1 Gold Baseline。若确认原标注错误，创建 v2 并记录修订原因。
+人工不得为了让候选通过而临时修改 v2 Gold Baseline。若确认原标注错误，创建 v3 并记录修订原因。
 
 ## 9. 结论记录模板
 
 每轮至少记录：
 
-    数据集：project-association-regression/v1
+    数据集：project-association-regression/v2
     代码版本：<commit 或明确的 dirty revision>
     Report Skill：<owner/slug@version>
     测试环境：14.157
-    Case 数：7
+    Case 数：12
     Run ID：<逐项列出>
     自动门禁：pass/fail
     人工复核：范围与问题
@@ -155,6 +170,6 @@ subject 必须来自数据库中的 `report_run_briefs.brief_payload.workstreams
 1. 先确认是可复现的通用边界，不是某次随机措辞差异。
 2. 冻结来源并计算 Source Set SHA-256；敏感正文进入受控 Archive。
 3. 人工标注父项目、允许别名、冷启动属性和禁止合并关系。
-4. 创建 `project-association-regression/v2`，不要修改 v1。
+4. 创建新的版本目录，例如 `project-association-regression/v3`，不要修改已发布的 v1/v2。
 5. 同时更新 `doc/评测数据集/README.md` 的目录状态和版本说明。
-6. v2 通过 Manifest 校验后，才能作为新的发布门禁。
+6. 新版本通过 Manifest 校验后，才能作为新的发布门禁。

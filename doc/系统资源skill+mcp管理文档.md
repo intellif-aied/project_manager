@@ -23,7 +23,7 @@
 | 环境 | Skill owner | Skill | MCP | 最近验证 | 验证依据 |
 | --- | --- | --- | --- | --- | --- |
 | 生产 | 10086 | aida-report@1.1.31 | aida-report-mcp@report-v1 | 2026-08-06 | `20260806-Project-Memory工作空间关联生产发布`、运行配置与公共 Registry |
-| 14.157 测试 | 100866 | aida-report@1.1.36 | aida-report-mcp@report-v1 | 2026-08-06 | `20260806-Project关联评测数据集与强关联回归测试发布`、运行环境、公共 Registry 与固定数据集回放 |
+| 14.157 测试 | 100866 | aida-report@1.1.42 | aida-report-mcp@report-v1 | 2026-08-06 | `20260806-Report-Compiler单次提案测试发布`、Registry 正文回读与 Project Association v2 回放 |
 
 规则：
 

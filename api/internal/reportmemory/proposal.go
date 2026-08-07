@@ -22,6 +22,7 @@ const (
 )
 
 var activityOnlyName = regexp.MustCompile(`^(修复|测试|部署|调研|优化|开发|验证|走读|讨论|排查|发布|上线)$`)
+var literalProjectKey = regexp.MustCompile(`[A-Za-z][A-Za-z0-9._-]{2,23}`)
 
 func parseAndValidateProposal(raw string, input ConsolidationInput) (MemoryProposal, []byte, int, error) {
 	clean := strings.TrimSpace(raw)
@@ -95,20 +96,85 @@ func parseAndValidateProposal(raw string, input ConsolidationInput) (MemoryPropo
 				decision.Action, decision.ProjectRef, decision.CanonicalName, decision.Aliases = "unresolved", "", "", nil
 			}
 		case "unresolved":
-			decision.ProjectRef, decision.CanonicalName, decision.Aliases = "", "", nil
+			decision.ProjectRef, decision.CanonicalName, decision.Aliases, decision.WorkstreamCues = "", "", nil, nil
 		case "suggest_rename", "suggest_merge":
 			// Suggestions remain observable but are not applied in v1.
 		default:
 			return MemoryProposal{}, nil, estimate, fmt.Errorf("decision %s action is invalid", decision.ThemeRef)
 		}
 		decision.Aliases = normalizeProposalAliases(decision.Aliases)
+		decision.WorkstreamCues = normalizeWorkstreamCues(decision.WorkstreamCues)
 	}
 	if len(seen) != len(inputThemes) {
 		return MemoryProposal{}, nil, estimate, errors.New("memory proposal does not account for every current theme")
 	}
+	applyStrongParentScope(&proposal, input)
 	sort.SliceStable(proposal.Decisions, func(i, j int) bool { return proposal.Decisions[i].ThemeRef < proposal.Decisions[j].ThemeRef })
 	payload, err := json.Marshal(proposal)
 	return proposal, payload, estimate, err
+}
+
+func applyStrongParentScope(proposal *MemoryProposal, input ConsolidationInput) {
+	if proposal == nil {
+		return
+	}
+	strongParents := make([]InputProject, 0)
+	parentByTheme := make(map[string][]string)
+	for _, candidate := range input.CandidateProjects {
+		if candidate.SourceWeight < 0.95 ||
+			(candidate.SourceType != sourceManualFinal && candidate.SourceType != sourceHumanEdited) ||
+			len(candidate.MatchedThemes) < 2 {
+			continue
+		}
+		strongParents = append(strongParents, candidate)
+		for _, themeRef := range candidate.MatchedThemes {
+			parentByTheme[themeRef] = appendUnique(parentByTheme[themeRef], candidate.ProjectRef)
+		}
+	}
+	if len(strongParents) == 0 {
+		return
+	}
+	candidates := make(map[string]InputProject, len(input.CandidateProjects))
+	for _, candidate := range input.CandidateProjects {
+		candidates[candidate.ProjectRef] = candidate
+	}
+	for _, parent := range strongParents {
+		covered := make([]int, 0, len(parent.MatchedThemes))
+		for index := range proposal.Decisions {
+			decision := &proposal.Decisions[index]
+			if len(parentByTheme[decision.ThemeRef]) != 1 || parentByTheme[decision.ThemeRef][0] != parent.ProjectRef {
+				continue
+			}
+			if decision.Action != "link_existing" && decision.Action != "create_new" {
+				continue
+			}
+			covered = append(covered, index)
+		}
+		if len(covered) < 2 {
+			continue
+		}
+		for _, index := range covered {
+			decision := &proposal.Decisions[index]
+			if decision.Action == "link_existing" && decision.ProjectRef == parent.ProjectRef {
+				continue
+			}
+			if chosen, ok := candidates[decision.ProjectRef]; ok && chosen.SourceWeight >= parent.SourceWeight {
+				continue
+			}
+			decision.Action = "link_existing"
+			decision.ProjectRef = parent.ProjectRef
+			decision.CanonicalName = ""
+			decision.Confidence = maxFloat(decision.Confidence, highConfidenceScore)
+			decision.Reason = "服务端依据人工确认父项目覆盖多个当天主题归并"
+		}
+	}
+}
+
+func maxFloat(left, right float64) float64 {
+	if left > right {
+		return left
+	}
+	return right
 }
 
 // ValidateProposal is the Project Memory MCP write seam. It applies the same
@@ -135,6 +201,20 @@ func normalizeProposalAliases(values []string) []string {
 			result = appendUnique(result, value)
 		}
 		if len(result) >= maxAliasesPerProject {
+			break
+		}
+	}
+	return result
+}
+
+func normalizeWorkstreamCues(values []string) []string {
+	result := make([]string, 0, minInt(len(values), maxDecisionCues))
+	for _, value := range values {
+		value = limitRunes(value, titleRuneLimit)
+		if validProjectName(value) {
+			result = appendUnique(result, value)
+		}
+		if len(result) >= maxDecisionCues {
 			break
 		}
 	}
@@ -190,6 +270,7 @@ func applyProposal(
 		ID, CanonicalName string
 		Titles            []string
 		Aliases           []string
+		WorkstreamCues    []string
 	}
 	applied := map[string]*appliedProject{}
 	for _, decision := range proposal.Decisions {
@@ -232,6 +313,9 @@ func applyProposal(
 		for _, alias := range decision.Aliases {
 			item.Aliases = appendUnique(item.Aliases, alias)
 		}
+		for _, cue := range decision.WorkstreamCues {
+			item.WorkstreamCues = appendUnique(item.WorkstreamCues, cue)
+		}
 		for _, workspaceRef := range themes[decision.ThemeRef].WorkspaceRefs {
 			if err := upsertProjectWorkspaceLink(
 				ctx, tx, job, input, projectID, workspaceRef, decision.ThemeRef, decision.Confidence,
@@ -245,24 +329,31 @@ func applyProposal(
 		if err := upsertAlias(ctx, tx, item.ID, report, item.CanonicalName, "canonical", 1); err != nil {
 			return "", err
 		}
+		for _, projectKey := range derivedProjectKeys(item.CanonicalName) {
+			if err := upsertAlias(ctx, tx, item.ID, report, projectKey, "child_topic", 0.98); err != nil {
+				return "", err
+			}
+		}
 		for _, alias := range item.Aliases {
 			if err := upsertAlias(ctx, tx, item.ID, report, alias, "child_topic", 0.9); err != nil {
 				return "", err
 			}
 		}
 		children, _ := json.Marshal(item.Titles)
+		workstreamCues := marshalStringArray(item.WorkstreamCues)
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO report_project_occurrences (
-				project_id, report_id, report_date, observed_title, child_topics_json,
+				project_id, report_id, report_date, observed_title, child_topics_json, workstream_cues_json,
 				source_type, source_weight
-			) VALUES ($1, $2, $3::date, $4, $5::jsonb, $6, $7)
+			) VALUES ($1, $2, $3::date, $4, $5::jsonb, $6::jsonb, $7, $8)
 			ON CONFLICT (project_id, report_id) DO UPDATE SET
 				report_date = EXCLUDED.report_date,
 				observed_title = EXCLUDED.observed_title,
 				child_topics_json = EXCLUDED.child_topics_json,
+				workstream_cues_json = EXCLUDED.workstream_cues_json,
 				source_type = EXCLUDED.source_type,
 				source_weight = EXCLUDED.source_weight`, item.ID, job.ReportID, job.ReportDate,
-			item.CanonicalName, string(children), input.SourceType, input.SourceWeight); err != nil {
+			item.CanonicalName, string(children), string(workstreamCues), input.SourceType, input.SourceWeight); err != nil {
 			return "", err
 		}
 	}
@@ -305,6 +396,33 @@ func applyProposal(
 		return "", err
 	}
 	return snapshotID, tx.Commit()
+}
+
+func derivedProjectKeys(value string) []string {
+	result := make([]string, 0, 2)
+	for _, match := range literalProjectKey.FindAllString(value, -1) {
+		match = strings.Trim(match, "._-")
+		hasLetter, hasDigit := false, false
+		for _, current := range match {
+			hasLetter = hasLetter || (current >= 'A' && current <= 'Z') || (current >= 'a' && current <= 'z')
+			hasDigit = hasDigit || (current >= '0' && current <= '9')
+		}
+		if hasLetter && hasDigit && validProjectName(match) {
+			result = appendUnique(result, match)
+		}
+	}
+	return result
+}
+
+func marshalStringArray(values []string) []byte {
+	if len(values) == 0 {
+		return []byte("[]")
+	}
+	payload, err := json.Marshal(values)
+	if err != nil {
+		return []byte("[]")
+	}
+	return payload
 }
 
 func upsertProjectWorkspaceLink(
@@ -351,9 +469,21 @@ func upsertProjectWorkspaceLink(
 
 func currentMemoryPayload(ctx context.Context, tx *sql.Tx, userID, currentReportID string) ([]byte, error) {
 	rows, err := tx.QueryContext(ctx, `
-		SELECT p.id::text, p.canonical_name, p.status, p.first_seen_on::text, p.last_seen_on::text,
+	SELECT p.id::text, p.canonical_name, p.status, p.first_seen_on::text, p.last_seen_on::text,
 		       COALESCE(array_agg(a.alias ORDER BY a.source_weight DESC, a.source_report_date DESC)
-		           FILTER (WHERE a.alias IS NOT NULL), '{}')
+		           FILTER (WHERE a.alias IS NOT NULL), '{}'),
+		       COALESCE((
+		           SELECT array_agg(recent_cue.cue)
+		           FROM (
+		               SELECT cue.value AS cue, max(occurrence.report_date) AS last_seen
+		               FROM report_project_occurrences occurrence
+		               CROSS JOIN LATERAL jsonb_array_elements_text(occurrence.workstream_cues_json) cue(value)
+		               WHERE occurrence.project_id = p.id
+		               GROUP BY cue.value
+		               ORDER BY last_seen DESC, cue.value
+		               LIMIT $3
+		           ) recent_cue
+		       ), '{}')
 		FROM report_projects p
 		LEFT JOIN report_project_aliases a ON a.project_id = p.id
 		WHERE p.user_id = $1
@@ -369,27 +499,29 @@ func currentMemoryPayload(ctx context.Context, tx *sql.Tx, userID, currentReport
 				)
 			  )
 		  )
-		GROUP BY p.id ORDER BY p.last_seen_on DESC, p.id`, userID, currentReportID)
+		GROUP BY p.id ORDER BY p.last_seen_on DESC, p.id`, userID, currentReportID, maxWorkstreamCues)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	type project struct {
-		ProjectRef    string   `json:"project_ref"`
-		CanonicalName string   `json:"canonical_name"`
-		Status        string   `json:"status"`
-		FirstSeenOn   string   `json:"first_seen_on"`
-		LastSeenOn    string   `json:"last_seen_on"`
-		Aliases       []string `json:"aliases"`
+		ProjectRef     string   `json:"project_ref"`
+		CanonicalName  string   `json:"canonical_name"`
+		Status         string   `json:"status"`
+		FirstSeenOn    string   `json:"first_seen_on"`
+		LastSeenOn     string   `json:"last_seen_on"`
+		Aliases        []string `json:"aliases"`
+		WorkstreamCues []string `json:"workstream_cues,omitempty"`
 	}
 	projects := make([]project, 0)
 	for rows.Next() {
 		var item project
-		var aliases pq.StringArray
-		if err := rows.Scan(&item.ProjectRef, &item.CanonicalName, &item.Status, &item.FirstSeenOn, &item.LastSeenOn, &aliases); err != nil {
+		var aliases, workstreamCues pq.StringArray
+		if err := rows.Scan(&item.ProjectRef, &item.CanonicalName, &item.Status, &item.FirstSeenOn, &item.LastSeenOn, &aliases, &workstreamCues); err != nil {
 			return nil, err
 		}
 		item.Aliases = append([]string(nil), aliases...)
+		item.WorkstreamCues = append([]string(nil), workstreamCues...)
 		projects = append(projects, item)
 	}
 	if err := rows.Err(); err != nil {

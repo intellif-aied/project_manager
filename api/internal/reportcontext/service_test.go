@@ -25,14 +25,16 @@ type sourceStub struct {
 func TestProjectMemoryContextKeepsMatchedFactsAsOptionalBackground(t *testing.T) {
 	context := projectMemoryContextFromHints([]reportmemory.HistoricalProjectHint{{
 		ProjectRef: "project-1", CanonicalName: "Symphony",
-		Aliases: []string{"Symphony 任务编排器"}, MatchedFactRef: []string{"fact-016"}, Confidence: 0.9,
+		Aliases: []string{"Symphony 任务编排器"}, WorkstreamCues: []string{"任务调度"},
+		MatchedFactRef: []string{"fact-016"}, Confidence: 0.9,
 	}})
 	if context == nil || !strings.Contains(context.GroupingRule, "不是成果证据或强制归属") ||
-		!strings.Contains(context.GroupingRule, "两个相似项目不得因历史背景被合并") {
+		!strings.Contains(context.GroupingRule, "新项目或不确定内容不得被强行归入历史项目") {
 		t.Fatalf("grouping rule = %#v", context)
 	}
 	if len(context.Hints) != 1 || !strings.Contains(context.Hints[0].Instruction, "不是项目归属结论") ||
-		!strings.Contains(context.Hints[0].Instruction, "自行判断是否采用") {
+		!strings.Contains(context.Hints[0].Instruction, "自行判断是否采用") ||
+		strings.Join(context.Hints[0].WorkstreamCues, ",") != "任务调度" {
 		t.Fatalf("hint instruction = %#v", context.Hints)
 	}
 	payload, err := json.Marshal(context)
@@ -56,6 +58,7 @@ func TestProjectMemoryContextPreservesWorkspaceSemanticParentSignal(t *testing.T
 	context := projectMemoryContextFromHints([]reportmemory.HistoricalProjectHint{{
 		ProjectRef: "project-1", CanonicalName: "芯片验证平台",
 		Aliases: []string{"版本流", "用例筛选工作台"}, MatchedFactRef: []string{"fact-001", "fact-062"},
+		WorkstreamCues:  []string{"调用执行", "ctp CLI"},
 		SemanticFactRef: []string{"fact-001"}, WorkspaceFactRef: []string{"fact-001", "fact-062"},
 		Confidence: 0.9, MatchBasis: "workspace_semantic",
 	}})

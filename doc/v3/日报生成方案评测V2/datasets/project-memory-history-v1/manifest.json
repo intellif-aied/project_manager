@@ -1,0 +1,40 @@
+{
+  "schema_version": "project-memory-history-regression/v1",
+  "dataset_version": "project-memory-history-regression/v1",
+  "controlled_archive": "/home/intellif/evaluation/project-memory-history-v1",
+  "date_range": {
+    "from": "2026-07-29",
+    "to": "2026-08-07"
+  },
+  "report_count": 34,
+  "subjects": [
+    {
+      "subject_ref": "pmh-001",
+      "report_count": 8,
+      "first_report_date": "2026-07-30",
+      "last_report_date": "2026-08-06",
+      "sha256": "adf1bc21370a612b06d76b530b4df654d03e85fc39bd9b590045a570537f73cf"
+    },
+    {
+      "subject_ref": "pmh-002",
+      "report_count": 8,
+      "first_report_date": "2026-07-29",
+      "last_report_date": "2026-08-06",
+      "sha256": "fc1ecb0d566c0198fb6bbc00786ebbd68cca0ed9adbf642f813170e4f0f63b8a"
+    },
+    {
+      "subject_ref": "pmh-003",
+      "report_count": 9,
+      "first_report_date": "2026-07-29",
+      "last_report_date": "2026-08-06",
+      "sha256": "b40a2a9a171a89175ad6c84dffed536e35a5701fa7fa190cea4eba5889c52d46"
+    },
+    {
+      "subject_ref": "pmh-004",
+      "report_count": 9,
+      "first_report_date": "2026-07-29",
+      "last_report_date": "2026-08-06",
+      "sha256": "00945a49f13c75e3b998100c7e6349618349758ccc69e67f1e20c7893de54c22"
+    }
+  ]
+}

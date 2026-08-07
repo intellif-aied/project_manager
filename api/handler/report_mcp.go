@@ -64,6 +64,7 @@ type ReportMCPHandler struct {
 
 type reportBriefService interface {
 	Accept(context.Context, string, string, reportbrief.Draft) (reportbrief.Stored, error)
+	Compile(context.Context, string, string, reportbrief.Draft) (reportbrief.Compiled, error)
 	RejectInvalid(context.Context, string, string, string) (reportbrief.Stored, error)
 	ValidateForWrite(context.Context, string, string, string, string, string) (reportbrief.Stored, error)
 	DegradedWriteReason(context.Context, string, string) (string, error)

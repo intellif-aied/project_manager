@@ -11,16 +11,21 @@ import (
 )
 
 const (
-	ResolverVersion        = "project-memory-resolver/v5"
+	ResolverVersion        = "project-memory-resolver/v11"
 	maxInputTokens         = 8000
 	maxOutputTokens        = 1500
 	maxCurrentThemes       = 8
 	maxCandidateProjects   = 8
-	maxRecentReports       = 5
+	maxRecentReports       = 10
+	maxHistoricalAnchors   = 10
+	maxMemorySnapshotDepth = 20
 	maxAliasesPerProject   = 5
+	maxWorkstreamCues      = 8
+	maxDecisionCues        = 5
 	maxHistoricalExcerpt   = 2
 	maxOverviewRunes       = 1200
-	maxHistoryOverviewRune = 400
+	maxHistoryOverviewRune = 300
+	maxHistoryAnchorRunes  = 120
 )
 
 type Resolver interface {
@@ -73,6 +78,7 @@ type ConsolidationInput struct {
 	BriefWorkstreams   []InputWorkstream  `json:"brief_workstreams,omitempty"`
 	CandidateProjects  []InputProject     `json:"candidate_projects,omitempty"`
 	RecentOverviews    []HistoricalReport `json:"recent_overviews,omitempty"`
+	HistoricalAnchors  []HistoricalReport `json:"historical_project_anchors,omitempty"`
 	EvidenceConstraint string             `json:"evidence_constraint"`
 	AllowedActions     []string           `json:"allowed_actions"`
 }
@@ -91,13 +97,15 @@ type InputTheme struct {
 }
 
 type InputProject struct {
-	ProjectRef    string   `json:"project_ref"`
-	CanonicalName string   `json:"canonical_name"`
-	Aliases       []string `json:"aliases,omitempty"`
-	WorkspaceRefs []string `json:"workspace_refs,omitempty"`
-	LastSeenOn    string   `json:"last_seen_on"`
-	SourceType    string   `json:"source_type"`
-	SourceWeight  float64  `json:"source_weight"`
+	ProjectRef     string   `json:"project_ref"`
+	CanonicalName  string   `json:"canonical_name"`
+	Aliases        []string `json:"aliases,omitempty"`
+	WorkstreamCues []string `json:"workstream_cues,omitempty"`
+	WorkspaceRefs  []string `json:"workspace_refs,omitempty"`
+	MatchedThemes  []string `json:"matched_theme_refs,omitempty"`
+	LastSeenOn     string   `json:"last_seen_on"`
+	SourceType     string   `json:"source_type"`
+	SourceWeight   float64  `json:"source_weight"`
 }
 
 type HistoricalReport struct {
@@ -113,24 +121,26 @@ type MemoryProposal struct {
 }
 
 type MemoryDecision struct {
-	ThemeRef      string   `json:"theme_ref"`
-	Action        string   `json:"action"`
-	ProjectRef    string   `json:"project_ref,omitempty"`
-	CanonicalName string   `json:"canonical_name,omitempty"`
-	Aliases       []string `json:"aliases,omitempty"`
-	Confidence    float64  `json:"confidence"`
-	Reason        string   `json:"reason,omitempty"`
+	ThemeRef       string   `json:"theme_ref"`
+	Action         string   `json:"action"`
+	ProjectRef     string   `json:"project_ref,omitempty"`
+	CanonicalName  string   `json:"canonical_name,omitempty"`
+	Aliases        []string `json:"aliases,omitempty"`
+	WorkstreamCues []string `json:"workstream_cues,omitempty"`
+	Confidence     float64  `json:"confidence"`
+	Reason         string   `json:"reason,omitempty"`
 }
 
 func (decision *MemoryDecision) UnmarshalJSON(data []byte) error {
 	type decisionFields struct {
-		ThemeRef      string          `json:"theme_ref"`
-		Action        string          `json:"action"`
-		ProjectRef    string          `json:"project_ref,omitempty"`
-		CanonicalName string          `json:"canonical_name,omitempty"`
-		Aliases       []string        `json:"aliases,omitempty"`
-		Confidence    json.RawMessage `json:"confidence"`
-		Reason        string          `json:"reason,omitempty"`
+		ThemeRef       string          `json:"theme_ref"`
+		Action         string          `json:"action"`
+		ProjectRef     string          `json:"project_ref,omitempty"`
+		CanonicalName  string          `json:"canonical_name,omitempty"`
+		Aliases        []string        `json:"aliases,omitempty"`
+		WorkstreamCues []string        `json:"workstream_cues,omitempty"`
+		Confidence     json.RawMessage `json:"confidence"`
+		Reason         string          `json:"reason,omitempty"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
@@ -145,7 +155,8 @@ func (decision *MemoryDecision) UnmarshalJSON(data []byte) error {
 	*decision = MemoryDecision{
 		ThemeRef: fields.ThemeRef, Action: fields.Action, ProjectRef: fields.ProjectRef,
 		CanonicalName: fields.CanonicalName, Aliases: fields.Aliases,
-		Confidence: confidence, Reason: fields.Reason,
+		WorkstreamCues: fields.WorkstreamCues,
+		Confidence:     confidence, Reason: fields.Reason,
 	}
 	return nil
 }

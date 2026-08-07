@@ -407,7 +407,7 @@ func projectMemoryContextFromHints(hints []reportmemory.HistoricalProjectHint) *
 	result := &ProjectMemoryContext{
 		Purpose:      "提供用户近期项目名称和别名作为可选背景，帮助理解当天工作；是否关联由当天 Facts 决定。",
 		EvidenceRule: "历史提示不是当天事实；不得复制历史成果、状态、指标、日期或结论。",
-		GroupingRule: "project_memory_context 不是成果证据或强制归属。match_basis=workspace_semantic 且 candidate_only=false 时，semantic_fact_refs 是项目语义锚点，workspace_fact_refs 只是同工作空间候选；当天 Facts 没有出现冲突项目或目标时，可用 canonical_name 归并锚点及兼容的别名和子能力。其他 Hint 仍是弱参考；两个相似项目不得因历史背景被合并。",
+		GroupingRule: "project_memory_context 不是成果证据或强制归属。workstream_cues 是该项目历史上确认过的稳定模块或工作对象，只用于识别父项目。semantic_fact_refs 与名称、别名或 workstream_cues 匹配时，当天没有冲突项目或目标可优先采用 canonical_name，并把具体工作保留为子项；workspace_fact_refs 只能作为辅助。新项目或不确定内容不得被强行归入历史项目。",
 	}
 	for _, hint := range hints {
 		instruction := "这是根据名称或别名相似性召回的历史背景，不是项目归属结论。结合当天 Facts 自行判断是否采用；冲突、不确定或已切换项目时忽略。历史名称不得作为成果证据。"
@@ -417,13 +417,14 @@ func projectMemoryContextFromHints(hints []reportmemory.HistoricalProjectHint) *
 		converted := HistoricalProjectHint{
 			ProjectRef: hint.ProjectRef, CanonicalName: hint.CanonicalName,
 			Aliases:          hint.Aliases,
+			WorkstreamCues:   hint.WorkstreamCues,
 			SemanticFactRefs: hint.SemanticFactRef, WorkspaceFactRefs: hint.WorkspaceFactRef,
 			Confidence: hint.Confidence, MatchBasis: hint.MatchBasis,
 			CandidateOnly: hint.CandidateOnly, Instruction: instruction,
 		}
 		switch hint.MatchBasis {
 		case "workspace_semantic":
-			converted.Instruction = "semantic_fact_refs 通过当天名称/别名语义锚定该历史项目，workspace_fact_refs 仅表示同工作空间候选。这是高可信的父项目命名参考，但不是当天成果证据；锚点应采用 canonical_name，工作空间候选只有在当天目标兼容且无其他项目冲突时才归入，并保留具体工作为子成果。"
+			converted.Instruction = "semantic_fact_refs 通过当天名称、别名或稳定 workstream_cues 锚定该历史项目，workspace_fact_refs 仅表示同工作空间候选。这是高可信的父项目命名参考，但不是当天成果证据；无冲突时优先采用 canonical_name，并把具体工作保留为子成果。"
 		case "workspace":
 			converted.Instruction = "这是由当天 Fact 所在 Workspace 召回的历史项目弱参考，只用于辅助项目命名与归并。当天事实兼容时可采用；出现新项目名称、目标冲突或无法确认时忽略。历史内容不得作为当天成果。"
 		}

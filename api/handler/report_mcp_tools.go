@@ -245,10 +245,6 @@ func reportMCPToolsForToolsetWithBrief(toolset string, briefEnabled bool) []map[
 		return tools
 	}
 	names := []string{toolGetReportContext}
-	if toolset == managedReportMCPToolset && briefEnabled {
-		tools = append(tools, reportBriefTool())
-		names = append(names, toolWriteReportBrief)
-	}
 	names = append(names, toolWriteReportResult, toolWriteReportFailure)
 	byName := make(map[string]map[string]any, len(tools))
 	for _, tool := range tools {
@@ -259,12 +255,50 @@ func reportMCPToolsForToolsetWithBrief(toolset string, briefEnabled bool) []map[
 	for _, name := range names {
 		if tool, ok := byName[name]; ok {
 			if toolset == managedReportMCPToolset && name == toolWriteReportResult {
-				tool = managedFormattedReportResultTool(tool)
+				if briefEnabled {
+					tool = managedCompiledReportResultTool(tool)
+				} else {
+					tool = managedFormattedReportResultTool(tool)
+				}
 			}
 			filtered = append(filtered, managedRunBoundTool(tool))
 		}
 	}
 	return filtered
+}
+
+func managedCompiledReportResultTool(tool map[string]any) map[string]any {
+	compiled := make(map[string]any, len(tool))
+	for key, value := range tool {
+		compiled[key] = value
+	}
+	compiled["description"] = "Submit one structured personal-daily draft. Aida repairs, freezes, renders, and saves the report in this call; do not submit a Brief first or render Markdown."
+	deliverableSchema := map[string]any{
+		"type":     "object",
+		"required": []string{"result", "fact_refs"},
+		"properties": map[string]any{
+			"result":    map[string]any{"type": "string"},
+			"fact_refs": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+		},
+	}
+	workstreamSchema := map[string]any{
+		"type":     "object",
+		"required": []string{"subject", "title", "deliverables"},
+		"properties": map[string]any{
+			"subject":      map[string]any{"type": "string"},
+			"title":        map[string]any{"type": "string"},
+			"deliverables": map[string]any{"type": "array", "items": deliverableSchema},
+		},
+	}
+	compiled["inputSchema"] = map[string]any{
+		"type":     "object",
+		"required": []string{"workstreams", "no_reportable_work"},
+		"properties": map[string]any{
+			"workstreams":        map[string]any{"type": "array", "items": workstreamSchema},
+			"no_reportable_work": map[string]any{"type": "boolean"},
+		},
+	}
+	return compiled
 }
 
 func managedFormattedReportResultTool(tool map[string]any) map[string]any {

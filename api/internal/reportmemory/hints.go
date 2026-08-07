@@ -9,7 +9,10 @@ import (
 	"strings"
 )
 
-const maxHistoricalHints = 3
+const (
+	maxHistoricalHints = 3
+	maxHintFactRefs    = 64
+)
 
 type HintRequest struct {
 	UserID     string
@@ -19,9 +22,10 @@ type HintRequest struct {
 }
 
 type HistoricalProjectHint struct {
-	ProjectRef    string   `json:"project_ref"`
-	CanonicalName string   `json:"canonical_name"`
-	Aliases       []string `json:"aliases,omitempty"`
+	ProjectRef     string   `json:"project_ref"`
+	CanonicalName  string   `json:"canonical_name"`
+	Aliases        []string `json:"aliases,omitempty"`
+	WorkstreamCues []string `json:"workstream_cues,omitempty"`
 	// MatchedFactRef is the compatibility union exposed to older callers.
 	MatchedFactRef   []string `json:"matched_fact_refs"`
 	SemanticFactRef  []string `json:"semantic_fact_refs,omitempty"`
@@ -116,6 +120,14 @@ func LoadHistoricalHints(ctx context.Context, tx *sql.Tx, request HintRequest) (
 			return nil, err
 		}
 		item.Aliases = aliases
+		workstreamCues, err := loadHintWorkstreamCues(ctx, tx, request.UserID, item.ProjectRef)
+		if err != nil {
+			return nil, err
+		}
+		item.WorkstreamCues = workstreamCues
+		item.MatchedFactRef = limitStrings(item.MatchedFactRef, maxHintFactRefs)
+		item.SemanticFactRef = limitStrings(item.SemanticFactRef, maxHintFactRefs)
+		item.WorkspaceFactRef = limitStrings(item.WorkspaceFactRef, maxHintFactRefs)
 		result = append(result, *item)
 	}
 	sort.SliceStable(result, func(i, j int) bool {
@@ -167,7 +179,9 @@ func loadWorkspaceHintMatches(ctx context.Context, tx *sql.Tx, request HintReque
 		}
 		current := result[projectRef]
 		current.CanonicalName = name
-		current.FactRefs = appendUnique(current.FactRefs, factRef)
+		if len(current.FactRefs) < maxHintFactRefs {
+			current.FactRefs = appendUnique(current.FactRefs, factRef)
+		}
 		if confidence > current.Confidence {
 			current.Confidence = confidence
 		}
@@ -219,4 +233,38 @@ func loadHintAliases(ctx context.Context, tx *sql.Tx, userID, projectID string) 
 		return nil, err
 	}
 	return aliases, nil
+}
+
+func loadHintWorkstreamCues(ctx context.Context, tx *sql.Tx, userID, projectID string) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT cue.value
+		FROM report_project_occurrences occurrence
+		JOIN report_projects project ON project.id = occurrence.project_id
+		CROSS JOIN LATERAL jsonb_array_elements_text(occurrence.workstream_cues_json) cue(value)
+		WHERE occurrence.project_id = $1 AND project.user_id = $2
+		GROUP BY cue.value
+		ORDER BY max(occurrence.source_weight) DESC, max(occurrence.report_date) DESC, cue.value
+		LIMIT $3`, projectID, userID, maxWorkstreamCues)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]string, 0, maxWorkstreamCues)
+	for rows.Next() {
+		var cue string
+		if err := rows.Scan(&cue); err != nil {
+			return nil, err
+		}
+		if validProjectName(cue) {
+			result = appendUnique(result, cue)
+		}
+	}
+	return result, rows.Err()
+}
+
+func limitStrings(values []string, limit int) []string {
+	if len(values) <= limit {
+		return values
+	}
+	return append([]string(nil), values[:limit]...)
 }

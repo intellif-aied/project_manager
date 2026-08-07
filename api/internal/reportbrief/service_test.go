@@ -9,7 +9,221 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/aidashboard/api/internal/reportcontext"
 )
+
+type staticReportContextReader struct {
+	stored reportcontext.StoredContext
+}
+
+func (reader staticReportContextReader) Get(context.Context, string, string) (reportcontext.StoredContext, error) {
+	return reader.stored, nil
+}
+
+func TestCompileRepairsDraftWithoutRequestingAnotherModelPass(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	const (
+		runID  = "00000000-0000-4000-8000-000000000001"
+		userID = "305"
+	)
+	contextPayload := []byte(`{"run":{"report_type":"personal_daily","period":{"start":"2026-08-06","end":"2026-08-06"}},"work_evidence":{"facts":[{"fact_ref":"fact-001","text":"完成 AIDA 日报生成流程优化"},{"fact_ref":"fact-002","text":"检查内部环境"}]}}`)
+	service := NewService(db, nil)
+	service.context = staticReportContextReader{stored: reportcontext.StoredContext{
+		Payload: contextPayload,
+		Hash:    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}}
+	mock.ExpectQuery("SELECT business_type, status").
+		WithArgs(runID, userID).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"business_type", "status", "execution_stage", "model_id", "report_context_representation",
+		}).AddRow("report_agent_run", "running", "agent_running", "MiniMax-M2.5", "work_evidence"))
+	mock.ExpectExec("INSERT INTO report_run_briefs").
+		WithArgs(runID, SchemaVersion, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), "MiniMax-M2.5").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	compiled, err := service.Compile(context.Background(), userID, runID, Draft{Workstreams: []Workstream{
+		{
+			Subject: "AIDA", Title: "AIDA 日报生成流程优化",
+			Deliverables: []Deliverable{
+				{Result: "优化日报生成流程并减少无效重试", FactRefs: []string{"fact-001", "fact-999"}},
+				{Result: "访问 http://192.168.14.182:9180 完成验证", FactRefs: []string{"fact-002"}},
+			},
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compiled.Mode != CompileModeRepaired {
+		t.Fatalf("compile mode = %q, want repaired", compiled.Mode)
+	}
+	if len(compiled.Stored.Payload.Workstreams) != 1 || len(compiled.Stored.Payload.Workstreams[0].Deliverables) != 1 {
+		t.Fatalf("compiled workstreams = %#v", compiled.Stored.Payload.Workstreams)
+	}
+	deliverable := compiled.Stored.Payload.Workstreams[0].Deliverables[0]
+	if fmt.Sprint(deliverable.FactRefs) != "[fact-001]" || strings.Contains(deliverable.Result, "192.168") {
+		t.Fatalf("unsafe or unknown evidence survived repair: %#v", deliverable)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCompileFallsBackToFrozenFactsWhenAgentDraftIsEmpty(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	const (
+		runID  = "00000000-0000-4000-8000-000000000002"
+		userID = "305"
+	)
+	service := NewService(db, nil)
+	service.context = staticReportContextReader{stored: reportcontext.StoredContext{
+		Payload: []byte(`{"run":{"report_type":"personal_daily","period":{"start":"2026-08-06","end":"2026-08-06"}},"work_evidence":{"facts":[{"fact_ref":"fact-001","text":"完成日报项目归并方案设计"},{"fact_ref":"fact-002","text":"访问 http://192.168.14.182:9180 检查服务"}]}}`),
+		Hash:    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+	}}
+	mock.ExpectQuery("SELECT business_type, status").
+		WithArgs(runID, userID).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"business_type", "status", "execution_stage", "model_id", "report_context_representation",
+		}).AddRow("report_agent_run", "running", "agent_running", "MiniMax-M2.5", "work_evidence"))
+	mock.ExpectExec("INSERT INTO report_run_briefs").
+		WithArgs(runID, SchemaVersion, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), "MiniMax-M2.5").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	compiled, err := service.Compile(context.Background(), userID, runID, Draft{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compiled.Mode != CompileModeFallback {
+		t.Fatalf("compile mode = %q, want fallback", compiled.Mode)
+	}
+	content, _, ok := compiled.Stored.ReaderReport()
+	if !ok || !strings.Contains(content, "日报项目归并方案设计") || strings.Contains(content, "192.168") {
+		t.Fatalf("fallback report = %q, ok=%v", content, ok)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestApplyProjectMemoryGroupingMergesOnlyAnchoredKnownTerms(t *testing.T) {
+	var envelope contextEnvelope
+	envelope.ProjectMemoryContext = &struct {
+		Hints []struct {
+			CanonicalName    string   `json:"canonical_name"`
+			Aliases          []string `json:"aliases"`
+			WorkstreamCues   []string `json:"workstream_cues"`
+			SemanticFactRefs []string `json:"semantic_fact_refs"`
+			Confidence       float64  `json:"confidence"`
+			CandidateOnly    bool     `json:"candidate_only"`
+			MatchBasis       string   `json:"match_basis"`
+		} `json:"hints"`
+	}{}
+	hint := struct {
+		CanonicalName    string   `json:"canonical_name"`
+		Aliases          []string `json:"aliases"`
+		WorkstreamCues   []string `json:"workstream_cues"`
+		SemanticFactRefs []string `json:"semantic_fact_refs"`
+		Confidence       float64  `json:"confidence"`
+		CandidateOnly    bool     `json:"candidate_only"`
+		MatchBasis       string   `json:"match_basis"`
+	}{
+		CanonicalName: "芯片验证平台", Aliases: []string{"工单处理流程", "版本流"},
+		WorkstreamCues:   []string{"CLI", "调用执行", "调度器"},
+		SemanticFactRefs: []string{"fact-001", "fact-002", "fact-003"},
+		Confidence:       0.99, MatchBasis: "workspace_semantic",
+	}
+	envelope.ProjectMemoryContext.Hints = append(envelope.ProjectMemoryContext.Hints, hint)
+	draft := Draft{Workstreams: []Workstream{
+		{Subject: "调用执行", Title: "调用执行调整", Deliverables: []Deliverable{{Result: "调整调用执行", FactRefs: []string{"fact-001"}}}},
+		{Subject: "CLI 工具", Title: "CLI 同步", Deliverables: []Deliverable{{Result: "同步 CLI", FactRefs: []string{"fact-002"}}}},
+		{Subject: "工单与调度器", Title: "工单调整", Deliverables: []Deliverable{{Result: "调整工单", FactRefs: []string{"fact-003"}}}},
+		{Subject: "新项目", Title: "新项目工作", Deliverables: []Deliverable{{Result: "推进新项目", FactRefs: []string{"fact-004"}}}},
+	}}
+	grouped, changed := applyProjectMemoryGrouping(draft, envelope)
+	if !changed || len(grouped.Workstreams) != 2 {
+		t.Fatalf("grouped workstreams = %#v, changed=%v", grouped.Workstreams, changed)
+	}
+	if grouped.Workstreams[0].Subject != "芯片验证平台" || len(grouped.Workstreams[0].Deliverables) != 3 {
+		t.Fatalf("parent workstream = %#v", grouped.Workstreams[0])
+	}
+	if grouped.Workstreams[1].Subject != "新项目" {
+		t.Fatalf("unrelated workstream was changed: %#v", grouped.Workstreams[1])
+	}
+}
+
+func TestApplyProjectMemoryGroupingDoesNotForceWeakCandidate(t *testing.T) {
+	var envelope contextEnvelope
+	envelope.ProjectMemoryContext = &struct {
+		Hints []struct {
+			CanonicalName    string   `json:"canonical_name"`
+			Aliases          []string `json:"aliases"`
+			WorkstreamCues   []string `json:"workstream_cues"`
+			SemanticFactRefs []string `json:"semantic_fact_refs"`
+			Confidence       float64  `json:"confidence"`
+			CandidateOnly    bool     `json:"candidate_only"`
+			MatchBasis       string   `json:"match_basis"`
+		} `json:"hints"`
+	}{}
+	hint := struct {
+		CanonicalName    string   `json:"canonical_name"`
+		Aliases          []string `json:"aliases"`
+		WorkstreamCues   []string `json:"workstream_cues"`
+		SemanticFactRefs []string `json:"semantic_fact_refs"`
+		Confidence       float64  `json:"confidence"`
+		CandidateOnly    bool     `json:"candidate_only"`
+		MatchBasis       string   `json:"match_basis"`
+	}{CanonicalName: "芯片验证平台", Aliases: []string{"版本流"}, SemanticFactRefs: []string{"fact-001", "fact-002"}, Confidence: 0.99, CandidateOnly: true, MatchBasis: "workspace"}
+	envelope.ProjectMemoryContext.Hints = append(envelope.ProjectMemoryContext.Hints, hint)
+	draft := Draft{Workstreams: []Workstream{{Subject: "版本流", Deliverables: []Deliverable{{FactRefs: []string{"fact-001"}}}}}}
+	grouped, changed := applyProjectMemoryGrouping(draft, envelope)
+	if changed || grouped.Workstreams[0].Subject != "版本流" {
+		t.Fatalf("weak candidate was forced: %#v", grouped.Workstreams)
+	}
+}
+
+func TestApplyProjectMemoryGroupingUsesAnchoredFactsWithoutLiteralSubjectMatch(t *testing.T) {
+	var envelope contextEnvelope
+	envelope.ProjectMemoryContext = &struct {
+		Hints []struct {
+			CanonicalName    string   `json:"canonical_name"`
+			Aliases          []string `json:"aliases"`
+			WorkstreamCues   []string `json:"workstream_cues"`
+			SemanticFactRefs []string `json:"semantic_fact_refs"`
+			Confidence       float64  `json:"confidence"`
+			CandidateOnly    bool     `json:"candidate_only"`
+			MatchBasis       string   `json:"match_basis"`
+		} `json:"hints"`
+	}{}
+	hint := struct {
+		CanonicalName    string   `json:"canonical_name"`
+		Aliases          []string `json:"aliases"`
+		WorkstreamCues   []string `json:"workstream_cues"`
+		SemanticFactRefs []string `json:"semantic_fact_refs"`
+		Confidence       float64  `json:"confidence"`
+		CandidateOnly    bool     `json:"candidate_only"`
+		MatchBasis       string   `json:"match_basis"`
+	}{CanonicalName: "AI Coding 提效支撑", SemanticFactRefs: []string{"fact-001", "fact-002"}, Confidence: 0.86, MatchBasis: "semantic"}
+	envelope.ProjectMemoryContext.Hints = append(envelope.ProjectMemoryContext.Hints, hint)
+	draft := Draft{Workstreams: []Workstream{
+		{Subject: "训练数据生成", Deliverables: []Deliverable{{FactRefs: []string{"fact-001", "fact-004"}}}},
+		{Subject: "模型评测", Deliverables: []Deliverable{{FactRefs: []string{"fact-002"}}}},
+		{Subject: "独立项目", Deliverables: []Deliverable{{FactRefs: []string{"fact-003"}}}},
+	}}
+	grouped, changed := applyProjectMemoryGrouping(draft, envelope)
+	if !changed || len(grouped.Workstreams) != 2 || grouped.Workstreams[0].Subject != "AI Coding 提效支撑" || len(grouped.Workstreams[0].Deliverables) != 2 {
+		t.Fatalf("anchored facts were not grouped under the historical parent: %#v, changed=%v", grouped.Workstreams, changed)
+	}
+	if grouped.Workstreams[1].Subject != "独立项目" {
+		t.Fatalf("unanchored workstream was changed: %#v", grouped.Workstreams[1])
+	}
+}
 
 func TestNormalizeDraftAcceptsCompleteEvidenceMap(t *testing.T) {
 	available := map[string]struct{}{

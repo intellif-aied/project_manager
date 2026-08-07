@@ -18,6 +18,7 @@ import (
 const (
 	personalDaily                             = "personal_daily"
 	maxPersonalDailyContentRunesPerWorkstream = 600
+	minProjectMemorySemanticConfidence        = 0.86
 )
 
 type contextReader interface {
@@ -52,8 +53,21 @@ type contextEnvelope struct {
 	WorkEvidence *struct {
 		Facts []struct {
 			FactRef string `json:"fact_ref"`
+			Text    string `json:"text"`
+			Source  string `json:"source"`
 		} `json:"facts"`
 	} `json:"work_evidence"`
+	ProjectMemoryContext *struct {
+		Hints []struct {
+			CanonicalName    string   `json:"canonical_name"`
+			Aliases          []string `json:"aliases"`
+			WorkstreamCues   []string `json:"workstream_cues"`
+			SemanticFactRefs []string `json:"semantic_fact_refs"`
+			Confidence       float64  `json:"confidence"`
+			CandidateOnly    bool     `json:"candidate_only"`
+			MatchBasis       string   `json:"match_basis"`
+		} `json:"hints"`
+	} `json:"project_memory_context"`
 }
 
 func (s *Service) Accept(ctx context.Context, userID, runID string, draft Draft) (Stored, error) {
@@ -97,10 +111,171 @@ func (s *Service) Accept(ctx context.Context, userID, runID string, draft Draft)
 	if err != nil {
 		return s.rejectInvalidBrief(ctx, userID, runID, err)
 	}
+	return s.storePayload(ctx, userID, runID, run.ModelID, storedContext.Hash, payload, false)
+}
+
+// Compile accepts one semantic proposal and deterministically produces a
+// stored Report Brief. Invalid quality fields are repaired or dropped locally;
+// the caller never needs to ask the model to rewrite the complete Brief.
+func (s *Service) Compile(ctx context.Context, userID, runID string, draft Draft) (Compiled, error) {
+	if s == nil || s.db == nil || s.context == nil || strings.TrimSpace(userID) == "" || strings.TrimSpace(runID) == "" {
+		return Compiled{}, ErrInvalid
+	}
+	run, err := s.loadRun(ctx, userID, runID)
+	if err != nil {
+		return Compiled{}, err
+	}
+	if run.BusinessType != "report_agent_run" || run.Status != "running" || run.Stage != "agent_running" ||
+		run.Representation != reportcontext.RepresentationWorkEvidence {
+		return Compiled{}, ErrRunNotWritable
+	}
+	storedContext, err := s.context.Get(ctx, userID, runID)
+	if errors.Is(err, reportcontext.ErrNotFound) {
+		return Compiled{}, ErrNotFound
+	}
+	if err != nil {
+		return Compiled{}, err
+	}
+	var envelope contextEnvelope
+	if err := json.Unmarshal(storedContext.Payload, &envelope); err != nil || envelope.WorkEvidence == nil ||
+		envelope.Run.ReportType != personalDaily || envelope.Run.Period.Start == "" || envelope.Run.Period.End == "" {
+		return Compiled{}, fmt.Errorf("%w: personal daily work evidence context is required", ErrInvalid)
+	}
+	available := make(map[string]struct{}, len(envelope.WorkEvidence.Facts))
+	for _, fact := range envelope.WorkEvidence.Facts {
+		ref := strings.TrimSpace(fact.FactRef)
+		if !factRefPattern.MatchString(ref) {
+			return Compiled{}, fmt.Errorf("%w: context contains an invalid fact_ref", ErrInvalid)
+		}
+		available[ref] = struct{}{}
+	}
+	period := Period{Start: envelope.Run.Period.Start, End: envelope.Run.Period.End}
+	draft, memoryGrouped := applyProjectMemoryGrouping(draft, envelope)
+	payload, strictErr := normalizeDraft(draft, envelope.Run.ReportType, period, available)
+	mode := CompileModeAccepted
+	warnings := []string{}
+	if memoryGrouped {
+		mode = CompileModeRepaired
+		warnings = append(warnings, "project_memory_parent_applied")
+	}
+	if strictErr != nil {
+		repaired, repairWarnings, fallback := repairDraft(draft, envelope)
+		warnings = append(warnings, repairWarnings...)
+		payload, err = normalizeDraft(repaired, envelope.Run.ReportType, period, available)
+		if err != nil {
+			return Compiled{}, err
+		}
+		mode = CompileModeRepaired
+		if fallback {
+			mode = CompileModeFallback
+		}
+	}
+	stored, err := s.storePayload(ctx, userID, runID, run.ModelID, storedContext.Hash, payload, true)
+	if err != nil {
+		return Compiled{}, err
+	}
+	return Compiled{Stored: stored, Mode: mode, Warnings: warnings}, nil
+}
+
+func applyProjectMemoryGrouping(draft Draft, envelope contextEnvelope) (Draft, bool) {
+	if draft.NoReportableWork || envelope.ProjectMemoryContext == nil || len(draft.Workstreams) == 0 {
+		return draft, false
+	}
+	result := draft
+	changed := false
+	for _, hint := range envelope.ProjectMemoryContext.Hints {
+		canonical := normalizeText(hint.CanonicalName)
+		if canonical == "" || hint.CandidateOnly || hint.Confidence < minProjectMemorySemanticConfidence ||
+			(hint.MatchBasis != "semantic" && hint.MatchBasis != "workspace_semantic") || len(hint.SemanticFactRefs) < 2 {
+			continue
+		}
+		anchored := make(map[string]struct{}, len(hint.SemanticFactRefs))
+		for _, ref := range hint.SemanticFactRefs {
+			anchored[strings.TrimSpace(ref)] = struct{}{}
+		}
+		terms := append([]string{canonical}, hint.Aliases...)
+		terms = append(terms, hint.WorkstreamCues...)
+		matchedIndexes := make([]int, 0, len(result.Workstreams))
+		for index, workstream := range result.Workstreams {
+			// A high-confidence semantic hint already maps current-day Facts to a
+			// historical parent. Accept either that exact Fact mapping or an
+			// explicit parent/alias/cue in the proposed subject. Requiring both
+			// made the compiler ignore valid parents whenever the model used a
+			// natural headline instead of repeating a cue verbatim.
+			if !workstreamHasAnchoredRef(workstream, anchored) && !projectTermMatches(workstream.Subject, terms) {
+				continue
+			}
+			matchedIndexes = append(matchedIndexes, index)
+		}
+		if len(matchedIndexes) == 0 {
+			continue
+		}
+		first := matchedIndexes[0]
+		merged := result.Workstreams[first]
+		merged.Subject = canonical
+		merged.Title = canonical
+		for _, index := range matchedIndexes[1:] {
+			for _, deliverable := range result.Workstreams[index].Deliverables {
+				merged.Deliverables = append(merged.Deliverables, deliverable)
+			}
+		}
+		matched := make(map[int]struct{}, len(matchedIndexes))
+		for _, index := range matchedIndexes {
+			matched[index] = struct{}{}
+		}
+		grouped := make([]Workstream, 0, len(result.Workstreams)-len(matchedIndexes)+1)
+		for index, workstream := range result.Workstreams {
+			if index == first {
+				grouped = append(grouped, merged)
+				continue
+			}
+			if _, ok := matched[index]; !ok {
+				grouped = append(grouped, workstream)
+			}
+		}
+		result.Workstreams = grouped
+		changed = true
+	}
+	return result, changed
+}
+
+func projectTermMatches(subject string, terms []string) bool {
+	subject = normalizeProjectTerm(subject)
+	if subject == "" {
+		return false
+	}
+	for _, raw := range terms {
+		term := normalizeProjectTerm(raw)
+		if len(term) < 3 {
+			continue
+		}
+		if subject == term || strings.Contains(subject, term) || strings.Contains(term, subject) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeProjectTerm(value string) string {
+	value = strings.ToLower(normalizeText(value))
+	return strings.NewReplacer(" ", "", "-", "", "_", "", "·", "", "：", "", ":", "").Replace(value)
+}
+
+func workstreamHasAnchoredRef(workstream Workstream, anchored map[string]struct{}) bool {
+	for _, deliverable := range workstream.Deliverables {
+		for _, ref := range deliverable.FactRefs {
+			if _, ok := anchored[strings.TrimSpace(ref)]; ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (s *Service) storePayload(ctx context.Context, userID, runID, modelID, contextHash string, payload Payload, preferExisting bool) (Stored, error) {
 	encoded, err := json.Marshal(payload)
 	if err != nil || len(encoded) > MaxPayloadBytes {
-		return s.rejectInvalidBrief(ctx, userID, runID,
-			fmt.Errorf("%w: normalized payload exceeds %d bytes", ErrInvalid, MaxPayloadBytes))
+		return Stored{}, fmt.Errorf("%w: normalized payload exceeds %d bytes", ErrInvalid, MaxPayloadBytes)
 	}
 	sum := sha256.Sum256(encoded)
 	briefHash := hex.EncodeToString(sum[:])
@@ -109,7 +284,7 @@ func (s *Service) Accept(ctx context.Context, userID, runID string, draft Draft)
 			run_id, schema_version, context_hash, brief_hash, brief_payload, model_id
 		) VALUES ($1::uuid, $2, $3, $4, $5::jsonb, NULLIF($6, ''))
 		ON CONFLICT (run_id) DO NOTHING`,
-		runID, SchemaVersion, storedContext.Hash, briefHash, encoded, run.ModelID,
+		runID, SchemaVersion, contextHash, briefHash, encoded, modelID,
 	)
 	if err != nil {
 		return Stored{}, err
@@ -123,12 +298,124 @@ func (s *Service) Accept(ctx context.Context, userID, runID string, draft Draft)
 		if err != nil {
 			return Stored{}, err
 		}
-		if existing.BriefHash != briefHash || existing.ContextHash != storedContext.Hash {
+		if existing.ContextHash != contextHash {
+			return Stored{}, ErrConflict
+		}
+		if existing.BriefHash != briefHash && !preferExisting {
 			return Stored{}, ErrConflict
 		}
 		return existing, nil
 	}
-	return Stored{Payload: payload, BriefHash: briefHash, ContextHash: storedContext.Hash}, nil
+	return Stored{Payload: payload, BriefHash: briefHash, ContextHash: contextHash}, nil
+}
+
+func repairDraft(draft Draft, envelope contextEnvelope) (Draft, []string, bool) {
+	available := make(map[string]struct{}, len(envelope.WorkEvidence.Facts))
+	for _, fact := range envelope.WorkEvidence.Facts {
+		available[strings.TrimSpace(fact.FactRef)] = struct{}{}
+	}
+	warnings := []string{"agent_draft_repaired"}
+	if draft.NoReportableWork {
+		repaired := Draft{NoReportableWork: true}
+		for _, fact := range envelope.WorkEvidence.Facts {
+			repaired.ExcludedFacts = append(repaired.ExcludedFacts, ExcludedFact{
+				FactRef: strings.TrimSpace(fact.FactRef), Reason: "low_reader_value",
+			})
+		}
+		return repaired, uniqueWarnings(append(warnings, "no_reportable_work_accounted")), false
+	}
+	repaired := Draft{}
+	for _, rawWorkstream := range draft.Workstreams {
+		if len(repaired.Workstreams) >= MaxWorkstreams {
+			warnings = append(warnings, "extra_workstream_dropped")
+			break
+		}
+		workstream := Workstream{
+			Subject: normalizeText(rawWorkstream.Subject),
+			Title:   normalizeText(rawWorkstream.Title),
+		}
+		for _, rawDeliverable := range rawWorkstream.Deliverables {
+			if len(workstream.Deliverables) >= readerMaxDeliverables {
+				warnings = append(warnings, "extra_deliverable_dropped")
+				break
+			}
+			result := normalizeText(rawDeliverable.Result)
+			if result == "" || !ReaderFacingTextSafe(result) || operationalTracePattern.MatchString(result) || agentJudgementPattern.MatchString(result) {
+				warnings = append(warnings, "unsafe_deliverable_dropped")
+				continue
+			}
+			refs := make([]string, 0, len(rawDeliverable.FactRefs))
+			for _, ref := range normalizeFactRefs(rawDeliverable.FactRefs) {
+				if _, ok := available[ref]; ok {
+					refs = append(refs, ref)
+				} else {
+					warnings = append(warnings, "unknown_fact_dropped")
+				}
+			}
+			if len(refs) == 0 {
+				warnings = append(warnings, "unsupported_deliverable_dropped")
+				continue
+			}
+			workstream.Deliverables = append(workstream.Deliverables, Deliverable{
+				Result: compactReaderText(result, readerResultRuneLimit), FactRefs: refs,
+			})
+		}
+		if len(workstream.Deliverables) == 0 {
+			continue
+		}
+		if workstream.Title == "" || !ReaderFacingTextSafe(workstream.Title) {
+			workstream.Title = workstream.Deliverables[0].Result
+			warnings = append(warnings, "title_derived")
+		}
+		workstream.Title = compactReaderText(workstream.Title, readerHeadlineRuneLimit)
+		if workstream.Subject == "" || !ReaderFacingTextSafe(workstream.Subject) {
+			workstream.Subject = compactReaderText(workstream.Title, readerSubjectRuneLimit)
+			warnings = append(warnings, "subject_derived")
+		}
+		workstream.Subject = compactReaderText(workstream.Subject, readerSubjectRuneLimit)
+		repaired.Workstreams = append(repaired.Workstreams, workstream)
+	}
+	if len(repaired.Workstreams) > 0 {
+		return repaired, uniqueWarnings(warnings), false
+	}
+	for _, fact := range envelope.WorkEvidence.Facts {
+		if len(repaired.Workstreams) >= 3 {
+			break
+		}
+		text := normalizeText(fact.Text)
+		if text == "" || !ReaderFacingTextSafe(text) || operationalTracePattern.MatchString(text) || agentJudgementPattern.MatchString(text) {
+			continue
+		}
+		ref := strings.TrimSpace(fact.FactRef)
+		title := compactReaderText(text, readerHeadlineRuneLimit)
+		repaired.Workstreams = append(repaired.Workstreams, Workstream{
+			Subject: compactReaderText(title, readerSubjectRuneLimit), Title: title,
+			Deliverables: []Deliverable{{Result: compactReaderText(text, readerResultRuneLimit), FactRefs: []string{ref}}},
+		})
+	}
+	if len(repaired.Workstreams) == 0 {
+		repaired.NoReportableWork = true
+		for _, fact := range envelope.WorkEvidence.Facts {
+			repaired.ExcludedFacts = append(repaired.ExcludedFacts, ExcludedFact{
+				FactRef: strings.TrimSpace(fact.FactRef), Reason: "low_reader_value",
+			})
+		}
+	}
+	warnings = append(warnings, "context_fallback")
+	return repaired, uniqueWarnings(warnings), true
+}
+
+func uniqueWarnings(values []string) []string {
+	seen := map[string]struct{}{}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }
 
 // RejectInvalid records a malformed Report Brief that could not be decoded into

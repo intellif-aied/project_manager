@@ -23,6 +23,12 @@ type recordingReportBriefService struct {
 	degradedErr    error
 }
 
+func (s *recordingReportBriefService) Compile(_ context.Context, _, runID string, draft reportbrief.Draft) (reportbrief.Compiled, error) {
+	s.runID = runID
+	s.draft = draft
+	return reportbrief.Compiled{}, reportbrief.ErrInvalid
+}
+
 func (s *recordingReportBriefService) RejectInvalid(_ context.Context, _, runID, details string) (reportbrief.Stored, error) {
 	s.rejectCalls++
 	s.runID = runID
