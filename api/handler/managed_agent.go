@@ -3888,16 +3888,9 @@ func (h *ManagedAgentHandler) validateManagedAgentScheduleConfig(ctx context.Con
 		}
 	}
 	if client != nil && client.Configured() {
-		agentsResp, err := client.ListMyAgents(ctx)
+		matched, _, err := h.resolveScheduleAgent(ctx, client, normalized.AgentID)
 		if err != nil {
 			return err
-		}
-		var matched *model.ManagedAgent
-		for idx := range agentsResp.Agents {
-			if agentsResp.Agents[idx].AgentID == normalized.AgentID {
-				matched = &agentsResp.Agents[idx]
-				break
-			}
 		}
 		if matched == nil {
 			return fmt.Errorf("agent not found")
@@ -3938,6 +3931,28 @@ func (h *ManagedAgentHandler) validateManagedAgentScheduleConfig(ctx context.Con
 		return err
 	}
 	return nil
+}
+
+func (h *ManagedAgentHandler) resolveScheduleAgent(ctx context.Context, client *service.ManagedAgentClient, agentID string) (*model.ManagedAgent, string, error) {
+	if client != nil && client.Configured() {
+		resp, err := client.ListMyAgents(ctx)
+		if err != nil {
+			return nil, "", err
+		}
+		for idx := range resp.Agents {
+			if resp.Agents[idx].AgentID == agentID {
+				return &resp.Agents[idx], managedAgentSourcePersonal, nil
+			}
+		}
+	}
+	systemAgent, err := h.systemReportAgent(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	if systemAgent != nil && systemAgent.AgentID == agentID {
+		return systemAgent, managedAgentSourceSystem, nil
+	}
+	return nil, "", nil
 }
 
 type scheduledReportPeriod struct {
@@ -4260,43 +4275,54 @@ func (h *ManagedAgentHandler) ensureScheduleAgentRunnable(ctx context.Context, c
 		}
 		return nil
 	}
-	resp, err := client.ListMyAgents(ctx)
+	agent, source, err := h.resolveScheduleAgent(ctx, client, agentID)
 	if err != nil {
 		return err
 	}
-	for _, agent := range resp.Agents {
-		if agent.AgentID != agentID {
-			continue
-		}
-		if agent.Archived {
-			return fmt.Errorf("agent is archived")
-		}
-		agentRunKind := scheduleRunKindGeneric
-		if profileRunKind != "" {
-			agentRunKind = profileRunKind
-		} else if agent.BusinessType == managedAgentBusinessReport || (agent.BusinessType == "" && len(reportTypesForAgent(agent)) > 0) {
-			agentRunKind = scheduleRunKindReport
-		}
-		if runKind != "" && runKind != agentRunKind {
-			return fmt.Errorf("run_kind does not match agent type")
-		}
-		if agentRunKind == scheduleRunKindReport {
-			if err := h.resolveAndRepairReportAgent(ctx, client, &agent, managedAgentSourcePersonal, false); err != nil {
-				return err
-			}
-		}
-		return nil
+	if agent == nil {
+		return fmt.Errorf("agent not found")
 	}
-	return fmt.Errorf("agent not found")
+	if agent.Archived {
+		return fmt.Errorf("agent is archived")
+	}
+	agentRunKind := scheduleRunKindGeneric
+	if profileRunKind != "" {
+		agentRunKind = profileRunKind
+	} else if agent.BusinessType == managedAgentBusinessReport || (agent.BusinessType == "" && len(reportTypesForAgent(*agent)) > 0) {
+		agentRunKind = scheduleRunKindReport
+	}
+	if runKind != "" && runKind != agentRunKind {
+		return fmt.Errorf("run_kind does not match agent type")
+	}
+	if agentRunKind == scheduleRunKindReport && source == managedAgentSourcePersonal {
+		if err := h.resolveAndRepairReportAgent(ctx, client, agent, managedAgentSourcePersonal, false); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-func (h *ManagedAgentHandler) executeReportAgentScheduleRun(ctx context.Context, _ *service.ManagedAgentClient, schedule model.ManagedAgentSchedule, u *model.User, _ string, modelID string, inputRef map[string]any, scheduledAt time.Time, advanceNext bool) (*model.AIRun, error) {
+func (h *ManagedAgentHandler) executeReportAgentScheduleRun(ctx context.Context, client *service.ManagedAgentClient, schedule model.ManagedAgentSchedule, u *model.User, _ string, modelID string, inputRef map[string]any, scheduledAt time.Time, advanceNext bool) (*model.AIRun, error) {
 	if h.defaults.AIDAPublicBaseURL == "" {
 		return nil, fmt.Errorf("AIDA_PUBLIC_BASE_URL is required for Report Agent")
 	}
 	reportType := strings.TrimSpace(schedule.ReportConfig["report_type"])
 	if err := validateReportType(reportType); err != nil {
 		return nil, err
+	}
+	agent, reportAgentSource, err := h.resolveScheduleAgent(ctx, client, schedule.AgentID)
+	if err != nil {
+		return nil, err
+	}
+	if agent == nil {
+		return nil, fmt.Errorf("agent not found")
+	}
+	isSystemReportAgent := reportAgentSource == managedAgentSourceSystem
+	if isSystemReportAgent {
+		modelID = h.defaults.ReportModelID
+		inputRef["model_id"] = modelID
+		inputRef["report_skill_slug"] = h.defaults.ReportSkillSlug
+		inputRef["report_skill_version"] = h.defaults.ReportSkillVersion
 	}
 	target, err := resolveTarget(u, reportTarget{}, reportType, true)
 	if err != nil {
@@ -4336,11 +4362,27 @@ func (h *ManagedAgentHandler) executeReportAgentScheduleRun(ctx context.Context,
 		"report_context_schema_version": reportcontext.SchemaVersion,
 		"report_context_representation": reportcontext.RepresentationWorkEvidence,
 	}
+	var agentVersionID *int
+	if agent.CurrentVersionID > 0 {
+		value := agent.CurrentVersionID
+		agentVersionID = &value
+	}
 	variantManifest, variantSHA256, err := buildSubmittedReportVariant(
-		schedule.AgentID, nil, modelID, inputRef, managedAgentSourcePersonal, false,
+		schedule.AgentID, agentVersionID, modelID, inputRef, reportAgentSource,
+		isSystemReportAgent && h.defaults.ReportTwoPassEnabled,
 	)
 	if err != nil {
 		return nil, err
+	}
+	executionInput := map[string]any{
+		"timezone": schedule.Timezone, "initial_message": userMessage,
+		"credential_overrides":          map[string]string{},
+		"report_mcp_slots":              []string{h.defaults.ReportMCPCredentialSlot},
+		"report_context_representation": reportcontext.RepresentationWorkEvidence,
+		"report_agent_source":           reportAgentSource,
+	}
+	if isSystemReportAgent {
+		executionInput["system_report_account"] = true
 	}
 	result, err := h.reportSource.CreateReportRun(ctx, reportsource.RunSubmissionRequest{
 		UserID: u.ID, ReportType: reportType, Period: contextPeriod,
@@ -4348,14 +4390,8 @@ func (h *ManagedAgentHandler) executeReportAgentScheduleRun(ctx context.Context,
 		BusinessType:   reportAgentRunBusinessType, AgentID: schedule.AgentID, ModelID: modelID,
 		IdempotencyKey:          schedule.ID + ":" + scheduledAt.UTC().Format(time.RFC3339Nano),
 		RequestFingerprintInput: frozenScope, ActiveDedupeInput: frozenScope,
-		InputRef: inputRef,
-		ExecutionInput: map[string]any{
-			"timezone": schedule.Timezone, "initial_message": userMessage,
-			"credential_overrides":          map[string]string{},
-			"report_mcp_slots":              []string{h.defaults.ReportMCPCredentialSlot},
-			"report_context_representation": reportcontext.RepresentationWorkEvidence,
-			"report_agent_source":           managedAgentSourcePersonal,
-		},
+		InputRef:        inputRef,
+		ExecutionInput:  executionInput,
 		VariantManifest: variantManifest, VariantSHA256: variantSHA256,
 	})
 	if err != nil {
