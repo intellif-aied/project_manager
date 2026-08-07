@@ -71,6 +71,7 @@ func managedRunStatusRows() *sqlmock.Rows {
 		"business_id",
 		"output_ref_json",
 		"started_at",
+		"execution_stage",
 	})
 }
 
@@ -97,7 +98,7 @@ func TestManagedAgentRunStatusSyncerRefreshesCompletedRun(t *testing.T) {
 	mock.ExpectQuery(managedRunSyncQueryPattern).
 		WithArgs(100).
 		WillReturnRows(managedRunStatusRows().
-			AddRow("run-1", "task-123", "", "pending", "scheduled_agent_run", "", []byte(`{}`), startedAt))
+			AddRow("run-1", "task-123", "", "pending", "scheduled_agent_run", "", []byte(`{}`), startedAt, ""))
 	mock.ExpectExec("UPDATE ai_runs SET").
 		WithArgs("succeeded", outputRefWithoutResult{status: "completed", taskID: "task-123"}, 3, "Kimi-K2.6", now, "run-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -128,7 +129,7 @@ func TestManagedAgentRunStatusSyncerTimesOutOldPendingRun(t *testing.T) {
 	mock.ExpectQuery(managedRunSyncQueryPattern).
 		WithArgs(100).
 		WillReturnRows(managedRunStatusRows().
-			AddRow("run-1", "task-123", "", "pending", "scheduled_agent_run", "", []byte(`{}`), startedAt))
+			AddRow("run-1", "task-123", "", "pending", "scheduled_agent_run", "", []byte(`{}`), startedAt, ""))
 	mock.ExpectExec("UPDATE ai_runs SET").
 		WithArgs("timeout", outputRefWithoutResult{status: "pending", taskID: "task-123", errText: "managed agent run timed out after 2h"}, nil, "managed agent run timed out after 2h", now, "run-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -154,7 +155,7 @@ func TestManagedAgentRunStatusSyncerStillTimesOutLegacyPendingRunWithoutExternal
 	mock.ExpectQuery(managedRunSyncQueryPattern).
 		WithArgs(100).
 		WillReturnRows(managedRunStatusRows().
-			AddRow("legacy-pending", "", "", "pending", "manual_agent_run", "", []byte(`{}`), startedAt))
+			AddRow("legacy-pending", "", "", "pending", "manual_agent_run", "", []byte(`{}`), startedAt, ""))
 	mock.ExpectExec("UPDATE ai_runs SET").
 		WithArgs(
 			"timeout",
@@ -195,7 +196,7 @@ func TestManagedAgentRunStatusSyncerRefreshesSessionRun(t *testing.T) {
 	mock.ExpectQuery(managedRunSyncQueryPattern).
 		WithArgs(100).
 		WillReturnRows(managedRunStatusRows().
-			AddRow("run-1", "", "session-123", "running", "scheduled_agent_run", "", []byte(`{}`), startedAt))
+			AddRow("run-1", "", "session-123", "running", "scheduled_agent_run", "", []byte(`{}`), startedAt, ""))
 	mock.ExpectExec("UPDATE ai_runs SET").
 		WithArgs("succeeded", outputRefWithoutResult{status: "completed", taskID: "session-123", sessionID: "session-123"}, 5, "MiniMax-M2.5", now, "run-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -233,7 +234,7 @@ func TestManagedAgentRunStatusSyncerFailsCompletedReportSessionWithoutWriteback(
 	mock.ExpectQuery(managedRunSyncQueryPattern).
 		WithArgs(100).
 		WillReturnRows(managedRunStatusRows().
-			AddRow("run-report", "", "session-report", "running", "report_agent_run", "", []byte(`{}`), startedAt))
+			AddRow("run-report", "", "session-report", "running", "report_agent_run", "", []byte(`{}`), startedAt, ""))
 	mock.ExpectExec("UPDATE ai_runs SET").
 		WithArgs("failed", outputRefWithoutResult{status: "completed", taskID: "session-report", sessionID: "session-report", errText: reportAgentFailureErrorMessage}, nil, reportAgentFailureErrorMessage, now, "REPORT_WRITEBACK_MISSING", "run-report").
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -275,7 +276,7 @@ func TestManagedAgentRunStatusSyncerUsesFallbackForCompletedReportWithoutWriteba
 	mock.ExpectQuery(managedRunSyncQueryPattern).
 		WithArgs(100).
 		WillReturnRows(managedRunStatusRows().
-			AddRow("run-report", "", "session-report", "running", "report_agent_run", "", []byte(`{}`), startedAt))
+			AddRow("run-report", "", "session-report", "running", "report_agent_run", "", []byte(`{}`), startedAt, ""))
 
 	fallback := &recordingManagedReportFallback{}
 	syncer := NewManagedAgentRunStatusSyncer(db, NewManagedAgentClient(platform.URL, "platform-token")).
@@ -285,6 +286,47 @@ func TestManagedAgentRunStatusSyncerUsesFallbackForCompletedReportWithoutWriteba
 	}
 	if len(fallback.runIDs) != 1 || fallback.runIDs[0] != "run-report" {
 		t.Fatalf("fallback run ids = %#v", fallback.runIDs)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestManagedAgentRunStatusSyncerDoesNotFallbackWhileReviewIsRunning(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	now := time.Date(2026, 8, 7, 10, 0, 0, 0, time.UTC)
+	finishedAt := now.Add(-ManagedAgentReportWritebackGrace - time.Minute).Unix()
+	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"task_id":"session-report","status":"completed","finished_at":` + managedStringFromAny(finishedAt) + `}`))
+	}))
+	defer platform.Close()
+
+	startedAt := now.Add(-10 * time.Minute)
+	mock.ExpectQuery(managedRunSyncQueryPattern).WithArgs(100).WillReturnRows(
+		managedRunStatusRows().AddRow(
+			"run-report", "", "session-report", "running", "report_agent_run", "", []byte(`{}`), startedAt, "review_running",
+		),
+	)
+	mock.ExpectExec("UPDATE ai_runs SET").WithArgs(
+		"running",
+		outputRefWithoutResult{status: "completed", taskID: "session-report", sessionID: "session-report"},
+		nil,
+		"run-report",
+	).WillReturnResult(sqlmock.NewResult(0, 1))
+
+	fallback := &recordingManagedReportFallback{}
+	syncer := NewManagedAgentRunStatusSyncer(db, NewManagedAgentClient(platform.URL, "platform-token")).
+		ConfigureReportFallback(fallback)
+	if err := syncer.RunOnce(t.Context(), now); err != nil {
+		t.Fatal(err)
+	}
+	if len(fallback.runIDs) != 0 {
+		t.Fatalf("review run unexpectedly used fallback: %#v", fallback.runIDs)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
@@ -309,7 +351,7 @@ func TestManagedAgentRunStatusSyncerKeepsCompletedReportSessionRunningDuringWrit
 	mock.ExpectQuery(managedRunSyncQueryPattern).
 		WithArgs(100).
 		WillReturnRows(managedRunStatusRows().
-			AddRow("run-report", "", "session-report", "running", "report_agent_run", "", []byte(`{}`), startedAt))
+			AddRow("run-report", "", "session-report", "running", "report_agent_run", "", []byte(`{}`), startedAt, ""))
 	mock.ExpectExec("UPDATE ai_runs SET").
 		WithArgs("running", outputRefWithoutResult{status: "completed", taskID: "session-report", sessionID: "session-report"}, nil, "run-report").
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -340,7 +382,7 @@ func TestManagedAgentRunStatusSyncerAllowsCompletedReportSessionWithWriteback(t 
 	mock.ExpectQuery(managedRunSyncQueryPattern).
 		WithArgs(100).
 		WillReturnRows(managedRunStatusRows().
-			AddRow("run-report", "", "session-report", "running", "report_agent_run", "report-1", []byte(`{}`), startedAt))
+			AddRow("run-report", "", "session-report", "running", "report_agent_run", "report-1", []byte(`{}`), startedAt, ""))
 	mock.ExpectExec("UPDATE ai_runs SET").
 		WithArgs("succeeded", outputRefWithoutResult{status: "completed", taskID: "session-report", sessionID: "session-report", reportID: "report-1"}, 7, "report-1", now, "run-report").
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -371,7 +413,7 @@ func TestManagedAgentRunStatusSyncerHidesPlatformFailedSessionDetails(t *testing
 	mock.ExpectQuery(managedRunSyncQueryPattern).
 		WithArgs(100).
 		WillReturnRows(managedRunStatusRows().
-			AddRow("run-failed", "", "session-failed", "running", "report_agent_run", "", []byte(`{}`), startedAt))
+			AddRow("run-failed", "", "session-failed", "running", "report_agent_run", "", []byte(`{}`), startedAt, ""))
 	mock.ExpectExec("UPDATE ai_runs SET").
 		WithArgs("failed", outputRefWithoutResult{status: "failed", taskID: "session-failed", sessionID: "session-failed", errText: reportAgentFailureErrorMessage, forbiddenText: "tool execution failed"}, nil, reportAgentFailureErrorMessage, now, "AGENT_EXECUTION_FAILED", "run-failed").
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -404,7 +446,7 @@ func TestManagedAgentRunStatusSyncerNormalizesInfrastructureTimeout(t *testing.T
 	mock.ExpectQuery(managedRunSyncQueryPattern).
 		WithArgs(100).
 		WillReturnRows(managedRunStatusRows().
-			AddRow("run-timeout", "", "session-timeout", "running", "report_agent_run", "", []byte(`{}`), startedAt))
+			AddRow("run-timeout", "", "session-timeout", "running", "report_agent_run", "", []byte(`{}`), startedAt, ""))
 	mock.ExpectExec("UPDATE ai_runs SET").
 		WithArgs(
 			"timeout",
@@ -445,7 +487,7 @@ func TestManagedAgentRunStatusSyncerHidesEarlyInfrastructureFailure(t *testing.T
 	mock.ExpectQuery(managedRunSyncQueryPattern).
 		WithArgs(100).
 		WillReturnRows(managedRunStatusRows().
-			AddRow("run-failed", "", "session-failed", "running", "report_agent_run", "", []byte(`{}`), startedAt))
+			AddRow("run-failed", "", "session-failed", "running", "report_agent_run", "", []byte(`{}`), startedAt, ""))
 	mock.ExpectExec("UPDATE ai_runs SET").
 		WithArgs(
 			"failed",
@@ -489,7 +531,7 @@ func TestManagedAgentRunStatusSyncerHidesUpstreamModelFailureDetails(t *testing.
 	mock.ExpectQuery(managedRunSyncQueryPattern).
 		WithArgs(100).
 		WillReturnRows(managedRunStatusRows().
-			AddRow("run-model-failed", "", "session-model-failed", "running", "report_agent_run", "", []byte(`{}`), startedAt))
+			AddRow("run-model-failed", "", "session-model-failed", "running", "report_agent_run", "", []byte(`{}`), startedAt, ""))
 	mock.ExpectExec("UPDATE ai_runs SET").
 		WithArgs(
 			"failed",

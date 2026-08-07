@@ -106,6 +106,24 @@ func TestLoadProjectMemoryConfiguration(t *testing.T) {
 	}
 }
 
+func TestLoadReportReviewConfiguration(t *testing.T) {
+	t.Setenv("REPORT_REVIEW_ENABLED", "true")
+	t.Setenv("REPORT_REVIEW_AGENT_ID", "report-review-test")
+	t.Setenv("REPORT_REVIEW_MODEL_ID", "MiniMax-M2.5")
+	t.Setenv("REPORT_REVIEW_SKILL_OWNER", "100866")
+	t.Setenv("REPORT_REVIEW_SKILL_VERSION", "report-review-v8")
+	t.Setenv("REPORT_REVIEW_MCP_URL", "http://api:8080/api/v1/mcp/report-review")
+
+	config := Load()
+	if !config.ReportReviewEnabled || config.ReportReviewAgentID != "report-review-test" ||
+		config.ReportReviewModelID != "MiniMax-M2.5" || config.ReportReviewSkillOwner != "100866" {
+		t.Fatalf("report review config = %#v", config)
+	}
+	if err := config.ValidateReportReviewResources(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestValidateReportEmail(t *testing.T) {
 	tests := []struct {
 		name    string

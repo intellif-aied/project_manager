@@ -18,7 +18,6 @@ import (
 const (
 	personalDaily                             = "personal_daily"
 	maxPersonalDailyContentRunesPerWorkstream = 600
-	minProjectMemorySemanticConfidence        = 0.86
 )
 
 type contextReader interface {
@@ -150,14 +149,9 @@ func (s *Service) Compile(ctx context.Context, userID, runID string, draft Draft
 		available[ref] = struct{}{}
 	}
 	period := Period{Start: envelope.Run.Period.Start, End: envelope.Run.Period.End}
-	draft, memoryGrouped := applyProjectMemoryGrouping(draft, envelope)
 	payload, strictErr := normalizeDraft(draft, envelope.Run.ReportType, period, available)
 	mode := CompileModeAccepted
 	warnings := []string{}
-	if memoryGrouped {
-		mode = CompileModeRepaired
-		warnings = append(warnings, "project_memory_parent_applied")
-	}
 	if strictErr != nil {
 		repaired, repairWarnings, fallback := repairDraft(draft, envelope)
 		warnings = append(warnings, repairWarnings...)
@@ -175,101 +169,6 @@ func (s *Service) Compile(ctx context.Context, userID, runID string, draft Draft
 		return Compiled{}, err
 	}
 	return Compiled{Stored: stored, Mode: mode, Warnings: warnings}, nil
-}
-
-func applyProjectMemoryGrouping(draft Draft, envelope contextEnvelope) (Draft, bool) {
-	if draft.NoReportableWork || envelope.ProjectMemoryContext == nil || len(draft.Workstreams) == 0 {
-		return draft, false
-	}
-	result := draft
-	changed := false
-	for _, hint := range envelope.ProjectMemoryContext.Hints {
-		canonical := normalizeText(hint.CanonicalName)
-		if canonical == "" || hint.CandidateOnly || hint.Confidence < minProjectMemorySemanticConfidence ||
-			(hint.MatchBasis != "semantic" && hint.MatchBasis != "workspace_semantic") || len(hint.SemanticFactRefs) < 2 {
-			continue
-		}
-		anchored := make(map[string]struct{}, len(hint.SemanticFactRefs))
-		for _, ref := range hint.SemanticFactRefs {
-			anchored[strings.TrimSpace(ref)] = struct{}{}
-		}
-		terms := append([]string{canonical}, hint.Aliases...)
-		terms = append(terms, hint.WorkstreamCues...)
-		matchedIndexes := make([]int, 0, len(result.Workstreams))
-		for index, workstream := range result.Workstreams {
-			// A high-confidence semantic hint already maps current-day Facts to a
-			// historical parent. Accept either that exact Fact mapping or an
-			// explicit parent/alias/cue in the proposed subject. Requiring both
-			// made the compiler ignore valid parents whenever the model used a
-			// natural headline instead of repeating a cue verbatim.
-			if !workstreamHasAnchoredRef(workstream, anchored) && !projectTermMatches(workstream.Subject, terms) {
-				continue
-			}
-			matchedIndexes = append(matchedIndexes, index)
-		}
-		if len(matchedIndexes) == 0 {
-			continue
-		}
-		first := matchedIndexes[0]
-		merged := result.Workstreams[first]
-		merged.Subject = canonical
-		merged.Title = canonical
-		for _, index := range matchedIndexes[1:] {
-			for _, deliverable := range result.Workstreams[index].Deliverables {
-				merged.Deliverables = append(merged.Deliverables, deliverable)
-			}
-		}
-		matched := make(map[int]struct{}, len(matchedIndexes))
-		for _, index := range matchedIndexes {
-			matched[index] = struct{}{}
-		}
-		grouped := make([]Workstream, 0, len(result.Workstreams)-len(matchedIndexes)+1)
-		for index, workstream := range result.Workstreams {
-			if index == first {
-				grouped = append(grouped, merged)
-				continue
-			}
-			if _, ok := matched[index]; !ok {
-				grouped = append(grouped, workstream)
-			}
-		}
-		result.Workstreams = grouped
-		changed = true
-	}
-	return result, changed
-}
-
-func projectTermMatches(subject string, terms []string) bool {
-	subject = normalizeProjectTerm(subject)
-	if subject == "" {
-		return false
-	}
-	for _, raw := range terms {
-		term := normalizeProjectTerm(raw)
-		if len(term) < 3 {
-			continue
-		}
-		if subject == term || strings.Contains(subject, term) || strings.Contains(term, subject) {
-			return true
-		}
-	}
-	return false
-}
-
-func normalizeProjectTerm(value string) string {
-	value = strings.ToLower(normalizeText(value))
-	return strings.NewReplacer(" ", "", "-", "", "_", "", "·", "", "：", "", ":", "").Replace(value)
-}
-
-func workstreamHasAnchoredRef(workstream Workstream, anchored map[string]struct{}) bool {
-	for _, deliverable := range workstream.Deliverables {
-		for _, ref := range deliverable.FactRefs {
-			if _, ok := anchored[strings.TrimSpace(ref)]; ok {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func (s *Service) storePayload(ctx context.Context, userID, runID, modelID, contextHash string, payload Payload, preferExisting bool) (Stored, error) {
@@ -357,7 +256,7 @@ func repairDraft(draft Draft, envelope contextEnvelope) (Draft, []string, bool) 
 				continue
 			}
 			workstream.Deliverables = append(workstream.Deliverables, Deliverable{
-				Result: compactReaderText(result, readerResultRuneLimit), FactRefs: refs,
+				Result: boundedSemanticText(result, 500), FactRefs: refs,
 			})
 		}
 		if len(workstream.Deliverables) == 0 {
@@ -367,12 +266,12 @@ func repairDraft(draft Draft, envelope contextEnvelope) (Draft, []string, bool) 
 			workstream.Title = workstream.Deliverables[0].Result
 			warnings = append(warnings, "title_derived")
 		}
-		workstream.Title = compactReaderText(workstream.Title, readerHeadlineRuneLimit)
+		workstream.Title = boundedSemanticText(workstream.Title, 80)
 		if workstream.Subject == "" || !ReaderFacingTextSafe(workstream.Subject) {
-			workstream.Subject = compactReaderText(workstream.Title, readerSubjectRuneLimit)
+			workstream.Subject = workstream.Title
 			warnings = append(warnings, "subject_derived")
 		}
-		workstream.Subject = compactReaderText(workstream.Subject, readerSubjectRuneLimit)
+		workstream.Subject = boundedSemanticText(workstream.Subject, 80)
 		repaired.Workstreams = append(repaired.Workstreams, workstream)
 	}
 	if len(repaired.Workstreams) > 0 {
@@ -387,10 +286,11 @@ func repairDraft(draft Draft, envelope contextEnvelope) (Draft, []string, bool) 
 			continue
 		}
 		ref := strings.TrimSpace(fact.FactRef)
-		title := compactReaderText(text, readerHeadlineRuneLimit)
+		result := boundedSemanticText(text, 500)
+		title := boundedSemanticText(result, 80)
 		repaired.Workstreams = append(repaired.Workstreams, Workstream{
-			Subject: compactReaderText(title, readerSubjectRuneLimit), Title: title,
-			Deliverables: []Deliverable{{Result: compactReaderText(text, readerResultRuneLimit), FactRefs: []string{ref}}},
+			Subject: title, Title: title,
+			Deliverables: []Deliverable{{Result: result, FactRefs: []string{ref}}},
 		})
 	}
 	if len(repaired.Workstreams) == 0 {
@@ -403,6 +303,23 @@ func repairDraft(draft Draft, envelope contextEnvelope) (Draft, []string, bool) 
 	}
 	warnings = append(warnings, "context_fallback")
 	return repaired, uniqueWarnings(warnings), true
+}
+
+func boundedSemanticText(value string, limit int) string {
+	value = normalizeText(value)
+	if limit <= 0 {
+		return value
+	}
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	for index := limit - 1; index >= limit/2; index-- {
+		if strings.ContainsRune("。；;！!?", runes[index]) {
+			return strings.TrimSpace(string(runes[:index+1]))
+		}
+	}
+	return strings.TrimSpace(string(runes[:limit]))
 }
 
 func uniqueWarnings(values []string) []string {

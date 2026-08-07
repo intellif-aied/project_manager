@@ -16,20 +16,22 @@ func QueueReportChange(ctx context.Context, tx *sql.Tx, reportID, userID, report
 	if tx == nil || strings.TrimSpace(reportID) == "" || strings.TrimSpace(userID) == "" || strings.TrimSpace(reportDate) == "" {
 		return errors.New("report memory change is incomplete")
 	}
-	var content, runID, briefHash string
+	var content, runID, briefSignature string
 	err := tx.QueryRowContext(ctx, `
 		SELECT COALESCE(NULLIF(r.submitted_content, ''), r.content),
 		       COALESCE(r.managed_agent_run_id::text, ''),
-		       COALESCE(b.brief_hash, '')
+		       COALESCE(review.final_brief_json::text, b.brief_hash, '')
 		FROM daily_reports r
 		LEFT JOIN report_run_briefs b ON b.run_id = r.managed_agent_run_id
+		LEFT JOIN report_review_jobs review ON review.run_id = r.managed_agent_run_id
+			AND review.status = 'written'
 		WHERE r.id = $1 AND r.user_id = $2 AND r.report_date = $3::date
 		  AND r.status IN ('saved', 'submitted')`, reportID, userID, reportDate).
-		Scan(&content, &runID, &briefHash)
+		Scan(&content, &runID, &briefSignature)
 	if err != nil {
 		return err
 	}
-	fingerprint := memorySourceFingerprint(reportID, reportDate, content, runID, briefHash)
+	fingerprint := memorySourceFingerprint(reportID, reportDate, content, runID, briefSignature)
 	dueAt := nextNightlyWindow(now)
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO report_project_memory_jobs (

@@ -34,7 +34,7 @@ func buildConsolidationInput(ctx context.Context, database *sql.DB, job queuedJo
 		       COALESCE(NULLIF(r.submitted_content, ''), r.content),
 		       COALESCE(r.generation_mode, ''), r.edited,
 		       COALESCE(s.generated_content_sha256, ''),
-		       COALESCE(b.brief_payload::text, ''),
+		       COALESCE(review.final_brief_json::text, b.brief_payload::text, ''),
 		       EXISTS (
 			SELECT 1 FROM report_user_outcome_events outcome
 			WHERE outcome.report_id = r.id AND outcome.action IN ('saved', 'submitted')
@@ -42,6 +42,8 @@ func buildConsolidationInput(ctx context.Context, database *sql.DB, job queuedJo
 		FROM daily_reports r
 		LEFT JOIN report_generation_snapshots s ON s.run_id = r.managed_agent_run_id
 		LEFT JOIN report_run_briefs b ON b.run_id = r.managed_agent_run_id
+		LEFT JOIN report_review_jobs review ON review.run_id = r.managed_agent_run_id
+			AND review.status = 'written'
 		WHERE r.id = $1 AND r.user_id = $2 AND r.report_date = $3::date
 		  AND r.status IN ('saved', 'submitted')
 		  AND NULLIF(BTRIM(COALESCE(NULLIF(r.submitted_content, ''), r.content, '')), '') IS NOT NULL`,
@@ -390,7 +392,7 @@ func loadHistoricalContext(ctx context.Context, database *sql.DB, userID, report
 		       COALESCE(NULLIF(r.submitted_content, ''), r.content),
 		       COALESCE(r.generation_mode, ''), r.edited,
 		       COALESCE(s.generated_content_sha256, ''),
-		       COALESCE(b.brief_payload::text, ''),
+		       COALESCE(review.final_brief_json::text, b.brief_payload::text, ''),
 		       EXISTS (
 			SELECT 1 FROM report_user_outcome_events outcome
 			WHERE outcome.report_id = r.id AND outcome.action IN ('saved', 'submitted')
@@ -398,6 +400,8 @@ func loadHistoricalContext(ctx context.Context, database *sql.DB, userID, report
 		FROM daily_reports r
 		LEFT JOIN report_generation_snapshots s ON s.run_id = r.managed_agent_run_id
 		LEFT JOIN report_run_briefs b ON b.run_id = r.managed_agent_run_id
+		LEFT JOIN report_review_jobs review ON review.run_id = r.managed_agent_run_id
+			AND review.status = 'written'
 		WHERE r.user_id = $1 AND r.report_date < $2::date
 		  AND r.status IN ('saved', 'submitted')
 		  AND NULLIF(BTRIM(COALESCE(NULLIF(r.submitted_content, ''), r.content, '')), '') IS NOT NULL

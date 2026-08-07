@@ -64,12 +64,21 @@ type frozenReportSourceRefs struct {
 }
 
 func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.RawMessage) (any, error) {
-	u, err := requireUser(r)
-	if err != nil {
-		return nil, err
-	}
 	var args writeReportResultArgs
 	if err := decodeArguments(rawArgs, &args); err != nil {
+		return nil, err
+	}
+	return h.writeReportResult(r, args, nil, nil)
+}
+
+func (h *ReportMCPHandler) writeReportResult(
+	r *http.Request,
+	args writeReportResultArgs,
+	reviewed *reportbrief.ReviewFinalized,
+	reviewMetadata json.RawMessage,
+) (any, error) {
+	u, err := requireUser(r)
+	if err != nil {
 		return nil, err
 	}
 	runID, err := resolveReportRunID(r, args.RunID)
@@ -91,8 +100,22 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 	degradedContentReplaced := false
 	compileWarnings := []string{}
 	var content, normalizedSummary string
+	var candidateForReview *reportbrief.Stored
 	requiresBrief := h.briefEnabled && reportType == reportTypePersonalDaily && reportBriefRequiredForRun(*run)
-	if requiresBrief && strings.TrimSpace(args.BriefHash) != "" {
+	if reviewed != nil {
+		var ok bool
+		content, normalizedSummary, ok = reviewed.Stored.ReaderReport()
+		if !ok {
+			return nil, errMCPInternal
+		}
+		briefSchemaVersion = reviewed.Stored.Payload.SchemaVersion
+		acceptedBriefHash = reviewed.Stored.BriefHash
+		compileWarnings = append(compileWarnings, reviewed.Warnings...)
+		if reviewed.Mode != reportbrief.ReviewModeAccepted {
+			degradedReason = reviewed.Mode
+			degradedContentReplaced = reviewed.Mode == reportbrief.ReviewModeConservative
+		}
+	} else if requiresBrief && strings.TrimSpace(args.BriefHash) != "" {
 		if h.reportBrief == nil {
 			return nil, errMCPInternal
 		}
@@ -108,6 +131,7 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 		}
 		briefSchemaVersion = storedBrief.Payload.SchemaVersion
 		acceptedBriefHash = storedBrief.BriefHash
+		candidateForReview = &storedBrief
 	} else if requiresBrief {
 		if h.reportBrief == nil {
 			return nil, errMCPInternal
@@ -126,6 +150,8 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 		}
 		briefSchemaVersion = compiled.Stored.Payload.SchemaVersion
 		acceptedBriefHash = compiled.Stored.BriefHash
+		candidate := compiled.Stored
+		candidateForReview = &candidate
 		compileWarnings = compiled.Warnings
 		if compiled.Mode != reportbrief.CompileModeAccepted {
 			degradedReason = compiled.Mode
@@ -136,6 +162,18 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 		if err != nil {
 			return nil, err
 		}
+	}
+	if reviewed == nil && candidateForReview != nil && h.reportReview != nil && h.reportReview.Enabled() &&
+		reportReviewRequiredForRun(reportType, *run) {
+		queued, queueErr := h.reportReview.Queue(r.Context(), u.ID, run.ID, *candidateForReview)
+		if queueErr == nil {
+			return mcpTextResult(map[string]any{
+				"status": "review_queued", "report_type": reportType,
+				"agent_run_id": run.ID, "brief_hash": queued.BriefHash,
+			}), nil
+		}
+		log.Printf("queue report review failed for run %s, saving candidate: %v", run.ID, queueErr)
+		compileWarnings = append(compileWarnings, "review_queue_failed")
 	}
 	if content == "" {
 		return nil, mcpErr("INVALID_ARGUMENT", "content is required")
@@ -190,11 +228,15 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 			}
 		}
 	}
-	stageResult, err := tx.ExecContext(ctx, `
+	stagePredicate := "(execution_stage = 'agent_running' OR execution_stage IS NULL)"
+	if reviewed != nil {
+		stagePredicate = "execution_stage IN ('review_pending', 'review_running', 'review_finalizing')"
+	}
+	stageResult, err := tx.ExecContext(ctx, fmt.Sprintf(`
 		UPDATE ai_runs
 		SET execution_stage = 'writing_result', stage_updated_at = now()
 		WHERE id = $1 AND user_id = $2 AND status = 'running'
-		  AND (execution_stage = 'agent_running' OR execution_stage IS NULL)`, run.ID, u.ID)
+		  AND %s`, stagePredicate), run.ID, u.ID)
 	if err != nil {
 		return nil, errMCPInternal
 	}
@@ -264,6 +306,15 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 	if len(compileWarnings) > 0 {
 		outputPayload["report_compile_warnings"] = compileWarnings
 	}
+	if reviewed != nil {
+		outputPayload["report_review_mode"] = reviewed.Mode
+		if len(reviewMetadata) > 0 {
+			var reviewOutput map[string]any
+			if json.Unmarshal(reviewMetadata, &reviewOutput) == nil {
+				outputPayload["report_review"] = reviewOutput
+			}
+		}
+	}
 	copyReportRunMetadata(outputPayload, run.InputRef)
 	outputRef, _ := json.Marshal(outputPayload)
 	finalizeResult, err := tx.ExecContext(ctx, `
@@ -304,6 +355,26 @@ func (h *ReportMCPHandler) toolWriteReportResult(r *http.Request, rawArgs json.R
 		"updated_by_user":      false,
 		"degraded":             degradedReason != "",
 	}), nil
+}
+
+// FinalizeReviewedReport is the single reviewed-report write seam. It reuses
+// the normal identity, source, edit-conflict, snapshot, and idempotency guards.
+func (h *ReportMCPHandler) FinalizeReviewedReport(
+	ctx context.Context,
+	userID string,
+	runID string,
+	finalized reportbrief.ReviewFinalized,
+	reviewMetadata json.RawMessage,
+) error {
+	user, err := loadAidaUserByID(h.db, strings.TrimSpace(userID))
+	if err != nil {
+		return err
+	}
+	request := (&http.Request{}).WithContext(context.WithValue(
+		context.WithValue(ctx, userKey, user), reportRunIDKey, strings.TrimSpace(runID),
+	))
+	_, err = h.writeReportResult(request, writeReportResultArgs{}, &finalized, reviewMetadata)
+	return err
 }
 
 // WriteReportFallback completes a managed report run when the Agent session
@@ -560,6 +631,11 @@ func (h *ReportMCPHandler) aiRunGuard(r *http.Request, runID, userID string) (*r
 
 func reportBriefRequiredForRun(run reportAIRun) bool {
 	return strings.TrimSpace(run.ReportAgentSource) != managedAgentSourcePersonal
+}
+
+func reportReviewRequiredForRun(reportType string, run reportAIRun) bool {
+	return reportType == reportTypePersonalDaily &&
+		strings.TrimSpace(run.ReportAgentSource) == managedAgentSourceSystem
 }
 
 func prepareReportResultForRun(run reportAIRun, reportType string, args writeReportResultArgs) (string, string, error) {

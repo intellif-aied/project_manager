@@ -112,116 +112,45 @@ func TestCompileFallsBackToFrozenFactsWhenAgentDraftIsEmpty(t *testing.T) {
 	}
 }
 
-func TestApplyProjectMemoryGroupingMergesOnlyAnchoredKnownTerms(t *testing.T) {
-	var envelope contextEnvelope
-	envelope.ProjectMemoryContext = &struct {
-		Hints []struct {
-			CanonicalName    string   `json:"canonical_name"`
-			Aliases          []string `json:"aliases"`
-			WorkstreamCues   []string `json:"workstream_cues"`
-			SemanticFactRefs []string `json:"semantic_fact_refs"`
-			Confidence       float64  `json:"confidence"`
-			CandidateOnly    bool     `json:"candidate_only"`
-			MatchBasis       string   `json:"match_basis"`
-		} `json:"hints"`
-	}{}
-	hint := struct {
-		CanonicalName    string   `json:"canonical_name"`
-		Aliases          []string `json:"aliases"`
-		WorkstreamCues   []string `json:"workstream_cues"`
-		SemanticFactRefs []string `json:"semantic_fact_refs"`
-		Confidence       float64  `json:"confidence"`
-		CandidateOnly    bool     `json:"candidate_only"`
-		MatchBasis       string   `json:"match_basis"`
-	}{
-		CanonicalName: "芯片验证平台", Aliases: []string{"工单处理流程", "版本流"},
-		WorkstreamCues:   []string{"CLI", "调用执行", "调度器"},
-		SemanticFactRefs: []string{"fact-001", "fact-002", "fact-003"},
-		Confidence:       0.99, MatchBasis: "workspace_semantic",
+func TestCompileDoesNotRewriteAgentWorkstreamsFromProjectMemory(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
 	}
-	envelope.ProjectMemoryContext.Hints = append(envelope.ProjectMemoryContext.Hints, hint)
-	draft := Draft{Workstreams: []Workstream{
-		{Subject: "调用执行", Title: "调用执行调整", Deliverables: []Deliverable{{Result: "调整调用执行", FactRefs: []string{"fact-001"}}}},
-		{Subject: "CLI 工具", Title: "CLI 同步", Deliverables: []Deliverable{{Result: "同步 CLI", FactRefs: []string{"fact-002"}}}},
-		{Subject: "工单与调度器", Title: "工单调整", Deliverables: []Deliverable{{Result: "调整工单", FactRefs: []string{"fact-003"}}}},
-		{Subject: "新项目", Title: "新项目工作", Deliverables: []Deliverable{{Result: "推进新项目", FactRefs: []string{"fact-004"}}}},
+	defer db.Close()
+	const (
+		runID  = "00000000-0000-4000-8000-000000000003"
+		userID = "198"
+	)
+	service := NewService(db, nil)
+	service.context = staticReportContextReader{stored: reportcontext.StoredContext{
+		Payload: []byte(`{"run":{"report_type":"personal_daily","period":{"start":"2026-08-06","end":"2026-08-06"}},"work_evidence":{"facts":[{"fact_ref":"fact-407","text":"尚未证明项目命名更准确"},{"fact_ref":"fact-433","text":"日报邮件功能默认关闭，未执行真实 SMTP"}]},"project_memory_context":{"hints":[{"canonical_name":"AIDA日报系统Project Memory与CLI修复","semantic_fact_refs":["fact-407","fact-433"],"confidence":0.99,"match_basis":"workspace_semantic"}]}}`),
+		Hash:    "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
 	}}
-	grouped, changed := applyProjectMemoryGrouping(draft, envelope)
-	if !changed || len(grouped.Workstreams) != 2 {
-		t.Fatalf("grouped workstreams = %#v, changed=%v", grouped.Workstreams, changed)
-	}
-	if grouped.Workstreams[0].Subject != "芯片验证平台" || len(grouped.Workstreams[0].Deliverables) != 3 {
-		t.Fatalf("parent workstream = %#v", grouped.Workstreams[0])
-	}
-	if grouped.Workstreams[1].Subject != "新项目" {
-		t.Fatalf("unrelated workstream was changed: %#v", grouped.Workstreams[1])
-	}
-}
+	mock.ExpectQuery("SELECT business_type, status").WithArgs(runID, userID).WillReturnRows(
+		sqlmock.NewRows([]string{"business_type", "status", "execution_stage", "model_id", "report_context_representation"}).
+			AddRow("report_agent_run", "running", "agent_running", "deepseek-v4-flash", "work_evidence"),
+	)
+	mock.ExpectExec("INSERT INTO report_run_briefs").WithArgs(
+		runID, SchemaVersion, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), "deepseek-v4-flash",
+	).WillReturnResult(sqlmock.NewResult(0, 1))
 
-func TestApplyProjectMemoryGroupingDoesNotForceWeakCandidate(t *testing.T) {
-	var envelope contextEnvelope
-	envelope.ProjectMemoryContext = &struct {
-		Hints []struct {
-			CanonicalName    string   `json:"canonical_name"`
-			Aliases          []string `json:"aliases"`
-			WorkstreamCues   []string `json:"workstream_cues"`
-			SemanticFactRefs []string `json:"semantic_fact_refs"`
-			Confidence       float64  `json:"confidence"`
-			CandidateOnly    bool     `json:"candidate_only"`
-			MatchBasis       string   `json:"match_basis"`
-		} `json:"hints"`
-	}{}
-	hint := struct {
-		CanonicalName    string   `json:"canonical_name"`
-		Aliases          []string `json:"aliases"`
-		WorkstreamCues   []string `json:"workstream_cues"`
-		SemanticFactRefs []string `json:"semantic_fact_refs"`
-		Confidence       float64  `json:"confidence"`
-		CandidateOnly    bool     `json:"candidate_only"`
-		MatchBasis       string   `json:"match_basis"`
-	}{CanonicalName: "芯片验证平台", Aliases: []string{"版本流"}, SemanticFactRefs: []string{"fact-001", "fact-002"}, Confidence: 0.99, CandidateOnly: true, MatchBasis: "workspace"}
-	envelope.ProjectMemoryContext.Hints = append(envelope.ProjectMemoryContext.Hints, hint)
-	draft := Draft{Workstreams: []Workstream{{Subject: "版本流", Deliverables: []Deliverable{{FactRefs: []string{"fact-001"}}}}}}
-	grouped, changed := applyProjectMemoryGrouping(draft, envelope)
-	if changed || grouped.Workstreams[0].Subject != "版本流" {
-		t.Fatalf("weak candidate was forced: %#v", grouped.Workstreams)
+	compiled, err := service.Compile(context.Background(), userID, runID, Draft{Workstreams: []Workstream{
+		{Subject: "Project Memory", Title: "推进 Project Memory 项目关联验证", Deliverables: []Deliverable{{Result: "完成测试服项目关联样本验证", FactRefs: []string{"fact-407"}}}},
+		{Subject: "日报邮件", Title: "推进日报邮件通知能力", Deliverables: []Deliverable{{Result: "完成日报邮件后端能力，功能默认关闭", FactRefs: []string{"fact-433"}}}},
+	}})
+	if err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestApplyProjectMemoryGroupingUsesAnchoredFactsWithoutLiteralSubjectMatch(t *testing.T) {
-	var envelope contextEnvelope
-	envelope.ProjectMemoryContext = &struct {
-		Hints []struct {
-			CanonicalName    string   `json:"canonical_name"`
-			Aliases          []string `json:"aliases"`
-			WorkstreamCues   []string `json:"workstream_cues"`
-			SemanticFactRefs []string `json:"semantic_fact_refs"`
-			Confidence       float64  `json:"confidence"`
-			CandidateOnly    bool     `json:"candidate_only"`
-			MatchBasis       string   `json:"match_basis"`
-		} `json:"hints"`
-	}{}
-	hint := struct {
-		CanonicalName    string   `json:"canonical_name"`
-		Aliases          []string `json:"aliases"`
-		WorkstreamCues   []string `json:"workstream_cues"`
-		SemanticFactRefs []string `json:"semantic_fact_refs"`
-		Confidence       float64  `json:"confidence"`
-		CandidateOnly    bool     `json:"candidate_only"`
-		MatchBasis       string   `json:"match_basis"`
-	}{CanonicalName: "AI Coding 提效支撑", SemanticFactRefs: []string{"fact-001", "fact-002"}, Confidence: 0.86, MatchBasis: "semantic"}
-	envelope.ProjectMemoryContext.Hints = append(envelope.ProjectMemoryContext.Hints, hint)
-	draft := Draft{Workstreams: []Workstream{
-		{Subject: "训练数据生成", Deliverables: []Deliverable{{FactRefs: []string{"fact-001", "fact-004"}}}},
-		{Subject: "模型评测", Deliverables: []Deliverable{{FactRefs: []string{"fact-002"}}}},
-		{Subject: "独立项目", Deliverables: []Deliverable{{FactRefs: []string{"fact-003"}}}},
-	}}
-	grouped, changed := applyProjectMemoryGrouping(draft, envelope)
-	if !changed || len(grouped.Workstreams) != 2 || grouped.Workstreams[0].Subject != "AI Coding 提效支撑" || len(grouped.Workstreams[0].Deliverables) != 2 {
-		t.Fatalf("anchored facts were not grouped under the historical parent: %#v, changed=%v", grouped.Workstreams, changed)
+	if compiled.Mode != CompileModeAccepted || len(compiled.Warnings) != 0 {
+		t.Fatalf("compile result = mode %q warnings %#v", compiled.Mode, compiled.Warnings)
 	}
-	if grouped.Workstreams[1].Subject != "独立项目" {
-		t.Fatalf("unanchored workstream was changed: %#v", grouped.Workstreams[1])
+	workstreams := compiled.Stored.Payload.Workstreams
+	if len(workstreams) != 2 || workstreams[0].Subject != "Project Memory" || workstreams[1].Subject != "日报邮件" {
+		t.Fatalf("project memory rewrote Agent workstreams: %#v", workstreams)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -1032,5 +961,42 @@ func TestCompactReaderTextMarksAnUnfinishedLongSentence(t *testing.T) {
 	}
 	if len([]rune(got)) != readerResultRuneLimit {
 		t.Fatalf("compactReaderText() length = %d, want %d", len([]rune(got)), readerResultRuneLimit)
+	}
+}
+
+func TestReaderDisplayTextEndsAtACompleteClauseWithoutEllipsis(t *testing.T) {
+	want := strings.Repeat("甲", readerResultRuneLimit/3) + "；"
+	value := want + strings.Repeat("乙", readerResultRuneLimit)
+	got := compactReaderDisplayText(value, readerResultRuneLimit)
+	if got != want || strings.Contains(got, "…") {
+		t.Fatalf("compactReaderDisplayText() = %q, want complete clause %q", got, want)
+	}
+}
+
+func TestRepairDraftPreservesFullSemanticResultForReaderRendering(t *testing.T) {
+	value := strings.Repeat("甲", 70) + "；" + strings.Repeat("乙", 80) + "。"
+	envelope := contextEnvelope{}
+	envelope.WorkEvidence = &struct {
+		Facts []struct {
+			FactRef string `json:"fact_ref"`
+			Text    string `json:"text"`
+			Source  string `json:"source"`
+		} `json:"facts"`
+	}{Facts: []struct {
+		FactRef string `json:"fact_ref"`
+		Text    string `json:"text"`
+		Source  string `json:"source"`
+	}{{FactRef: "fact-001", Text: value, Source: "user"}}}
+	repaired, _, _ := repairDraft(Draft{Workstreams: []Workstream{{
+		Subject: "项目", Title: "项目推进",
+		Deliverables: []Deliverable{{Result: value, FactRefs: []string{"fact-001"}}},
+	}}}, envelope)
+	if got := repaired.Workstreams[0].Deliverables[0].Result; got != value {
+		t.Fatalf("repairDraft result = %q, want full semantic result", got)
+	}
+	repaired.Workstreams[0].Deliverables = append(repaired.Workstreams[0].Deliverables, Deliverable{Result: "完成补充验证。"})
+	content, _, ok := (Stored{Payload: Payload{Workstreams: repaired.Workstreams}}).ReaderReport()
+	if !ok || strings.Contains(content, "…") || !strings.Contains(content, strings.Repeat("甲", 20)+"；") {
+		t.Fatalf("ReaderReport() = %q, want a complete clause without ellipsis", content)
 	}
 }

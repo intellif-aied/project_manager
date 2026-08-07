@@ -93,10 +93,12 @@ func syncHistoricalReports(ctx context.Context, tx *sql.Tx, userID, reportDate s
 		       COALESCE(NULLIF(r.submitted_content, ''), r.content),
 		       COALESCE(r.generation_mode, ''), r.edited,
 		       COALESCE(snapshot.generated_content_sha256, ''),
-		       COALESCE(brief.brief_payload::text, '')
+		       COALESCE(review.final_brief_json::text, brief.brief_payload::text, '')
 		FROM daily_reports r
 		LEFT JOIN report_generation_snapshots snapshot ON snapshot.run_id = r.managed_agent_run_id
 		LEFT JOIN report_run_briefs brief ON brief.run_id = r.managed_agent_run_id
+		LEFT JOIN report_review_jobs review ON review.run_id = r.managed_agent_run_id
+			AND review.status = 'written'
 		WHERE r.user_id = $1
 		  AND r.report_date < $2::date
 		  AND r.status IN ('saved', 'submitted')

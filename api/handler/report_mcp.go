@@ -12,6 +12,7 @@ import (
 	"github.com/aidashboard/api/internal/biztime"
 	"github.com/aidashboard/api/internal/reportbrief"
 	"github.com/aidashboard/api/internal/reportcontext"
+	"github.com/aidashboard/api/internal/reportreview"
 	"github.com/aidashboard/api/internal/reportsource"
 	"github.com/aidashboard/api/model"
 )
@@ -59,7 +60,13 @@ type ReportMCPHandler struct {
 	reportSource  *reportsource.Service
 	reportContext *reportcontext.Service
 	reportBrief   reportBriefService
+	reportReview  reportReviewQueue
 	briefEnabled  bool
+}
+
+type reportReviewQueue interface {
+	Enabled() bool
+	Queue(context.Context, string, string, reportbrief.Stored) (reportreview.QueueResult, error)
 }
 
 type reportBriefService interface {
@@ -85,6 +92,10 @@ func (h *ReportMCPHandler) ConfigureReportContext(service *reportcontext.Service
 func (h *ReportMCPHandler) ConfigureReportBrief(service reportBriefService, enabled bool) {
 	h.reportBrief = service
 	h.briefEnabled = enabled
+}
+
+func (h *ReportMCPHandler) ConfigureReportReview(service reportReviewQueue) {
+	h.reportReview = service
 }
 
 type mcpRequest struct {

@@ -45,6 +45,7 @@ type managedAgentRunStatusRow struct {
 	BusinessID        string
 	OutputRefJSON     []byte
 	StartedAt         sql.NullTime
+	ExecutionStage    string
 }
 
 func NewManagedAgentRunStatusSyncer(db *sql.DB, client *ManagedAgentClient) *ManagedAgentRunStatusSyncer {
@@ -90,7 +91,7 @@ func (s *ManagedAgentRunStatusSyncer) RunOnce(ctx context.Context, now time.Time
 	rows, err := s.db.QueryContext(ctx, `
 			SELECT id::text, COALESCE(external_task_id, ''), COALESCE(external_session_id, ''), status,
 			       business_type, COALESCE(business_id::text, ''), COALESCE(output_ref_json, '{}'::jsonb),
-			       started_at
+			       started_at, COALESCE(execution_stage, '')
 			FROM ai_runs
 			WHERE status IN ('pending', 'running')
 			  AND (
@@ -106,7 +107,7 @@ func (s *ManagedAgentRunStatusSyncer) RunOnce(ctx context.Context, now time.Time
 
 	for rows.Next() {
 		var run managedAgentRunStatusRow
-		if err := rows.Scan(&run.ID, &run.ExternalTaskID, &run.ExternalSessionID, &run.Status, &run.BusinessType, &run.BusinessID, &run.OutputRefJSON, &run.StartedAt); err != nil {
+		if err := rows.Scan(&run.ID, &run.ExternalTaskID, &run.ExternalSessionID, &run.Status, &run.BusinessType, &run.BusinessID, &run.OutputRefJSON, &run.StartedAt, &run.ExecutionStage); err != nil {
 			return err
 		}
 		if err := s.refreshRun(ctx, run, now); err != nil {
@@ -156,7 +157,9 @@ func (s *ManagedAgentRunStatusSyncer) refreshRun(ctx context.Context, run manage
 		}
 	}
 	if run.isReportAgentRun() && status == "succeeded" && !run.hasReportWriteback() {
-		if !reportWritebackGraceElapsed(task, now) {
+		if run.isInReview() {
+			status = "running"
+		} else if !reportWritebackGraceElapsed(task, now) {
 			status = "running"
 		} else if s.fallback != nil {
 			if err := s.fallback.WriteReportFallback(ctx, run.ID); err != nil {
@@ -176,6 +179,15 @@ func (s *ManagedAgentRunStatusSyncer) refreshRun(ctx context.Context, run manage
 		errMsg = "managed agent run timed out after 2h"
 	}
 	return s.updateRunStatus(ctx, run, task, status, errMsg, now)
+}
+
+func (run managedAgentRunStatusRow) isInReview() bool {
+	switch strings.TrimSpace(run.ExecutionStage) {
+	case "review_pending", "review_running", "review_finalizing":
+		return true
+	default:
+		return false
+	}
 }
 
 func normalizeManagedAgentFailure(task *ManagedTaskStatus) (string, string) {

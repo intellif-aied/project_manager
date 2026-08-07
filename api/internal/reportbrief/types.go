@@ -122,7 +122,7 @@ func (s Stored) ReaderSummary() (string, bool) {
 		if strings.TrimSpace(workstream.Subject) == "" {
 			return "", false
 		}
-		title := compactReaderText(workstream.Title, readerHeadlineRuneLimit)
+		title := compactReaderDisplayText(workstream.Title, readerHeadlineRuneLimit)
 		if title == "" {
 			return "", false
 		}
@@ -142,7 +142,7 @@ func (s Stored) ReaderReport() (string, string, bool) {
 	}
 	lines := make([]string, 0, len(s.Payload.Workstreams)*3)
 	for index, workstream := range s.Payload.Workstreams {
-		subject := compactReaderText(workstream.Subject, readerSubjectRuneLimit)
+		subject := compactReaderDisplayText(workstream.Subject, readerSubjectRuneLimit)
 		if subject == "" {
 			return "", "", false
 		}
@@ -151,12 +151,12 @@ func (s Stored) ReaderReport() (string, string, bool) {
 			if len(results) >= readerMaxDeliverables {
 				break
 			}
-			if result := compactReaderText(deliverable.Result, readerResultRuneLimit); result != "" {
+			if result := compactReaderDisplayText(deliverable.Result, readerResultRuneLimit); result != "" {
 				results = append(results, result)
 			}
 		}
 		if len(results) <= 1 {
-			title := compactReaderText(workstream.Title, readerHeadlineRuneLimit)
+			title := compactReaderDisplayText(workstream.Title, readerHeadlineRuneLimit)
 			if title == "" {
 				return "", "", false
 			}
@@ -188,6 +188,37 @@ func compactReaderText(value string, limit int) string {
 		end--
 	}
 	return strings.TrimSpace(string(runes[:end])) + "…"
+}
+
+// compactReaderDisplayText bounds reader-facing lines only at a natural
+// sentence or clause boundary. It never manufactures an ellipsis or mutates
+// the semantic Brief used by the reviewer.
+func compactReaderDisplayText(value string, limit int) string {
+	value = strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+	value = strings.NewReplacer("**", "", string(rune(96)), "").Replace(value)
+	if limit <= 0 || utf8.RuneCountInString(value) <= limit {
+		return value
+	}
+	runes := []rune(value)
+	minimumBoundary := limit / 3
+	if minimumBoundary < 24 {
+		minimumBoundary = 24
+	}
+	for index := limit - 1; index >= minimumBoundary; index-- {
+		if strings.ContainsRune("。；;！!?", runes[index]) {
+			return strings.TrimSpace(string(runes[:index+1]))
+		}
+	}
+	maximumBoundary := limit + limit/3
+	if maximumBoundary > len(runes) {
+		maximumBoundary = len(runes)
+	}
+	for index := limit; index < maximumBoundary; index++ {
+		if strings.ContainsRune("。；;！!?", runes[index]) {
+			return strings.TrimSpace(string(runes[:index+1]))
+		}
+	}
+	return value
 }
 
 type Accepted struct {

@@ -43,6 +43,12 @@ type Config struct {
 	ProjectMemoryMCPURL            string
 	ProjectMemoryStartHour         int
 	ProjectMemoryEndHour           int
+	ReportReviewEnabled            bool
+	ReportReviewAgentID            string
+	ReportReviewModelID            string
+	ReportReviewSkillOwner         string
+	ReportReviewSkillVersion       string
+	ReportReviewMCPURL             string
 	ReportTwoPassEnabled           bool
 	AIDAPublicBaseURL              string
 	AIDAInternalMetricsAddr        string
@@ -109,6 +115,12 @@ func Load() *Config {
 		ProjectMemoryMCPURL:            strings.TrimSpace(getEnv("PROJECT_MEMORY_MCP_URL", "")),
 		ProjectMemoryStartHour:         getEnvInt("PROJECT_MEMORY_START_HOUR", 2),
 		ProjectMemoryEndHour:           getEnvInt("PROJECT_MEMORY_END_HOUR", 6),
+		ReportReviewEnabled:            strings.EqualFold(strings.TrimSpace(getEnv("REPORT_REVIEW_ENABLED", "false")), "true"),
+		ReportReviewAgentID:            strings.TrimSpace(getEnv("REPORT_REVIEW_AGENT_ID", "")),
+		ReportReviewModelID:            strings.TrimSpace(getEnv("REPORT_REVIEW_MODEL_ID", "MiniMax-M2.5")),
+		ReportReviewSkillOwner:         strings.TrimSpace(getEnv("REPORT_REVIEW_SKILL_OWNER", "")),
+		ReportReviewSkillVersion:       strings.TrimSpace(getEnv("REPORT_REVIEW_SKILL_VERSION", "")),
+		ReportReviewMCPURL:             strings.TrimSpace(getEnv("REPORT_REVIEW_MCP_URL", "")),
 		ReportTwoPassEnabled:           getEnv("REPORT_TWO_PASS_ENABLED", "false") == "true",
 		AIDAPublicBaseURL:              getEnv("AIDA_PUBLIC_BASE_URL", ""),
 		AIDAInternalMetricsAddr:        getEnv("AIDA_INTERNAL_METRICS_ADDR", ":9091"),
@@ -174,6 +186,27 @@ func (c *Config) ValidateProjectMemoryResources() error {
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("project memory system resources are incomplete: %s", strings.Join(missing, ", "))
+	}
+	return nil
+}
+
+func (c *Config) ValidateReportReviewResources() error {
+	if c == nil || !c.ReportReviewEnabled {
+		return nil
+	}
+	missing := make([]string, 0, 4)
+	for key, value := range map[string]string{
+		"REPORT_REVIEW_AGENT_ID":      c.ReportReviewAgentID,
+		"REPORT_REVIEW_SKILL_OWNER":   c.ReportReviewSkillOwner,
+		"REPORT_REVIEW_SKILL_VERSION": c.ReportReviewSkillVersion,
+		"REPORT_REVIEW_MCP_URL":       c.ReportReviewMCPURL,
+	} {
+		if strings.TrimSpace(value) == "" {
+			missing = append(missing, key)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("report review system resources are incomplete: %s", strings.Join(missing, ", "))
 	}
 	return nil
 }

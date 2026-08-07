@@ -21,10 +21,13 @@ const reportRunIDKey contextKey = "report_run_id"
 
 const projectMemoryJobRefKey contextKey = "project_memory_job_ref"
 
+const reportReviewJobRefKey contextKey = "report_review_job_ref"
+
 type aiHubIdentity struct {
 	UID                 int64
 	ReportRunID         string
 	ProjectMemoryJobRef string
+	ReportReviewJobRef  string
 }
 
 func AuthMiddleware(db *sql.DB, aiHubSecret string, aihub *service.AIHubClient) func(http.Handler) http.Handler {
@@ -72,6 +75,9 @@ func authMiddleware(db *sql.DB, aiHubSecret string, aihub *service.AIHubClient, 
 			}
 			if identity.ProjectMemoryJobRef != "" {
 				ctx = context.WithValue(ctx, projectMemoryJobRefKey, identity.ProjectMemoryJobRef)
+			}
+			if identity.ReportReviewJobRef != "" {
+				ctx = context.WithValue(ctx, reportReviewJobRefKey, identity.ReportReviewJobRef)
 			}
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
@@ -131,9 +137,11 @@ func identityFromClaims(claims jwt.MapClaims) (aiHubIdentity, error) {
 	}
 	runID, _ := claims["report_run_id"].(string)
 	memoryJobRef, _ := claims["project_memory_job_ref"].(string)
+	reviewJobRef, _ := claims["report_review_job_ref"].(string)
 	return aiHubIdentity{
 		UID: uid, ReportRunID: strings.TrimSpace(runID),
 		ProjectMemoryJobRef: strings.TrimSpace(memoryJobRef),
+		ReportReviewJobRef:  strings.TrimSpace(reviewJobRef),
 	}, nil
 }
 

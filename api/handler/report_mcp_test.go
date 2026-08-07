@@ -38,6 +38,18 @@ func TestReportBriefRequiredOnlyForSystemFlow(t *testing.T) {
 	}
 }
 
+func TestReportReviewRequiredOnlyForSystemPersonalDaily(t *testing.T) {
+	if !reportReviewRequiredForRun(reportTypePersonalDaily, reportAIRun{ReportAgentSource: managedAgentSourceSystem}) {
+		t.Fatal("system personal daily report must use semantic review")
+	}
+	if reportReviewRequiredForRun(reportTypePersonalDaily, reportAIRun{ReportAgentSource: managedAgentSourcePersonal}) {
+		t.Fatal("personal Agent report must not use system semantic review")
+	}
+	if reportReviewRequiredForRun(reportTypePersonalWeekly, reportAIRun{ReportAgentSource: managedAgentSourceSystem}) {
+		t.Fatal("weekly report must not use personal daily semantic review")
+	}
+}
+
 func TestValidateAutoReportWriteGuard(t *testing.T) {
 	updatedAt := time.Date(2026, 7, 31, 12, 0, 0, 123000, time.UTC)
 	replaceGuard := map[string]any{

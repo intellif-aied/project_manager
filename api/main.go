@@ -23,6 +23,7 @@ import (
 	"github.com/aidashboard/api/internal/reportemail"
 	"github.com/aidashboard/api/internal/reporteval"
 	"github.com/aidashboard/api/internal/reportmemory"
+	"github.com/aidashboard/api/internal/reportreview"
 	"github.com/aidashboard/api/internal/reportrun"
 	"github.com/aidashboard/api/internal/reportsource"
 	"github.com/aidashboard/api/internal/reportsourcecatalog"
@@ -46,6 +47,9 @@ func main() {
 	}
 	if err := cfg.ValidateProjectMemoryResources(); err != nil {
 		log.Fatalf("Invalid project memory resource configuration: %v", err)
+	}
+	if err := cfg.ValidateReportReviewResources(); err != nil {
+		log.Fatalf("Invalid report review resource configuration: %v", err)
 	}
 	if err := cfg.ValidateEvaluationRuntime(); err != nil {
 		log.Fatalf("Invalid evaluation runtime configuration: %v", err)
@@ -160,6 +164,29 @@ func main() {
 	managedAgentH := handler.NewManagedAgentHandlerWithDefaults(database, managedAgentClient, managedAgentDefaults)
 	managedAgentH.ConfigureReportSourceSelection(reportSourceService)
 	managedAgentH.ConfigureReportContext(reportContextService)
+	dailyReportMCPH := handler.NewReportMCPHandler(database)
+	dailyReportMCPH.ConfigureReportSourceSelection(reportSourceService)
+	dailyReportMCPH.ConfigureReportContext(reportContextService)
+	dailyReportMCPH.ConfigureReportBrief(reportBriefService, cfg.ReportTwoPassEnabled)
+	reportReviewTokenMinter := func(user *model.User, jobRef string) (string, error) {
+		return handler.MintReportReviewJobToken(user, cfg.AIHubSecret, jobRef)
+	}
+	reportReviewService, err := reportreview.NewService(
+		database, reportContextService,
+		service.NewManagedReportReviewResolver(
+			database, managedAgentClient, reportReviewTokenMinter,
+			service.ReportReviewMCPCredentialSlot,
+		), dailyReportMCPH, reportreview.Config{
+			Enabled: cfg.ReportReviewEnabled, AgentID: cfg.ReportReviewAgentID,
+			ModelID: cfg.ReportReviewModelID, WorkerID: "api:" + hostname + ":report-review",
+			ClaimBatch: 5,
+		},
+	)
+	if err != nil {
+		log.Fatalf("Failed to init report review service: %v", err)
+	}
+	dailyReportMCPH.ConfigureReportReview(reportReviewService)
+	reportReviewMCPH := handler.NewReportReviewMCPHandler(reportReviewService)
 	autoDailyReportService, err := autodailyreport.NewService(
 		database, managedAgentH, "api:"+hostname+":auto-daily-report",
 	)
@@ -206,14 +233,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to init report email service: %v", err)
 	}
-	dailyReportMCPH := handler.NewReportMCPHandler(database)
 	projectMemoryMCPH := handler.NewProjectMemoryMCPHandler(database)
-	dailyReportMCPH.ConfigureReportSourceSelection(reportSourceService)
-	dailyReportMCPH.ConfigureReportContext(reportContextService)
-	dailyReportMCPH.ConfigureReportBrief(reportBriefService, cfg.ReportTwoPassEnabled)
 	schedulerCtx, stopScheduler := context.WithCancel(context.Background())
 	defer stopScheduler()
 	projectMemoryService.Start(schedulerCtx)
+	reportReviewService.Start(schedulerCtx)
 	dailyReportEmailService.Start(schedulerCtx)
 	metrics, err := observability.New(database, observability.WorkerCounts{
 		ReportRun: workerCounts.ReportRun, DigestBackground: workerCounts.DigestBackground,
@@ -584,6 +608,7 @@ func main() {
 
 		r.Post("/mcp/reports", dailyReportMCPH.Serve)
 		r.Post("/mcp/project-memory", projectMemoryMCPH.Serve)
+		r.Post("/mcp/report-review", reportReviewMCPH.Serve)
 		r.Get("/report-source-capability", reportSourceH.Capability)
 		r.Get("/report-source-sessions", reportSourceH.ListCandidates)
 		r.Post("/report-source-selections", reportSourceH.CreateSelection)

@@ -100,13 +100,19 @@
       "workstream_subjects": ["芯片验证平台"]
     }
 
-subject 必须来自数据库中的 `report_run_briefs.brief_payload.workstreams[].subject`，不能根据最终日报手工改写。核对 SQL：
+subject 必须来自数据库中的最终结构化 Brief，不能根据最终日报手工改写。启用 Report Reviewer 后，`report_run_briefs` 保存审核前候选，`report_review_jobs.final_brief_json` 保存审核后最终 Brief；评测优先读取状态为 `written` 的最终 Brief，没有 Review Job 时才读取原 Brief。核对 SQL：
 
     SELECT
       b.run_id,
       jsonb_agg(item.workstream ->> 'subject' ORDER BY item.ordinality) AS workstream_subjects
     FROM report_run_briefs b
-    CROSS JOIN LATERAL jsonb_array_elements(b.brief_payload -> 'workstreams')
+    LEFT JOIN report_review_jobs j ON j.run_id = b.run_id
+    CROSS JOIN LATERAL jsonb_array_elements(
+      COALESCE(
+        CASE WHEN j.status = 'written' THEN j.final_brief_json END,
+        b.brief_payload
+      ) -> 'workstreams'
+    )
       WITH ORDINALITY AS item(workstream, ordinality)
     WHERE b.run_id IN ('<本轮 Run ID>')
     GROUP BY b.run_id;

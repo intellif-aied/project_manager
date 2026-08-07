@@ -47,6 +47,16 @@ func MintProjectMemoryJobToken(user *model.User, secret, jobRef string) (string,
 	})
 }
 
+func MintReportReviewJobToken(user *model.User, secret, jobRef string) (string, error) {
+	jobRef = strings.TrimSpace(jobRef)
+	if jobRef == "" {
+		return "", errors.New("report review job ref is required")
+	}
+	return mintAIHubCompatibleTokenWithClaims(user, secret, map[string]any{
+		"report_review_job_ref": jobRef,
+	})
+}
+
 func mintAIHubCompatibleToken(user *model.User, secret, reportRunID string) (string, error) {
 	extra := map[string]any{}
 	if reportRunID != "" {
