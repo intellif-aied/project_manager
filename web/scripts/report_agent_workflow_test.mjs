@@ -246,6 +246,11 @@ assert.match(
   /\/ai-assets\/report-agents\/\$\{agentId\}\/runs/,
   "client must use Report Agent runs"
 );
+assert.match(
+  client,
+  /agent-schedules\/\$\{scheduleId\}\/runs[\s\S]*silentErrorCodes:\s*\["REPORT_SOURCE_UNAVAILABLE"\]/,
+  "scheduled report source errors must suppress the duplicate global message"
+);
 assert.doesNotMatch(
   client,
   /\/reports\/today\/draft/,

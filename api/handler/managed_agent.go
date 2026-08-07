@@ -279,6 +279,17 @@ func writeManagedAgentError(w http.ResponseWriter, err error) {
 	writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 }
 
+func writeAgentScheduleRunError(w http.ResponseWriter, err error) {
+	if errors.Is(err, reportsource.ErrSourceUnavailable) {
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"code":  "REPORT_SOURCE_UNAVAILABLE",
+			"error": "暂无可生成日报的工作记录，请先上传或同步今日 Session 后重试",
+		})
+		return
+	}
+	writeManagedAgentError(w, err)
+}
+
 func writeManagedAgentConfigError(w http.ResponseWriter, message string) {
 	writeJSON(w, http.StatusServiceUnavailable, map[string]any{
 		"code":  managedAgentConfigInvalidCode,
@@ -3257,7 +3268,7 @@ func (h *ManagedAgentHandler) RunAgentScheduleNow(w http.ResponseWriter, r *http
 	}
 	run, err := h.executeManagedAgentScheduleRun(r.Context(), schedule, u, token, triggerSource, time.Now(), false)
 	if err != nil {
-		writeManagedAgentError(w, err)
+		writeAgentScheduleRunError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, run)
