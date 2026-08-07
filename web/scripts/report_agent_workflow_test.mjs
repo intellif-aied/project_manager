@@ -248,8 +248,8 @@ assert.match(
 );
 assert.match(
   client,
-  /agent-schedules\/\$\{scheduleId\}\/runs[\s\S]*silentErrorCodes:\s*\["REPORT_SOURCE_UNAVAILABLE"\]/,
-  "scheduled report source errors must suppress the duplicate global message"
+  /agent-schedules\/\$\{scheduleId\}\/runs[\s\S]*skipErrorHandler:\s*true/,
+  "scheduled report run errors must leave feedback to the page mutation only"
 );
 assert.doesNotMatch(
   client,

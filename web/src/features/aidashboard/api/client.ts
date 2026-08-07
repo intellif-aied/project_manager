@@ -912,7 +912,7 @@ export const runManagedAgentScheduleNow = (
     api.post<AIRun>(
       `/ai-assets/agent-schedules/${scheduleId}/runs`,
       { trigger_source: triggerSource },
-      { silentErrorCodes: ["REPORT_SOURCE_UNAVAILABLE"] }
+      { skipErrorHandler: true }
     )
   );
 
