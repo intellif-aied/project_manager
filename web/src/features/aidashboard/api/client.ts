@@ -909,9 +909,11 @@ export const runManagedAgentScheduleNow = (
   triggerSource: "manual" | "save_and_run" = "manual"
 ) =>
   unwrap(
-    api.post<AIRun>(`/ai-assets/agent-schedules/${scheduleId}/runs`, {
-      trigger_source: triggerSource
-    })
+    api.post<AIRun>(
+      `/ai-assets/agent-schedules/${scheduleId}/runs`,
+      { trigger_source: triggerSource },
+      { silentErrorCodes: ["REPORT_SOURCE_UNAVAILABLE"] }
+    )
   );
 
 // ───────────────────────── Tokens ─────────────────────────

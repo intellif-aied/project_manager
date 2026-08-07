@@ -2220,6 +2220,26 @@ func expectReportRunSubmission(mock sqlmock.Sqlmock, userID, agentID, modelID, i
 	mock.ExpectCommit()
 }
 
+func TestWriteAgentScheduleRunErrorMapsUnavailableSource(t *testing.T) {
+	rec := httptest.NewRecorder()
+
+	writeAgentScheduleRunError(rec, reportsource.ErrSourceUnavailable)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		Code  string `json:"code"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Code != "REPORT_SOURCE_UNAVAILABLE" || got.Error != "暂无可生成日报的工作记录，请先上传或同步今日 Session 后重试" {
+		t.Fatalf("response = %#v", got)
+	}
+}
+
 func TestExecuteSystemReportAgentScheduleUsesSystemAccount(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
