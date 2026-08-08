@@ -11,10 +11,10 @@ import (
 )
 
 const (
-	ResolverVersion        = "project-memory-resolver/v11"
+	ResolverVersion        = "project-memory-resolver/v12"
 	maxInputTokens         = 8000
 	maxOutputTokens        = 1500
-	maxCurrentThemes       = 8
+	maxCurrentThemes       = 24
 	maxCandidateProjects   = 8
 	maxRecentReports       = 10
 	maxHistoricalAnchors   = 10
@@ -79,6 +79,7 @@ type ConsolidationInput struct {
 	CandidateProjects  []InputProject     `json:"candidate_projects,omitempty"`
 	RecentOverviews    []HistoricalReport `json:"recent_overviews,omitempty"`
 	HistoricalAnchors  []HistoricalReport `json:"historical_project_anchors,omitempty"`
+	CurrentMemory      []InputProject     `json:"current_memory,omitempty"`
 	EvidenceConstraint string             `json:"evidence_constraint"`
 	AllowedActions     []string           `json:"allowed_actions"`
 }
@@ -91,6 +92,11 @@ type InputWorkstream struct {
 
 type InputTheme struct {
 	ThemeRef      string   `json:"theme_ref"`
+	EvidenceRef   string   `json:"evidence_ref"`
+	ReportRef     string   `json:"report_ref"`
+	ReportDate    string   `json:"report_date"`
+	SourceType    string   `json:"source_type"`
+	SourceWeight  float64  `json:"source_weight"`
 	Title         string   `json:"title"`
 	FactRefs      []string `json:"fact_refs,omitempty"`
 	WorkspaceRefs []string `json:"workspace_refs,omitempty"`
@@ -116,35 +122,51 @@ type HistoricalReport struct {
 }
 
 type MemoryProposal struct {
-	SchemaVersion string           `json:"schema_version"`
-	Decisions     []MemoryDecision `json:"decisions"`
+	SchemaVersion string              `json:"schema_version"`
+	Operations    []MemoryOperation   `json:"operations"`
+	Rejected      []RejectedOperation `json:"rejected_operations,omitempty"`
 }
 
-type MemoryDecision struct {
-	ThemeRef       string   `json:"theme_ref"`
-	Action         string   `json:"action"`
-	ProjectRef     string   `json:"project_ref,omitempty"`
-	CanonicalName  string   `json:"canonical_name,omitempty"`
-	Aliases        []string `json:"aliases,omitempty"`
-	WorkstreamCues []string `json:"workstream_cues,omitempty"`
-	Confidence     float64  `json:"confidence"`
-	Reason         string   `json:"reason,omitempty"`
+type MemoryOperation struct {
+	OperationID   string   `json:"operation_id"`
+	Operation     string   `json:"operation"`
+	ThemeRef      string   `json:"theme_ref,omitempty"`
+	ProjectRef    string   `json:"project_ref,omitempty"`
+	TempRef       string   `json:"temp_ref,omitempty"`
+	DependsOn     []string `json:"depends_on,omitempty"`
+	EvidenceRefs  []string `json:"evidence_refs,omitempty"`
+	CanonicalName string   `json:"canonical_name,omitempty"`
+	SignalType    string   `json:"signal_type,omitempty"`
+	Value         string   `json:"value,omitempty"`
+	WorkspaceRef  string   `json:"workspace_ref,omitempty"`
+	Confidence    float64  `json:"confidence"`
+	Reason        string   `json:"reason,omitempty"`
 }
 
-func (decision *MemoryDecision) UnmarshalJSON(data []byte) error {
-	type decisionFields struct {
-		ThemeRef       string          `json:"theme_ref"`
-		Action         string          `json:"action"`
-		ProjectRef     string          `json:"project_ref,omitempty"`
-		CanonicalName  string          `json:"canonical_name,omitempty"`
-		Aliases        []string        `json:"aliases,omitempty"`
-		WorkstreamCues []string        `json:"workstream_cues,omitempty"`
-		Confidence     json.RawMessage `json:"confidence"`
-		Reason         string          `json:"reason,omitempty"`
+type RejectedOperation struct {
+	OperationID string `json:"operation_id"`
+	Reason      string `json:"reason"`
+}
+
+func (operation *MemoryOperation) UnmarshalJSON(data []byte) error {
+	type operationFields struct {
+		OperationID   string          `json:"operation_id"`
+		Operation     string          `json:"operation"`
+		ThemeRef      string          `json:"theme_ref,omitempty"`
+		ProjectRef    string          `json:"project_ref,omitempty"`
+		TempRef       string          `json:"temp_ref,omitempty"`
+		DependsOn     []string        `json:"depends_on,omitempty"`
+		EvidenceRefs  []string        `json:"evidence_refs,omitempty"`
+		CanonicalName string          `json:"canonical_name,omitempty"`
+		SignalType    string          `json:"signal_type,omitempty"`
+		Value         string          `json:"value,omitempty"`
+		WorkspaceRef  string          `json:"workspace_ref,omitempty"`
+		Confidence    json.RawMessage `json:"confidence"`
+		Reason        string          `json:"reason,omitempty"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
-	var fields decisionFields
+	var fields operationFields
 	if err := decoder.Decode(&fields); err != nil {
 		return err
 	}
@@ -152,11 +174,13 @@ func (decision *MemoryDecision) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	*decision = MemoryDecision{
-		ThemeRef: fields.ThemeRef, Action: fields.Action, ProjectRef: fields.ProjectRef,
-		CanonicalName: fields.CanonicalName, Aliases: fields.Aliases,
-		WorkstreamCues: fields.WorkstreamCues,
-		Confidence:     confidence, Reason: fields.Reason,
+	*operation = MemoryOperation{
+		OperationID: fields.OperationID, Operation: fields.Operation,
+		ThemeRef: fields.ThemeRef, ProjectRef: fields.ProjectRef, TempRef: fields.TempRef,
+		DependsOn: fields.DependsOn, CanonicalName: fields.CanonicalName,
+		EvidenceRefs: fields.EvidenceRefs,
+		SignalType:   fields.SignalType, Value: fields.Value, WorkspaceRef: fields.WorkspaceRef,
+		Confidence: confidence, Reason: fields.Reason,
 	}
 	return nil
 }
@@ -190,8 +214,12 @@ type queuedJob struct {
 	UserID                   string
 	ReportID                 string
 	ReportDate               string
+	DirtyFromDate            string
 	DesiredSourceFingerprint string
 	ClaimedSourceFingerprint string
+	DesiredEvidenceWatermark int64
+	ClaimedEvidenceWatermark int64
+	RebuildRequired          bool
 	ExternalTaskID           string
 	Attempts                 int
 	InputJSON                json.RawMessage

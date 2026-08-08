@@ -152,145 +152,74 @@ func TestHistoricalOverviewUsesBriefSubjectsForUnchangedAIReport(t *testing.T) {
 }
 
 func TestSnapshotProjectRefsUsesOnlyCanonicalSnapshotShape(t *testing.T) {
-	refs := snapshotProjectRefs([]byte(`{"projects":[{"project_ref":"project-1"},{"ProjectRef":"legacy-shadow"}]}`))
-	if !refs["project-1"] || refs["legacy-shadow"] {
-		t.Fatalf("snapshot refs = %#v", refs)
+	projects := snapshotProjects([]byte(`{"projects":[{"project_ref":"project-1","canonical_name":"AIDA"},{"ProjectRef":"legacy-shadow"}]}`))
+	if projects["project-1"].Stored.CanonicalName != "AIDA" {
+		t.Fatalf("snapshot projects = %#v", projects)
 	}
 }
 
-func TestProposalValidationAllowsAbstentionAndDowngradesWeakLink(t *testing.T) {
+func TestProposalV2AllowsEmptyOperations(t *testing.T) {
+	proposal, _, _, err := parseAndValidateProposal(`{"schema_version":"project-memory-maintenance/v2","operations":[]}`, ConsolidationInput{})
+	if err != nil || len(proposal.Operations) != 0 || len(proposal.Rejected) != 0 {
+		t.Fatalf("proposal=%+v err=%v", proposal, err)
+	}
+}
+
+func TestProposalV2KeepsValidOperationsAndRejectsInvalidOnes(t *testing.T) {
+	input := ConsolidationInput{CurrentThemes: []InputTheme{{ThemeRef: "theme-001", EvidenceRef: "evidence-1", Title: "Report Agent"}}}
+	raw := `{"schema_version":"project-memory-maintenance/v2","operations":[{"operation_id":"op-1","operation":"create_project","theme_ref":"theme-001","evidence_refs":["evidence-1"],"temp_ref":"new-1","canonical_name":"完成发布；下一步上线。","confidence":0.9},{"operation_id":"op-2","operation":"create_project","theme_ref":"theme-001","evidence_refs":["evidence-1"],"temp_ref":"new-2","canonical_name":"Report Agent","confidence":"high"}]}`
+	proposal, _, _, err := parseAndValidateProposal(raw, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(proposal.Operations) != 1 || proposal.Operations[0].OperationID != "op-2" || len(proposal.Rejected) != 1 {
+		t.Fatalf("proposal=%+v", proposal)
+	}
+}
+
+func TestProposalV2ValidatesTempRefDependencies(t *testing.T) {
+	input := ConsolidationInput{CurrentThemes: []InputTheme{{ThemeRef: "theme-001", EvidenceRef: "evidence-1", Title: "芯片验证平台"}}}
+	raw := `{"schema_version":"project-memory-maintenance/v2","operations":[{"operation_id":"op-1","operation":"create_project","theme_ref":"theme-001","evidence_refs":["evidence-1"],"temp_ref":"new-1","canonical_name":"芯片验证平台","confidence":0.9},{"operation_id":"op-2","operation":"upsert_signal","theme_ref":"theme-001","project_ref":"new-1","depends_on":["op-1"],"evidence_refs":["evidence-1"],"signal_type":"workstream_cue","value":"RTL","confidence":0.9}]}`
+	proposal, _, _, err := parseAndValidateProposal(raw, input)
+	if err != nil || len(proposal.Operations) != 2 || len(proposal.Rejected) != 0 {
+		t.Fatalf("proposal=%+v err=%v", proposal, err)
+	}
+}
+
+func TestProposalV2RejectsWeakLinkWithoutFailingBatch(t *testing.T) {
 	input := ConsolidationInput{
-		CurrentThemes:     []InputTheme{{ThemeRef: "theme-001", Title: "Report Agent"}},
+		CurrentThemes:     []InputTheme{{ThemeRef: "theme-001", EvidenceRef: "evidence-1", Title: "Report Agent"}},
 		CandidateProjects: []InputProject{{ProjectRef: "project-1", CanonicalName: "Report Agent"}},
 	}
-	raw := `{"schema_version":"project-memory-proposal/v1","decisions":[{"theme_ref":"theme-001","action":"link_existing","project_ref":"project-1","confidence":0.6}]}`
+	raw := `{"schema_version":"project-memory-maintenance/v2","operations":[{"operation_id":"op-1","operation":"link_existing","theme_ref":"theme-001","evidence_refs":["evidence-1"],"project_ref":"project-1","confidence":0.6}]}`
 	proposal, _, _, err := parseAndValidateProposal(raw, input)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := proposal.Decisions[0]; got.Action != "unresolved" || got.ProjectRef != "" {
-		t.Fatalf("weak link was not downgraded: %+v", got)
+	if err != nil || len(proposal.Operations) != 0 || len(proposal.Rejected) != 1 {
+		t.Fatalf("proposal=%+v err=%v", proposal, err)
 	}
 }
 
-func TestProposalValidationAllowsTopLevelRequestMetadata(t *testing.T) {
-	input := ConsolidationInput{CurrentThemes: []InputTheme{{ThemeRef: "theme-001", Title: "Report Agent"}}}
-	raw := `{"schema_version":"project-memory-proposal/v1","user_ref":"305","report_date":"2026-08-01","decisions":[{"theme_ref":"theme-001","action":"create_new","canonical_name":"Report Agent","confidence":0.9}]}`
-	if _, _, _, err := parseAndValidateProposal(raw, input); err != nil {
-		t.Fatalf("harmless request metadata should be accepted: %v", err)
+func TestProposalV2RejectsSignalWithoutCitedThemeEvidence(t *testing.T) {
+	input := ConsolidationInput{
+		CurrentThemes:     []InputTheme{{ThemeRef: "theme-001", EvidenceRef: "evidence-1", Title: "芯片验证平台"}},
+		CandidateProjects: []InputProject{{ProjectRef: "project-1", CanonicalName: "芯片验证平台"}},
 	}
-}
-
-func TestProposalValidationAcceptsCommonConfidenceLabels(t *testing.T) {
-	input := ConsolidationInput{CurrentThemes: []InputTheme{{ThemeRef: "theme-001", Title: "Report Agent"}}}
-	raw := `{"schema_version":"project-memory-proposal/v1","decisions":[{"theme_ref":"theme-001","action":"create_new","canonical_name":"Report Agent","confidence":"high"}]}`
+	raw := `{"schema_version":"project-memory-maintenance/v2","operations":[{"operation_id":"op-1","operation":"upsert_signal","project_ref":"project-1","signal_type":"workstream_cue","value":"RTL","confidence":0.9}]}`
 	proposal, _, _, err := parseAndValidateProposal(raw, input)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if proposal.Decisions[0].Confidence != 0.9 {
-		t.Fatalf("confidence = %v", proposal.Decisions[0].Confidence)
+	if err != nil || len(proposal.Operations) != 0 || len(proposal.Rejected) != 1 {
+		t.Fatalf("proposal=%+v err=%v", proposal, err)
 	}
 }
 
-func TestProposalValidationRejectsUnknownDecisionField(t *testing.T) {
-	input := ConsolidationInput{CurrentThemes: []InputTheme{{ThemeRef: "theme-001", Title: "Report Agent"}}}
-	raw := `{"schema_version":"project-memory-proposal/v1","decisions":[{"theme_ref":"theme-001","action":"create_new","canonical_name":"Report Agent","confidence":0.9,"invented":"value"}]}`
-	if _, _, _, err := parseAndValidateProposal(raw, input); err == nil {
-		t.Fatal("unknown decision fields must be rejected")
-	}
-}
-
-func TestProposalValidationRejectsActivityOnlyProjectName(t *testing.T) {
-	input := ConsolidationInput{CurrentThemes: []InputTheme{{ThemeRef: "theme-001", Title: "部署 GLM"}}}
-	raw := `{"schema_version":"project-memory-proposal/v1","decisions":[{"theme_ref":"theme-001","action":"create_new","canonical_name":"部署","confidence":0.9}]}`
-	proposal, _, _, err := parseAndValidateProposal(raw, input)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := proposal.Decisions[0]; got.Action != "unresolved" || got.CanonicalName != "" {
-		t.Fatalf("invalid project name was not downgraded: %+v", got)
-	}
-}
-
-func TestProposalValidationDowngradesNarrativeProjectNameWithoutFailingBatch(t *testing.T) {
+func TestEvidenceAuthorityComesFromOperationTheme(t *testing.T) {
 	input := ConsolidationInput{CurrentThemes: []InputTheme{
-		{ThemeRef: "theme-001", Title: "Report Agent"},
-		{ThemeRef: "theme-002", Title: "Knowledge Map"},
+		{ThemeRef: "theme-ai", EvidenceRef: "evidence-ai", ReportDate: "2026-08-08", SourceType: "auto_carried", SourceWeight: 0.5},
+		{ThemeRef: "theme-human", EvidenceRef: "evidence-human", ReportDate: "2026-08-07", SourceType: sourceHumanEdited, SourceWeight: 0.95},
 	}}
-	raw := `{"schema_version":"project-memory-proposal/v1","decisions":[{"theme_ref":"theme-001","action":"create_new","canonical_name":"完成 Report Agent 方案；下一步发布生产。","confidence":0.9},{"theme_ref":"theme-002","action":"create_new","canonical_name":"Knowledge Map","confidence":0.9}]}`
-	proposal, _, _, err := parseAndValidateProposal(raw, input)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if proposal.Decisions[0].Action != "unresolved" || proposal.Decisions[1].Action != "create_new" {
-		t.Fatalf("one invalid name must not discard valid decisions: %+v", proposal.Decisions)
-	}
-}
-
-func TestNormalizeProposalAliasesKeepsNamesAndDropsNarrativeText(t *testing.T) {
-	aliases := normalizeProposalAliases([]string{"Report Agent", "完成 Report Agent 方案；下一步发布生产。"})
-	if len(aliases) != 1 || aliases[0] != "Report Agent" {
-		t.Fatalf("aliases = %#v", aliases)
-	}
-}
-
-func TestProposalValidationKeepsBoundedWorkstreamCues(t *testing.T) {
-	input := ConsolidationInput{CurrentThemes: []InputTheme{{ThemeRef: "theme-001", Title: "芯片验证平台"}}}
-	raw := `{"schema_version":"project-memory-proposal/v1","decisions":[{"theme_ref":"theme-001","action":"create_new","canonical_name":"芯片验证平台","workstream_cues":["调用执行","ctp CLI","版本流","完成完整后端测试；准备发布。"],"confidence":0.9}]}`
-	proposal, _, _, err := parseAndValidateProposal(raw, input)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := proposal.Decisions[0].WorkstreamCues
-	if len(got) != 3 || got[0] != "调用执行" || got[1] != "ctp CLI" || got[2] != "版本流" {
-		t.Fatalf("workstream cues = %#v", got)
-	}
-}
-
-func TestProposalCompilerReparentsLowWeightChildrenToStrongHumanParent(t *testing.T) {
-	input := ConsolidationInput{
-		CurrentThemes: []InputTheme{
-			{ThemeRef: "theme-001", Title: "Qwen3 4B DSpark训练"},
-			{ThemeRef: "theme-002", Title: "GLM5.2 DSpark训练"},
-		},
-		CandidateProjects: []InputProject{
-			{ProjectRef: "parent", CanonicalName: "AI Coding 提效支撑", SourceType: sourceHumanEdited, SourceWeight: 1, MatchedThemes: []string{"theme-001", "theme-002"}},
-			{ProjectRef: "qwen", CanonicalName: "Qwen3 4B DSpark训练", SourceType: "auto_carried", SourceWeight: 0.5, MatchedThemes: []string{"theme-001"}},
-			{ProjectRef: "glm", CanonicalName: "GLM5.2 DSpark训练", SourceType: "auto_carried", SourceWeight: 0.5, MatchedThemes: []string{"theme-002"}},
-		},
-	}
-	raw := `{"schema_version":"project-memory-proposal/v1","decisions":[{"theme_ref":"theme-001","action":"link_existing","project_ref":"qwen","confidence":0.95},{"theme_ref":"theme-002","action":"link_existing","project_ref":"glm","confidence":0.95}]}`
-	proposal, _, _, err := parseAndValidateProposal(raw, input)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, decision := range proposal.Decisions {
-		if decision.Action != "link_existing" || decision.ProjectRef != "parent" {
-			t.Fatalf("decision was not reparented: %+v", decision)
-		}
-	}
-}
-
-func TestProposalCompilerDoesNotForceSingleThemeOrEqualWeightConflict(t *testing.T) {
-	input := ConsolidationInput{
-		CurrentThemes: []InputTheme{
-			{ThemeRef: "theme-001", Title: "Qwen3 4B DSpark训练"},
-			{ThemeRef: "theme-002", Title: "独立人工项目"},
-		},
-		CandidateProjects: []InputProject{
-			{ProjectRef: "parent", CanonicalName: "AI Coding 提效支撑", SourceType: sourceHumanEdited, SourceWeight: 1, MatchedThemes: []string{"theme-001", "theme-002"}},
-			{ProjectRef: "qwen", CanonicalName: "Qwen3 4B DSpark训练", SourceType: "auto_carried", SourceWeight: 0.5, MatchedThemes: []string{"theme-001"}},
-			{ProjectRef: "independent", CanonicalName: "独立人工项目", SourceType: sourceManualFinal, SourceWeight: 1, MatchedThemes: []string{"theme-002"}},
-		},
-	}
-	raw := `{"schema_version":"project-memory-proposal/v1","decisions":[{"theme_ref":"theme-001","action":"link_existing","project_ref":"qwen","confidence":0.95},{"theme_ref":"theme-002","action":"link_existing","project_ref":"independent","confidence":0.95}]}`
-	proposal, _, _, err := parseAndValidateProposal(raw, input)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if proposal.Decisions[0].ProjectRef != "parent" || proposal.Decisions[1].ProjectRef != "independent" {
-		t.Fatalf("strong conflicting project was overwritten: %+v", proposal.Decisions)
+	metadata, err := evidenceMetadata(input, MemoryOperation{
+		ThemeRef: "theme-ai", EvidenceRefs: []string{"evidence-ai", "evidence-human"},
+	})
+	if err != nil || metadata.SourceType != "auto_carried" || metadata.SourceWeight != 0.5 {
+		t.Fatalf("metadata=%+v err=%v", metadata, err)
 	}
 }
 

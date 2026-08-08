@@ -8,9 +8,10 @@
 | --- | --- | --- | --- | --- |
 | `project-association-regression/v2` | active | Project Memory 能否恢复稳定父项目、避免误合并，并区分 Source 覆盖不足 | `doc/v3/日报生成方案评测V2/datasets/project-association-regression-v2/manifest.json` | [Project关联评测数据集使用手册](Project关联评测数据集使用手册.md) |
 | `project-memory-history-regression/v1` | active-parameter | 给 Project Association 回归提供同一用户此前 10～20 份日报的连续历史参数 | `doc/v3/日报生成方案评测V2/datasets/project-memory-history-v1/manifest.json` | [数据集 README](../v3/日报生成方案评测V2/datasets/project-memory-history-v1/README.md) |
+| `project-memory-production-sample/v1` | active-reference | 用生产真实日报的 AI 原稿、最终稿和连续历史检验 Project Memory 输入及日报可用性 | `doc/v3/日报生成方案评测V2/datasets/project-memory-production-sample-v1/manifest.json` | [数据集 README](../v3/日报生成方案评测V2/datasets/project-memory-production-sample-v1/README.md) |
 | `project-association-regression/v1` | deprecated | 首批 3 组、7 个用户日的历史基线 | `doc/v3/日报生成方案评测V2/datasets/project-association-regression-v1/manifest.json` | 已由 v2 完整继承，保留历史结果 |
 
-`active` 表示当前回归基线；`active-parameter` 表示它只提供评测输入参数，不单独产生通过结论；`deprecated` 表示不再用于新版本门禁，但历史结果仍保留。数据集不能通过删除目录表达停用。
+`active` 表示当前回归基线；`active-parameter` 表示它只提供评测输入参数；`active-reference` 表示它提供真实生产观察样本，但不单独产生通过结论；`deprecated` 表示不再用于新版本门禁，但历史结果仍保留。数据集不能通过删除目录表达停用。
 
 ## Codex 固定工作流
 

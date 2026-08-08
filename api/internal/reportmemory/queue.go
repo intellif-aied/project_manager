@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,26 +32,63 @@ func QueueReportChange(ctx context.Context, tx *sql.Tx, reportID, userID, report
 	if err != nil {
 		return err
 	}
-	fingerprint := memorySourceFingerprint(reportID, reportDate, content, runID, briefSignature)
+	eventFingerprint := memorySourceFingerprint(reportID, reportDate, content, runID, briefSignature)
 	dueAt := nextNightlyWindow(now)
-	_, err = tx.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "project-memory-queue:"+userID); err != nil {
+		return err
+	}
+	var existingFingerprint string
+	var lastEventFingerprint string
+	var existingWatermark int64
+	err = tx.QueryRowContext(ctx, `
+		SELECT desired_source_fingerprint, COALESCE(last_event_fingerprint, ''), desired_evidence_watermark
+		FROM report_project_memory_jobs WHERE user_id = $1 FOR UPDATE`, userID).
+		Scan(&existingFingerprint, &lastEventFingerprint, &existingWatermark)
+	if errors.Is(err, sql.ErrNoRows) {
+		_, err = tx.ExecContext(ctx, `
 		INSERT INTO report_project_memory_jobs (
-			user_id, report_date, report_id, desired_source_fingerprint, status, due_at
-		) VALUES ($1, $2::date, $3, $4, 'pending', $5)
-		ON CONFLICT (user_id, report_date) DO UPDATE SET
-			report_id = EXCLUDED.report_id,
-			desired_source_fingerprint = EXCLUDED.desired_source_fingerprint,
-			status = CASE
-				WHEN report_project_memory_jobs.status IN ('submitting', 'running') THEN report_project_memory_jobs.status
-				ELSE 'pending'
-			END,
-			due_at = EXCLUDED.due_at,
-			attempts = CASE
-				WHEN report_project_memory_jobs.desired_source_fingerprint IS DISTINCT FROM EXCLUDED.desired_source_fingerprint THEN 0
-				ELSE report_project_memory_jobs.attempts
-			END,
-			last_error = NULL,
-			updated_at = now()`, userID, reportDate, reportID, fingerprint, dueAt)
+			user_id, report_date, report_id, dirty_from_date,
+			desired_source_fingerprint, last_event_fingerprint,
+			desired_evidence_watermark, status, due_at, rebuild_required
+		) VALUES ($1, $2::date, $3, COALESCE((
+			SELECT min(report_date) FROM (
+				SELECT report_date FROM daily_reports
+				WHERE user_id = $1 AND report_date <= $2::date
+				  AND status IN ('saved', 'submitted')
+				  AND NULLIF(BTRIM(COALESCE(NULLIF(submitted_content, ''), content, '')), '') IS NOT NULL
+				ORDER BY report_date DESC, updated_at DESC LIMIT $7
+			) recent
+		), $2::date), $4, $4, 1, 'pending', $5,
+			EXISTS (
+				SELECT 1 FROM report_project_memory_snapshots snapshot
+				WHERE snapshot.user_id = $1 AND snapshot.resolver_version = $6
+				  AND snapshot.evidence_cutoff_date >= $2::date
+			))`, userID, reportDate, reportID, eventFingerprint, dueAt, ResolverVersion, maxMemorySnapshotDepth)
+		return err
+	}
+	if err != nil {
+		return err
+	}
+	if lastEventFingerprint == eventFingerprint {
+		return nil
+	}
+	nextWatermark := existingWatermark + 1
+	aggregateFingerprint := memorySourceFingerprint(existingFingerprint, eventFingerprint, strconv.FormatInt(nextWatermark, 10))
+	_, err = tx.ExecContext(ctx, `
+		UPDATE report_project_memory_jobs SET
+			report_id = CASE WHEN $2::date >= report_date THEN $3 ELSE report_id END,
+			report_date = GREATEST(report_date, $2::date),
+			dirty_from_date = CASE WHEN status = 'succeeded' THEN $2::date ELSE LEAST(dirty_from_date, $2::date) END,
+			desired_source_fingerprint = $4, last_event_fingerprint = $8,
+			desired_evidence_watermark = $5,
+			rebuild_required = rebuild_required OR EXISTS (
+				SELECT 1 FROM report_project_memory_snapshots snapshot
+				WHERE snapshot.user_id = $1 AND snapshot.resolver_version = $7
+				  AND snapshot.evidence_cutoff_date >= $2::date
+			),
+			status = CASE WHEN status IN ('submitting', 'running') THEN status ELSE 'pending' END,
+			due_at = $6, attempts = 0, last_error = NULL, updated_at = now()
+		WHERE user_id = $1`, userID, reportDate, reportID, aggregateFingerprint, nextWatermark, dueAt, ResolverVersion, eventFingerprint)
 	return err
 }
 

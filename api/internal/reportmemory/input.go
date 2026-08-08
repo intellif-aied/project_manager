@@ -15,14 +15,17 @@ import (
 	"github.com/lib/pq"
 )
 
-const consolidationInputSchema = "project-memory-consolidation-input/v2"
+const consolidationInputSchema = "project-memory-consolidation-input/v3"
 
 func buildConsolidationInput(ctx context.Context, database *sql.DB, job queuedJob) (ConsolidationInput, []byte, int, error) {
 	input := ConsolidationInput{
 		SchemaVersion: consolidationInputSchema, ResolverVersion: ResolverVersion,
-		UserRef: job.UserID, ReportRef: job.ReportID, ReportDate: job.ReportDate,
+		UserRef:            job.UserID,
 		EvidenceConstraint: "历史内容仅用于项目命名和归并，不是当前日报事实；无法判断时返回 unresolved。",
-		AllowedActions:     []string{"link_existing", "create_new", "unresolved", "suggest_rename", "suggest_merge"},
+		AllowedActions: []string{
+			"create_project", "link_existing", "upsert_signal", "retire_signal",
+			"link_workspace", "unlink_workspace", "archive_project", "noop", "unresolved",
+		},
 	}
 	if database == nil {
 		return input, nil, 0, sql.ErrConnDone
@@ -30,6 +33,17 @@ func buildConsolidationInput(ctx context.Context, database *sql.DB, job queuedJo
 	var report historicalReport
 	var hasOutcome bool
 	err := database.QueryRowContext(ctx, `
+		WITH next_report AS (
+			SELECT candidate.id
+			FROM daily_reports candidate
+			WHERE candidate.user_id = $1
+			  AND candidate.report_date >= $3::date
+			  AND candidate.report_date <= $2::date
+			  AND candidate.status IN ('saved', 'submitted')
+			  AND NULLIF(BTRIM(COALESCE(NULLIF(candidate.submitted_content, ''), candidate.content, '')), '') IS NOT NULL
+			ORDER BY candidate.report_date, candidate.updated_at DESC, candidate.id
+			LIMIT 1
+		)
 		SELECT r.id::text, r.report_date::text,
 		       COALESCE(NULLIF(r.submitted_content, ''), r.content),
 		       COALESCE(r.generation_mode, ''), r.edited,
@@ -44,21 +58,22 @@ func buildConsolidationInput(ctx context.Context, database *sql.DB, job queuedJo
 		LEFT JOIN report_run_briefs b ON b.run_id = r.managed_agent_run_id
 		LEFT JOIN report_review_jobs review ON review.run_id = r.managed_agent_run_id
 			AND review.status = 'written'
-		WHERE r.id = $1 AND r.user_id = $2 AND r.report_date = $3::date
+		WHERE r.id = (SELECT id FROM next_report) AND r.user_id = $1
 		  AND r.status IN ('saved', 'submitted')
 		  AND NULLIF(BTRIM(COALESCE(NULLIF(r.submitted_content, ''), r.content, '')), '') IS NOT NULL`,
-		job.ReportID, job.UserID, job.ReportDate).Scan(
+		job.UserID, job.ReportDate, job.DirtyFromDate).Scan(
 		&report.id, &report.date, &report.content, &report.generationMode, &report.edited,
 		&report.generatedContentSHA256, &report.briefPayload, &hasOutcome,
 	)
 	if err != nil {
 		return input, nil, 0, err
 	}
+	input.ReportRef, input.ReportDate = report.id, report.date
 	report.sourceType, report.sourceWeight = classifyNightlySource(report, hasOutcome)
-	if stats, shadowErr := materializeWorkspaceEvidenceForReport(ctx, database, job.UserID, job.ReportID); shadowErr != nil {
+	if stats, shadowErr := materializeWorkspaceEvidenceForReport(ctx, database, job.UserID, report.id); shadowErr != nil {
 		log.Printf("project memory workspace shadow materialization failed for user=%s report=%s: %v", job.UserID, job.ReportID, shadowErr)
 	} else if stats.EvidenceCreated > 0 {
-		log.Printf("project memory workspace shadow materialized user=%s report=%s identities=%d evidence=%d", job.UserID, job.ReportID, stats.IdentitiesObserved, stats.EvidenceCreated)
+		log.Printf("project memory workspace shadow materialized user=%s report=%s identities=%d evidence=%d", job.UserID, report.id, stats.IdentitiesObserved, stats.EvidenceCreated)
 	}
 	input.SourceType, input.SourceWeight = report.sourceType, report.sourceWeight
 	for _, workstream := range workstreamsFromBrief(report.briefPayload) {
@@ -67,13 +82,14 @@ func buildConsolidationInput(ctx context.Context, database *sql.DB, job queuedJo
 			break
 		}
 	}
-	workspaceRefs, err := loadWorkspaceRefsByFact(ctx, database, job.UserID, job.ReportID)
+	workspaceRefs, err := loadWorkspaceRefsByFact(ctx, database, job.UserID, report.id)
 	if err != nil {
 		return input, nil, 0, err
 	}
 	if report.generationMode == "managed_agent" && report.sourceType != sourceHumanEdited && len(input.BriefWorkstreams) > 0 {
 		for index, workstream := range input.BriefWorkstreams {
-			theme := InputTheme{ThemeRef: fmt.Sprintf("theme-%03d", index+1), Title: workstream.Subject, FactRefs: workstream.FactRefs}
+			theme := reportInputTheme(report, fmt.Sprintf("theme-%03d", index+1), workstream.Subject)
+			theme.FactRefs = workstream.FactRefs
 			for _, factRef := range workstream.FactRefs {
 				for _, workspaceRef := range workspaceRefs[factRef] {
 					theme.WorkspaceRefs = appendUnique(theme.WorkspaceRefs, workspaceRef)
@@ -87,28 +103,37 @@ func buildConsolidationInput(ctx context.Context, database *sql.DB, job queuedJo
 			themes = themes[:maxCurrentThemes]
 		}
 		for index, theme := range themes {
-			input.CurrentThemes = append(input.CurrentThemes, InputTheme{
-				ThemeRef: fmt.Sprintf("theme-%03d", index+1), Title: limitRunes(theme.Title, titleRuneLimit),
-			})
+			input.CurrentThemes = append(input.CurrentThemes,
+				reportInputTheme(report, fmt.Sprintf("theme-%03d", index+1), limitRunes(theme.Title, titleRuneLimit)))
 		}
 	}
 	if len(input.CurrentThemes) == 0 {
 		return input, nil, 0, errors.New("final overview has no project memory themes")
 	}
-	projects, err := loadInputProjects(ctx, database, job.UserID, job.ReportDate, input.CurrentThemes)
-	if err != nil {
-		return input, nil, 0, err
-	}
-	input.CandidateProjects = projects
-	history, err := loadHistoricalContext(ctx, database, job.UserID, job.ReportDate)
+	history, err := loadHistoricalContext(ctx, database, job.UserID, input.ReportDate, "")
 	if err != nil {
 		return input, nil, 0, err
 	}
 	input.RecentOverviews = history.RecentOverviews
 	input.HistoricalAnchors = history.ProjectAnchors
+	projects, err := loadInputProjects(ctx, database, job.UserID, input.ReportDate, input.CurrentThemes)
+	if err != nil {
+		return input, nil, 0, err
+	}
+	input.CandidateProjects = projects
+	input.CurrentMemory = append([]InputProject(nil), projects...)
 
 	payload, estimate, err := marshalWithinBudget(input)
 	return input, payload, estimate, err
+}
+
+func reportInputTheme(report historicalReport, themeRef, title string) InputTheme {
+	return InputTheme{
+		ThemeRef: themeRef, EvidenceRef: "evidence-" + report.id,
+		ReportRef: report.id, ReportDate: report.date,
+		SourceType: report.sourceType, SourceWeight: report.sourceWeight,
+		Title: title,
+	}
 }
 
 func consolidationThemes(report historicalReport, workstreams []InputWorkstream) []Theme {
@@ -216,30 +241,29 @@ func loadInputProjects(ctx context.Context, database *sql.DB, userID, reportDate
 	rows, err := database.QueryContext(ctx, `
 		SELECT p.id::text, p.canonical_name, p.last_seen_on::text,
 		       p.canonical_source_type, p.canonical_source_weight::float8,
-		       COALESCE(array_agg(a.alias ORDER BY a.source_weight DESC, a.source_report_date DESC)
-		           FILTER (WHERE a.alias IS NOT NULL), '{}'),
-		       COALESCE((SELECT array_agg(recent_cue.cue)
-		           FROM (
-		               SELECT cue.value AS cue, max(occurrence.report_date) AS last_seen
-		               FROM report_project_occurrences occurrence
-		               CROSS JOIN LATERAL jsonb_array_elements_text(occurrence.workstream_cues_json) cue(value)
-		               WHERE occurrence.project_id = p.id
-		               GROUP BY cue.value
-		               ORDER BY last_seen DESC, cue.value
-		               LIMIT $3
-		           ) recent_cue), '{}'),
+		       COALESCE((SELECT array_agg(alias.display_value)
+		           FROM (SELECT signal.display_value FROM report_project_signals signal
+		                 WHERE signal.project_id = p.id AND signal.signal_type = 'alias'
+		                   AND signal.status = 'active' AND signal.first_seen_on <= $2::date
+		                 ORDER BY signal.confidence DESC, signal.last_seen_on DESC LIMIT $6) alias), '{}'),
+		       COALESCE((SELECT array_agg(cue.display_value)
+		           FROM (SELECT signal.display_value FROM report_project_signals signal
+		                 WHERE signal.project_id = p.id AND signal.signal_type = 'workstream_cue'
+		                   AND signal.status = 'active' AND signal.first_seen_on <= $2::date
+		                 ORDER BY signal.confidence DESC, signal.last_seen_on DESC LIMIT $3) cue), '{}'),
 		       COALESCE((SELECT array_agg(link.workspace_id::text ORDER BY link.last_seen_on DESC)
-		           FROM report_project_workspace_links link WHERE link.project_id = p.id), '{}')
+		           FROM report_project_workspace_links link WHERE link.project_id = p.id
+		             AND link.status = 'active' AND link.first_seen_on <= $2::date), '{}')
 		FROM report_projects p
-		LEFT JOIN report_project_aliases a ON a.project_id = p.id
-		WHERE p.user_id = $1 AND p.first_seen_on < $2::date AND p.status <> 'ended'
+		WHERE p.user_id = $1 AND p.first_seen_on <= $2::date AND p.status <> 'ended'
 		  AND EXISTS (
 			SELECT 1
 			FROM (
 				SELECT snapshot.project_memory_json
 				FROM report_project_memory_snapshots snapshot
-				WHERE snapshot.user_id = $1 AND snapshot.report_date < $2::date
-				ORDER BY snapshot.report_date DESC, snapshot.created_at DESC
+				WHERE snapshot.user_id = $1 AND snapshot.evidence_cutoff_date <= $2::date
+				  AND snapshot.resolver_version = $5
+				ORDER BY snapshot.evidence_cutoff_date DESC, snapshot.created_at DESC
 				LIMIT $4
 			) recent_snapshot
 			CROSS JOIN LATERAL jsonb_array_elements(
@@ -247,9 +271,8 @@ func loadInputProjects(ctx context.Context, database *sql.DB, userID, reportDate
 			) accepted
 			WHERE accepted->>'project_ref' = p.id::text
 		  )
-		GROUP BY p.id
 		ORDER BY p.last_seen_on DESC, p.id
-		LIMIT 40`, userID, reportDate, maxWorkstreamCues, maxMemorySnapshotDepth)
+		LIMIT 40`, userID, reportDate, maxWorkstreamCues, maxMemorySnapshotDepth, ResolverVersion, maxAliasesPerProject)
 	if err != nil {
 		return nil, err
 	}
@@ -384,9 +407,21 @@ func stringSlicesIntersect(left, right []string) bool {
 type historicalContext struct {
 	RecentOverviews []HistoricalReport
 	ProjectAnchors  []HistoricalReport
+	EvidenceThemes  []InputTheme
 }
 
-func loadHistoricalContext(ctx context.Context, database *sql.DB, userID, reportDate string) (historicalContext, error) {
+func hasV2MemorySnapshot(ctx context.Context, database *sql.DB, userID, reportDate string) (bool, error) {
+	var exists bool
+	err := database.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM report_project_memory_snapshots
+			WHERE user_id = $1 AND evidence_cutoff_date <= $2::date
+			  AND resolver_version = $3
+		)`, userID, reportDate, ResolverVersion).Scan(&exists)
+	return exists, err
+}
+
+func loadHistoricalContext(ctx context.Context, database *sql.DB, userID, reportDate, dirtyFromDate string) (historicalContext, error) {
 	rows, err := database.QueryContext(ctx, `
 		SELECT r.id::text, r.report_date::text,
 		       COALESCE(NULLIF(r.submitted_content, ''), r.content),
@@ -403,10 +438,11 @@ func loadHistoricalContext(ctx context.Context, database *sql.DB, userID, report
 		LEFT JOIN report_review_jobs review ON review.run_id = r.managed_agent_run_id
 			AND review.status = 'written'
 		WHERE r.user_id = $1 AND r.report_date < $2::date
+		  AND (NULLIF($3, '')::date IS NULL OR r.report_date >= NULLIF($3, '')::date)
 		  AND r.status IN ('saved', 'submitted')
 		  AND NULLIF(BTRIM(COALESCE(NULLIF(r.submitted_content, ''), r.content, '')), '') IS NOT NULL
 		ORDER BY r.report_date DESC, r.updated_at DESC
-		LIMIT $3`, userID, reportDate, maxRecentReports+maxHistoricalAnchors)
+		LIMIT $4`, userID, reportDate, dirtyFromDate, maxRecentReports+maxHistoricalAnchors)
 	if err != nil {
 		return historicalContext{}, err
 	}
@@ -414,6 +450,7 @@ func loadHistoricalContext(ctx context.Context, database *sql.DB, userID, report
 	result := historicalContext{
 		RecentOverviews: make([]HistoricalReport, 0, maxRecentReports),
 		ProjectAnchors:  make([]HistoricalReport, 0, maxHistoricalAnchors),
+		EvidenceThemes:  make([]InputTheme, 0, maxCurrentThemes),
 	}
 	index := 0
 	for rows.Next() {
@@ -426,6 +463,20 @@ func loadHistoricalContext(ctx context.Context, database *sql.DB, userID, report
 			return historicalContext{}, err
 		}
 		report.sourceType, report.sourceWeight = classifyNightlySource(report, hasOutcome)
+		for themeIndex, theme := range themesForHistoricalReport(report) {
+			if themeIndex >= 2 {
+				break
+			}
+			if len(result.EvidenceThemes) >= maxCurrentThemes {
+				break
+			}
+			title := limitRunes(sanitizeTitle(theme.Title), titleRuneLimit)
+			if !validProjectName(title) {
+				continue
+			}
+			result.EvidenceThemes = append(result.EvidenceThemes,
+				reportInputTheme(report, fmt.Sprintf("evidence-%03d-theme-%02d", index+1, themeIndex+1), title))
+		}
 		item := HistoricalReport{Date: report.date, SourceType: report.sourceType, SourceWeight: report.sourceWeight}
 		if index < maxRecentReports {
 			item.Overview = limitRunes(strings.TrimSpace(historicalOverviewForMemory(report)), maxHistoryOverviewRune)

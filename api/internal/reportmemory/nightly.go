@@ -132,8 +132,8 @@ func (service *NightlyService) claimPending(ctx context.Context, now time.Time) 
 	defer tx.Rollback()
 	var job queuedJob
 	err = tx.QueryRowContext(ctx, `
-		SELECT user_id::text, report_id::text, report_date::text,
-		       desired_source_fingerprint, attempts
+		SELECT user_id::text, report_id::text, report_date::text, dirty_from_date::text,
+		       desired_source_fingerprint, desired_evidence_watermark, rebuild_required, attempts
 		FROM report_project_memory_jobs
 		WHERE (
 			status IN ('pending', 'failed')
@@ -141,7 +141,8 @@ func (service *NightlyService) claimPending(ctx context.Context, now time.Time) 
 		) AND due_at <= $1 AND attempts < $2
 		ORDER BY due_at, report_date, user_id
 		FOR UPDATE SKIP LOCKED LIMIT 1`, now, maxMemoryAttempts).Scan(
-		&job.UserID, &job.ReportID, &job.ReportDate, &job.DesiredSourceFingerprint, &job.Attempts,
+		&job.UserID, &job.ReportID, &job.ReportDate, &job.DirtyFromDate, &job.DesiredSourceFingerprint,
+		&job.DesiredEvidenceWatermark, &job.RebuildRequired, &job.Attempts,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return queuedJob{}, false, nil
@@ -149,15 +150,51 @@ func (service *NightlyService) claimPending(ctx context.Context, now time.Time) 
 	if err != nil {
 		return queuedJob{}, false, err
 	}
+	if job.RebuildRequired {
+		if _, err := tx.ExecContext(ctx, `UPDATE report_project_memory_jobs SET snapshot_id = NULL WHERE user_id = $1`, job.UserID); err != nil {
+			return queuedJob{}, false, err
+		}
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM report_project_memory_snapshots
+			WHERE user_id = $1 AND resolver_version = $2`, job.UserID, ResolverVersion); err != nil {
+			return queuedJob{}, false, err
+		}
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM report_projects
+			WHERE user_id = $1 AND memory_schema_version = 'project-memory/v2'`, job.UserID); err != nil {
+			return queuedJob{}, false, err
+		}
+		if err := tx.QueryRowContext(ctx, `
+			SELECT min(report_date)::text FROM (
+				SELECT report_date
+				FROM daily_reports
+				WHERE user_id = $1 AND report_date <= $2::date
+				  AND status IN ('saved', 'submitted')
+				  AND NULLIF(BTRIM(COALESCE(NULLIF(submitted_content, ''), content, '')), '') IS NOT NULL
+				ORDER BY report_date DESC, updated_at DESC
+				LIMIT $3
+			) recent`, job.UserID, job.ReportDate, maxMemorySnapshotDepth).Scan(&job.DirtyFromDate); err != nil {
+			return queuedJob{}, false, err
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE report_project_memory_jobs
+			SET dirty_from_date = $2::date, rebuild_required = false
+			WHERE user_id = $1`, job.UserID, job.DirtyFromDate); err != nil {
+			return queuedJob{}, false, err
+		}
+		job.RebuildRequired = false
+	}
 	job.ClaimedSourceFingerprint = job.DesiredSourceFingerprint
+	job.ClaimedEvidenceWatermark = job.DesiredEvidenceWatermark
 	job.Attempts++
 	job.StartedAt = now
 	result, err := tx.ExecContext(ctx, `
 		UPDATE report_project_memory_jobs SET
 			status = 'submitting', claimed_source_fingerprint = desired_source_fingerprint,
-			attempts = attempts + 1, lease_owner = $4, lease_until = $5,
+			claimed_evidence_watermark = desired_evidence_watermark,
+			attempts = attempts + 1, lease_owner = $3, lease_until = $4,
 			started_at = $1, finished_at = NULL, last_error = NULL, updated_at = now()
-		WHERE user_id = $2 AND report_date = $3::date`, now, job.UserID, job.ReportDate,
+		WHERE user_id = $2`, now, job.UserID,
 		service.config.WorkerID, now.Add(service.config.LeaseTTL))
 	if err != nil {
 		return queuedJob{}, false, err
@@ -181,10 +218,9 @@ func (service *NightlyService) submit(ctx context.Context, job queuedJob, now ti
 			input_json = $1::jsonb, input_token_estimate = $2,
 			proposal_json = NULL, resolver_version = $3, model_id = NULLIF($4, ''),
 			updated_at = now()
-		WHERE user_id = $5 AND report_date = $6::date AND status = 'submitting'
-		  AND claimed_source_fingerprint = $7`, string(payload), estimate,
-		ResolverVersion, service.config.ModelID, job.UserID, job.ReportDate,
-		job.ClaimedSourceFingerprint)
+		WHERE user_id = $5 AND status = 'submitting'
+		  AND claimed_source_fingerprint = $6`, string(payload), estimate,
+		ResolverVersion, service.config.ModelID, job.UserID, job.ClaimedSourceFingerprint)
 	if err != nil {
 		return err
 	}
@@ -205,9 +241,9 @@ func (service *NightlyService) submit(ctx context.Context, job queuedJob, now ti
 		UPDATE report_project_memory_jobs SET
 			status = 'running', external_task_id = $1,
 			lease_owner = NULL, lease_until = NULL, updated_at = now()
-		WHERE user_id = $2 AND report_date = $3::date AND status = 'submitting'
-		  AND claimed_source_fingerprint = $4`, submission.TaskID, job.UserID,
-		job.ReportDate, job.ClaimedSourceFingerprint)
+		WHERE user_id = $2 AND status = 'submitting'
+		  AND claimed_source_fingerprint = $3`, submission.TaskID, job.UserID,
+		job.ClaimedSourceFingerprint)
 	if err != nil {
 		return err
 	}
@@ -227,15 +263,17 @@ func (service *NightlyService) claimRunning(ctx context.Context, now time.Time) 
 	var input []byte
 	var started sql.NullTime
 	err = tx.QueryRowContext(ctx, `
-		SELECT user_id::text, report_id::text, report_date::text,
+		SELECT user_id::text, report_id::text, report_date::text, dirty_from_date::text,
 		       desired_source_fingerprint, COALESCE(claimed_source_fingerprint, ''),
+		       desired_evidence_watermark, COALESCE(claimed_evidence_watermark, 0),
 		       external_task_id, attempts, input_json, COALESCE(proposal_json, 'null'::jsonb), started_at
 		FROM report_project_memory_jobs
 		WHERE status = 'running' AND (lease_until IS NULL OR lease_until <= $1)
 		ORDER BY updated_at, user_id
 		FOR UPDATE SKIP LOCKED LIMIT 1`, now).Scan(
-		&job.UserID, &job.ReportID, &job.ReportDate, &job.DesiredSourceFingerprint,
-		&job.ClaimedSourceFingerprint, &job.ExternalTaskID, &job.Attempts, &input, &job.ProposalJSON, &started,
+		&job.UserID, &job.ReportID, &job.ReportDate, &job.DirtyFromDate, &job.DesiredSourceFingerprint,
+		&job.ClaimedSourceFingerprint, &job.DesiredEvidenceWatermark, &job.ClaimedEvidenceWatermark,
+		&job.ExternalTaskID, &job.Attempts, &input, &job.ProposalJSON, &started,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return queuedJob{}, false, nil
@@ -249,8 +287,8 @@ func (service *NightlyService) claimRunning(ctx context.Context, now time.Time) 
 	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE report_project_memory_jobs SET lease_owner = $1, lease_until = $2, updated_at = now()
-		WHERE user_id = $3 AND report_date = $4::date AND status = 'running'`,
-		service.config.WorkerID, now.Add(service.config.LeaseTTL), job.UserID, job.ReportDate); err != nil {
+		WHERE user_id = $3 AND status = 'running'`,
+		service.config.WorkerID, now.Add(service.config.LeaseTTL), job.UserID); err != nil {
 		return queuedJob{}, false, err
 	}
 	return job, true, tx.Commit()
@@ -317,8 +355,8 @@ func (service *NightlyService) releaseRunningLease(ctx context.Context, job queu
 		UPDATE report_project_memory_jobs SET
 			lease_owner = NULL, lease_until = NULL,
 			last_error = NULLIF($1, ''), updated_at = now()
-		WHERE user_id = $2 AND report_date = $3::date AND status = 'running'
-		  AND external_task_id = $4`, limitRunes(message, 1000), job.UserID, job.ReportDate, job.ExternalTaskID)
+		WHERE user_id = $2 AND status = 'running'
+		  AND external_task_id = $3`, limitRunes(message, 1000), job.UserID, job.ExternalTaskID)
 	return err
 }
 
@@ -330,10 +368,11 @@ func (service *NightlyService) failJob(ctx context.Context, job queuedJob, now t
 	_, err := service.db.ExecContext(ctx, `
 		UPDATE report_project_memory_jobs SET
 			status = $1, due_at = $2, claimed_source_fingerprint = NULL,
+			claimed_evidence_watermark = NULL,
 			external_task_id = NULL, lease_owner = NULL, lease_until = NULL,
 			last_error = $3, finished_at = $4, updated_at = now()
-		WHERE user_id = $5 AND report_date = $6::date
+		WHERE user_id = $5
 		  AND status IN ('submitting', 'running')`, status, nextNightlyWindow(now),
-		limitRunes(message, 1000), now, job.UserID, job.ReportDate)
+		limitRunes(message, 1000), now, job.UserID)
 	return err
 }

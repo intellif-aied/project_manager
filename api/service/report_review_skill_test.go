@@ -14,6 +14,8 @@ func TestReportReviewSkillHasBoundedVerifierContract(t *testing.T) {
 		"aliases and workstream_cues explain the established scope",
 		"identity_usage=parent_label_for_matching_cues",
 		"proposed_targets are Resolver proposals", "service applies them deterministically",
+		"one to three Workstreams", "two to six reader-facing lines", "35–90 Chinese characters",
+		"Merge Workstreams that serve one daily objective", "metric-only", "machine names",
 		"decision=accept", "decision=repair", "decision=conservative",
 		"at most 8 patches", "write_report_review exactly once", "Do not retry",
 	} {

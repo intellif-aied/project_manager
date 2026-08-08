@@ -108,7 +108,7 @@ func (h *ProjectMemoryMCPHandler) getContext(r *http.Request, raw json.RawMessag
 	if !emptyJSONObject(raw) {
 		return nil, errors.New("get_project_memory_context accepts only {}")
 	}
-	userID, date, fingerprint, err := boundProjectMemoryJob(r)
+	userID, _, fingerprint, err := boundProjectMemoryJob(r)
 	if err != nil {
 		return nil, err
 	}
@@ -116,10 +116,10 @@ func (h *ProjectMemoryMCPHandler) getContext(r *http.Request, raw json.RawMessag
 	err = h.db.QueryRowContext(r.Context(), `
 		SELECT input_json
 		FROM report_project_memory_jobs
-		WHERE user_id = $1 AND report_date = $2::date
-		  AND claimed_source_fingerprint = $3
+		WHERE user_id = $1
+		  AND claimed_source_fingerprint = $2
 		  AND status IN ('submitting', 'running')`,
-		userID, date, fingerprint).Scan(&input)
+		userID, fingerprint).Scan(&input)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, errors.New("project memory job is unavailable")
 	}
@@ -138,7 +138,7 @@ func (h *ProjectMemoryMCPHandler) writeResult(r *http.Request, raw json.RawMessa
 	if err := decoder.Decode(&args); err != nil || len(args.ProposalJSON) == 0 {
 		return nil, errors.New("proposal_json is required")
 	}
-	userID, date, fingerprint, err := boundProjectMemoryJob(r)
+	userID, _, fingerprint, err := boundProjectMemoryJob(r)
 	if err != nil {
 		return nil, err
 	}
@@ -147,10 +147,10 @@ func (h *ProjectMemoryMCPHandler) writeResult(r *http.Request, raw json.RawMessa
 	err = h.db.QueryRowContext(r.Context(), `
 		SELECT input_json, COALESCE(proposal_json, 'null'::jsonb)
 		FROM report_project_memory_jobs
-		WHERE user_id = $1 AND report_date = $2::date
-		  AND claimed_source_fingerprint = $3
+		WHERE user_id = $1
+		  AND claimed_source_fingerprint = $2
 		  AND status IN ('submitting', 'running')
-		FOR UPDATE`, userID, date, fingerprint).Scan(&inputPayload, &existing)
+		FOR UPDATE`, userID, fingerprint).Scan(&inputPayload, &existing)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, errors.New("project memory job is unavailable")
 	}
@@ -176,10 +176,10 @@ func (h *ProjectMemoryMCPHandler) writeResult(r *http.Request, raw json.RawMessa
 	result, err := h.db.ExecContext(r.Context(), `
 		UPDATE report_project_memory_jobs SET
 			proposal_json = $1::jsonb, output_token_estimate = $2, updated_at = now()
-		WHERE user_id = $3 AND report_date = $4::date
-		  AND claimed_source_fingerprint = $5
+		WHERE user_id = $3
+		  AND claimed_source_fingerprint = $4
 		  AND status IN ('submitting', 'running') AND proposal_json IS NULL`,
-		string(normalized), outputEstimate, userID, date, fingerprint)
+		string(normalized), outputEstimate, userID, fingerprint)
 	if err != nil {
 		return nil, err
 	}

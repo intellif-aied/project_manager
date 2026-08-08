@@ -246,3 +246,22 @@ func TestExpandProjectAttachmentsUsesAcceptedResolverProposal(t *testing.T) {
 		t.Fatalf("accepted resolver proposal was not applied: %#v", decision)
 	}
 }
+
+func TestExpandProjectAttachmentsRunsDuringUnrelatedRepair(t *testing.T) {
+	decision, err := expandProjectAttachments(reportbrief.ReviewDecision{
+		Decision: reportbrief.ReviewDecisionRepair,
+		Patches:  []reportbrief.ReviewPatch{{Op: "replace_title", Target: "w1", Value: "修正标题", SupportingFactRefs: []string{"fact-001"}}},
+	}, Input{
+		Candidate: reportbrief.Payload{Workstreams: []reportbrief.Workstream{{Subject: "OSCAR"}, {Subject: "Qwen3"}}},
+		ProjectCandidates: []ProjectCandidate{{
+			CanonicalName: "KV Cache 压缩算法", IdentityUsage: "parent_label_for_matching_cues",
+			ProposedTargets: []string{"w1", "w2"}, RelatedFactRefs: []string{"fact-001"},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(decision.ProjectAttachments) != 1 || len(decision.Patches) != 3 {
+		t.Fatalf("project grouping was skipped during repair: %#v", decision)
+	}
+}

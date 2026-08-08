@@ -43,8 +43,14 @@ func LoadHistoricalHints(ctx context.Context, tx *sql.Tx, request HintRequest) (
 	err := tx.QueryRowContext(ctx, `
 		SELECT project_memory_json
 		FROM report_project_memory_snapshots
-		WHERE user_id = $1 AND report_date < $2::date
-		ORDER BY report_date DESC, created_at DESC LIMIT 1`, request.UserID, request.ReportDate).
+		WHERE user_id = $1 AND evidence_cutoff_date < $2::date
+		  AND resolver_version = $3
+		  AND NOT EXISTS (
+			SELECT 1 FROM report_project_memory_jobs job
+			WHERE job.user_id = $1 AND job.dirty_from_date < $2::date
+			  AND job.status <> 'succeeded'
+		  )
+		ORDER BY evidence_cutoff_date DESC, created_at DESC LIMIT 1`, request.UserID, request.ReportDate, ResolverVersion).
 		Scan(&snapshotPayload)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -52,32 +58,24 @@ func LoadHistoricalHints(ctx context.Context, tx *sql.Tx, request HintRequest) (
 	if err != nil {
 		return nil, err
 	}
-	acceptedRefs := snapshotProjectRefs(snapshotPayload)
-	if len(acceptedRefs) == 0 {
+	frozenProjects := snapshotProjects(snapshotPayload)
+	if len(frozenProjects) == 0 {
 		return nil, nil
 	}
-	projects, err := loadProjects(ctx, tx, request.UserID, request.ReportDate)
-	if err != nil {
-		return nil, err
+	projects := make([]storedProject, 0, len(frozenProjects))
+	for _, frozen := range frozenProjects {
+		projects = append(projects, frozen.Stored)
 	}
-	filtered := projects[:0]
-	for _, project := range projects {
-		if acceptedRefs[project.ID] {
-			filtered = append(filtered, project)
-		}
-	}
-	projects = filtered
 	byProject := map[string]*HistoricalProjectHint{}
-	workspaceMatches, err := loadWorkspaceHintMatches(ctx, tx, request)
+	workspaceMatches, err := loadWorkspaceHintMatches(ctx, tx, request, frozenProjects)
 	if err != nil {
 		return nil, err
 	}
 	for projectRef, match := range workspaceMatches {
-		if !acceptedRefs[projectRef] {
-			continue
-		}
+		frozen := frozenProjects[projectRef]
 		byProject[projectRef] = &HistoricalProjectHint{
-			ProjectRef: projectRef, CanonicalName: match.CanonicalName,
+			ProjectRef: projectRef, CanonicalName: frozen.Stored.CanonicalName,
+			Aliases: frozen.Aliases, WorkstreamCues: frozen.WorkstreamCues,
 			MatchedFactRef: match.FactRefs, WorkspaceFactRef: match.FactRefs, Confidence: match.Confidence,
 			CandidateOnly: true, MatchBasis: "workspace",
 		}
@@ -91,8 +89,10 @@ func LoadHistoricalHints(ctx context.Context, tx *sql.Tx, request HintRequest) (
 		if item == nil {
 			for _, candidate := range resolution.CandidateList {
 				if candidate.ProjectRef == resolution.ProjectRef {
+					frozen := frozenProjects[resolution.ProjectRef]
 					item = &HistoricalProjectHint{
 						ProjectRef: resolution.ProjectRef, CanonicalName: candidate.CanonicalName,
+						Aliases: frozen.Aliases, WorkstreamCues: frozen.WorkstreamCues,
 						Confidence: resolution.Confidence, MatchBasis: "semantic",
 					}
 					break
@@ -115,16 +115,6 @@ func LoadHistoricalHints(ctx context.Context, tx *sql.Tx, request HintRequest) (
 	}
 	result := make([]HistoricalProjectHint, 0, len(byProject))
 	for _, item := range byProject {
-		aliases, err := loadHintAliases(ctx, tx, request.UserID, item.ProjectRef)
-		if err != nil {
-			return nil, err
-		}
-		item.Aliases = aliases
-		workstreamCues, err := loadHintWorkstreamCues(ctx, tx, request.UserID, item.ProjectRef)
-		if err != nil {
-			return nil, err
-		}
-		item.WorkstreamCues = workstreamCues
 		item.MatchedFactRef = limitStrings(item.MatchedFactRef, maxHintFactRefs)
 		item.SemanticFactRef = limitStrings(item.SemanticFactRef, maxHintFactRefs)
 		item.WorkspaceFactRef = limitStrings(item.WorkspaceFactRef, maxHintFactRefs)
@@ -143,123 +133,101 @@ func LoadHistoricalHints(ctx context.Context, tx *sql.Tx, request HintRequest) (
 }
 
 type workspaceHintMatch struct {
-	CanonicalName string
-	FactRefs      []string
-	Confidence    float64
+	FactRefs   []string
+	Confidence float64
 }
 
-func loadWorkspaceHintMatches(ctx context.Context, tx *sql.Tx, request HintRequest) (map[string]workspaceHintMatch, error) {
+func loadWorkspaceHintMatches(ctx context.Context, tx *sql.Tx, request HintRequest, projects map[string]frozenSnapshotProject) (map[string]workspaceHintMatch, error) {
 	result := make(map[string]workspaceHintMatch)
 	if strings.TrimSpace(request.RunID) == "" {
 		return result, nil
 	}
 	rows, err := tx.QueryContext(ctx, `
-		SELECT link.project_id::text, project.canonical_name, source.fact_ref,
-		       (link.confidence * (0.7 + link.source_weight * 0.3))::float8
+		SELECT DISTINCT evidence.workspace_id::text, source.fact_ref
 		FROM report_run_fact_sources source
 		JOIN report_source_selections selection ON selection.attached_run_id = source.run_id
 		JOIN report_source_selection_items item
 		  ON item.selection_id = selection.id AND item.session_ref_snapshot = source.session_ref
 		JOIN report_workspace_evidence evidence
 		  ON evidence.source_session_id = item.session_id
-		JOIN report_project_workspace_links link ON link.workspace_id = evidence.workspace_id
-		JOIN report_projects project ON project.id = link.project_id
-		WHERE source.run_id = $1 AND project.user_id = $2
-		  AND project.first_seen_on < $3::date AND project.status <> 'ended'
-		ORDER BY link.confidence DESC, link.last_seen_on DESC`, request.RunID, request.UserID, request.ReportDate)
+		WHERE source.run_id = $1 AND selection.user_id = $2
+		ORDER BY evidence.workspace_id::text, source.fact_ref`, request.RunID, request.UserID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var projectRef, name, factRef string
-		var confidence float64
-		if err := rows.Scan(&projectRef, &name, &factRef, &confidence); err != nil {
+		var workspaceRef, factRef string
+		if err := rows.Scan(&workspaceRef, &factRef); err != nil {
 			return nil, err
 		}
-		current := result[projectRef]
-		current.CanonicalName = name
-		if len(current.FactRefs) < maxHintFactRefs {
+		for projectRef, project := range projects {
+			if !containsString(project.WorkspaceRefs, workspaceRef) {
+				continue
+			}
+			current := result[projectRef]
 			current.FactRefs = appendUnique(current.FactRefs, factRef)
+			current.Confidence = 0.72
+			result[projectRef] = current
 		}
-		if confidence > current.Confidence {
-			current.Confidence = confidence
-		}
-		result[projectRef] = current
 	}
 	return result, rows.Err()
 }
 
-func snapshotProjectRefs(payload []byte) map[string]bool {
+type frozenSnapshotProject struct {
+	Stored         storedProject
+	Aliases        []string
+	WorkstreamCues []string
+	WorkspaceRefs  []string
+}
+
+func snapshotProjects(payload []byte) map[string]frozenSnapshotProject {
 	var snapshot struct {
 		Projects []struct {
-			ProjectRef string `json:"project_ref"`
+			ProjectRef     string   `json:"project_ref"`
+			CanonicalName  string   `json:"canonical_name"`
+			LastSeenOn     string   `json:"last_seen_on"`
+			Aliases        []string `json:"aliases"`
+			WorkstreamCues []string `json:"workstream_cues"`
+			WorkspaceRefs  []string `json:"workspace_refs"`
 		} `json:"projects"`
 	}
 	if json.Unmarshal(payload, &snapshot) != nil {
 		return nil
 	}
-	result := make(map[string]bool, len(snapshot.Projects))
+	result := make(map[string]frozenSnapshotProject, len(snapshot.Projects))
 	for _, project := range snapshot.Projects {
-		if ref := strings.TrimSpace(project.ProjectRef); ref != "" {
-			result[ref] = true
+		ref := strings.TrimSpace(project.ProjectRef)
+		if ref == "" || !validProjectName(project.CanonicalName) {
+			continue
 		}
+		frozen := frozenSnapshotProject{
+			Stored:         storedProject{ID: ref, CanonicalName: project.CanonicalName, LastSeenOn: project.LastSeenOn},
+			Aliases:        limitStrings(project.Aliases, maxAliasesPerProject),
+			WorkstreamCues: limitStrings(project.WorkstreamCues, maxWorkstreamCues),
+			WorkspaceRefs:  limitStrings(project.WorkspaceRefs, maxHintFactRefs),
+		}
+		frozen.Stored.Aliases = append(frozen.Stored.Aliases, storedAlias{
+			Text: project.CanonicalName, Normalized: normalizeName(project.CanonicalName), Type: "canonical", SourceType: "snapshot", SourceWeight: 1,
+		})
+		for _, alias := range frozen.Aliases {
+			frozen.Stored.Aliases = append(frozen.Stored.Aliases, storedAlias{Text: alias, Normalized: normalizeName(alias), Type: "alias", SourceType: "snapshot", SourceWeight: 0.9})
+		}
+		for _, cue := range frozen.WorkstreamCues {
+			frozen.Stored.Aliases = append(frozen.Stored.Aliases, storedAlias{Text: cue, Normalized: normalizeName(cue), Type: "workstream_cue", SourceType: "snapshot", SourceWeight: 0.8})
+		}
+		result[ref] = frozen
 	}
 	return result
 }
 
-func loadHintAliases(ctx context.Context, tx *sql.Tx, userID, projectID string) ([]string, error) {
-	rows, err := tx.QueryContext(ctx, `
-		SELECT alias FROM report_project_aliases a
-		JOIN report_projects p ON p.id = a.project_id
-		WHERE a.project_id = $1 AND p.user_id = $2
-		ORDER BY a.source_weight DESC, a.source_report_date DESC, a.alias
-		LIMIT $3`, projectID, userID, maxAliasesPerProject)
-	if err != nil {
-		return nil, err
-	}
-	aliases := make([]string, 0, maxAliasesPerProject)
-	for rows.Next() {
-		var alias string
-		if err := rows.Scan(&alias); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		if validProjectName(alias) {
-			aliases = appendUnique(aliases, alias)
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
 		}
 	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	return aliases, nil
-}
-
-func loadHintWorkstreamCues(ctx context.Context, tx *sql.Tx, userID, projectID string) ([]string, error) {
-	rows, err := tx.QueryContext(ctx, `
-		SELECT cue.value
-		FROM report_project_occurrences occurrence
-		JOIN report_projects project ON project.id = occurrence.project_id
-		CROSS JOIN LATERAL jsonb_array_elements_text(occurrence.workstream_cues_json) cue(value)
-		WHERE occurrence.project_id = $1 AND project.user_id = $2
-		GROUP BY cue.value
-		ORDER BY max(occurrence.source_weight) DESC, max(occurrence.report_date) DESC, cue.value
-		LIMIT $3`, projectID, userID, maxWorkstreamCues)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	result := make([]string, 0, maxWorkstreamCues)
-	for rows.Next() {
-		var cue string
-		if err := rows.Scan(&cue); err != nil {
-			return nil, err
-		}
-		if validProjectName(cue) {
-			result = appendUnique(result, cue)
-		}
-	}
-	return result, rows.Err()
+	return false
 }
 
 func limitStrings(values []string, limit int) []string {

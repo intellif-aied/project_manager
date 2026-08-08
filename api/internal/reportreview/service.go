@@ -237,7 +237,11 @@ func (service *Service) WriteDecision(ctx context.Context, userID, jobRef string
 }
 
 func expandProjectAttachments(decision reportbrief.ReviewDecision, input Input) (reportbrief.ReviewDecision, error) {
-	if len(decision.ProjectAttachments) == 0 && decision.Decision == reportbrief.ReviewDecisionAccept {
+	// Parent-project attachments are a bounded deterministic grouping pass.
+	// They must also run when the Reviewer repairs another issue in the Brief;
+	// otherwise a valid Project Memory grouping is lost just because the same
+	// review contained an unrelated correction.
+	if len(decision.ProjectAttachments) == 0 && decision.Decision != reportbrief.ReviewDecisionConservative {
 		for _, project := range input.ProjectCandidates {
 			if project.IdentityUsage != "parent_label_for_matching_cues" || len(project.ProposedTargets) < 2 {
 				continue

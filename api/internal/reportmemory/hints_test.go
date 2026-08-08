@@ -22,18 +22,9 @@ func TestLoadHistoricalHintsDoesNotExposeUnanchoredRecentProject(t *testing.T) {
 	defer tx.Rollback()
 
 	mock.ExpectQuery("SELECT project_memory_json").
-		WithArgs("5192", "2026-07-31").
+		WithArgs("5192", "2026-07-31", ResolverVersion).
 		WillReturnRows(sqlmock.NewRows([]string{"project_memory_json"}).AddRow(
-			`{"projects":[{"project_ref":"project-1"}]}`,
-		))
-	mock.ExpectQuery("FROM report_projects p").
-		WithArgs("5192", "2026-07-31").
-		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "canonical_name", "last_seen_on", "alias", "normalized_alias",
-			"alias_type", "source_type", "source_weight",
-		}).AddRow(
-			"project-1", "芯片验证平台", "2026-07-30", "芯片验证平台", "芯片验证平台",
-			"canonical", "manual_final", 1.0,
+			`{"projects":[{"project_ref":"project-1","canonical_name":"芯片验证平台","last_seen_on":"2026-07-30"}]}`,
 		))
 	hints, err := LoadHistoricalHints(context.Background(), tx, HintRequest{
 		UserID: "5192", ReportDate: "2026-07-31",
@@ -63,23 +54,11 @@ func TestLoadHistoricalHintsUsesWorkspaceAsBoundedWeakReference(t *testing.T) {
 	}
 	defer tx.Rollback()
 	mock.ExpectQuery("SELECT project_memory_json").
-		WithArgs("21", "2026-08-05").
-		WillReturnRows(sqlmock.NewRows([]string{"project_memory_json"}).AddRow(`{"projects":[{"project_ref":"project-1"}]}`))
-	mock.ExpectQuery("FROM report_projects p").
-		WithArgs("21", "2026-08-05").
-		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "canonical_name", "last_seen_on", "alias", "normalized_alias", "alias_type", "source_type", "source_weight",
-		}).AddRow("project-1", "芯片验证平台", "2026-08-04", "芯片验证平台", "芯片验证平台", "canonical", "manual_final", 1.0))
+		WithArgs("21", "2026-08-05", ResolverVersion).
+		WillReturnRows(sqlmock.NewRows([]string{"project_memory_json"}).AddRow(`{"projects":[{"project_ref":"project-1","canonical_name":"芯片验证平台","last_seen_on":"2026-08-04","workspace_refs":["workspace-1"]}]}`))
 	mock.ExpectQuery("FROM report_run_fact_sources source").
-		WithArgs("run-1", "21", "2026-08-05").
-		WillReturnRows(sqlmock.NewRows([]string{"project_id", "canonical_name", "fact_ref", "confidence"}).
-			AddRow("project-1", "芯片验证平台", "fact-001", 0.88))
-	mock.ExpectQuery("SELECT alias FROM report_project_aliases").
-		WithArgs("project-1", "21", maxAliasesPerProject).
-		WillReturnRows(sqlmock.NewRows([]string{"alias"}).AddRow("芯片验证平台"))
-	mock.ExpectQuery("FROM report_project_occurrences occurrence").
-		WithArgs("project-1", "21", maxWorkstreamCues).
-		WillReturnRows(sqlmock.NewRows([]string{"value"}))
+		WithArgs("run-1", "21").
+		WillReturnRows(sqlmock.NewRows([]string{"workspace_id", "fact_ref"}).AddRow("workspace-1", "fact-001"))
 	hints, err := LoadHistoricalHints(context.Background(), tx, HintRequest{
 		UserID: "21", RunID: "run-1", ReportDate: "2026-08-05",
 		Facts: []FactInput{{FactRef: "fact-001", Text: "完成测试执行模块改造"}},
@@ -108,24 +87,12 @@ func TestLoadHistoricalHintsSeparatesSemanticAnchorsFromWorkspaceCandidates(t *t
 	}
 	defer tx.Rollback()
 	mock.ExpectQuery("SELECT project_memory_json").
-		WithArgs("21", "2026-08-05").
-		WillReturnRows(sqlmock.NewRows([]string{"project_memory_json"}).AddRow(`{"projects":[{"project_ref":"project-1"}]}`))
-	mock.ExpectQuery("FROM report_projects p").
-		WithArgs("21", "2026-08-05").
-		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "canonical_name", "last_seen_on", "alias", "normalized_alias", "alias_type", "source_type", "source_weight",
-		}).AddRow("project-1", "芯片验证平台", "2026-08-04", "芯片验证平台", "芯片验证平台", "canonical", "manual_final", 1.0))
+		WithArgs("21", "2026-08-05", ResolverVersion).
+		WillReturnRows(sqlmock.NewRows([]string{"project_memory_json"}).AddRow(`{"projects":[{"project_ref":"project-1","canonical_name":"芯片验证平台","last_seen_on":"2026-08-04","workstream_cues":["版本流"],"workspace_refs":["workspace-1"]}]}`))
 	mock.ExpectQuery("FROM report_run_fact_sources source").
-		WithArgs("run-1", "21", "2026-08-05").
-		WillReturnRows(sqlmock.NewRows([]string{"project_id", "canonical_name", "fact_ref", "confidence"}).
-			AddRow("project-1", "芯片验证平台", "fact-001", 0.88).
-			AddRow("project-1", "芯片验证平台", "fact-002", 0.88))
-	mock.ExpectQuery("SELECT alias FROM report_project_aliases").
-		WithArgs("project-1", "21", maxAliasesPerProject).
-		WillReturnRows(sqlmock.NewRows([]string{"alias"}).AddRow("芯片验证平台"))
-	mock.ExpectQuery("FROM report_project_occurrences occurrence").
-		WithArgs("project-1", "21", maxWorkstreamCues).
-		WillReturnRows(sqlmock.NewRows([]string{"value"}).AddRow("版本流").AddRow("用例筛选工作台"))
+		WithArgs("run-1", "21").
+		WillReturnRows(sqlmock.NewRows([]string{"workspace_id", "fact_ref"}).
+			AddRow("workspace-1", "fact-001").AddRow("workspace-1", "fact-002"))
 	hints, err := LoadHistoricalHints(context.Background(), tx, HintRequest{
 		UserID: "21", RunID: "run-1", ReportDate: "2026-08-05",
 		Facts: []FactInput{
@@ -163,19 +130,8 @@ func TestLoadHistoricalHintsUsesWorkstreamCueAsSemanticAnchor(t *testing.T) {
 	}
 	defer tx.Rollback()
 	mock.ExpectQuery("SELECT project_memory_json").
-		WithArgs("21", "2026-08-06").
-		WillReturnRows(sqlmock.NewRows([]string{"project_memory_json"}).AddRow(`{"projects":[{"project_ref":"project-1"}]}`))
-	mock.ExpectQuery("FROM report_projects p").
-		WithArgs("21", "2026-08-06").
-		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "canonical_name", "last_seen_on", "term", "normalized_term", "term_type", "source_type", "source_weight",
-		}).AddRow("project-1", "芯片验证平台", "2026-08-05", "调用执行", "调用执行", "workstream_cue", "manual_final", 1.0))
-	mock.ExpectQuery("SELECT alias FROM report_project_aliases").
-		WithArgs("project-1", "21", maxAliasesPerProject).
-		WillReturnRows(sqlmock.NewRows([]string{"alias"}).AddRow("芯片验证平台"))
-	mock.ExpectQuery("FROM report_project_occurrences occurrence").
-		WithArgs("project-1", "21", maxWorkstreamCues).
-		WillReturnRows(sqlmock.NewRows([]string{"value"}).AddRow("调用执行"))
+		WithArgs("21", "2026-08-06", ResolverVersion).
+		WillReturnRows(sqlmock.NewRows([]string{"project_memory_json"}).AddRow(`{"projects":[{"project_ref":"project-1","canonical_name":"芯片验证平台","last_seen_on":"2026-08-05","workstream_cues":["调用执行"]}]}`))
 	hints, err := LoadHistoricalHints(context.Background(), tx, HintRequest{
 		UserID: "21", ReportDate: "2026-08-06",
 		Facts: []FactInput{{FactRef: "fact-001", Text: "完成调用执行链路调整"}},

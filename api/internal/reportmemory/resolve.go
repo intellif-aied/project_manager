@@ -345,19 +345,22 @@ func loadProjects(ctx context.Context, tx *sql.Tx, userID, reportDate string) ([
 		       source.source_type, source.source_weight
 		FROM (
 			SELECT p.id::text AS project_id, p.canonical_name, p.last_seen_on::text,
-			       a.alias AS term, a.normalized_alias AS normalized_term, a.alias_type AS term_type,
-			       a.source_type, a.source_weight::float8
+			       p.canonical_name AS term, p.normalized_name AS normalized_term,
+			       'canonical' AS term_type, p.canonical_source_type AS source_type,
+			       p.canonical_source_weight::float8 AS source_weight
 			FROM report_projects p
-			JOIN report_project_aliases a ON a.project_id = p.id
 			WHERE p.user_id = $1 AND p.first_seen_on < $2::date AND p.status <> 'ended'
+			  AND p.memory_schema_version = 'project-memory/v2'
 			UNION ALL
-			SELECT p.id::text, p.canonical_name, p.last_seen_on::text,
-			       cue.value, cue.value, 'workstream_cue',
-			       occurrence.source_type, occurrence.source_weight::float8
+			SELECT p.id::text AS project_id, p.canonical_name, p.last_seen_on::text,
+			       signal.display_value AS term, signal.normalized_value AS normalized_term,
+			       signal.signal_type AS term_type, signal.authority AS source_type,
+			       signal.confidence::float8 AS source_weight
 			FROM report_projects p
-			JOIN report_project_occurrences occurrence ON occurrence.project_id = p.id
-			CROSS JOIN LATERAL jsonb_array_elements_text(occurrence.workstream_cues_json) cue(value)
+			JOIN report_project_signals signal ON signal.project_id = p.id
 			WHERE p.user_id = $1 AND p.first_seen_on < $2::date AND p.status <> 'ended'
+			  AND p.memory_schema_version = 'project-memory/v2'
+			  AND signal.status = 'active' AND signal.first_seen_on < $2::date
 		) source
 		ORDER BY source.last_seen_on DESC, source.project_id, source.term_type, source.normalized_term`, userID, reportDate)
 	if err != nil {
@@ -378,9 +381,7 @@ func loadProjects(ctx context.Context, tx *sql.Tx, userID, reportDate string) ([
 		if !validProjectName(name) || !validProjectName(alias) {
 			continue
 		}
-		if aliasType == "workstream_cue" {
-			normalizedAlias = normalizeName(alias)
-		}
+		normalizedAlias = normalizeName(normalizedAlias)
 		index, exists := indexes[id]
 		if !exists {
 			projects = append(projects, storedProject{ID: id, CanonicalName: name, LastSeenOn: lastSeen})
