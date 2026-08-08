@@ -9,14 +9,14 @@
 | --- | --- |
 | 发布编号 | `20260808-01` |
 | 目标环境 | 生产 |
-| Git 基线 | `main@1b83dd9` |
-| API 镜像 | `20260808-1b83dd9-project-memory-v2-density`（发布后补充 digest） |
+| Git 基线 | `main@9bdb731`（功能提交 `1b83dd9`） |
+| API 镜像 | `20260808-9bdb731-project-memory-v2-density`；`sha256:33ac1b47351515c116684a9ccee63f67bdc2df38f9d22e40083c223c05e236ed` |
 | Web 镜像 | 不涉及；保留 `20260807-1c9f12f-project-memory-v10` |
-| Report Skill | 计划从 `10086/aida-report@1.1.33` derive `1.1.34` |
-| Project Memory | 计划发布 `10086/aida-project-memory@project-memory-v11` |
-| Report Reviewer | 计划发布 `10086/aida-report-review@report-review-v10` |
+| Report Skill | `10086/aida-report@1.1.34`；平台 SHA256 `dd4736b27c25e89e7cc9364788dfd1f67368e860ad365558edaf3dc18274d59b` |
+| Project Memory | `10086/aida-project-memory@project-memory-v11`；SHA256 `fcec39f5d9fd1e0a6abb1eccf53cccdde2022289d3c1295e8f89f7565ed6aaab` |
+| Report Reviewer | `10086/aida-report-review@report-review-v10`；SHA256 `d08eb38ade3b6fcdaa0f422e7d6a074e08b889c17f7a9b01eb33fe30eac5e086` |
 | Migration | `041_report_semantic_review.sql`、`042_report_review_run_stages.sql`、`043_project_memory_v2.sql` |
-| 开始/结束时间 | 2026-08-08 / 待完成 |
+| 开始/结束时间 | 2026-08-08 15:45 / 16:18（北京时间） |
 
 ## 完整范围清单
 
@@ -41,9 +41,9 @@
 - [x] 完整后端测试 `go test ./...` 通过。
 - [x] 测试服 Report Skill `1.1.44`、Reviewer `v10`，7/7 报告与 7/7 Reviewer 成功。
 - [x] Project Memory V2 为可选辅助上下文，不强制项目归属。
-- [ ] 生产 PostgreSQL、配置和旧镜像信息完成备份。
-- [ ] 生产不可变 API 镜像完成构建、推送和 digest 核对。
-- [ ] 生产 Skill、Agent、migration 和关键链路验收完成。
+- [x] 生产 PostgreSQL、配置和旧镜像信息完成备份。
+- [x] 生产不可变 API 镜像完成构建、推送和 digest 核对。
+- [x] 生产 Skill、Agent、migration 和关键链路验收完成。
 
 ## 回退与停止条件
 
@@ -60,21 +60,21 @@
 
 ```text
 本次范围已完整列出：是
-所有发布项均有证据：待发布后确认
-所有阻断项均为 0：待发布后确认
+所有发布项均有证据：是
+所有阻断项均为 0：是
 生产可以发布：是
-最终状态：发布中
+最终状态：已发布
 ```
 
 ## 上线结果
 
 | 项目 | 实际结果 | 证据 |
 | --- | --- | --- |
-| API/Web 容器 | 待填写 |  |
-| migration | 待填写 |  |
-| 数据备份 | 待填写 |  |
-| Skill/MCP/Agent | 待填写 |  |
-| 健康检查 | 待填写 |  |
-| 关键接口 | 待填写 |  |
-| 观察窗口 | 待填写 |  |
-| 未完成项与后续任务 | 待填写 |  |
+| API/Web 容器 | API 已发布；Web 未变 | API 使用 `20260808-9bdb731-project-memory-v2-density`；Web 保持原镜像；DB、MinIO 未重启 |
+| migration | 已完成 | 041、042、043 成功，`schema_migrations` 最高 43 |
+| 数据备份 | 已完成 | `/home/luoxian/aida/backups/project-memory-v2-density-20260808T1545CST`；PostgreSQL custom dump 2.2 GB；SHA256 `93a2eb8663705dfd93f94dcad35ac2499ed6d62cd8de3a93c00b7ff067d4f6cf`；`pg_restore --list` 952 项 |
+| Skill/MCP/Agent | 已完成 | 默认 Agent 绑定 `10086/aida-report@1.1.34`；Project Memory v11；Reviewer v10；MCP URL 保持生产内网地址 |
+| 健康检查 | 已通过 | `/health` HTTP 200；API、Web、DB、MinIO 均运行 |
+| 关键接口 | 已通过 | Report Integration、生产日报价值接口均 HTTP 200；Integration 返回 Skill `1.1.34` |
+| 观察窗口 | 正常 | migration 后未授权数据库锁 0；无 panic、deadlock、migration failure；Project Memory 32 个用户队列等待夜间渐进重建 |
+| 未完成项与后续任务 | 无发布阻断 | Project Memory 队列将在既定夜间窗口继续处理，不属于同步回填 |
